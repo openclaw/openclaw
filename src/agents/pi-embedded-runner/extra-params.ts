@@ -91,6 +91,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  options?: { skipCacheDefault?: boolean },
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -113,7 +114,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
+  const cacheRetention = resolveCacheRetention(extraParams, provider, {
+    skipDefault: options?.skipCacheDefault,
+  });
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -437,7 +440,16 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
+
   const dynamicTemperature = resolveDynamicTemperature({ merged, override, thinkingLevel });
+
+  // availableToolNames is used strictly for dynamic temperature resolution.
+  // We must strip it before passing it to the stream parameters to prevent
+  // unintended cache behavior overrides (e.g., Anthropic short cache).
+  delete merged.availableToolNames;
+
+  const hasUserParams = Object.keys(merged).length > 0;
+
   if (dynamicTemperature !== undefined) {
     merged.temperature = dynamicTemperature;
     log.debug(
@@ -445,12 +457,9 @@ export function applyExtraParamsToAgent(
     );
   }
 
-  // availableToolNames is used strictly for dynamic temperature resolution.
-  // We must strip it before passing it to the stream parameters to prevent
-  // unintended cache behavior overrides (e.g., Anthropic short cache).
-  delete merged.availableToolNames;
-
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider, {
+    skipCacheDefault: !hasUserParams,
+  });
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

@@ -1903,6 +1903,30 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.temperature).toBe(0.3);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
+
+  it("applies dynamic temperature AND cache retention when user params are present", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      maxTokens: 1000, // User param
+    });
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.temperature).toBe(0.3);
+    expect(calls[0]?.maxTokens).toBe(1000);
+    expect(calls[0]?.cacheRetention).toBe("short");
   });
 
   it("applies a stricter default temperature for shell-like turns", () => {
