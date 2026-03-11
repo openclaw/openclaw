@@ -66,6 +66,7 @@ openclaw models fallbacks list
 ```bash
 openclaw models auth add
 openclaw models auth login --provider <id>
+openclaw models auth login --provider <id> --profile-id <provider:profile>
 openclaw models auth setup-token
 openclaw models auth paste-token
 ```
@@ -75,5 +76,6 @@ openclaw models auth paste-token
 
 Notes:
 
+- `login --profile-id <id>` writes the auth result to a specific profile id. You can pass either `<provider>:<name>` or a bare `<name>` (which is expanded to `<provider>:<name>`).
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.

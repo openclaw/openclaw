@@ -94,6 +94,8 @@ export type ProviderAuthContext = {
   config: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  /** Optional explicit auth profile id target supplied by CLI. */
+  profileId?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   isRemote: boolean;

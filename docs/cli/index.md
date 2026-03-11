@@ -836,11 +836,12 @@ Options:
 - `--set-image`
 - `--json`
 
-### `models auth add|setup-token|paste-token`
+### `models auth add|login|setup-token|paste-token`
 
 Options:
 
 - `add`: interactive auth helper
+- `login`: `--provider <id>`, `--method <id>`, `--profile-id <id>`, `--set-default`
 - `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 

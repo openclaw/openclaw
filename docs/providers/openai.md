@@ -46,6 +46,9 @@ openclaw onboard --auth-choice openai-codex
 
 # Or run OAuth directly
 openclaw models auth login --provider openai-codex
+
+# Or target a specific auth profile id
+openclaw models auth login --provider openai-codex --profile-id openai-codex:work
 ```
 
 ### Config snippet (Codex subscription)

@@ -21,6 +21,8 @@ flows. Run them via:
 
 ```bash
 openclaw models auth login --provider <id>
+# Optional: force credentials into a specific profile id
+openclaw models auth login --provider <id> --profile-id <provider:profile>
 ```
 
 ## The token sink (why it exists)
@@ -130,6 +132,7 @@ Pick which profile is used:
 
 - globally via config ordering (`auth.order`)
 - per-session via `/model ...@<profileId>`
+- at login time via `openclaw models auth login --provider <id> --profile-id <id>`
 
 Example (session override):
 

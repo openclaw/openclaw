@@ -236,8 +236,69 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
 };
+
+export function normalizeAuthLoginProfileId(
+  rawProfileId: string | undefined,
+  providerId: string,
+): string | undefined {
+  const trimmed = rawProfileId?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(providerId);
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx < 0) {
+    return `${providerKey}:${trimmed}`;
+  }
+
+  const rawPrefix = trimmed.slice(0, colonIdx).trim();
+  const suffix = trimmed.slice(colonIdx + 1).trim();
+  if (!rawPrefix || !suffix) {
+    throw new Error(`Invalid --profile-id "${trimmed}". Expected "<provider>:<name>" or "<name>".`);
+  }
+
+  const normalizedPrefix = normalizeProviderId(rawPrefix);
+  if (normalizedPrefix !== providerKey) {
+    throw new Error(
+      `Auth profile "${trimmed}" is for ${normalizedPrefix}, not ${providerKey}. Use a ${providerKey}:<name> profile id.`,
+    );
+  }
+
+  return `${providerKey}:${suffix}`;
+}
+
+export function remapAuthLoginProfiles(params: {
+  profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  profileId?: string;
+  providerId: string;
+}): Array<{ profileId: string; credential: AuthProfileCredential }> {
+  const { profiles, profileId, providerId } = params;
+  if (!profileId) {
+    return profiles;
+  }
+  if (profiles.length === 0) {
+    throw new Error("Auth flow did not return any profiles to map.");
+  }
+  if (profiles.length > 1) {
+    throw new Error(
+      `Auth flow returned ${profiles.length} profiles. --profile-id requires exactly one returned profile.`,
+    );
+  }
+
+  const only = profiles[0];
+  const credentialProvider = normalizeProviderId(only.credential.provider);
+  const providerKey = normalizeProviderId(providerId);
+  if (credentialProvider !== providerKey) {
+    throw new Error(
+      `Auth flow returned provider "${credentialProvider}" but selected provider is "${providerKey}".`,
+    );
+  }
+
+  return [{ ...only, profileId }];
+}
 
 function resolveProviderMatch(
   providers: ProviderPlugin[],
@@ -386,11 +447,14 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error("Unknown auth method. Use --method <id> to select one.");
   }
 
+  const requestedProfileId = normalizeAuthLoginProfileId(opts.profileId, selectedProvider.id);
+
   const isRemote = isRemoteEnvironment();
   const result: ProviderAuthResult = await chosenMethod.run({
     config,
     agentDir,
     workspaceDir,
+    profileId: requestedProfileId,
     prompter,
     runtime,
     isRemote,
@@ -401,8 +465,13 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       createVpsAwareHandlers: (params) => createVpsAwareOAuthHandlers(params),
     },
   });
+  const resolvedProfiles = remapAuthLoginProfiles({
+    profiles: result.profiles,
+    profileId: requestedProfileId,
+    providerId: selectedProvider.id,
+  });
 
-  for (const profile of result.profiles) {
+  for (const profile of resolvedProfiles) {
     upsertAuthProfile({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -415,7 +484,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     if (result.configPatch) {
       next = mergeConfigPatch(next, result.configPatch);
     }
-    for (const profile of result.profiles) {
+    for (const profile of resolvedProfiles) {
       next = applyAuthProfileConfig(next, {
         profileId: profile.profileId,
         provider: profile.credential.provider,
@@ -429,7 +498,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   });
 
   logConfigUpdated(runtime);
-  for (const profile of result.profiles) {
+  for (const profile of resolvedProfiles) {
     runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
