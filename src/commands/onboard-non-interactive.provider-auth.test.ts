@@ -434,6 +434,32 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("uses AZURE_OPENAI_API_KEY env fallback for Azure non-interactive auth", async () => {
+    await withOnboardEnv("openclaw-onboard-azure-openai-env-fallback-", async (env) => {
+      await withEnvAsync(
+        {
+          AZURE_OPENAI_API_KEY: "azure-env-key", // pragma: allowlist secret
+        },
+        async () => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "azure-openai-api-key",
+            azureOpenaiBaseUrl: "https://example.openai.azure.com",
+            azureOpenaiModelId: "gpt-4.1",
+          });
+
+          expect(cfg.auth?.profiles?.["azure-openai-responses:default"]?.provider).toBe(
+            "azure-openai-responses",
+          );
+          await expectApiKeyProfile({
+            profileId: "azure-openai-responses:default",
+            provider: "azure-openai-responses",
+            key: "azure-env-key",
+          });
+        },
+      );
+    });
+  });
+
   it("fails Azure OpenAI onboarding when base URL/model ID flags are missing", async () => {
     await withOnboardEnv("openclaw-onboard-azure-openai-missing-flags-", async ({ runtime }) => {
       await expect(
