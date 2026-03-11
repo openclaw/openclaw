@@ -188,6 +188,10 @@ final class ControlChannel {
             return desc
         }
 
+        if let authIssue = RemoteGatewayAuthIssue(error: error) {
+            return authIssue.statusMessage
+        }
+
         // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
         if let urlErr = error as? URLError,
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
