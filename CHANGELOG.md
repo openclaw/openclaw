@@ -1045,6 +1045,7 @@ Docs: https://docs.openclaw.ai
 - Browser/Navigate: resolve the correct `targetId` in navigate responses after renderer swaps. (#25326) Thanks @stone-jin and @vincentkoc.
 - FS/Sandbox workspace boundaries: add a dedicated `outside-workspace` safe-open error code for root-escape checks, and propagate specific outside-workspace messages across edit/browser/media consumers instead of generic not-found/invalid-path fallbacks. (#29715) Thanks @YuzuruS.
 - Diagnostics/Stuck session signal: add configurable stuck-session warning threshold via `diagnostics.stuckSessionWarnMs` (default 120000ms) to reduce false-positive warnings on long multi-tool turns. (#31032)
+- Agents/error classification: check billing errors before context overflow heuristics in the agent runner catch block so spend-limit and quota errors show the billing-specific message instead of being misclassified as "Context overflow: prompt too large". (#40409) Thanks @ademczuk.
 
 ## 2026.2.26
 
