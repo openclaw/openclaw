@@ -63,6 +63,7 @@ import UIKit
 
             // iOS should expose notify, but not host shell/exec-approval commands.
             #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+            #expect(!commands.contains(OpenClawSystemCommand.runPrepare.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.which.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue))

@@ -65,6 +65,8 @@ actor MacNodeRuntime {
                 return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.runPrepare.rawValue:
+                return try await self.handleSystemRunPrepare(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -553,6 +555,54 @@ actor MacNodeRuntime {
             displayCommand: evaluation.displayCommand)
     }
 
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        struct PrepareParams: Decodable {
+            var command: [String]?
+            var rawCommand: String?
+            var cwd: String?
+            var agentId: String?
+            var sessionKey: String?
+        }
+
+        struct PreparePlan: Encodable {
+            var argv: [String]
+            var cwd: String?
+            var rawCommand: String?
+            var agentId: String?
+            var sessionKey: String?
+        }
+
+        struct PreparePayload: Encodable {
+            var cmdText: String
+            var plan: PreparePlan
+        }
+
+        let params = try Self.decodeParams(PrepareParams.self, from: req.paramsJSON)
+        let argv = params.command ?? []
+        guard !argv.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "command required")
+        }
+
+        let resolvedCommand = ExecSystemRunCommandValidator.resolve(
+            command: argv,
+            rawCommand: params.rawCommand)
+        switch resolvedCommand {
+        case let .invalid(message):
+            return Self.errorResponse(req, code: .invalidRequest, message: message)
+        case let .ok(resolved):
+            let payload = PreparePayload(
+                cmdText: resolved.displayCommand,
+                plan: PreparePlan(
+                    argv: argv,
+                    cwd: Self.normalizeOptionalString(params.cwd),
+                    rawCommand: resolved.displayCommand,
+                    agentId: Self.normalizeOptionalString(params.agentId),
+                    sessionKey: Self.normalizeOptionalString(params.sessionKey)))
+            let payloadJSON = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payloadJSON)
+        }
+    }
+
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try Self.decodeParams(OpenClawSystemWhichParams.self, from: req.paramsJSON)
         let bins = params.bins
@@ -934,6 +984,11 @@ extension MacNodeRuntime {
             ])
         }
         return json
+    }
+
+    private static func normalizeOptionalString(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private nonisolated static func canvasEnabled() -> Bool {

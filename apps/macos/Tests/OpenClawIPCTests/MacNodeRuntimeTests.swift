@@ -21,6 +21,47 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `handle invoke prepares system run payload`() async throws {
+        struct PrepareParams: Encodable {
+            var command: [String]
+            var cwd: String?
+            var agentId: String?
+            var sessionKey: String?
+        }
+
+        struct PreparePayload: Decodable {
+            struct Plan: Decodable {
+                var argv: [String]
+                var cwd: String?
+                var rawCommand: String?
+                var agentId: String?
+                var sessionKey: String?
+            }
+
+            var cmdText: String
+            var plan: Plan
+        }
+
+        let runtime = MacNodeRuntime()
+        let params = PrepareParams(
+            command: ["echo", "hello"],
+            cwd: "  /tmp  ",
+            agentId: "  agent-1  ",
+            sessionKey: "  main  ")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-prepare", command: OpenClawSystemCommand.runPrepare.rawValue, paramsJSON: json))
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(PreparePayload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.cmdText == "echo hello")
+        #expect(payload.plan.argv == ["echo", "hello"])
+        #expect(payload.plan.cwd == "/tmp")
+        #expect(payload.plan.rawCommand == "echo hello")
+        #expect(payload.plan.agentId == "agent-1")
+        #expect(payload.plan.sessionKey == "main")
+    }
+
     @Test func `handle invoke rejects empty system which`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemWhichParams(bins: [])
