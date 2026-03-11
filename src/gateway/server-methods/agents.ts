@@ -867,7 +867,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
       // files) but reject writes to prevent an agent from overwriting an arbitrary
       // workspace file via a symlink alias.
       const normalizedName = path.normalize(name);
-      if (relativeWritePath !== normalizedName) {
+      // Use case-insensitive comparison on platforms that may have case-insensitive
+      // filesystems (e.g. default macOS HFS+/APFS volumes). A request for "MEMORY.md"
+      // should be allowed when the in-workspace file is "memory.md". The security
+      // invariant (no symlink alias writes) is still enforced — only case variation
+      // is tolerated, not path traversal or cross-directory redirects.
+      if (relativeWritePath.toLowerCase() !== normalizedName.toLowerCase()) {
         respondWorkspaceFileUnsafe(respond, name);
         return;
       }

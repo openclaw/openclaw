@@ -646,6 +646,61 @@ describe("agents.files.get/set symlink safety", () => {
     );
   });
 
+  it("allows agents.files.set when only filename casing differs (case-insensitive filesystem)", async () => {
+    const workspace = "/workspace/test-agent";
+    // On-disk file is "memory.md" but request uses "MEMORY.md"
+    const candidate = path.resolve(workspace, "memory.md");
+    const fileStat = makeFileStat({ size: 10, mtimeMs: 1000, dev: 1, ino: 1 });
+
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      // The real path resolves to the same file (not a symlink redirect)
+      if (p === path.resolve(workspace, "MEMORY.md")) {
+        return candidate;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate || p === path.resolve(workspace, "MEMORY.md")) {
+        return makeFileStat({ size: 10, mtimeMs: 1000, dev: 1, ino: 1 });
+      }
+      throw createEnoentError();
+    });
+    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return fileStat;
+      }
+      throw createEnoentError();
+    });
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => fileStat,
+          readFile: async () => Buffer.from("content\n"),
+          truncate: async () => {},
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+
+    const setCall = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "MEMORY.md",
+      content: "updated\n",
+    });
+    await setCall.promise;
+    // Must succeed — case difference alone is not a symlink alias
+    expect(setCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true }),
+      undefined,
+    );
+  });
+
   function mockHardlinkedWorkspaceAlias() {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
