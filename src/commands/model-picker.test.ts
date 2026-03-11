@@ -78,7 +78,7 @@ describe("promptDefaultModel", () => {
       .fn()
       .mockResolvedValueOnce("http://127.0.0.1:30000/v1")
       .mockResolvedValueOnce("sk-sglang-test")
-      .mockResolvedValueOnce("meta-llama/Meta-Llama-3-8B-Instruct");
+      .mockResolvedValueOnce("Qwen/Qwen3-8B");
     const prompter = makePrompter({ select, text: text as never });
     const config = { agents: { defaults: {} } } as OpenClawConfig;
 
@@ -98,14 +98,12 @@ describe("promptDefaultModel", () => {
         credential: expect.objectContaining({ provider: "sglang" }),
       }),
     );
-    expect(result.model).toBe("sglang/meta-llama/Meta-Llama-3-8B-Instruct");
+    expect(result.model).toBe("sglang/Qwen/Qwen3-8B");
     expect(result.config?.models?.providers?.sglang).toMatchObject({
       baseUrl: "http://127.0.0.1:30000/v1",
       api: "openai-completions",
       apiKey: "SGLANG_API_KEY", // pragma: allowlist secret
-      models: [
-        { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "meta-llama/Meta-Llama-3-8B-Instruct" },
-      ],
+      models: [{ id: "Qwen/Qwen3-8B", name: "Qwen/Qwen3-8B" }],
     });
   });
 

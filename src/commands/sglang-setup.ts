@@ -30,7 +30,7 @@ export async function promptAndConfigureSglang(params: {
   });
   const modelIdRaw = await params.prompter.text({
     message: "SGLang model",
-    placeholder: "meta-llama/Meta-Llama-3-8B-Instruct",
+    placeholder: "Qwen/Qwen3-8B",
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
 
