@@ -66,6 +66,12 @@ type TargetInfoResponse = {
   };
 };
 
+type RelayListTarget = {
+  id: string;
+  url: string;
+  title?: string;
+};
+
 type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
@@ -118,6 +124,23 @@ const MAX_NETWORK_REQUESTS = 500;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
+
+function pwSessionLog(
+  event: string,
+  data: Record<string, unknown>,
+  level: "info" | "warn" = "info",
+) {
+  const payload = {
+    ts: new Date().toISOString(),
+    event,
+    ...data,
+  };
+  if (level === "warn") {
+    console.warn("[browser-pw-session]", payload);
+    return;
+  }
+  console.info("[browser-pw-session]", payload);
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -403,7 +426,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
 
 function matchPageByTargetList(
   pages: Page[],
-  targets: Array<{ id: string; url: string; title?: string }>,
+  targets: RelayListTarget[],
   targetId: string,
 ): Page | null {
   const target = targets.find((entry) => entry.id === targetId);
@@ -417,14 +440,130 @@ function matchPageByTargetList(
   }
   if (urlMatch.length > 1) {
     const sameUrlTargets = targets.filter((entry) => entry.url === target.url);
-    if (sameUrlTargets.length === urlMatch.length) {
-      const idx = sameUrlTargets.findIndex((entry) => entry.id === targetId);
-      if (idx >= 0 && idx < urlMatch.length) {
-        return urlMatch[idx] ?? null;
-      }
+    const idx = sameUrlTargets.findIndex((entry) => entry.id === targetId);
+    if (idx >= 0 && idx < urlMatch.length) {
+      return urlMatch[idx] ?? null;
+    }
+    if (sameUrlTargets.length > 0 && idx >= 0) {
+      // Auth redirect flows can leave Playwright's page set and /json/list with different
+      // counts for the same URL for a short time. Clamp the index instead of hard failing.
+      const clampedIdx = Math.min(idx, urlMatch.length - 1);
+      return urlMatch[clampedIdx] ?? null;
     }
   }
   return null;
+}
+
+async function resolveExtensionRelayAliasTargetId(opts: {
+  cdpUrl: string;
+  targetId: string;
+}): Promise<string> {
+  const requested = opts.targetId.trim();
+  if (!requested) {
+    return requested;
+  }
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
+  const resolveUrl = appendCdpPath(cdpHttpBase, `/json/resolve/${encodeURIComponent(requested)}`);
+  const payload = await fetchJson<{ targetId?: unknown }>(resolveUrl, 1200).catch(() => null);
+  const resolved = typeof payload?.targetId === "string" ? payload.targetId.trim() : "";
+  if (!resolved) {
+    return requested;
+  }
+  if (resolved !== requested) {
+    pwSessionLog("extension.target.alias-resolved", {
+      requested,
+      resolved,
+    });
+  }
+  return resolved;
+}
+
+async function fetchRelayTargets(cdpUrl: string): Promise<RelayListTarget[]> {
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  const targets = await fetchJson<Array<{ id: string; url: string; title?: string }>>(
+    appendCdpPath(cdpHttpBase, "/json/list"),
+    2000,
+  );
+  return targets;
+}
+
+async function findPageByRelayTargetList(opts: {
+  pages: Page[];
+  targets: RelayListTarget[];
+  targetId: string;
+}): Promise<Page | null> {
+  const direct = matchPageByTargetList(opts.pages, opts.targets, opts.targetId);
+  if (direct) {
+    return direct;
+  }
+
+  const target = opts.targets.find((entry) => entry.id === opts.targetId);
+  if (!target) {
+    return null;
+  }
+
+  const urlMatches = opts.pages.filter((page) => page.url() === target.url);
+  if (urlMatches.length === 0) {
+    return null;
+  }
+
+  const sameUrlTargets = opts.targets.filter((entry) => entry.url === target.url);
+  const idx = sameUrlTargets.findIndex((entry) => entry.id === opts.targetId);
+  if (idx >= 0 && idx < urlMatches.length) {
+    return urlMatches[idx] ?? null;
+  }
+  if (idx >= 0 && urlMatches.length > 0) {
+    const clamped = urlMatches[Math.min(idx, urlMatches.length - 1)];
+    if (clamped) {
+      return clamped;
+    }
+  }
+
+  const normalizedTitle = String(target.title ?? "").trim();
+  if (normalizedTitle) {
+    const titleMatches: Page[] = [];
+    for (const page of urlMatches) {
+      const title = await page.title().catch(() => "");
+      if (title.trim() === normalizedTitle) {
+        titleMatches.push(page);
+      }
+    }
+    if (titleMatches.length === 1) {
+      return titleMatches[0] ?? null;
+    }
+    if (idx >= 0 && idx < titleMatches.length) {
+      return titleMatches[idx] ?? null;
+    }
+    if (titleMatches.length > 0) {
+      return titleMatches[0] ?? null;
+    }
+  }
+
+  return urlMatches[0] ?? null;
+}
+
+async function findPageByTargetProbe(pages: Page[], targetId: string): Promise<Page | null> {
+  for (const page of pages) {
+    const probedTargetId = await pageTargetId(page).catch(() => null);
+    if (probedTargetId === targetId) {
+      return page;
+    }
+  }
+  return null;
+}
+
+async function findFocusedPage(pages: Page[]): Promise<Page | null> {
+  const focused: Page[] = [];
+  for (const page of pages) {
+    const hasFocus = await page.evaluate(() => document.hasFocus()).catch(() => false);
+    if (hasFocus) {
+      focused.push(page);
+      if (focused.length > 1) {
+        return null;
+      }
+    }
+  }
+  return focused[0] ?? null;
 }
 
 async function findPageByTargetIdViaTargetList(
@@ -432,15 +571,8 @@ async function findPageByTargetIdViaTargetList(
   targetId: string,
   cdpUrl: string,
 ): Promise<Page | null> {
-  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
-  const targets = await fetchJson<
-    Array<{
-      id: string;
-      url: string;
-      title?: string;
-    }>
-  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
-  return matchPageByTargetList(pages, targets, targetId);
+  const targets = await fetchRelayTargets(cdpUrl);
+  return await findPageByRelayTargetList({ pages, targets, targetId });
 }
 
 async function findPageByTargetId(
@@ -453,15 +585,114 @@ async function findPageByTargetId(
     ? await isExtensionRelayCdpEndpoint(cdpUrl).catch(() => false)
     : false;
   if (cdpUrl && isExtensionRelay) {
-    try {
-      const matched = await findPageByTargetIdViaTargetList(pages, targetId, cdpUrl);
+    const resolvedTargetId = await resolveExtensionRelayAliasTargetId({
+      cdpUrl,
+      targetId,
+    }).catch(() => targetId);
+
+    const relayTargets = await fetchRelayTargets(cdpUrl).catch(() => null);
+    if (relayTargets) {
+      const matched = await findPageByRelayTargetList({
+        pages,
+        targets: relayTargets,
+        targetId: resolvedTargetId,
+      });
       if (matched) {
+        pwSessionLog("extension.target.match", {
+          requestedTargetId: targetId,
+          resolvedTargetId,
+          method: "target-list",
+          pages: pages.length,
+        });
+        return matched;
+      }
+    }
+
+    const targetProbeMatch = await findPageByTargetProbe(pages, resolvedTargetId).catch(() => null);
+    if (targetProbeMatch) {
+      pwSessionLog("extension.target.match", {
+        requestedTargetId: targetId,
+        resolvedTargetId,
+        method: "page-target-probe",
+        pages: pages.length,
+      });
+      return targetProbeMatch;
+    }
+
+    const targetListed = relayTargets?.some((target) => target.id === resolvedTargetId) ?? false;
+    if (targetListed) {
+      const focused = await findFocusedPage(pages).catch(() => null);
+      if (focused) {
+        pwSessionLog("extension.target.match-fallback", {
+          requestedTargetId: targetId,
+          resolvedTargetId,
+          method: "focused-page-fallback",
+          pages: pages.length,
+        });
+        return focused;
+      }
+      if (pages.length > 0) {
+        // Last-resort continuity: if relay still lists the target but Playwright cannot map it,
+        // keep the session alive by returning the first available page instead of hard failing.
+        pwSessionLog(
+          "extension.target.match-fallback",
+          {
+            requestedTargetId: targetId,
+            resolvedTargetId,
+            method: "first-page-when-listed",
+            pages: pages.length,
+            classification: "target-listed-but-playwright-mapping-missed",
+          },
+          "warn",
+        );
+        return pages[0] ?? null;
+      }
+    }
+
+    try {
+      const matched = await findPageByTargetIdViaTargetList(pages, resolvedTargetId, cdpUrl);
+      if (matched) {
+        pwSessionLog("extension.target.match", {
+          requestedTargetId: targetId,
+          resolvedTargetId,
+          method: "target-list-retry",
+          pages: pages.length,
+        });
         return matched;
       }
     } catch {
       // Ignore fetch errors and fall through to best-effort single-page fallback.
+      pwSessionLog(
+        "extension.target.match-fetch-failed",
+        {
+          requestedTargetId: targetId,
+          resolvedTargetId,
+          cdpUrl: normalizeCdpUrl(cdpUrl),
+          pages: pages.length,
+        },
+        "warn",
+      );
     }
-    return pages.length === 1 ? (pages[0] ?? null) : null;
+    if (pages.length === 1) {
+      pwSessionLog("extension.target.match-fallback", {
+        requestedTargetId: targetId,
+        resolvedTargetId,
+        method: "single-page-fallback",
+      });
+      return pages[0] ?? null;
+    }
+    pwSessionLog(
+      "extension.target.match-failed",
+      {
+        requestedTargetId: targetId,
+        resolvedTargetId,
+        pages: pages.length,
+        pageUrls: pages.map((page) => page.url()).slice(0, 20),
+        classification: "target-listed-but-playwright-page-unresolved",
+      },
+      "warn",
+    );
+    return null;
   }
 
   let resolvedViaCdp = false;

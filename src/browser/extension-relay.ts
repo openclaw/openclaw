@@ -73,6 +73,7 @@ type AttachedToTargetEvent = {
 type DetachedFromTargetEvent = {
   sessionId: string;
   targetId?: string;
+  reason?: string;
 };
 
 type ConnectedTarget = {
@@ -84,6 +85,27 @@ type ConnectedTarget = {
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
 const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
+const TARGET_ALIAS_TTL_MS = 60_000;
+const TARGET_ALIAS_MAX_DEPTH = 8;
+
+type TargetAlias = {
+  targetId: string;
+  sessionId: string;
+  updatedAt: number;
+};
+
+function relayLog(
+  event: string,
+  data: Record<string, unknown>,
+  level: "info" | "warn" = "info",
+): void {
+  const payload = { ts: new Date().toISOString(), event, ...data };
+  if (level === "warn") {
+    console.warn("[browser-relay]", payload);
+    return;
+  }
+  console.info("[browser-relay]", payload);
+}
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (!value) {
@@ -266,6 +288,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     let extensionWs: WebSocket | null = null;
     const cdpClients = new Set<WebSocket>();
     const connectedTargets = new Map<string, ConnectedTarget>();
+    const targetAliasByTargetId = new Map<string, TargetAlias>();
     const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
     const hasConnectedTargets = () => connectedTargets.size > 0;
     let extensionDisconnectCleanupTimer: NodeJS.Timeout | null = null;
@@ -291,7 +314,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
     };
 
     const closeCdpClientsAfterExtensionDisconnect = () => {
+      relayLog(
+        "relay.disconnect.final",
+        {
+          cause: "extension-disconnected-grace-expired",
+          connectedTargets: connectedTargets.size,
+          cdpClients: cdpClients.size,
+        },
+        "warn",
+      );
       connectedTargets.clear();
+      targetAliasByTargetId.clear();
       for (const client of cdpClients) {
         try {
           client.close(1011, "extension disconnected");
@@ -301,6 +334,79 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       cdpClients.clear();
       flushExtensionReconnectWaiters(false);
+    };
+
+    const pruneExpiredTargetAliases = (now = Date.now()) => {
+      for (const [sourceTargetId, alias] of targetAliasByTargetId) {
+        if (now - alias.updatedAt <= TARGET_ALIAS_TTL_MS) {
+          continue;
+        }
+        targetAliasByTargetId.delete(sourceTargetId);
+      }
+    };
+
+    const dropAliasesForTarget = (targetId: string) => {
+      targetAliasByTargetId.delete(targetId);
+      for (const [sourceTargetId, alias] of targetAliasByTargetId) {
+        if (alias.targetId === targetId) {
+          targetAliasByTargetId.delete(sourceTargetId);
+        }
+      }
+    };
+
+    const setTargetAlias = (params: {
+      sourceTargetId: string;
+      targetId: string;
+      sessionId: string;
+    }) => {
+      const sourceTargetId = params.sourceTargetId.trim();
+      const targetId = params.targetId.trim();
+      if (!sourceTargetId || !targetId || sourceTargetId === targetId) {
+        return;
+      }
+      pruneExpiredTargetAliases();
+      targetAliasByTargetId.set(sourceTargetId, {
+        targetId,
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      });
+      relayLog("target.transition", {
+        sessionId: params.sessionId,
+        from: sourceTargetId,
+        to: targetId,
+      });
+    };
+
+    const resolveConnectedTargetId = (targetId: string): string => {
+      pruneExpiredTargetAliases();
+      let current = targetId.trim();
+      if (!current) {
+        return current;
+      }
+      const visited = new Set<string>();
+      for (let depth = 0; depth < TARGET_ALIAS_MAX_DEPTH; depth++) {
+        if (visited.has(current)) {
+          break;
+        }
+        visited.add(current);
+        const alias = targetAliasByTargetId.get(current);
+        if (!alias) {
+          break;
+        }
+        if (
+          !Array.from(connectedTargets.values()).some(
+            (target) => target.sessionId === alias.sessionId,
+          )
+        ) {
+          targetAliasByTargetId.delete(current);
+          break;
+        }
+        current = alias.targetId;
+      }
+      if (current !== targetId) {
+        relayLog("target.alias.resolve", { requested: targetId, resolved: current });
+      }
+      return current;
     };
 
     const scheduleExtensionDisconnectCleanup = () => {
@@ -424,9 +530,20 @@ export async function ensureChromeExtensionRelayServer(opts: {
       if (!isMissingTargetError(err)) {
         return;
       }
+      relayLog(
+        "command.fail.missing-target",
+        {
+          method: cmd.method,
+          sessionId: cmd.sessionId,
+          classification: "target-not-found-command-failure",
+          error: err instanceof Error ? err.message : String(err),
+        },
+        "warn",
+      );
       if (cmd.sessionId) {
         const removed = dropConnectedTargetSession(cmd.sessionId);
         if (removed) {
+          dropAliasesForTarget(removed.targetId);
           broadcastDetachedTarget(removed);
           return;
         }
@@ -438,6 +555,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       const removedTargets = dropConnectedTargetsByTargetId(targetId);
       for (const removed of removedTargets) {
+        dropAliasesForTarget(removed.targetId);
         broadcastDetachedTarget(removed, targetId);
       }
     };
@@ -490,7 +608,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
           };
         case "Target.getTargetInfo": {
           const params = (cmd.params ?? {}) as { targetId?: string };
-          const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
+          const targetId =
+            typeof params.targetId === "string"
+              ? resolveConnectedTargetId(params.targetId)
+              : undefined;
           if (targetId) {
             for (const t of connectedTargets.values()) {
               if (t.targetId === targetId) {
@@ -509,7 +630,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
         }
         case "Target.attachToTarget": {
           const params = (cmd.params ?? {}) as { targetId?: string };
-          const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
+          const targetId =
+            typeof params.targetId === "string"
+              ? resolveConnectedTargetId(params.targetId)
+              : undefined;
           if (!targetId) {
             throw new Error("targetId required");
           }
@@ -643,18 +767,26 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if (!match || (req.method !== "GET" && req.method !== "PUT")) {
           return false;
         }
-        let targetId = "";
+        let requestedTargetId = "";
         try {
-          targetId = decodeURIComponent(match[1] ?? "").trim();
+          requestedTargetId = decodeURIComponent(match[1] ?? "").trim();
         } catch {
           res.writeHead(400);
           res.end("invalid targetId encoding");
           return true;
         }
-        if (!targetId) {
+        if (!requestedTargetId) {
           res.writeHead(400);
           res.end("targetId required");
           return true;
+        }
+        const targetId = resolveConnectedTargetId(requestedTargetId);
+        if (targetId !== requestedTargetId) {
+          relayLog("target.action.resolve", {
+            method: cdpMethod,
+            requestedTargetId,
+            resolvedTargetId: targetId,
+          });
         }
         void (async () => {
           try {
@@ -671,6 +803,27 @@ export async function ensureChromeExtensionRelayServer(opts: {
         res.end("OK");
         return true;
       };
+
+      const resolveMatch = path.match(/^\/json\/resolve\/(.+)$/);
+      if (resolveMatch && (req.method === "GET" || req.method === "PUT")) {
+        let requestedTargetId = "";
+        try {
+          requestedTargetId = decodeURIComponent(resolveMatch[1] ?? "").trim();
+        } catch {
+          res.writeHead(400);
+          res.end("invalid targetId encoding");
+          return;
+        }
+        if (!requestedTargetId) {
+          res.writeHead(400);
+          res.end("targetId required");
+          return;
+        }
+        const targetId = resolveConnectedTargetId(requestedTargetId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ targetId }));
+        return;
+      }
 
       if (
         handleTargetActionRoute(path.match(/^\/json\/activate\/(.+)$/), "Target.activateTarget")
@@ -822,7 +975,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
                 targetId: nextTargetId,
                 targetInfo: attached.targetInfo,
               });
+              relayLog("target.attached", {
+                sessionId: attached.sessionId,
+                targetId: nextTargetId,
+                url: attached.targetInfo.url ?? "",
+              });
               if (changedTarget && prevTargetId) {
+                setTargetAlias({
+                  sourceTargetId: prevTargetId,
+                  targetId: nextTargetId,
+                  sessionId: attached.sessionId,
+                });
                 broadcastToCdpClients({
                   method: "Target.detachedFromTarget",
                   params: { sessionId: attached.sessionId, targetId: prevTargetId },
@@ -838,10 +1001,21 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
           if (method === "Target.detachedFromTarget") {
             const detached = (params ?? {}) as DetachedFromTargetEvent;
+            relayLog("target.detached", {
+              sessionId: detached.sessionId,
+              targetId: detached.targetId ?? "",
+              reason: detached.reason ?? "unknown",
+            });
             if (detached?.sessionId) {
-              dropConnectedTargetSession(detached.sessionId);
+              const removed = dropConnectedTargetSession(detached.sessionId);
+              if (removed) {
+                dropAliasesForTarget(removed.targetId);
+              }
             } else if (detached?.targetId) {
-              dropConnectedTargetsByTargetId(detached.targetId);
+              const removedTargets = dropConnectedTargetsByTargetId(detached.targetId);
+              for (const removed of removedTargets) {
+                dropAliasesForTarget(removed.targetId);
+              }
             }
             broadcastToCdpClients({ method, params, sessionId });
             return;
@@ -850,7 +1024,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
           if (method === "Target.targetDestroyed" || method === "Target.targetCrashed") {
             const targetEvent = (params ?? {}) as { targetId?: string };
             if (targetEvent.targetId) {
-              dropConnectedTargetsByTargetId(targetEvent.targetId);
+              relayLog("target.destroyed", { targetId: targetEvent.targetId, source: method });
+              const removedTargets = dropConnectedTargetsByTargetId(targetEvent.targetId);
+              for (const removed of removedTargets) {
+                dropAliasesForTarget(removed.targetId);
+              }
             }
             broadcastToCdpClients({ method, params, sessionId });
             return;
@@ -879,11 +1057,26 @@ export async function ensureChromeExtensionRelayServer(opts: {
         }
       });
 
-      ws.on("close", () => {
+      ws.on("close", (code, reason) => {
         clearInterval(ping);
         if (extensionWs !== ws) {
           return;
         }
+        const reasonText =
+          typeof reason === "string"
+            ? reason
+            : Buffer.isBuffer(reason)
+              ? reason.toString("utf8")
+              : "";
+        relayLog(
+          "relay.ws.close",
+          {
+            source: "extension",
+            code,
+            reason: reasonText || "none",
+          },
+          "warn",
+        );
         extensionWs = null;
         for (const [, pending] of pendingExtension) {
           clearTimeout(pending.timer);
@@ -937,7 +1130,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
           }
           if (cmd.method === "Target.attachToTarget") {
             const params = (cmd.params ?? {}) as { targetId?: string };
-            const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
+            const targetId =
+              typeof params.targetId === "string"
+                ? resolveConnectedTargetId(params.targetId)
+                : undefined;
             if (targetId) {
               const target = Array.from(connectedTargets.values()).find(
                 (t) => t.targetId === targetId,
@@ -1021,6 +1217,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         relayRuntimeByPort.delete(port);
         clearExtensionDisconnectCleanupTimer();
         flushExtensionReconnectWaiters(false);
+        targetAliasByTargetId.clear();
         for (const [, pending] of pendingExtension) {
           clearTimeout(pending.timer);
           pending.reject(new Error("server stopping"));
