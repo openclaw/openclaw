@@ -131,6 +131,29 @@ describe("web_search brave language param normalization", () => {
     });
   });
 
+  it("normalizes Chinese locale variants to Brave-supported search_lang values", () => {
+    expect(normalizeBraveLanguageParams({ search_lang: "zh" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh_CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-Hans-CN" })).toEqual({
+      search_lang: "zh-hans",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-TW" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: undefined,
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "zh-Hant-HK" })).toEqual({
+      search_lang: "zh-hant",
+      ui_lang: undefined,
+    });
+  });
+
   it("flags invalid Brave language formats", () => {
     expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
       invalidField: "search_lang",
