@@ -38,7 +38,10 @@ describe("applyAuthChoiceOpenAI", () => {
     return env.agentDir;
   }
 
-  async function writeCodexCliAuth(stateDir: string, tokens?: { access?: string; refresh?: string }) {
+  async function writeCodexCliAuth(
+    stateDir: string,
+    tokens?: { access?: string; refresh?: string },
+  ) {
     const codexHome = path.join(stateDir, "codex-home");
     process.env.CODEX_HOME = codexHome;
     await fs.mkdir(codexHome, { recursive: true });
