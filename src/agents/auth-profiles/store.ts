@@ -19,6 +19,13 @@ type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
+  /**
+   * When true, skip the main-agent inheritance fallback that clones main profiles
+   * into a subagent directory when the subagent has no auth-profiles.json.
+   * Use for the pre-lock migration trigger in auth-clean to avoid materialising
+   * main credentials in the subagent file before cleanup (scope bleed).
+   */
+  skipInheritance?: boolean;
 };
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
@@ -473,8 +480,11 @@ function loadAuthProfileStoreForAgent(
     return asStore;
   }
 
-  // Fallback: inherit auth-profiles from main agent if subagent has none
-  if (agentDir && !readOnly) {
+  // Fallback: inherit auth-profiles from main agent if subagent has none.
+  // Skipped when skipInheritance:true (e.g. auth-clean pre-lock migration trigger)
+  // to prevent materialising main credentials in the subagent file before cleanup
+  // runs — that would cause scope bleed and a misleading no-op clean. (#2915653312)
+  if (agentDir && !readOnly && !options?.skipInheritance) {
     const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
@@ -590,7 +600,7 @@ export function ensureAuthProfileStore(
  */
 export function loadAgentLocalAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean; readOnly?: boolean },
+  options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
   return loadAuthProfileStoreForAgent(agentDir, options);
 }

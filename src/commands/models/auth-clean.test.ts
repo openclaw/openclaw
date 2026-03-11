@@ -248,25 +248,33 @@ describe("modelsAuthCleanCommand", () => {
   it("probe uses readOnly:true; migration trigger uses readOnly:false after guards pass (non-default agent)", async () => {
     // #2915530629: same as default agent path — probe is always readOnly:true;
     // migration trigger uses readOnly:false after guards pass. (#2914491523, #2914711181)
+    // #2915653312: migration trigger must also pass skipInheritance:true so that
+    // the main-agent fallback inside loadAuthProfileStoreForAgent is suppressed —
+    // without it, a subagent with no local store would clone main credentials
+    // before cleanup, causing scope bleed and a misleading no-op.
     const store = makeStore(["anthropic:agent-profile", "anthropic:agent-stale"]);
+    const workerAgentDir = "/home/user/.openclaw/agents/worker/agent";
 
     mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:agent-profile"]));
     mocks.resolveKnownAgentId.mockReturnValueOnce("worker");
-    mocks.resolveAgentDir.mockReturnValueOnce("/home/user/.openclaw/agents/worker/agent");
+    mocks.resolveAgentDir.mockReturnValueOnce(workerAgentDir);
     mocks.loadAgentLocalAuthProfileStore.mockReturnValue(store);
     captureUpdater(store);
 
     await modelsAuthCleanCommand({ agent: "worker" }, makeRuntime()); // no dryRun
 
-    // Probe call: readOnly:true (always, even for non-dryRun)
+    // Probe call: readOnly:true (always, even for non-dryRun); agentDir is the
+    // worker-specific path, not the main agent path.
     expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
-      expect.any(String),
+      workerAgentDir,
       expect.objectContaining({ readOnly: true }),
     );
-    // Migration trigger call: readOnly:false (after guards pass, before lock)
+    // Migration trigger call: readOnly:false (after guards pass, before lock).
+    // Must pass skipInheritance:true to prevent the main-agent fallback from
+    // cloning main profiles into the worker file before cleanup. (#2915653312)
     expect(mocks.loadAgentLocalAuthProfileStore).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ readOnly: false }),
+      workerAgentDir,
+      expect.objectContaining({ readOnly: false, skipInheritance: true }),
     );
   });
 

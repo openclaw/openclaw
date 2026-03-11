@@ -255,10 +255,20 @@ export async function modelsAuthCleanCommand(
   // updateAuthProfileStoreWithLock's ensureAuthStoreFile can create an empty
   // placeholder (which would cause the lock-internal load to see an empty store
   // and skip all profile removals). (#2914491523, #2914711181)
+  //
+  // For non-main agents, skipInheritance:true prevents the main-agent fallback
+  // inside loadAuthProfileStoreForAgent from cloning main profiles into the
+  // subagent file when auth-profiles.json is absent.  Without it, a subagent
+  // with no local store would materialise main credentials before cleanup and
+  // skip the intended legacy migration, causing scope bleed. (#2915653312)
   if (isMainAgentDir) {
     ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false, readOnly: false });
   } else {
-    loadAgentLocalAuthProfileStore(agentDir, { allowKeychainPrompt: false, readOnly: false });
+    loadAgentLocalAuthProfileStore(agentDir, {
+      allowKeychainPrompt: false,
+      readOnly: false,
+      skipInheritance: true,
+    });
   }
 
   // Track actual removals inside the lock (concurrent gateway writes may have
