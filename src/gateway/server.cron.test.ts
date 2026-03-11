@@ -499,19 +499,22 @@ describe("gateway server cron", () => {
       });
       const jobId = expectCronJobIdFromResponse(addRes);
 
-      await waitForCondition(
-        () =>
-          cronIsolatedRun.mock.calls.some((call) => {
-            const payload = call[0] as { job?: { id?: unknown } } | undefined;
+      await vi.waitFor(
+        () => {
+          const matched = cronIsolatedRun.mock.calls.some((entry) => {
+            const payload = (entry as [unknown])[0] as { job?: { id?: unknown } } | undefined;
             return payload?.job?.id === jobId;
-          }),
-        CRON_WAIT_TIMEOUT_MS,
+          });
+          expect(matched).toBe(true);
+        },
+        { timeout: CRON_WAIT_TIMEOUT_MS, interval: 5 },
       );
 
-      const call = cronIsolatedRun.mock.calls.find((entry) => {
-        const payload = entry[0] as { job?: { id?: unknown } } | undefined;
+      const matchingCall = cronIsolatedRun.mock.calls.find((entry) => {
+        const payload = (entry as [unknown])[0] as { job?: { id?: unknown } } | undefined;
         return payload?.job?.id === jobId;
-      })?.[0] as
+      }) as [unknown] | undefined;
+      const call = matchingCall?.[0] as
         | {
             lane?: unknown;
             sessionKey?: unknown;
