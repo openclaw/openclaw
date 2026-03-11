@@ -122,6 +122,13 @@ export function resolvePreferredOpenClawTmpDir(
     try {
       rmSync(dirPath, { recursive: true, force: true });
       mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+      // Guard against symlink race: verify the path is a real directory
+      // (not a symlink) before applying chmod in shared temp parents.
+      const st = lstatSync(dirPath);
+      if (st.isSymbolicLink()) {
+        rmSync(dirPath, { recursive: true, force: true });
+        return false;
+      }
       chmodSync(dirPath, 0o700);
       return resolveDirState(dirPath) === "available";
     } catch {

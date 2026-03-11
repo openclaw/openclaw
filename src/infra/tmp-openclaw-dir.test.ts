@@ -245,6 +245,7 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(resolved).toBe(fb);
     expect(rmSync).toHaveBeenCalledWith(fb, { recursive: true, force: true });
     expect(mkdirSync).toHaveBeenCalledWith(fb, { recursive: true, mode: 0o700 });
+    expect(chmodSync).toHaveBeenCalledWith(fb, 0o700);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced invalid temp dir"));
   });
 
