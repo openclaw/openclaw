@@ -42,7 +42,10 @@ function normalizeHintText(value: string): string {
 export function isLikelyInterimCronMessage(value: string): boolean {
   const normalized = normalizeHintText(value);
   if (!normalized) {
-    return true;
+    // Empty text after payload filtering means the agent either returned
+    // NO_REPLY (deliberately silent) or produced no deliverable content.
+    // Do not treat this as an interim acknowledgement that needs a rerun.
+    return false;
   }
   const words = normalized.split(" ").filter(Boolean).length;
   return words <= 45 && INTERIM_CRON_HINTS.some((hint) => normalized.includes(hint));
