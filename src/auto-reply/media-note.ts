@@ -13,7 +13,10 @@ function formatMediaAttachedLine(params: {
       : "[media attached: ";
   const typePart = params.type?.trim() ? ` (${params.type.trim()})` : "";
   const urlRaw = params.url?.trim();
-  const urlPart = urlRaw ? ` | ${urlRaw}` : "";
+  // Only append url if it's a real HTTP(S) URL and distinct from path,
+  // otherwise local fallback paths get duplicated (issue #42791)
+  const isDistinctUrl = urlRaw && urlRaw !== params.path && /^https?:\/\//i.test(urlRaw);
+  const urlPart = isDistinctUrl ? ` | ${urlRaw}` : "";
   return `${prefix}${params.path}${typePart}${urlPart}]`;
 }
 
