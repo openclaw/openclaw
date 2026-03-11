@@ -77,7 +77,7 @@ export async function checkInboundAccessControl(params: {
   // Self-chat mode: absolute isolation — only process messages from the owner's own phone.
   // This guard must run before group/DM policy evaluation to ensure no non-self message
   // ever reaches downstream processing (mention gating, debounce, auto-reply, etc.).
-  if (isSelfChat && !isSamePhone && params.selfE164 !== null) {
+  if (isSelfChat && !isSamePhone) {
     logVerbose(
       `Blocked non-self message in self-chat mode: from=${params.from} selfE164=${params.selfE164 ?? "null"} group=${params.group}`,
     );
