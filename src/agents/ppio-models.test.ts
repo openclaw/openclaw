@@ -198,7 +198,7 @@ describe("ppio-models", () => {
 
     await runWithDiscoveryEnabled(() => discoverPpioModels("sk-test-key"));
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer sk-test-key");
   });
 
