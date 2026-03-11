@@ -344,6 +344,52 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("mirrors reasoning-only final replies when reasoning delivery is enabled", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 999,
+      reasoningMessageId: 111,
+    });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "111" });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Reasoning:\n_step one expanded_" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(reasoningDraftStream.stop).toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      111,
+      "Reasoning:\n_step one expanded_",
+      expect.any(Object),
+    );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "s1",
+      text: "Reasoning:\n_step one expanded_",
+      mediaUrls: undefined,
+    });
+  });
+
   it("does not mirror suppressed reasoning text for media-only final delivery", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
@@ -2331,5 +2377,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
     expect(finalTextSentViaDeliverReplies).toBe(true);
+  });
+
+  it("does not mirror unconfirmed final text when preview finalization is retained", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming..." });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockRejectedValue(new Error("timeout: request timed out after 30000ms"));
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+    });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "Final answer",
+      mediaUrls: undefined,
+    });
   });
 });

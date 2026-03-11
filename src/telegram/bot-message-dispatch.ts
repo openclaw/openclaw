@@ -643,10 +643,12 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
-            if (info.kind === "final" && result !== "skipped") {
-              deliveredFinalPayload = true;
-              if (segment.lane === "answer") {
+            if (info.kind === "final") {
+              if (result === "sent" || result === "preview-finalized") {
+                deliveredFinalPayload = true;
                 mirroredTranscriptPayloads.push(applyTextToPayload(payload, segment.text));
+              } else if (result === "preview-retained") {
+                deliveredFinalPayload = true;
               }
             }
             if (segment.lane === "reasoning") {
