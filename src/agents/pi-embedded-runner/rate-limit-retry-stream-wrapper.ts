@@ -11,6 +11,9 @@ const RATE_LIMIT_RETRY_POLICY: BackoffPolicy = {
 /** Maximum number of retries before surfacing the 429 error. */
 const MAX_RETRIES = 3;
 
+/** Cap server-provided Retry-After to prevent unbounded blocking. */
+const MAX_RETRY_AFTER_MS = 30_000;
+
 /**
  * Detect whether an error represents an HTTP 429 (rate limit) response.
  *
@@ -129,8 +132,10 @@ export function createRateLimitRetryStreamWrapper(
         }
         const retryAfterMs = parseRetryAfterMs(err);
         const backoffMs = computeBackoff(RATE_LIMIT_RETRY_POLICY, retryCount + 1);
-        const rawDelayMs = retryAfterMs ?? backoffMs;
-        const delayMs = Math.min(rawDelayMs, RATE_LIMIT_RETRY_POLICY.maxMs);
+        // backoffMs is already bounded by computeBackoff; cap Retry-After separately
+        // so an unreasonably large header cannot block indefinitely.
+        const delayMs =
+          retryAfterMs != null ? Math.min(retryAfterMs, MAX_RETRY_AFTER_MS) : backoffMs;
         await sleepWithAbort(delayMs, abortSignal);
         return attempt(retryCount + 1);
       }

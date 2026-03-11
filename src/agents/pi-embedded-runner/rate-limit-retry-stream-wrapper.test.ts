@@ -167,6 +167,19 @@ describe("createRateLimitRetryStreamWrapper", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledWith(3_000, undefined);
   });
 
+  it("caps excessively large Retry-After at MAX_RETRY_AFTER_MS", async () => {
+    const inner = makeStreamFn([
+      () =>
+        Promise.reject(
+          make429Error({ headers: { "retry-after": "86400" } }),
+        ) as unknown as ReturnType<StreamFn>,
+      () => createAssistantMessageEventStream(),
+    ]);
+    const wrapped = createRateLimitRetryStreamWrapper(inner);
+    await wrapped(model, context, {});
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(30_000, undefined);
+  });
+
   it("does not retry when abort signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
