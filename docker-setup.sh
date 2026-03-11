@@ -32,6 +32,32 @@ is_truthy_value() {
   esac
 }
 
+# Sanitize a .env file so Docker Compose reads it correctly.
+# Removes UTF-8 BOM, converts CRLF to LF, and strips stray carriage returns.
+# This prevents subtle bugs when the file is edited on Windows (e.g. Notepad
+# saves with BOM + CRLF, causing variable values to carry trailing \r).
+sanitize_env_file() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+
+  local tmp
+  tmp="$(mktemp)"
+
+  # 1. Strip UTF-8 BOM (EF BB BF) if present at the start of file
+  # 2. Convert CRLF to LF
+  # 3. Remove any remaining bare CR characters
+  LC_ALL=C sed '1s/^\xef\xbb\xbf//' "$file" \
+    | tr -d '\r' \
+    >"$tmp"
+
+  # Only overwrite if content actually changed (preserves timestamps)
+  if ! cmp -s "$file" "$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 read_config_gateway_token() {
   local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
   if [[ ! -f "$config_path" ]]; then
@@ -409,6 +435,9 @@ upsert_env "$ENV_FILE" \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
+
+# Clean up any BOM / CRLF artifacts so Docker Compose reads the .env correctly.
+sanitize_env_file "$ENV_FILE"
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
