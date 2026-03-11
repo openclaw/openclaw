@@ -120,6 +120,22 @@ function createMessageQueue(ws: WebSocket) {
   return { next };
 }
 
+async function waitForJsonMessageMatching<T>(
+  queue: ReturnType<typeof createMessageQueue>,
+  match: (value: T) => boolean,
+  timeoutMs = 5000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const next = JSON.parse(await queue.next(remaining)) as T;
+    if (match(next)) {
+      return next;
+    }
+  }
+  throw new Error("timeout waiting for matching message");
+}
+
 async function waitForListMatch<T>(
   fetchList: () => Promise<T>,
   predicate: (value: T) => boolean,
@@ -934,6 +950,95 @@ describe("chrome extension relay server", () => {
       (attached?.params as { targetInfo?: { targetId?: string } } | undefined)?.targetInfo
         ?.targetId,
     ).toBe("t2");
+
+    cdp.close();
+    ext.close();
+  });
+
+  it("resolves stale target ids after redirect-style target swaps", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    await waitForOpen(ext);
+    const extQ = createMessageQueue(ext);
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "login-session",
+            targetInfo: {
+              targetId: "target-old",
+              type: "page",
+              title: "Login step 1",
+              url: "https://login.example/start",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "login-session",
+            targetInfo: {
+              targetId: "target-new",
+              type: "page",
+              title: "Login step 2",
+              url: "https://login.example/redirect",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    const cdpQ = createMessageQueue(cdp);
+
+    cdp.send(
+      JSON.stringify({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: "target-old" },
+      }),
+    );
+    const attachRes = await waitForJsonMessageMatching<{ id?: number; result?: unknown }>(
+      cdpQ,
+      (msg) => msg.id === 1,
+    );
+    expect(JSON.stringify(attachRes.result ?? {})).toContain("login-session");
+
+    const resolvedTarget = (await fetch(`${cdpUrl}/json/resolve/target-old`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(resolvedTarget.targetId).toBe("target-new");
+
+    await fetch(`${cdpUrl}/json/activate/target-old`, {
+      headers: relayAuthHeaders(cdpUrl),
+    });
+    const activateCmd = await waitForJsonMessageMatching<{
+      method?: string;
+      params?: { method?: string; params?: { targetId?: string } };
+    }>(
+      extQ,
+      (msg) => msg.method === "forwardCDPCommand" && msg.params?.method === "Target.activateTarget",
+    );
+    expect(activateCmd.params?.params?.targetId).toBe("target-new");
 
     cdp.close();
     ext.close();
