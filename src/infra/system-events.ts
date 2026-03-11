@@ -2,7 +2,18 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEventRuntimeOverrides = {
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
+};
+
+export type SystemEvent = {
+  text: string;
+  ts: number;
+  contextKey?: string | null;
+  runtimeOverrides?: SystemEventRuntimeOverrides;
+};
 
 const MAX_EVENTS = 20;
 
@@ -14,9 +25,10 @@ type SessionQueue = {
 
 const queues = new Map<string, SessionQueue>();
 
-type SystemEventOptions = {
+export type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
+  runtimeOverrides?: SystemEventRuntimeOverrides;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -75,6 +87,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
+    runtimeOverrides: options?.runtimeOverrides,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();

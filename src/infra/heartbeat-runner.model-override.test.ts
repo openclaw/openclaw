@@ -203,4 +203,60 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       }),
     );
   });
+
+  it("passes cron runtime overrides from queued main-session events", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+      const { enqueueSystemEvent, resetSystemEventsForTest } = await import("./system-events.js");
+      resetSystemEventsForTest();
+      enqueueSystemEvent("run cron payload", {
+        sessionKey,
+        contextKey: "cron:job-123",
+        runtimeOverrides: {
+          model: "openai-codex/gpt-5.4",
+          thinking: "low",
+          timeoutSeconds: 600,
+        },
+      });
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        reason: "cron:job-123",
+        sessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          heartbeatModelOverride: "openai-codex/gpt-5.4",
+          heartbeatThinkingOverride: "low",
+          timeoutOverrideSeconds: 600,
+        }),
+        cfg,
+      );
+    });
+  });
 });

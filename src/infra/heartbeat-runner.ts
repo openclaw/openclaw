@@ -563,6 +563,12 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
 };
 
+type HeartbeatRuntimeOverrides = {
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
+};
+
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
   if (!/heartbeat\.md/i.test(prompt)) {
     return prompt;
@@ -573,6 +579,22 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
     return prompt;
   }
   return `${prompt}\n${hint}`;
+}
+
+function resolveHeartbeatRuntimeOverrides(params: {
+  preflight: HeartbeatPreflight;
+  reason?: string;
+}): HeartbeatRuntimeOverrides | undefined {
+  const entries = params.preflight.pendingEventEntries;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const matching =
+    typeof params.reason === "string" && params.reason.startsWith("cron:")
+      ? entries.filter((event) => event.contextKey === params.reason)
+      : entries.filter((event) => event.contextKey?.startsWith("cron:"));
+  const selected = matching.at(-1);
+  return selected?.runtimeOverrides;
 }
 
 function resolveHeartbeatRunPrompt(params: {
@@ -765,18 +787,25 @@ export async function runHeartbeatOnce(opts: {
       agentId,
     });
 
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const cronRuntimeOverrides = resolveHeartbeatRuntimeOverrides({
+      preflight,
+      reason: opts.reason,
+    });
+    const heartbeatModelOverride =
+      cronRuntimeOverrides?.model?.trim() || heartbeat?.model?.trim() || undefined;
+    const heartbeatThinkingOverride = cronRuntimeOverrides?.thinking?.trim() || undefined;
+    const timeoutOverrideSeconds = cronRuntimeOverrides?.timeoutSeconds;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const replyOpts = {
+      isHeartbeat: true,
+      heartbeatModelOverride,
+      heartbeatThinkingOverride,
+      timeoutOverrideSeconds,
+      suppressToolErrorWarnings,
+      bootstrapContextMode,
+    };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
