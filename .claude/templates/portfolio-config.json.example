@@ -1,0 +1,69 @@
+{
+  "_comment": "Copy this to ~/.openclaw/workspace/data/portfolio/config.json and fill in your values.",
+  "version": "1",
+  "baseCurrency": "USD",
+
+  "accounts": [
+    {
+      "id": "ibkr-main",
+      "broker": "ibkr",
+      "label": "IBKR Main",
+      "currency": "USD",
+      "dataFile": "ibkr/positions.csv"
+    },
+    {
+      "id": "zerodha-main",
+      "broker": "zerodha",
+      "label": "Zerodha",
+      "currency": "INR",
+      "dataFile": "india/zerodha-holdings.csv"
+    },
+    {
+      "_comment": "Add Groww if you use it",
+      "id": "groww-main",
+      "broker": "groww",
+      "label": "Groww MF",
+      "currency": "INR",
+      "dataFile": "india/groww-holdings.csv"
+    }
+  ],
+
+  "targets": {
+    "_comment": "Percentages must sum to 100 within each dimension.",
+
+    "assetClass": {
+      "equity": 60,
+      "fixed_income": 15,
+      "real_estate": 10,
+      "alternatives": 5,
+      "cash": 10
+    },
+
+    "geography": {
+      "US": 40,
+      "IN": 35,
+      "SG": 10,
+      "global": 15
+    },
+
+    "currency": {
+      "USD": 50,
+      "INR": 30,
+      "SGD": 10,
+      "other": 10
+    }
+  },
+
+  "alertThresholds": {
+    "driftWarningPct": 5,
+    "concentrationWarningPct": 10
+  },
+
+  "fxRefreshAgeHours": 6,
+
+  "_notes": [
+    "driftWarningPct: show ⚠️ when actual allocation differs from target by more than this many percentage points.",
+    "concentrationWarningPct: flag any single holding that exceeds this % of total portfolio.",
+    "fxRefreshAgeHours: fetch fresh FX rates if cached rates are older than this."
+  ]
+}

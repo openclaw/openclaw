@@ -1,0 +1,45 @@
+{
+  "_comment": "Copy to ~/.openclaw/workspace/data/portfolio/manual/alternatives.json.",
+  "version": "1",
+  "updatedAt": "YYYY-MM-DD",
+  "holdings": [
+    {
+      "id": "angel-1",
+      "label": "[Company Name] — Series A",
+      "assetClass": "alternatives",
+      "subClass": "angel",
+      "geography": "IN",
+      "currency": "USD",
+      "currentValueLocalCcy": 50000,
+      "_comment_value": "Use last known valuation or cost basis if no new round has closed.",
+      "costBasisLocalCcy": 25000,
+      "investmentDate": "YYYY-MM-DD",
+      "notes": "~2x book based on last funding round. Unaudited."
+    },
+    {
+      "id": "pe-fund-1",
+      "label": "[Fund Name] — PE Fund II",
+      "assetClass": "alternatives",
+      "subClass": "pe",
+      "geography": "global",
+      "currency": "USD",
+      "currentValueLocalCcy": 100000,
+      "costBasisLocalCcy": 100000,
+      "investmentDate": "YYYY-MM-DD",
+      "notes": "Use capital called as cost basis; use TVPI × paid-in as current value estimate."
+    },
+    {
+      "id": "gold-physical-1",
+      "label": "Physical Gold",
+      "assetClass": "alternatives",
+      "subClass": "gold",
+      "geography": "IN",
+      "currency": "INR",
+      "currentValueLocalCcy": 500000,
+      "_comment_value": "Update manually using current gold price × grams held.",
+      "costBasisLocalCcy": 350000,
+      "investmentDate": "YYYY-MM-DD",
+      "notes": "50g. Valued at market price."
+    }
+  ]
+}

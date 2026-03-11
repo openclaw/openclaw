@@ -1,0 +1,39 @@
+{
+  "_comment": "Copy to ~/.openclaw/workspace/data/portfolio/manual/cash.json. Update balances regularly.",
+  "version": "1",
+  "updatedAt": "YYYY-MM-DD",
+  "accounts": [
+    {
+      "id": "cash-sg-dbs",
+      "label": "DBS Multiplier",
+      "currency": "SGD",
+      "balanceLocalCcy": 85000,
+      "type": "savings",
+      "notes": "Earns bonus interest. Check monthly."
+    },
+    {
+      "id": "cash-in-sbi",
+      "label": "SBI Savings",
+      "currency": "INR",
+      "balanceLocalCcy": 2500000,
+      "type": "savings"
+    },
+    {
+      "id": "cash-us-ibkr",
+      "_comment": "IBKR idle cash — sync monthly with IBKR portal.",
+      "label": "IBKR Cash (USD)",
+      "currency": "USD",
+      "balanceLocalCcy": 5000,
+      "type": "brokerage_cash"
+    },
+    {
+      "id": "cash-sg-fd",
+      "label": "DBS Fixed Deposit",
+      "currency": "SGD",
+      "balanceLocalCcy": 50000,
+      "type": "fixed_deposit",
+      "maturityDate": "YYYY-MM-DD",
+      "notes": "6-month FD at 3.2% p.a."
+    }
+  ]
+}

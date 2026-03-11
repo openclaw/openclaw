@@ -1,0 +1,40 @@
+{
+  "_comment": "Copy to ~/.openclaw/workspace/data/portfolio/manual/property.json. Add one entry per property.",
+  "version": "1",
+  "updatedAt": "YYYY-MM-DD",
+  "holdings": [
+    {
+      "id": "prop-sg-1",
+      "_comment": "Unique ID — use a short, stable slug.",
+      "label": "Singapore Condo — [Neighbourhood]",
+      "assetClass": "real_estate",
+      "subClass": "residential",
+      "geography": "SG",
+      "currency": "SGD",
+      "currentValueLocalCcy": 1800000,
+      "loanOutstandingLocalCcy": 650000,
+      "netValueLocalCcy": 1150000,
+      "_comment_net": "netValueLocalCcy = currentValueLocalCcy - loanOutstandingLocalCcy. This flows into the portfolio.",
+      "costBasisLocalCcy": 1400000,
+      "_comment_cost": "Purchase price + stamp duty + renovation. Used for unrealized P&L calculation.",
+      "purchaseDate": "YYYY-MM-DD",
+      "rentalYieldPct": 3.5,
+      "_comment_yield": "Optional. Gross annual rental yield as a percentage.",
+      "notes": "e.g. Owner-occupied, or rental property"
+    },
+    {
+      "id": "prop-in-1",
+      "label": "Mumbai Apartment — [Area]",
+      "assetClass": "real_estate",
+      "subClass": "residential",
+      "geography": "IN",
+      "currency": "INR",
+      "currentValueLocalCcy": 18000000,
+      "loanOutstandingLocalCcy": 0,
+      "netValueLocalCcy": 18000000,
+      "costBasisLocalCcy": 12000000,
+      "purchaseDate": "YYYY-MM-DD",
+      "notes": "Self-occupied"
+    }
+  ]
+}
