@@ -52,6 +52,7 @@ export type AuthChoice =
   | "qianfan-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
+  | "dashscope-api-key"
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
@@ -82,6 +83,7 @@ export type AuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "dashscope"
   | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -142,6 +144,7 @@ export type OnboardOptions = {
   qianfanApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
+  dashscopeApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

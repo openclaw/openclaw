@@ -38,6 +38,7 @@ type AuthChoiceFlagOptions = Pick<
   | "customBaseUrl"
   | "customModelId"
   | "customApiKey"
+  | "dashscopeApiKey"
 >;
 
 export type AuthChoiceInference = {

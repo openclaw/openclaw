@@ -464,7 +464,31 @@ export async function runOnboardingWizard(
       nextConfig = modelSelection.config;
     }
     if (modelSelection.model) {
-      nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+      const modelRef = String(modelSelection.model);
+      const slashIdx = modelRef.indexOf("/");
+      const providerId = slashIdx > 0 ? modelRef.slice(0, slashIdx) : undefined;
+      const modelId = slashIdx > 0 ? modelRef.slice(slashIdx + 1) : modelRef;
+
+      if (providerId === "dashscope") {
+        const { DASHSCOPE_REGION_BASE_URL } = await import("../agents/dashscope-models.js");
+        const regionSelection = await prompter.select({
+          message: "Dashscope region",
+          options: [
+            { value: "cn", label: "CN", hint: DASHSCOPE_REGION_BASE_URL.cn },
+            { value: "intl", label: "SG", hint: DASHSCOPE_REGION_BASE_URL.intl },
+            { value: "us", label: "US(Virginia)", hint: DASHSCOPE_REGION_BASE_URL.us },
+          ],
+          initialValue: "cn",
+        });
+
+        const { applyDashscopeProviderConfigWithModelId } =
+          await import("../commands/onboard-auth.config-core.js");
+        nextConfig = applyDashscopeProviderConfigWithModelId(nextConfig, modelId, {
+          region: regionSelection as "cn" | "intl" | "us",
+        });
+      }
+
+      nextConfig = applyPrimaryModel(nextConfig, modelRef);
     }
   }
 
