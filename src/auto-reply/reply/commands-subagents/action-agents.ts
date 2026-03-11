@@ -64,9 +64,12 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
             channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram"
+        : channel === "discord" ||
+            channel === "telegram" ||
+            channel === "feishu" ||
+            channel === "qqbot"
           ? "unbound"
-          : "bindings available on discord/telegram";
+          : "bindings available on supported channels";
       lines.push(`${index}. ${formatRunLabel(entry)} (${bindingText})`);
       index += 1;
     }

@@ -320,6 +320,127 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.cwd).toBe("/workspace/repo-a");
     expect(resolved?.spec.backend).toBe("acpx");
   });
+  it("resolves feishu catch-all ACP binding when peer is omitted", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "feishu",
+            accountId: "*",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_abc123",
+    });
+
+    expect(resolved?.spec.channel).toBe("feishu");
+    expect(resolved?.spec.conversationId).toBe("ou_abc123");
+    expect(resolved?.spec.agentId).toBe("claude");
+    expect(resolved?.record.targetSessionKey).toContain("agent:claude:acp:binding:feishu:");
+  });
+
+  it("resolves feishu binding with specific peer over catch-all", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "*",
+          },
+        },
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "feishu",
+            accountId: "main",
+            peer: { kind: "direct", id: "ou_specific" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const specific = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_specific",
+    });
+    const other = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_other",
+    });
+
+    expect(specific?.spec.agentId).toBe("claude");
+    expect(other?.spec.agentId).toBe("codex");
+  });
+
+  it("resolves qqbot catch-all ACP binding", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "qqbot",
+            accountId: "*",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "qqbot",
+      accountId: "default",
+      conversationId: "sender-123",
+    });
+
+    expect(resolved?.spec.channel).toBe("qqbot");
+    expect(resolved?.spec.conversationId).toBe("sender-123");
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
+  it("returns null for feishu when no binding matches", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "discord",
+            accountId: "*",
+            peer: { kind: "channel", id: "some-channel" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_abc123",
+    });
+
+    expect(resolved).toBeNull();
+  });
 });
 
 describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
@@ -410,6 +531,38 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
     });
 
     expect(spec?.backend).toBe("exact");
+  });
+
+  it("maps a feishu binding session key back to its spec when peer is specified", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: {
+            channel: "feishu",
+            accountId: "main",
+            peer: { kind: "direct", id: "ou_abc123" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_abc123",
+    });
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+
+    expect(spec?.channel).toBe("feishu");
+    expect(spec?.conversationId).toBe("ou_abc123");
+    expect(spec?.agentId).toBe("claude");
   });
 });
 

@@ -21,7 +21,12 @@ import {
 
 function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "discord" || normalized === "telegram") {
+  if (
+    normalized === "discord" ||
+    normalized === "telegram" ||
+    normalized === "feishu" ||
+    normalized === "qqbot"
+  ) {
     return normalized;
   }
   return null;
@@ -150,6 +155,24 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
         channel: "discord",
+        accountId: parsedSessionKey.accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        if (accountMatchPriority === 2) {
+          return spec;
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = spec;
+        }
+      }
+      continue;
+    }
+    if (channel === "feishu" || channel === "qqbot") {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
         accountId: parsedSessionKey.accountId,
         conversationId: targetConversationId,
         binding,
@@ -327,6 +350,55 @@ export function resolveConfiguredAcpBindingRecord(params: {
         accountId,
         conversationId: parsed.canonicalConversationId,
         parentConversationId: parsed.chatId,
+        binding: wildcardMatch,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
+    return null;
+  }
+
+  // Feishu and QQ use direct conversationId matching.
+  // When a binding omits peer.id it acts as a catch-all for the channel/account.
+  if (channel === "feishu" || channel === "qqbot") {
+    let wildcardMatch: AgentAcpBinding | null = null;
+    for (const binding of listAcpBindings(params.cfg)) {
+      if (normalizeBindingChannel(binding.match.channel) !== channel) {
+        continue;
+      }
+      const accountMatchPriority = resolveAccountMatchPriority(binding.match.accountId, accountId);
+      if (accountMatchPriority === 0) {
+        continue;
+      }
+      const bindingConversationId = resolveBindingConversationId(binding);
+      if (bindingConversationId && bindingConversationId !== conversationId) {
+        continue;
+      }
+      if (accountMatchPriority === 2) {
+        const spec = toConfiguredBindingSpec({
+          cfg: params.cfg,
+          channel,
+          accountId,
+          conversationId,
+          binding,
+        });
+        return {
+          spec,
+          record: toConfiguredAcpBindingRecord(spec),
+        };
+      }
+      if (!wildcardMatch) {
+        wildcardMatch = binding;
+      }
+    }
+    if (wildcardMatch) {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
+        accountId,
+        conversationId,
         binding: wildcardMatch,
       });
       return {

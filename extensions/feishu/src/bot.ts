@@ -5,10 +5,12 @@ import {
   clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  ensureConfiguredAcpRouteReady,
   type HistoryEntry,
   issuePairingChallenge,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
+  resolveConfiguredAcpRoute,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -1203,6 +1205,26 @@ export async function handleFeishuMessage(params: {
             `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
           );
         }
+      }
+    }
+
+    // ACP persistent binding resolution
+    const configuredRoute = resolveConfiguredAcpRoute({
+      cfg: effectiveCfg,
+      route,
+      channel: "feishu",
+      accountId: account.accountId,
+      conversationId: peerId,
+    });
+    const configuredBinding = configuredRoute.configuredBinding;
+    route = configuredRoute.route;
+    if (configuredBinding) {
+      const ensured = await ensureConfiguredAcpRouteReady({
+        cfg: effectiveCfg,
+        configuredBinding,
+      });
+      if (!ensured.ok) {
+        log(`feishu[${account.accountId}]: acp binding session init failed: ${ensured.error}`);
       }
     }
 

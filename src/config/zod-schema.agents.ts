@@ -62,20 +62,26 @@ const AcpBindingSchema = z
   .strict()
   .superRefine((value, ctx) => {
     const peerId = value.match.peer?.id?.trim() ?? "";
-    if (!peerId) {
+    const channel = value.match.channel.trim().toLowerCase();
+    if (
+      channel !== "discord" &&
+      channel !== "telegram" &&
+      channel !== "feishu" &&
+      channel !== "qqbot"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "channel"],
+        message:
+          'ACP bindings currently support only "discord", "telegram", "feishu", and "qqbot" channels.',
+      });
+      return;
+    }
+    if ((channel === "discord" || channel === "telegram") && !peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
-      });
-      return;
-    }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message: 'ACP bindings currently support only "discord" and "telegram" channels.',
       });
       return;
     }
