@@ -9,27 +9,27 @@ import {
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
+import {
+  enrichOllamaModelsWithContext,
+  OLLAMA_DEFAULT_CONTEXT_WINDOW,
+  OLLAMA_DEFAULT_COST,
+  OLLAMA_DEFAULT_MAX_TOKENS,
+  isReasoningModelHeuristic,
+  resolveOllamaApiBase,
+  type OllamaTagsResponse,
+} from "./ollama-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
+
+export { resolveOllamaApiBase } from "./ollama-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const log = createSubsystemLogger("agents/model-providers");
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
-const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
-const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-const OLLAMA_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -41,75 +41,11 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-interface OllamaModel {
-  name: string;
-  modified_at: string;
-  size: number;
-  digest: string;
-  details?: {
-    family?: string;
-    parameter_size?: string;
-  };
-}
-
-interface OllamaTagsResponse {
-  models: OllamaModel[];
-}
-
 type VllmModelsResponse = {
   data?: Array<{
     id?: string;
   }>;
 };
-
-/**
- * Derive the Ollama native API base URL from a configured base URL.
- *
- * Users typically configure `baseUrl` with a `/v1` suffix (e.g.
- * `http://192.168.20.14:11434/v1`) for the OpenAI-compatible endpoint.
- * The native Ollama API lives at the root (e.g. `/api/tags`), so we
- * strip the `/v1` suffix when present.
- */
-export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
-  if (!configuredBaseUrl) {
-    return OLLAMA_API_BASE_URL;
-  }
-  // Strip trailing slash, then strip /v1 suffix if present
-  const trimmed = configuredBaseUrl.replace(/\/+$/, "");
-  return trimmed.replace(/\/v1$/i, "");
-}
-
-async function queryOllamaContextWindow(
-  apiBase: string,
-  modelName: string,
-): Promise<number | undefined> {
-  try {
-    const response = await fetch(`${apiBase}/api/show`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: modelName }),
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
-        }
-      }
-    }
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 async function discoverOllamaModels(
   baseUrl?: string,
@@ -140,29 +76,18 @@ async function discoverOllamaModels(
         `Capping Ollama /api/show inspection to ${OLLAMA_SHOW_MAX_MODELS} models (received ${data.models.length})`,
       );
     }
-    const discovered: ModelDefinitionConfig[] = [];
-    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
-      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
-      const batchDiscovered = await Promise.all(
-        batch.map(async (model) => {
-          const modelId = model.name;
-          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
-          const isReasoning =
-            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-          return {
-            id: modelId,
-            name: modelId,
-            reasoning: isReasoning,
-            input: ["text"],
-            cost: OLLAMA_DEFAULT_COST,
-            contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig;
-        }),
-      );
-      discovered.push(...batchDiscovered);
-    }
-    return discovered;
+    const discovered = await enrichOllamaModelsWithContext(apiBase, modelsToInspect, {
+      concurrency: OLLAMA_SHOW_CONCURRENCY,
+    });
+    return discovered.map((model) => ({
+      id: model.name,
+      name: model.name,
+      reasoning: isReasoningModelHeuristic(model.name),
+      input: ["text"],
+      cost: OLLAMA_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+    }));
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
@@ -204,13 +129,10 @@ async function discoverVllmModels(
       .filter((model) => Boolean(model.id))
       .map((model) => {
         const modelId = model.id;
-        const lower = modelId.toLowerCase();
-        const isReasoning =
-          lower.includes("r1") || lower.includes("reasoning") || lower.includes("think");
         return {
           id: modelId,
           name: modelId,
-          reasoning: isReasoning,
+          reasoning: isReasoningModelHeuristic(modelId),
           input: ["text"],
           cost: VLLM_DEFAULT_COST,
           contextWindow: VLLM_DEFAULT_CONTEXT_WINDOW,
