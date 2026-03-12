@@ -245,11 +245,17 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
-        // Preserve think level as one-shot only when the message starts with a leading
-        // /think command (e.g., `/think high <body>`). Mid-text occurrences like
-        // "compare /think high vs /think low" should NOT trigger one-shot activation.
+        const oneShotCandidate = stripStructuralPrefixes(commandText);
+        const oneShotCandidateNoMentions = isGroup
+          ? stripMentions(oneShotCandidate, ctx, cfg, agentId)
+          : oneShotCandidate;
+        // Check the mention-stripped command text so group messages like "@bot /think high ..."
+        // still preserve the one-shot level, while mid-text "/think" mentions remain plain text.
         const oneShotThinkLevel =
-          parsedDirectives.hasThinkDirective && isOneShotThinkMessage(commandText)
+          parsedDirectives.hasThinkDirective &&
+          isOneShotThinkMessage(oneShotCandidateNoMentions, {
+            botUsername: ctx.BotUsername,
+          })
             ? parsedDirectives.thinkLevel
             : undefined;
         const allowInlineStatus =

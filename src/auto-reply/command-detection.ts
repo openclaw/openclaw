@@ -8,6 +8,57 @@ import {
 import { isAbortTrigger } from "./reply/abort.js";
 import { normalizeThinkLevel } from "./thinking.js";
 
+const THINK_COMMAND_ALIASES = new Set(["think", "thinking", "t"]);
+
+function parseOneShotThinkMessage(
+  text?: string,
+  options?: CommandNormalizeOptions,
+): { level: string; body: string } | null {
+  if (!text) {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) {
+    return null;
+  }
+
+  const match = trimmed.match(/^\/([^\s@:]+)(?:@([^\s:]+))?([\s\S]*)$/);
+  if (!match) {
+    return null;
+  }
+  const [, command, botUsername, remainder] = match;
+  if (!THINK_COMMAND_ALIASES.has(command.toLowerCase())) {
+    return null;
+  }
+  if (botUsername) {
+    const normalizedBotUsername = options?.botUsername?.trim().toLowerCase();
+    if (!normalizedBotUsername || botUsername.toLowerCase() !== normalizedBotUsername) {
+      return null;
+    }
+  }
+
+  // Keep the full remainder instead of normalizeCommandBody(), which truncates at the first
+  // newline and would misclassify multiline one-shot bodies as plain control commands.
+  const rest = remainder.trimStart();
+  const withoutColon = rest.startsWith(":") ? rest.slice(1).trimStart() : rest;
+  if (!withoutColon) {
+    return null;
+  }
+
+  const levelMatch = withoutColon.match(/^([A-Za-z-]+)([\s\S]*)$/);
+  if (!levelMatch) {
+    return null;
+  }
+  const [, rawLevel, body] = levelMatch;
+  if (!normalizeThinkLevel(rawLevel)) {
+    return null;
+  }
+  if (!body.trim()) {
+    return null;
+  }
+  return { level: rawLevel, body };
+}
+
 export function hasControlCommand(
   text?: string,
   cfg?: OpenClawConfig,
@@ -52,23 +103,11 @@ export function hasControlCommand(
 
 /**
  * Detect one-shot think messages: `/think <level> <body>`.
- * These should NOT be treated as control commands — they carry a message body
+ * These should NOT be treated as control commands, they carry a message body
  * that needs AI processing, with the think level applied for that single message only.
  */
 export function isOneShotThinkMessage(text?: string, options?: CommandNormalizeOptions): boolean {
-  if (!text) {
-    return false;
-  }
-  const body = normalizeCommandBody(text.trim(), options);
-  if (!body) {
-    return false;
-  }
-  // normalizeCommandBody resolves aliases (/t, /thinking → /think), so only match canonical form.
-  const match = body.match(/^\/think\s+(\S+)\s+\S/i);
-  if (!match) {
-    return false;
-  }
-  return normalizeThinkLevel(match[1]) !== undefined;
+  return parseOneShotThinkMessage(text, options) !== null;
 }
 
 export function isControlCommandMessage(

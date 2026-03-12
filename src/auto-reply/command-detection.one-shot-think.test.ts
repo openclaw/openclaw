@@ -22,6 +22,24 @@ describe("isOneShotThinkMessage", () => {
     expect(isOneShotThinkMessage("/t high write me a poem")).toBe(true);
   });
 
+  it("preserves multiline bodies and punctuation after the level", () => {
+    expect(isOneShotThinkMessage("/think high\nwrite me a poem")).toBe(true);
+    expect(isOneShotThinkMessage("/think high, write me a poem")).toBe(true);
+  });
+
+  it("supports bot-targeted think commands only for the addressed bot", () => {
+    expect(
+      isOneShotThinkMessage("/think@openclaw high write me a poem", {
+        botUsername: "openclaw",
+      }),
+    ).toBe(true);
+    expect(
+      isOneShotThinkMessage("/think@otherbot high write me a poem", {
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects bare /think <level> without body", () => {
     expect(isOneShotThinkMessage("/think high")).toBe(false);
     expect(isOneShotThinkMessage("/think medium")).toBe(false);
@@ -59,6 +77,8 @@ describe("hasControlCommand with one-shot think", () => {
   it("returns false for /think <level> <body> (one-shot)", () => {
     expect(hasControlCommand("/think high write me a poem")).toBe(false);
     expect(hasControlCommand("/t medium explain this")).toBe(false);
+    expect(hasControlCommand("/think high\nwrite me a poem")).toBe(false);
+    expect(hasControlCommand("/think high, write me a poem")).toBe(false);
   });
 
   it("returns true for bare /think <level>", () => {
