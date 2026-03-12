@@ -22,26 +22,21 @@ export class DeliverySerializer {
 
     // Chain after previous delivery settles (success or failure).
     // The tail always resolves so one failure doesn't stall the queue.
-    const tail: Promise<void> = prev.then(
-      () =>
-        fn().then(
+    // Wrap fn() in Promise.resolve().then() so a synchronous throw is
+    // converted to a rejection — ensures resolve/reject are always called.
+    const runFn = () =>
+      Promise.resolve()
+        .then(() => fn())
+        .then(
           (v) => {
             resolve(v);
           },
           (e) => {
             reject(e);
           },
-        ),
-      () =>
-        fn().then(
-          (v) => {
-            resolve(v);
-          },
-          (e) => {
-            reject(e);
-          },
-        ),
-    );
+        );
+
+    const tail: Promise<void> = prev.then(runFn, runFn);
 
     this.queues.set(key, tail);
 
