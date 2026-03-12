@@ -195,6 +195,10 @@ export async function waitForGatewayHealthyRestart(params: {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
 
+  // Initial delay: give the new process time to start after /Run
+  // This avoids false positives from checking too early
+  await sleep(3000);
+
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
@@ -206,8 +210,17 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.healthy) {
       return snapshot;
     }
-    if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
-      return snapshot;
+    // Tolerate stale processes during restart - they're expected to exit soon
+    // Don't give up immediately, continue waiting
+    if (snapshot.staleGatewayPids.length > 0) {
+      await sleep(delayMs);
+      snapshot = await inspectGatewayRestart({
+        service: params.service,
+        port: params.port,
+        env: params.env,
+        includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+      });
+      continue;
     }
     await sleep(delayMs);
     snapshot = await inspectGatewayRestart({
