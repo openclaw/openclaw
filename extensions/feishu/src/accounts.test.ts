@@ -241,6 +241,25 @@ describe("resolveFeishuCredentials", () => {
       domain: "feishu",
     });
   });
+
+  it("does not resolve encryptKey SecretRefs outside webhook mode", () => {
+    const creds = resolveFeishuCredentials(
+      asConfig({
+        connectionMode: "websocket",
+        appId: "cli_123",
+        appSecret: "secret_456",
+        encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
+      }),
+    );
+
+    expect(creds).toEqual({
+      appId: "cli_123",
+      appSecret: "secret_456", // pragma: allowlist secret
+      encryptKey: undefined,
+      verificationToken: undefined,
+      domain: "feishu",
+    });
+  });
 });
 
 describe("resolveFeishuAccount", () => {

@@ -64,6 +64,7 @@ function buildConfig(params: {
   path: string;
   port: number;
   verificationToken?: string;
+  encryptKey?: string;
 }): ClawdbotConfig {
   return {
     channels: {
@@ -78,6 +79,7 @@ function buildConfig(params: {
             webhookHost: "127.0.0.1",
             webhookPort: params.port,
             webhookPath: params.path,
+            encryptKey: params.encryptKey,
             verificationToken: params.verificationToken,
           },
         },
@@ -91,6 +93,7 @@ async function withRunningWebhookMonitor(
     accountId: string;
     path: string;
     verificationToken: string;
+    encryptKey: string;
   },
   run: (url: string) => Promise<void>,
 ) {
@@ -99,6 +102,7 @@ async function withRunningWebhookMonitor(
     accountId: params.accountId,
     path: params.path,
     port,
+    encryptKey: params.encryptKey,
     verificationToken: params.verificationToken,
   });
 
@@ -141,6 +145,19 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
+  it("rejects webhook mode without encryptKey", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    const cfg = buildConfig({
+      accountId: "missing-encrypt-key",
+      path: "/hook-missing-encrypt",
+      port: await getFreePort(),
+      verificationToken: "verify_token",
+    });
+
+    await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(/requires encryptKey/i);
+  });
+
   it("returns 415 for POST requests without json content type", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     await withRunningWebhookMonitor(
@@ -148,6 +165,7 @@ describe("Feishu webhook security hardening", () => {
         accountId: "content-type",
         path: "/hook-content-type",
         verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
       },
       async (url) => {
         const response = await fetch(url, {
@@ -169,6 +187,7 @@ describe("Feishu webhook security hardening", () => {
         accountId: "rate-limit",
         path: "/hook-rate-limit",
         verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
       },
       async (url) => {
         let saw429 = false;
