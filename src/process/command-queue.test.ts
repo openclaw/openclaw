@@ -353,7 +353,6 @@ describe("command queue", () => {
     });
 
     commandQueueA.resetAllLanes();
-    commandQueueB.resetAllLanes();
 
     try {
       const task = commandQueueA.enqueueCommandInLane(lane, async () => {
@@ -372,7 +371,6 @@ describe("command queue", () => {
     } finally {
       release();
       commandQueueA.resetAllLanes();
-      commandQueueB.resetAllLanes();
     }
   });
 });
