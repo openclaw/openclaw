@@ -14,12 +14,23 @@ import { loadInternalHooks } from "./loader.js";
 describe("loader", () => {
   let tmpDir: string;
   let originalBundledDir: string | undefined;
+  let isolatedManagedDir: string;
+  let isolatedBundledDir: string;
+
+  async function loadIsolatedHooks(cfg: OpenClawConfig): Promise<number> {
+    return loadInternalHooks(cfg, tmpDir, {
+      managedHooksDir: isolatedManagedDir,
+      bundledHooksDir: isolatedBundledDir,
+    });
+  }
 
   beforeEach(async () => {
     clearInternalHooks();
     // Create a temp directory for test modules
     tmpDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
     await fs.mkdir(tmpDir, { recursive: true });
+    isolatedManagedDir = path.join(tmpDir, ".managed-hooks-none");
+    isolatedBundledDir = path.join(tmpDir, ".bundled-hooks-none");
 
     // Disable bundled hooks during tests by setting env var to non-existent directory
     originalBundledDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
@@ -52,13 +63,13 @@ describe("loader", () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(0);
     });
 
     it("should return 0 when hooks config is missing", async () => {
       const cfg: OpenClawConfig = {};
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(0);
     });
 
@@ -86,7 +97,7 @@ describe("loader", () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(1);
 
       const keys = getRegisteredEventKeys();
@@ -113,7 +124,7 @@ describe("loader", () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(2);
 
       const keys = getRegisteredEventKeys();
@@ -146,7 +157,7 @@ describe("loader", () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(1);
     });
 
@@ -166,7 +177,7 @@ describe("loader", () => {
       };
 
       // Should not throw and should return 0 (handler failed to load)
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(0);
     });
 
@@ -190,7 +201,7 @@ describe("loader", () => {
       };
 
       // Should not throw and should return 0 (handler is not a function)
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(0);
     });
 
@@ -216,7 +227,7 @@ describe("loader", () => {
         },
       };
 
-      const count = await loadInternalHooks(cfg, tmpDir);
+      const count = await loadIsolatedHooks(cfg);
       expect(count).toBe(1);
     });
 
@@ -248,7 +259,7 @@ describe("loader", () => {
         },
       };
 
-      await loadInternalHooks(cfg, tmpDir);
+      await loadIsolatedHooks(cfg);
 
       // Trigger the hook
       const event = createInternalHookEvent("command", "new", "test-session");
