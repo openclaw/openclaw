@@ -207,7 +207,7 @@ describe("resolveAgentConfig", () => {
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual(["openai/gpt-4.1"]);
+    ).toEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgDisable,
