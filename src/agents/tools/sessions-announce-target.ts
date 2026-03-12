@@ -1,4 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { extractDeliveryInfo } from "../../config/sessions/delivery-info.js";
 import { callGateway } from "../../gateway/call.js";
 import { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
@@ -38,17 +39,25 @@ export async function resolveAnnounceTarget(params: {
       match?.deliveryContext && typeof match.deliveryContext === "object"
         ? (match.deliveryContext as Record<string, unknown>)
         : undefined;
+    const extracted = extractDeliveryInfo(params.sessionKey);
     const channel =
       (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined);
+      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
+      extracted.deliveryContext?.channel;
     const to =
       (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
-      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
+      (typeof match?.lastTo === "string" ? match.lastTo : undefined) ??
+      extracted.deliveryContext?.to;
     const accountId =
       (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
+      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
+      extracted.deliveryContext?.accountId;
+    const threadId =
+      (typeof deliveryContext?.threadId === "string" ? deliveryContext.threadId : undefined) ??
+      (typeof match?.lastThreadId === "string" ? match.lastThreadId : undefined) ??
+      extracted.threadId;
     if (channel && to) {
-      return { channel, to, accountId };
+      return { channel, to, accountId, threadId };
     }
   } catch {
     // ignore

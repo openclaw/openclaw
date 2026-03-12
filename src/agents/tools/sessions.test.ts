@@ -254,6 +254,33 @@ describe("resolveAnnounceTarget", () => {
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
+
+  it("preserves Telegram direct threadId from session lookup", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:telegram:direct:3718260:thread:3718260:1147978",
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:3718260",
+            accountId: "default",
+          },
+          lastThreadId: "3718260:1147978",
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:telegram:direct:3718260:thread:3718260:1147978",
+      displayKey: "agent:main:telegram:direct:3718260:thread:3718260:1147978",
+    });
+    expect(target).toEqual({
+      channel: "telegram",
+      to: "telegram:3718260",
+      accountId: "default",
+      threadId: "3718260:1147978",
+    });
+  });
 });
 
 describe("sessions_list gating", () => {

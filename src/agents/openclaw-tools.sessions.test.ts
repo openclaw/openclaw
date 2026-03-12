@@ -616,9 +616,19 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
+    }
+    const messageContextCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(messageContextCalls).toHaveLength(2);
+    for (const call of messageContextCalls) {
+      expect((call.params as { channel?: string }).channel).toBe("discord");
     }
     expect(
       agentCalls.some(
@@ -796,10 +806,20 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
     }
+    const messageContextCalls = agentCalls.filter(
+      (call) =>
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent message context",
+        ),
+    );
+    expect(messageContextCalls).toHaveLength(1);
+    expect((messageContextCalls[0]?.params as { channel?: string } | undefined)?.channel).toBe(
+      "discord",
+    );
 
     const replySteps = calls.filter(
       (call) =>
@@ -814,6 +834,115 @@ describe("sessions tools", () => {
       to: "channel:target",
       channel: "discord",
       message: "announce now",
+    });
+  });
+
+  it("sessions_send falls back to round-one reply and preserves Telegram threadId on announce skip", async () => {
+    const requesterKey = "agent:main:telegram:group:-1001879711349";
+    const targetKey = "agent:main:telegram:direct:3718260:thread:3718260:1147978";
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    let sendParams:
+      | {
+          to?: string;
+          channel?: string;
+          message?: string;
+          accountId?: string;
+          threadId?: string;
+        }
+      | undefined;
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as {
+          message?: string;
+          extraSystemPrompt?: string;
+          sessionKey?: string;
+          channel?: string;
+        };
+        let reply = "round-one reply";
+        if (params.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "ANNOUNCE_SKIP";
+        }
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 3000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "telegram",
+                to: "telegram:3718260",
+                accountId: "default",
+              },
+              lastThreadId: "3718260:1147978",
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendParams = request.params as typeof sendParams;
+        return { messageId: "m-telegram" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-telegram-sessions-send", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "round-one reply",
+      delivery: { status: "pending", mode: "announce" },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(sendParams).toBeDefined();
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(sendParams).toMatchObject({
+      to: "telegram:3718260",
+      channel: "telegram",
+      accountId: "default",
+      threadId: "3718260:1147978",
+      message: "round-one reply",
     });
   });
 

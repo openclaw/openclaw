@@ -118,15 +118,28 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    const effectiveAnnounceReply = (() => {
+      const trimmed = announceReply?.trim() ?? "";
+      if (trimmed && !isAnnounceSkip(trimmed)) {
+        return trimmed;
+      }
+      const roundOne = primaryReply?.trim() ?? "";
+      if (roundOne) {
+        return roundOne;
+      }
+      const latest = latestReply?.trim() ?? "";
+      return latest;
+    })();
+    if (announceTarget && effectiveAnnounceReply) {
       try {
         await callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
-            message: announceReply.trim(),
+            message: effectiveAnnounceReply,
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
@@ -136,6 +149,8 @@ export async function runSessionsSendA2AFlow(params: {
           runId: runContextId,
           channel: announceTarget.channel,
           to: announceTarget.to,
+          accountId: announceTarget.accountId,
+          threadId: announceTarget.threadId,
           error: formatErrorMessage(err),
         });
       }
