@@ -394,7 +394,13 @@ export async function dispatchReplyFromConfig(params: {
           intercepted = result.intercepted;
         } catch (err) {
           logVerbose(`dispatch-from-config: interceptor failed: ${String(err)}`);
-          // Treat interceptor failure as non-intercepted so the message is still delivered.
+          if (outputSent) {
+            // Output already delivered; treat as intercepted to avoid duplicate agent reply.
+            recordProcessed("completed", { reason: "dispatch_interceptor" });
+            markIdle("message_completed");
+            return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+          }
+          // No output sent; fail-open so the message is still delivered.
           continue;
         }
         if (intercepted) {

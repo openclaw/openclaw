@@ -429,10 +429,7 @@ export async function handleOpenResponsesHttpRequest(
       }
     } catch (err) {
       logWarn(`openresponses: dispatch interceptor failed: ${String(err)}`);
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
-      return true;
+      // fail-open: skip interceptors and let agent handle the request
     }
   }
 
