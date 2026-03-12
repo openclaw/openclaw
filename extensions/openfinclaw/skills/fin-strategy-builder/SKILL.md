@@ -111,7 +111,7 @@ identity:
   name: "DCA Basic Test Strategy" # 策略显示名称
   version: "1.0.0" # 语义化版本号
   style: dca # trend | mean_reversion | dca | momentum | swing | hybrid
-  visibility: private # public | private | unlisted（默认 private）
+  visibility: public # public | private | unlisted（默认 public）
   license: MIT # MIT | CC-BY-4.0 | proprietary（默认 MIT）
   author:
     name: "OpenFinClaw" # 默认作者
@@ -358,7 +358,7 @@ Generate:
      - Semver 格式 `X.Y.Z` 递增 `Z`（patch），双部分 `X.Y` 递增 `Y`，纯数字递增自身
      - 示例：`1.0.0` → `1.0.1`（参数调整），`1.1.0`（新指标），`2.0.0`（逻辑重构）
    - **默认作者：** `identity.author.name` 默认为 `"OpenFinClaw"`，除非用户指定其他作者
-   - **默认可见性：** `identity.visibility` 默认为 `"private"`（私有策略）
+    - **默认可见性：** `identity.visibility` 默认为 `"public"`（公开策略）
    - **默认许可证：** `identity.license` 默认为 `"MIT"`
    - **默认风格：** `identity.style` 根据策略类型自动选择（DCA 策略用 `dca`，趋势跟踪用 `trend` 等）
    - **tags 格式：** 必须使用行内数组 `tags: [dca, btc, crypto]`，禁止多行列表或单一字符串
