@@ -39,6 +39,83 @@ describe("Feishu Card Action Handler", () => {
     );
   });
 
+  it("handles card action with input_value", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u1", user_id: "uid1", union_id: "un1" },
+      token: "tok3",
+      action: { value: {}, tag: "input", input_value: "hello", name: "q1" },
+      context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
+    };
+    await handleFeishuCardAction({ cfg, event, runtime });
+    const parsed = JSON.parse(
+      JSON.parse(
+        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
+          .content,
+      ).text,
+    );
+    expect(parsed).toMatchObject({ action: "input", input_value: "hello", name: "q1" });
+  });
+
+  it("handles card action with form_value", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u1", user_id: "uid1", union_id: "un1" },
+      token: "tok4",
+      action: {
+        value: {},
+        tag: "form",
+        form_value: { field1: "val1", field2: "val2" },
+        name: "myform",
+      },
+      context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
+    };
+    await handleFeishuCardAction({ cfg, event, runtime });
+    const parsed = JSON.parse(
+      JSON.parse(
+        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
+          .content,
+      ).text,
+    );
+    expect(parsed).toMatchObject({
+      action: "form",
+      form_value: { field1: "val1", field2: "val2" },
+      name: "myform",
+    });
+  });
+
+  it("handles card action with option (select)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u1", user_id: "uid1", union_id: "un1" },
+      token: "tok5",
+      action: { value: {}, tag: "select_static", option: "opt_a", name: "dropdown1" },
+      context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
+    };
+    await handleFeishuCardAction({ cfg, event, runtime });
+    const parsed = JSON.parse(
+      JSON.parse(
+        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
+          .content,
+      ).text,
+    );
+    expect(parsed).toMatchObject({ action: "select_static", option: "opt_a", name: "dropdown1" });
+  });
+
+  it("handles card action with name-only (triggers form branch)", async () => {
+    const event: FeishuCardActionEvent = {
+      operator: { open_id: "u1", user_id: "uid1", union_id: "un1" },
+      token: "tok6",
+      action: { value: { key: "val" }, tag: "button", name: "btn1" },
+      context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
+    };
+    await handleFeishuCardAction({ cfg, event, runtime });
+    const parsed = JSON.parse(
+      JSON.parse(
+        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
+          .content,
+      ).text,
+    );
+    expect(parsed).toMatchObject({ action: "button", name: "btn1", value: { key: "val" } });
+  });
+
   it("handles card action with JSON object payload", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
