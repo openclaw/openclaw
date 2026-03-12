@@ -85,9 +85,22 @@ def run_write(args):
         parent_fd = walk_parent(root_fd, relative_parent, mkdir_enabled)
         temp_name, temp_fd = create_temp_file(parent_fd, basename)
         write_stdin_to_fd(temp_fd)
+        written = os.fstat(temp_fd).st_size
         os.fsync(temp_fd)
         os.close(temp_fd)
         temp_fd = None
+        # Guard: refuse to overwrite an existing file with empty content.
+        # This prevents data loss when stdin is truncated (e.g. abort race,
+        # broken pipe). Creating a new empty file is still allowed. (#43858)
+        if written == 0:
+            try:
+                os.stat(basename, dir_fd=parent_fd)
+                raise RuntimeError(
+                    "Refusing to overwrite existing file with empty content "
+                    "(stdin was empty or truncated)"
+                )
+            except FileNotFoundError:
+                pass  # target does not exist yet — allow empty file creation
         os.replace(temp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
     except Exception:
