@@ -27,7 +27,7 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
   ) {
     return true;
   }
-  if (hasLeadingRouteMarker && (hasInternalToolMarker || hasToolJsonArgs)) {
+  if (hasLeadingRouteMarker && hasToolJsonArgs) {
     return true;
   }
   return false;

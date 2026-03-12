@@ -229,9 +229,31 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["suspicious"]);
   });
 
+  it("strips suspicious text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: [
+        "NO_REPLY",
+        "assistant to=functions.exec commentary to=functions.exec ＿json",
+        '{"command":"ls ~/.openclaw/agents/main/sessions/ | head -20","yieldMs":10000}',
+      ].join("\n"),
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
   it("keeps explanatory text that merely mentions leaked markers", () => {
     const result = normalizeReplyPayload({
       text: "The leaked prefix was assistant to=functions.exec, which should never be sent.",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+  });
+
+  it("keeps explanatory text that starts with a route marker mention", () => {
+    const result = normalizeReplyPayload({
+      text: "assistant to=functions.exec is an internal prefix and should never reach users.",
     });
     expect(result).not.toBeNull();
     expect(result!.text).toContain("assistant to=functions.exec");

@@ -82,9 +82,12 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (text && hasSuspiciousReplyLeakage(text) && !hasMedia && !hasChannelData) {
-    opts.onSkip?.("suspicious");
-    return null;
+  if (text && hasSuspiciousReplyLeakage(text)) {
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("suspicious");
+      return null;
+    }
+    text = "";
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
