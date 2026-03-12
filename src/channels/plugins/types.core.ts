@@ -21,6 +21,9 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
+  appId?: string;
+  appSecret?: string;
+  encodingAESKey?: string;
   tokenFile?: string;
   botToken?: string;
   appToken?: string;

@@ -26,6 +26,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Nostr](/channels/nostr) — Decentralized DMs via NIP-04 (plugin, installed separately).
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
+- [WeChat Official Account](/channels/wemp) — WeChat Official Account webhook + customer service API (plugin, installed separately).
 - [Synology Chat](/channels/synology-chat) — Synology NAS Chat via outgoing+incoming webhooks (plugin, installed separately).
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Telegram](/channels/telegram) — Bot API via grammY; supports groups.

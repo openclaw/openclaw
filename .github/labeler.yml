@@ -99,6 +99,11 @@
           - "src/web/**"
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
+"channel: wemp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/wemp/**"
+          - "docs/channels/wemp.md"
 "channel: zalo":
   - changed-files:
       - any-glob-to-any-file:

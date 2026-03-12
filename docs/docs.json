@@ -910,6 +910,7 @@
                   "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/wemp",
                   "channels/mattermost",
                   "channels/msteams",
                   "channels/nextcloud-talk",

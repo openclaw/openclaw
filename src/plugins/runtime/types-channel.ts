@@ -14,6 +14,11 @@ type UpsertChannelPairingRequestForAccount = (
 ) => ReturnType<UpsertChannelPairingRequest>;
 
 export type PluginRuntimeChannel = {
+  /**
+   * Stable inbound dispatch entrypoint for channel plugins.
+   * Optional for backward compatibility with older runtime shims.
+   */
+  dispatchInbound?: import("./types.js").PluginChannelDispatchInbound;
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
     chunkMarkdownText: typeof import("../../auto-reply/chunk.js").chunkMarkdownText;

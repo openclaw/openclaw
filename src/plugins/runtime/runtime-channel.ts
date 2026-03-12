@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
@@ -26,6 +27,7 @@ import {
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
+import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
@@ -33,6 +35,7 @@ import {
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { routeReply } from "../../auto-reply/reply/route-reply.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
@@ -40,11 +43,13 @@ import { discordMessageActions } from "../../channels/plugins/actions/discord.js
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { loadConfig } from "../../config/config.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -114,10 +119,127 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
-import type { PluginRuntime } from "./types.js";
+import type { PluginChannelDispatchInboundParams, PluginRuntime } from "./types.js";
+
+function resolveDispatchChatType(raw: string | undefined): "direct" | "group" | "channel" {
+  return normalizeChatType(raw) ?? "direct";
+}
+
+function resolveDispatchTarget(
+  params: PluginChannelDispatchInboundParams,
+  chatType: "direct" | "group" | "channel",
+): string {
+  const explicit = String(params.originatingTo ?? "").trim();
+  if (explicit) {
+    return explicit;
+  }
+  const userId = String(params.userId ?? "").trim();
+  const chatId = String(params.chatId ?? "").trim();
+  if (chatType === "direct") {
+    return userId || chatId;
+  }
+  return chatId || userId;
+}
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   return {
+    dispatchInbound: async (params) => {
+      const channel = String(params.channel || "").trim().toLowerCase();
+      if (!channel) {
+        throw new Error("runtime.channel.dispatchInbound requires channel");
+      }
+      const sessionKey = String(params.sessionKey || "").trim();
+      if (!sessionKey) {
+        throw new Error("runtime.channel.dispatchInbound requires sessionKey");
+      }
+      const chatType = resolveDispatchChatType(params.chatType);
+      const originatingTo = resolveDispatchTarget(params, chatType);
+      if (!originatingTo) {
+        throw new Error("runtime.channel.dispatchInbound requires userId/chatId");
+      }
+      const senderId = String(params.senderId ?? params.userId ?? "").trim() || undefined;
+      const fromBase =
+        senderId ??
+        String(params.chatId ?? params.userId ?? originatingTo)
+          .trim();
+      const toBase = String(params.chatId ?? params.userId ?? originatingTo).trim();
+      const messageId = String(params.messageId ?? "").trim() || undefined;
+      const timestamp =
+        typeof params.timestamp === "number" && Number.isFinite(params.timestamp)
+          ? params.timestamp
+          : undefined;
+      const text = String(params.text ?? "");
+      const cfg = await loadConfig();
+      const ctx = finalizeInboundContext({
+        Body: text,
+        RawBody: text,
+        CommandBody: text,
+        BodyForCommands: text,
+        From: `${channel}:${fromBase || originatingTo}`,
+        To: `${channel}:${toBase || originatingTo}`,
+        SessionKey: sessionKey,
+        AccountId: params.accountId,
+        ChatType: chatType,
+        ConversationLabel: String(params.chatId ?? params.userId ?? originatingTo).trim() || undefined,
+        SenderId: senderId,
+        SenderName: params.senderName,
+        SenderUsername: params.senderUsername,
+        SenderTag: params.senderTag,
+        Provider: channel,
+        Surface: channel,
+        MessageSid: messageId,
+        Timestamp: timestamp,
+        CommandAuthorized: false,
+        MessageThreadId: params.threadId,
+        OriginatingChannel: channel,
+        OriginatingTo: originatingTo,
+      });
+
+      const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
+      await recordInboundSession({
+        storePath,
+        sessionKey,
+        ctx,
+        updateLastRoute:
+          chatType === "direct"
+            ? {
+                sessionKey,
+                channel,
+                to: originatingTo,
+                accountId: params.accountId,
+                threadId: params.threadId != null ? String(params.threadId) : undefined,
+              }
+            : undefined,
+        onRecordError: () => undefined,
+      });
+
+      return await dispatchReplyWithBufferedBlockDispatcher({
+        ctx,
+        cfg,
+        dispatcherOptions: {
+          deliver: async (payload) => {
+            const routed = await routeReply({
+              payload,
+              channel,
+              to: originatingTo,
+              sessionKey,
+              accountId: params.accountId,
+              threadId: params.threadId,
+              cfg,
+            });
+            if (!routed.ok) {
+              throw new Error(
+                routed.error ?? `runtime.channel.dispatchInbound failed to route reply for ${channel}`,
+              );
+            }
+          },
+        },
+      });
+    },
     text: {
       chunkByNewline,
       chunkMarkdownText,

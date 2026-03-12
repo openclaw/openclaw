@@ -48,6 +48,29 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+export type PluginChannelDispatchInboundParams = {
+  channel: string;
+  sessionKey: string;
+  text: string;
+  accountId?: string;
+  userId?: string;
+  chatId?: string;
+  chatType?: string;
+  messageId?: string;
+  targetAgentId?: string;
+  threadId?: string | number;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderTag?: string;
+  timestamp?: number;
+  originatingTo?: string;
+};
+
+export type PluginChannelDispatchInbound = (
+  params: PluginChannelDispatchInboundParams,
+) => Promise<Awaited<ReturnType<typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig>>>;
+
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
