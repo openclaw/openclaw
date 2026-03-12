@@ -191,6 +191,37 @@ export function logMessageProcessed(params: {
   markActivity();
 }
 
+export function logMessageFirstVisible(params: {
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionId?: string;
+  sessionKey?: string;
+  kind: "tool" | "block" | "final";
+  dispatchToFirstVisibleMs: number;
+}) {
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message first visible: channel=${params.channel} chatId=${params.chatId ?? "unknown"} messageId=${
+        params.messageId ?? "unknown"
+      } sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} kind=${
+        params.kind
+      } dispatchToFirstVisible=${params.dispatchToFirstVisibleMs}ms`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.first_visible",
+    channel: params.channel,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    kind: params.kind,
+    dispatchToFirstVisibleMs: params.dispatchToFirstVisibleMs,
+  });
+  markActivity();
+}
+
 export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;

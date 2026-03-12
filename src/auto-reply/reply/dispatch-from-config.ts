@@ -17,6 +17,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
+  logMessageFirstVisible,
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
@@ -34,6 +35,11 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import {
+  beginSessionGeneration,
+  isSessionGenerationCurrent,
+  registerSessionGenerationListener,
+} from "./session-generation.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -118,7 +124,6 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
     opts?: {
@@ -168,6 +173,32 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+
+  const generationToken = await beginSessionGeneration({ sessionKey, cfg });
+  const canEmitCurrent = () => isSessionGenerationCurrent(generationToken);
+  dispatcher.setDeliveryGuard?.(canEmitCurrent);
+  dispatcher.setFirstVisibleHandler?.((info) => {
+    if (!diagnosticsEnabled) {
+      return;
+    }
+    logMessageFirstVisible({
+      channel,
+      chatId,
+      messageId,
+      sessionKey,
+      kind: info.kind,
+      dispatchToFirstVisibleMs: Math.max(0, Date.now() - startTime),
+    });
+    dispatcher.setFirstVisibleHandler?.(undefined);
+  });
+  const unregisterSupersededListener =
+    sessionKey && generationToken
+      ? registerSessionGenerationListener(sessionKey, () => {
+          if (!canEmitCurrent()) {
+            dispatcher.notifySuperseded?.();
+          }
+        })
+      : undefined;
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -248,6 +279,9 @@ export async function dispatchReplyFromConfig(params: {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
+      return;
+    }
+    if (!canEmitCurrent()) {
       return;
     }
     if (abortSignal?.aborted) {
@@ -390,6 +424,9 @@ export async function dispatchReplyFromConfig(params: {
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
+          if (!canEmitCurrent()) {
+            return;
+          }
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
@@ -403,6 +440,9 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
+            if (!canEmitCurrent()) {
+              return;
+            }
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
@@ -412,6 +452,9 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
         onBlockReply: (payload: ReplyPayload, context) => {
+          if (!canEmitCurrent()) {
+            return;
+          }
           const run = async () => {
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
@@ -435,10 +478,26 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            if (!canEmitCurrent()) {
+              return;
+            }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              const result = await routeReply({
+                payload: ttsPayload,
+                channel: originatingChannel!,
+                to: originatingTo!,
+                sessionKey: ctx.SessionKey,
+                accountId: ctx.AccountId,
+                threadId: ctx.MessageThreadId,
+                cfg,
+                abortSignal: context?.abortSignal,
+                mirror: false,
+                isGroup,
+                groupId,
+              });
+              return result.ok;
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              return dispatcher.sendBlockReply(ttsPayload);
             }
           };
           return run();
@@ -491,6 +550,9 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      if (!canEmitCurrent()) {
+        continue;
+      }
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
@@ -526,7 +588,8 @@ export async function dispatchReplyFromConfig(params: {
       ttsMode === "final" &&
       replies.length === 0 &&
       blockCount > 0 &&
-      accumulatedBlockText.trim()
+      accumulatedBlockText.trim() &&
+      canEmitCurrent()
     ) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
@@ -537,6 +600,14 @@ export async function dispatchReplyFromConfig(params: {
           inboundAudio,
           ttsAuto: sessionTtsAuto,
         });
+        if (!canEmitCurrent()) {
+          await dispatcher.waitForIdle();
+          const counts = dispatcher.getQueuedCounts();
+          counts.final += routedFinalCount;
+          recordProcessed("completed");
+          markIdle("message_completed");
+          return { queuedFinal, counts };
+        }
         // Only send if TTS was actually applied (mediaUrl exists)
         if (ttsSyntheticReply.mediaUrl) {
           // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
@@ -586,5 +657,12 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
+  } finally {
+    void dispatcher.waitForIdle().finally(() => {
+      dispatcher.setFirstVisibleHandler?.(undefined);
+    });
+    if (unregisterSupersededListener) {
+      void dispatcher.waitForIdle().finally(unregisterSupersededListener);
+    }
   }
 }

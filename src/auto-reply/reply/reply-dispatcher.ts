@@ -90,6 +90,7 @@ export type ReplyDispatcher = {
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
   setDeliveryGuard?: (guard: (() => boolean) | undefined) => void;
+  setFirstVisibleHandler?: (handler: FirstVisibleReplyHandler | undefined) => void;
   notifySuperseded?: () => void;
 };
 
@@ -132,6 +133,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: 0,
   };
   let firstVisibleDelivered = false;
+  let firstVisibleHandler = options.onFirstVisible;
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -176,7 +178,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
         if (!firstVisibleDelivered) {
           firstVisibleDelivered = true;
-          options.onFirstVisible?.({ kind, payload: normalized });
+          firstVisibleHandler?.({ kind, payload: normalized });
         }
       })
       .catch((err) => {
@@ -229,6 +231,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     markComplete,
     setDeliveryGuard: (guard) => {
       deliveryGuard = guard;
+    },
+    setFirstVisibleHandler: (handler) => {
+      firstVisibleHandler = handler;
     },
     notifySuperseded: () => {},
   };

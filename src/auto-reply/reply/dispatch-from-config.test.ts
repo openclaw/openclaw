@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
+  logMessageFirstVisible: vi.fn(),
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
@@ -96,6 +97,7 @@ vi.mock("./abort.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  logMessageFirstVisible: diagnosticMocks.logMessageFirstVisible,
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
@@ -146,7 +148,9 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+const { createReplyDispatcher } = await import("./reply-dispatcher.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
+const { __resetSessionGenerationsForTest } = await import("./session-generation.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
@@ -209,10 +213,12 @@ describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetInboundDedupe();
+    __resetSessionGenerationsForTest();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
+    diagnosticMocks.logMessageFirstVisible.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -346,6 +352,9 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).toHaveBeenCalledWith(
@@ -1679,7 +1688,15 @@ describe("dispatchReplyFromConfig", () => {
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    let firstVisibleHandler:
+      | Parameters<NonNullable<ReplyDispatcher["setFirstVisibleHandler"]>>[0]
+      | undefined;
     const dispatcher = createDispatcher();
+    dispatcher.setFirstVisibleHandler = vi.fn((handler) => {
+      if (handler) {
+        firstVisibleHandler = handler;
+      }
+    });
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
@@ -1690,6 +1707,7 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    firstVisibleHandler?.({ kind: "final", payload: { text: "hi" } });
 
     expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
@@ -1702,6 +1720,39 @@ describe("dispatchReplyFromConfig", () => {
         channel: "slack",
         outcome: "completed",
         sessionKey: "agent:main:main",
+      }),
+    );
+    expect(diagnosticMocks.logMessageFirstVisible).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        kind: "final",
+        dispatchToFirstVisibleMs: expect.any(Number),
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("leaves first-visible diagnostics empty when nothing is delivered", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.setFirstVisibleHandler = vi.fn();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-empty",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => undefined;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(diagnosticMocks.logMessageFirstVisible).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        outcome: "completed",
       }),
     );
   });
@@ -1774,5 +1825,118 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("drops stale queued replies after a newer message starts", async () => {
+    setNoAbort();
+    let releaseOldBlock: (() => void) | undefined;
+    const waitForOldBlock = new Promise<void>((resolve) => {
+      releaseOldBlock = resolve;
+    });
+    const oldDelivered: string[] = [];
+    const newDelivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        oldDelivered.push(payload.text ?? "");
+        if (payload.text === "old-block") {
+          await waitForOldBlock;
+        }
+      },
+    });
+    const newDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        newDelivered.push(payload.text ?? "");
+      },
+    });
+    const sessionKey = "agent:main:session-guard";
+
+    const firstRun = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-old",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "old-block" });
+        return { text: "old-final" } satisfies ReplyPayload;
+      },
+    });
+
+    await expect.poll(() => oldDelivered.length).toBe(1);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-new",
+      }),
+      cfg: emptyConfig,
+      dispatcher: newDispatcher,
+      replyResolver: async () => ({ text: "new-final" }) satisfies ReplyPayload,
+    });
+
+    releaseOldBlock?.();
+    await firstRun;
+
+    expect(oldDelivered).toEqual(["old-block"]);
+    expect(newDelivered).toEqual(["new-final"]);
+  });
+
+  it("notifies an older dispatcher as soon as a newer generation starts", async () => {
+    setNoAbort();
+    let releaseOldBlock: (() => void) | undefined;
+    const oldBlock = new Promise<void>((resolve) => {
+      releaseOldBlock = resolve;
+    });
+    const oldDelivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        oldDelivered.push(payload.text ?? "");
+        if (payload.text === "old-block") {
+          await oldBlock;
+        }
+      },
+    });
+    oldDispatcher.notifySuperseded = vi.fn();
+    const sessionKey = "agent:main:session-supersede";
+
+    const firstRun = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-old",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "old-block" });
+        return { text: "old-final" } satisfies ReplyPayload;
+      },
+    });
+
+    await expect.poll(() => oldDelivered.length).toBe(1);
+    expect(oldDispatcher.notifySuperseded).not.toHaveBeenCalled();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-new",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "new-final" }) satisfies ReplyPayload,
+    });
+
+    expect(oldDispatcher.notifySuperseded).toHaveBeenCalledTimes(1);
+
+    releaseOldBlock?.();
+    await firstRun;
   });
 });
