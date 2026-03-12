@@ -1787,6 +1787,7 @@
   100% {
     border-color: var(--border);
   }
+
   50% {
     border-color: var(--accent);
   }
@@ -1843,6 +1844,7 @@
     opacity: 0.4;
     transform: translateY(0);
   }
+
   40% {
     opacity: 1;
     transform: translateY(-3px);
@@ -2403,6 +2405,7 @@
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 16px;
+  align-items: start;
 }
 
 .agent-files-list {
@@ -2449,6 +2452,12 @@
   border-radius: var(--radius-lg);
   padding: 16px;
   background: var(--card);
+}
+
+.agent-files-editor .field textarea {
+  height: 395px;
+  min-height: 120px;
+  resize: vertical;
 }
 
 .agent-file-header {
