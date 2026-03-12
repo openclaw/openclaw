@@ -116,6 +116,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "ernie",
+    label: "ERNIE (Baidu Wenxin)",
+    hint: "API key",
+    choices: ["ernie-api-key"],
+  },
+  {
     value: "modelstudio",
     label: "Alibaba Cloud Model Studio",
     hint: "Coding Plan API key (CN / Global)",
@@ -195,6 +201,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_HINTS: Partial<Record<AuthChoice, string>> = {
   "venice-api-key": "Privacy-focused inference (uncensored models)",
   "together-api-key": "Access to Llama, DeepSeek, Qwen, and more open models",
   "huggingface-api-key": "Inference Providers — OpenAI-compatible chat",
+  "ernie-api-key": "Qianfan API for ERNIE models",
   "opencode-zen": "Shared OpenCode key; curated Zen catalog",
   "opencode-go": "Shared OpenCode key; Kimi/GLM/MiniMax Go catalog",
 };
@@ -204,6 +211,7 @@ const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = 
   "moonshot-api-key-cn": "Kimi API key (.cn)",
   "kimi-code-api-key": "Kimi Code API key (subscription)",
   "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
+  "ernie-api-key": "ERNIE API key (Baidu Wenxin)",
   "opencode-zen": "OpenCode Zen catalog",
   "opencode-go": "OpenCode Go catalog",
 };

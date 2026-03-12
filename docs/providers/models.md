@@ -38,6 +38,7 @@ model as `provider/model`.
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/providers/bedrock)
+- [ERNIE (Baidu Wenxin)](/providers/ernie)
 - [Qianfan](/providers/qianfan)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
