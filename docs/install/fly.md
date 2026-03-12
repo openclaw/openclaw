@@ -84,7 +84,7 @@ primary_region = "iad"
 
 | Setting                        | Why                                                                         |
 | ------------------------------ | --------------------------------------------------------------------------- |
-| `--bind lan`                   | Uses bind mode `lan` (all interfaces) so Fly's proxy can reach the gateway |
+| `--bind lan`                   | Uses bind mode `lan` (all interfaces) so Fly's proxy can reach the gateway  |
 | `--allow-unconfigured`         | Starts without a config file (you'll create one after)                      |
 | `internal_port = 3000`         | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
 | `memory = "2048mb"`            | 512MB is too small; 2GB recommended                                         |
