@@ -850,10 +850,14 @@ export async function runEmbeddedAttempt(
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     // Track browser tabs opened during this run for automatic cleanup.
-    // Maps targetId → baseUrl so we close against the correct endpoint
-    // (host vs sandbox browser). Node-proxy tabs are excluded since
-    // their sandbox process is torn down independently.
-    const openedBrowserTabs = new Map<string, string | undefined>();
+    // Maps targetId → { baseUrl, profile } so we close against the correct
+    // endpoint (host vs sandbox browser) and browser profile.
+    // Node-proxy tabs store undefined baseUrl — their sandbox process is
+    // torn down independently, so cleanup is best-effort.
+    const openedBrowserTabs = new Map<
+      string,
+      { baseUrl: string | undefined; profile: string | undefined }
+    >();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -2023,14 +2027,14 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
 
         // Close browser tabs opened during this run to prevent leaked headless tabs.
-        // Each entry maps targetId → baseUrl so we close against the correct endpoint
-        // (host browser vs sandbox browser).
+        // Each entry maps targetId → { baseUrl, profile } so we close against the
+        // correct endpoint (host vs sandbox) and browser profile.
         if (openedBrowserTabs.size > 0) {
           log.debug(
             `closing ${openedBrowserTabs.size} browser tab(s) opened during run: runId=${params.runId}`,
           );
-          for (const [targetId, baseUrl] of openedBrowserTabs) {
-            browserCloseTab(baseUrl, targetId).catch((err) => {
+          for (const [targetId, { baseUrl, profile }] of openedBrowserTabs) {
+            browserCloseTab(baseUrl, targetId, { profile: profile ?? undefined }).catch((err) => {
               log.debug(`failed to close browser tab ${targetId}: ${String(err)}`);
             });
           }

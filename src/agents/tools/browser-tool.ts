@@ -283,8 +283,9 @@ export function createBrowserTool(opts?: {
   allowHostControl?: boolean;
   agentSessionKey?: string;
   /** When provided, tabs opened via this tool are tracked here for cleanup.
-   *  Maps targetId → baseUrl so cleanup can close against the correct endpoint. */
-  openedTabTracker?: Map<string, string | undefined>;
+   *  Maps targetId → { baseUrl, profile } so cleanup can close against the
+   *  correct endpoint and browser profile. */
+  openedTabTracker?: Map<string, { baseUrl: string | undefined; profile: string | undefined }>;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -426,11 +427,12 @@ export function createBrowserTool(opts?: {
               profile,
               body: { url: targetUrl },
             });
-            // Track opened tab (with baseUrl) for automatic cleanup when the run ends.
-            // Node-proxy tabs are excluded — their sandbox process is torn down independently.
+            // Track opened tab for automatic cleanup when the run ends.
+            // Node-proxy tabs store undefined baseUrl — their sandbox process
+            // is torn down independently, so cleanup is best-effort.
             const tid = (result as { targetId?: string })?.targetId;
             if (tid && opts?.openedTabTracker) {
-              opts.openedTabTracker.set(tid, undefined);
+              opts.openedTabTracker.set(tid, { baseUrl: undefined, profile });
             }
             return jsonResult(result);
           }
@@ -442,9 +444,9 @@ export function createBrowserTool(opts?: {
               baseUrl,
               profile,
             });
-            // Track opened tab (with baseUrl) for automatic cleanup when the run ends
+            // Track opened tab (with baseUrl and profile) for automatic cleanup when the run ends
             if (tab.targetId && opts?.openedTabTracker) {
-              opts.openedTabTracker.set(tab.targetId, baseUrl);
+              opts.openedTabTracker.set(tab.targetId, { baseUrl, profile });
             }
             return jsonResult(tab);
           }

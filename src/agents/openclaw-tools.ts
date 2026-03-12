@@ -78,8 +78,12 @@ export function createOpenClawTools(
      */
     spawnWorkspaceDir?: string;
     /** When provided, browser tabs opened during the run are tracked here for cleanup.
-     *  Maps targetId → baseUrl so cleanup can close against the correct endpoint. */
-    openedBrowserTabTracker?: Map<string, string | undefined>;
+     *  Maps targetId → { baseUrl, profile } so cleanup can close against the correct
+     *  endpoint and browser profile. */
+    openedBrowserTabTracker?: Map<
+      string,
+      { baseUrl: string | undefined; profile: string | undefined }
+    >;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
