@@ -319,9 +319,12 @@ describe("buildExcludeFilter", () => {
   });
 
   it("returns { filter: () => true } when patterns is empty", () => {
-    const { filter, getExcluded } = buildExcludeFilter([], new Map(), tempDir);
+    const { filter, getExcludedStats } = buildExcludeFilter([], new Map(), tempDir);
     expect(filter("/any/path", { size: 100 })).toBe(true);
-    expect(getExcluded()).toEqual([]);
+    const stats = getExcludedStats();
+    expect(stats.totalFiles).toBe(0);
+    expect(stats.totalBytes).toBe(0);
+    expect(stats.byPattern).toEqual([]);
   });
 
   it("filter returns true (include) for non-matching path", () => {
@@ -357,42 +360,48 @@ describe("buildExcludeFilter", () => {
     expect(filter("src/lib/main.py", { size: 100 })).toBe(true);
   });
 
-  it("getExcluded() returns entries populated by filter side-effect", () => {
+  it("getExcludedStats() returns per-pattern stats populated by filter side-effect", () => {
     const sources = new Map([["venvs/", "default" as const]]);
-    const { filter, getExcluded } = buildExcludeFilter(["venvs/"], sources, tempDir);
+    const { filter, getExcludedStats } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
     filter("venvs", { size: 0 });
     filter("memory/notes.md", { size: 100 });
 
-    const excluded = getExcluded();
-    expect(excluded).toHaveLength(1);
-    expect(excluded[0]?.path).toBe("venvs");
-    expect(excluded[0]?.pattern).toBe("venvs/");
-    expect(excluded[0]?.source).toBe("default");
+    const stats = getExcludedStats();
+    expect(stats.totalFiles).toBe(1);
+    expect(stats.totalBytes).toBe(0);
+    expect(stats.byPattern).toHaveLength(1);
+    expect(stats.byPattern[0]?.pattern).toBe("venvs/");
+    expect(stats.byPattern[0]?.source).toBe("default");
+    expect(stats.byPattern[0]?.files).toBe(1);
+    expect(stats.byPattern[0]?.bytes).toBe(0);
   });
 
-  it("getExcluded() entries include path, pattern, source, bytes", () => {
+  it("getExcludedStats() aggregates bytes and file count per pattern", () => {
     const sources = new Map([["*.log", "cli" as const]]);
-    const { filter, getExcluded } = buildExcludeFilter(["*.log"], sources, tempDir);
+    const { filter, getExcludedStats } = buildExcludeFilter(["*.log"], sources, tempDir);
 
     filter("error.log", { size: 500 });
-    const excluded = getExcluded();
+    filter("access.log", { size: 300 });
+    const stats = getExcludedStats();
 
-    expect(excluded).toHaveLength(1);
-    expect(excluded[0]).toEqual({
-      path: "error.log",
+    expect(stats.totalFiles).toBe(2);
+    expect(stats.totalBytes).toBe(800);
+    expect(stats.byPattern).toHaveLength(1);
+    expect(stats.byPattern[0]).toEqual({
       pattern: "*.log",
       source: "cli",
-      bytes: 500,
+      files: 2,
+      bytes: 800,
     });
   });
 
-  it("getExcluded() source is 'default' for SMART_EXCLUDE_DEFAULTS patterns", () => {
+  it("getExcludedStats() source is 'default' for SMART_EXCLUDE_DEFAULTS patterns", () => {
     const sources = new Map<string, "default" | "cli">();
     for (const d of SMART_EXCLUDE_DEFAULTS) {
       sources.set(d, "default");
     }
-    const { filter, getExcluded } = buildExcludeFilter(
+    const { filter, getExcludedStats } = buildExcludeFilter(
       [...SMART_EXCLUDE_DEFAULTS],
       sources,
       tempDir,
@@ -401,10 +410,11 @@ describe("buildExcludeFilter", () => {
     filter("venvs", { size: 0 });
     filter("models", { size: 0 });
 
-    const excluded = getExcluded();
-    expect(excluded).toHaveLength(2);
-    for (const e of excluded) {
-      expect(e.source).toBe("default");
+    const stats = getExcludedStats();
+    expect(stats.totalFiles).toBe(2);
+    expect(stats.byPattern.length).toBeGreaterThanOrEqual(2);
+    for (const entry of stats.byPattern) {
+      expect(entry.source).toBe("default");
     }
   });
 
@@ -436,15 +446,55 @@ describe("buildExcludeFilter", () => {
     expect(filter("./venvs", { size: 0 })).toBe(false);
   });
 
-  it("returns a separate copy of excluded entries on each call", () => {
+  it("getExcludedStats() does not include individual file paths", () => {
     const sources = new Map([["venvs/", "default" as const]]);
-    const { filter, getExcluded } = buildExcludeFilter(["venvs/"], sources, tempDir);
+    const { filter, getExcludedStats } = buildExcludeFilter(["venvs/"], sources, tempDir);
+
+    filter("venvs/lib/python3.11/site.py", { size: 1024 });
+    filter("venvs/bin/python", { size: 512 });
+    const stats = getExcludedStats();
+
+    // Stats should aggregate without exposing individual paths
+    expect(stats.totalFiles).toBe(2);
+    expect(stats.totalBytes).toBe(1536);
+    expect(stats.byPattern).toHaveLength(1);
+    // No 'path' field on the byPattern entries
+    for (const entry of stats.byPattern) {
+      expect(entry).not.toHaveProperty("path");
+    }
+  });
+
+  it("getExcludedStats() returns consistent snapshots on each call", () => {
+    const sources = new Map([["venvs/", "default" as const]]);
+    const { filter, getExcludedStats } = buildExcludeFilter(["venvs/"], sources, tempDir);
 
     filter("venvs", { size: 0 });
-    const first = getExcluded();
-    const second = getExcluded();
+    const first = getExcludedStats();
+    const second = getExcludedStats();
 
     expect(first).toEqual(second);
-    expect(first).not.toBe(second); // different array instances
+  });
+
+  it("getExcludedStats() tracks multiple patterns independently", () => {
+    const sources = new Map([
+      ["venvs/", "default" as const],
+      ["*.log", "cli" as const],
+    ]);
+    const { filter, getExcludedStats } = buildExcludeFilter(["venvs/", "*.log"], sources, tempDir);
+
+    filter("venvs/lib/site.py", { size: 100 });
+    filter("error.log", { size: 200 });
+    filter("access.log", { size: 300 });
+
+    const stats = getExcludedStats();
+    expect(stats.totalFiles).toBe(3);
+    expect(stats.totalBytes).toBe(600);
+    expect(stats.byPattern).toHaveLength(2);
+
+    const venvsStats = stats.byPattern.find((p: { pattern: string }) => p.pattern === "venvs/");
+    expect(venvsStats).toEqual({ pattern: "venvs/", source: "default", files: 1, bytes: 100 });
+
+    const logStats = stats.byPattern.find((p: { pattern: string }) => p.pattern === "*.log");
+    expect(logStats).toEqual({ pattern: "*.log", source: "cli", files: 2, bytes: 500 });
   });
 });

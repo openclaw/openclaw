@@ -12,6 +12,18 @@ vi.mock("../commands/backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
 }));
 
+async function getArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
+  await tar.t({
+    file: archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      entries.push(entry.path);
+    },
+  });
+  return entries;
+}
+
 describe("backup create — exclude patterns", () => {
   let tempHome: TempHomeEnv;
   let previousCwd: string;
@@ -69,18 +81,6 @@ describe("backup create — exclude patterns", () => {
     return stateDir;
   }
 
-  async function getArchiveEntries(archivePath: string): Promise<string[]> {
-    const entries: string[] = [];
-    await tar.t({
-      file: archivePath,
-      gzip: true,
-      onentry: (entry) => {
-        entries.push(entry.path);
-      },
-    });
-    return entries;
-  }
-
   it("default backup (no flags) includes everything including venvs/", async () => {
     await setupStateDir();
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-no-exclude-"));
@@ -97,8 +97,9 @@ describe("backup create — exclude patterns", () => {
       const venvEntries = entries.filter((e) => e.includes("venvs"));
       expect(venvEntries.length).toBeGreaterThan(0);
 
-      // No excluded entries
+      // No exclusion data at all
       expect(result.excluded).toBeUndefined();
+      expect(result.excludedStats).toBeUndefined();
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
@@ -116,13 +117,20 @@ describe("backup create — exclude patterns", () => {
         nowMs,
       });
 
-      // Should have excluded entries
-      expect(result.excluded).toBeDefined();
-      expect(result.excluded!.length).toBeGreaterThan(0);
+      // Per-file excluded[] is no longer returned
+      expect(result.excluded).toBeUndefined();
 
-      // Check excluded paths include our smart-exclude dirs
-      const excludedPaths = result.excluded!.map((e) => e.path);
-      expect(excludedPaths.some((p) => p === "venvs" || p.startsWith("venvs/"))).toBe(true);
+      // excludedStats should be populated with per-pattern aggregates
+      expect(result.excludedStats).toBeDefined();
+      expect(result.excludedStats!.totalFiles).toBeGreaterThan(0);
+      expect(result.excludedStats!.totalBytes).toBeGreaterThanOrEqual(0);
+      expect(result.excludedStats!.byPattern.length).toBeGreaterThan(0);
+
+      // byPattern entries should have the right shape
+      const venvsPattern = result.excludedStats!.byPattern.find((p) => p.pattern === "venvs/");
+      expect(venvsPattern).toBeDefined();
+      expect(venvsPattern!.files).toBeGreaterThan(0);
+      expect(venvsPattern!.source).toBe("default");
 
       // Verify archive does NOT contain venvs content
       const entries = await getArchiveEntries(result.archivePath);
@@ -152,8 +160,9 @@ describe("backup create — exclude patterns", () => {
         includeAll: true,
       });
 
-      // include-all overrides smart-exclude: no excluded entries
+      // include-all overrides smart-exclude: no exclusion data
       expect(result.excluded).toBeUndefined();
+      expect(result.excludedStats).toBeUndefined();
 
       // venvs should be in the archive
       const entries = await getArchiveEntries(result.archivePath);
@@ -177,9 +186,15 @@ describe("backup create — exclude patterns", () => {
         exclude: ["*.log"],
       });
 
-      expect(result.excluded).toBeDefined();
-      const excludedPaths = result.excluded!.map((e) => e.path);
-      expect(excludedPaths.some((p) => p.endsWith(".log"))).toBe(true);
+      // Per-file excluded[] is no longer returned
+      expect(result.excluded).toBeUndefined();
+
+      // excludedStats should record the pattern
+      expect(result.excludedStats).toBeDefined();
+      const logPattern = result.excludedStats!.byPattern.find((p) => p.pattern === "*.log");
+      expect(logPattern).toBeDefined();
+      expect(logPattern!.files).toBeGreaterThan(0);
+      expect(logPattern!.source).toBe("cli");
 
       // Archive should not contain .log files
       const entries = await getArchiveEntries(result.archivePath);
@@ -203,7 +218,13 @@ describe("backup create — exclude patterns", () => {
         excludeFile: excludeFilePath,
       });
 
-      expect(result.excluded).toBeDefined();
+      // Per-file excluded[] is no longer returned
+      expect(result.excluded).toBeUndefined();
+
+      // excludedStats should track both patterns from the file
+      expect(result.excludedStats).toBeDefined();
+      expect(result.excludedStats!.byPattern.some((p) => p.pattern === "venvs/")).toBe(true);
+      expect(result.excludedStats!.byPattern.some((p) => p.pattern === "models/")).toBe(true);
 
       const entries = await getArchiveEntries(result.archivePath);
       const venvEntries = entries.filter((e) => e.includes("venvs"));
@@ -233,7 +254,7 @@ describe("backup create — exclude patterns", () => {
     expect(result.excludedStats!.byPattern.length).toBeGreaterThan(0);
   });
 
-  it("--json output includes excluded[] in result object", async () => {
+  it("--json output does not include excluded[], only excludedStats", async () => {
     await setupStateDir();
     const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-json-exclude-"));
 
@@ -248,13 +269,28 @@ describe("backup create — exclude patterns", () => {
         },
       );
 
-      // The JSON output should include excluded info
       expect(logSpy).toHaveBeenCalledTimes(1);
       const jsonOutput = JSON.parse(logSpy.mock.calls[0][0] as string);
-      expect(jsonOutput.excluded).toBeDefined();
-      expect(Array.isArray(jsonOutput.excluded)).toBe(true);
+
+      // excluded[] must NOT be present in --json output
+      expect(jsonOutput.excluded).toBeUndefined();
+
+      // excludedStats must be present with full shape
       expect(jsonOutput.excludedStats).toBeDefined();
+      expect(typeof jsonOutput.excludedStats.totalFiles).toBe("number");
       expect(typeof jsonOutput.excludedStats.totalBytes).toBe("number");
+      expect(Array.isArray(jsonOutput.excludedStats.byPattern)).toBe(true);
+      expect(jsonOutput.excludedStats.byPattern.length).toBeGreaterThan(0);
+
+      // Each byPattern entry has the expected shape
+      for (const entry of jsonOutput.excludedStats.byPattern) {
+        expect(typeof entry.pattern).toBe("string");
+        expect(typeof entry.files).toBe("number");
+        expect(typeof entry.bytes).toBe("number");
+        expect(typeof entry.source).toBe("string");
+        // No per-file 'path' field
+        expect(entry).not.toHaveProperty("path");
+      }
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
@@ -287,7 +323,7 @@ describe("backup create — exclude patterns", () => {
         output: archiveDir,
       });
 
-      // No exclude options → nothing excluded
+      // No exclude options → neither excluded nor excludedStats
       expect(result.excluded).toBeUndefined();
       expect(result.excludedStats).toBeUndefined();
 
@@ -367,14 +403,13 @@ describe("backup verify — tolerant manifest reader", () => {
         smartExclude: true,
       });
 
-      // Verify the archive has excluded entries
-      expect(result.excluded).toBeDefined();
-      expect(result.excluded!.some((e) => e.path === "venvs" || e.path.startsWith("venvs/"))).toBe(
-        true,
-      );
+      // Per-file excluded[] is no longer returned; excludedStats provides auditability
+      expect(result.excluded).toBeUndefined();
+      expect(result.excludedStats).toBeDefined();
+      expect(result.excludedStats!.totalFiles).toBeGreaterThan(0);
 
-      // Real verify should pass — excluded paths are in the manifest,
-      // so verify knows their absence is intentional.
+      // Real verify should pass — excludedStats in manifest provides auditability;
+      // asset presence is verified unconditionally.
       const verifyResult = await realBackupVerifyCommand(runtime, {
         archive: result.archivePath,
       });
@@ -408,7 +443,7 @@ describe("backup verify — tolerant manifest reader", () => {
     }
   });
 
-  it("in-archive manifest contains excluded[] with accurate data", async () => {
+  it("in-archive manifest contains excludedStats (not excluded[]) with accurate data", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.mkdir(path.join(stateDir, "venvs/lib"), { recursive: true });
@@ -426,7 +461,7 @@ describe("backup verify — tolerant manifest reader", () => {
         smartExclude: true,
       });
 
-      // Extract manifest from archive and verify excluded[] is populated
+      // Extract manifest from archive
       let manifestJson = "";
       await tar.t({
         file: result.archivePath,
@@ -448,21 +483,78 @@ describe("backup verify — tolerant manifest reader", () => {
 
       expect(manifestJson).toBeTruthy();
       const manifest = JSON.parse(manifestJson);
-      expect(manifest.excluded).toBeDefined();
-      expect(Array.isArray(manifest.excluded)).toBe(true);
-      expect(manifest.excluded.length).toBeGreaterThan(0);
 
-      // Verify excluded entries have expected structure
-      const excludedPaths = manifest.excluded.map((e: { path: string }) => e.path);
-      expect(excludedPaths.some((p: string) => p === "venvs" || p.startsWith("venvs/"))).toBe(true);
+      // excluded[] must NOT be present in the manifest (no per-file paths)
+      expect(manifest.excluded).toBeUndefined();
 
-      // Each entry should have path, pattern, source, bytes
-      for (const entry of manifest.excluded) {
-        expect(typeof entry.path).toBe("string");
+      // excludedStats must be present with per-pattern aggregates
+      expect(manifest.excludedStats).toBeDefined();
+      expect(typeof manifest.excludedStats.totalFiles).toBe("number");
+      expect(typeof manifest.excludedStats.totalBytes).toBe("number");
+      expect(manifest.excludedStats.totalFiles).toBeGreaterThan(0);
+      expect(Array.isArray(manifest.excludedStats.byPattern)).toBe(true);
+      expect(manifest.excludedStats.byPattern.length).toBeGreaterThan(0);
+
+      // byPattern should include venvs/ and models/ patterns
+      const patterns = manifest.excludedStats.byPattern.map((p: { pattern: string }) => p.pattern);
+      expect(patterns).toContain("venvs/");
+      expect(patterns).toContain("models/");
+
+      // Each byPattern entry has the correct shape
+      for (const entry of manifest.excludedStats.byPattern) {
         expect(typeof entry.pattern).toBe("string");
-        expect(typeof entry.source).toBe("string");
+        expect(typeof entry.files).toBe("number");
         expect(typeof entry.bytes).toBe("number");
+        expect(typeof entry.source).toBe("string");
+        // Must NOT contain individual file paths
+        expect(entry).not.toHaveProperty("path");
       }
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("archive with excludes passes backup verify (excludedStats-only manifest)", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.mkdir(path.join(stateDir, "venvs/lib"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "venvs/lib/site.py"), "# python\n", "utf8");
+    await fs.mkdir(path.join(stateDir, "logs"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "logs/app.log"), "log line\n", "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.mkdir(path.join(stateDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "memory/notes.md"), "# notes\n", "utf8");
+
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-verify-excludedstats-"),
+    );
+
+    try {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      // Create archive with excludes active
+      const createResult = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        smartExclude: true,
+      });
+
+      // Confirm the archive was created with exclusions
+      expect(createResult.excludedStats).toBeDefined();
+      expect(createResult.excludedStats!.totalFiles).toBeGreaterThan(0);
+
+      // Archive should NOT contain excluded content
+      const entries = await getArchiveEntries(createResult.archivePath);
+      expect(entries.some((e) => e.includes("venvs"))).toBe(false);
+      expect(entries.some((e) => e.includes("logs"))).toBe(false);
+
+      // Archive SHOULD contain non-excluded content
+      expect(entries.some((e) => e.includes("memory"))).toBe(true);
+
+      // Real verify should pass with the excludedStats-only manifest
+      const verifyResult = await realBackupVerifyCommand(runtime, {
+        archive: createResult.archivePath,
+      });
+      expect(verifyResult.ok).toBe(true);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
