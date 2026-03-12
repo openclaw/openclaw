@@ -1,0 +1,25 @@
+{
+  "id": "personal-assistant-channel",
+  "name": "Personal Assistant Product",
+  "description": "Product tools and skills for the personal assistant app.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "assistantApiBaseUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "assistantApiToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000
+      }
+    },
+    "required": ["assistantApiBaseUrl", "assistantApiToken"]
+  }
+}
