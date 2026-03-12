@@ -362,27 +362,25 @@ function resolveDynamicTemperature(params: {
     return undefined;
   }
 
-  // Find the first explicit thinking-related config in merged.
-  // We check them in priority order to determine if the user has made an explicit choice.
-  const explicitThinking =
-    params.merged.thinking !== undefined
-      ? params.merged.thinking
-      : params.merged.thinkingEnabled !== undefined
-        ? params.merged.thinkingEnabled
-        : params.merged.thinking_enabled !== undefined
-          ? params.merged.thinking_enabled
-          : params.merged.reasoning !== undefined
-            ? params.merged.reasoning
-            : params.merged.reasoning_effort !== undefined
-              ? params.merged.reasoning_effort
-              : params.merged.effort !== undefined
-                ? params.merged.effort
-                : undefined;
+  const thinkingKeys = [
+    "thinking",
+    "thinkingEnabled",
+    "thinking_enabled",
+    "reasoning",
+    "reasoning_effort",
+    "effort",
+  ];
 
-  const isThinkingActive =
-    explicitThinking !== undefined
-      ? !isThinkingDisabled(explicitThinking)
-      : params.thinkingLevel != null && params.thinkingLevel !== "off";
+  const explicitConfigs = thinkingKeys
+    .map((key) => params.merged[key])
+    .filter((val) => val !== undefined);
+
+  let isThinkingActive: boolean;
+  if (explicitConfigs.length > 0) {
+    isThinkingActive = explicitConfigs.some((val) => !isThinkingDisabled(val));
+  } else {
+    isThinkingActive = params.thinkingLevel != null && params.thinkingLevel !== "off";
+  }
 
   if (isThinkingActive) {
     return undefined;
