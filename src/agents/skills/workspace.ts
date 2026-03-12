@@ -336,7 +336,19 @@ function loadSkillReferencesContent(
     return "";
   }
 
+  // Resolve base directory once before the loop.
+  // If it cannot be resolved, bail out early with a clear warning rather than
+  // emitting a misleading "outside skill directory" message for every file.
+  const baseDirRealPath = tryRealpath(skill.baseDir);
+  if (!baseDirRealPath) {
+    skillsLogger.warn("Cannot resolve skill base directory, skipping all references.", {
+      skill: skill.name,
+    });
+    return "";
+  }
+
   const parts: string[] = [];
+  let totalBytes = 0;
   for (const filename of filesToLoad) {
     // Security: only allow .md files, no path traversal
     if (
@@ -356,8 +368,7 @@ function loadSkillReferencesContent(
     if (!refRealPath) continue;
 
     // Security: ensure the reference file is inside the skill's baseDir
-    const baseDirRealPath = tryRealpath(skill.baseDir);
-    if (!baseDirRealPath || !isPathInside(baseDirRealPath, refRealPath)) {
+    if (!isPathInside(baseDirRealPath, refRealPath)) {
       skillsLogger.warn("Skipping reference file outside skill directory.", {
         skill: skill.name,
         filename,
@@ -376,7 +387,17 @@ function loadSkillReferencesContent(
         });
         continue;
       }
+      // Guard against unbounded combined references content.
+      if (totalBytes + stat.size > limits.maxSkillFileBytes) {
+        skillsLogger.warn("Skipping remaining references: combined size limit reached.", {
+          skill: skill.name,
+          filename,
+          totalBytes,
+        });
+        break;
+      }
       const content = fs.readFileSync(refRealPath, "utf-8");
+      totalBytes += stat.size;
       parts.push(`\n\n<!-- references/${filename} -->\n${content}`);
     } catch {
       skillsLogger.warn("Failed to load reference file.", { skill: skill.name, filename });
