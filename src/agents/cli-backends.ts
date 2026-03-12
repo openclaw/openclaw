@@ -56,6 +56,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   sessionArg: "--session-id",
   sessionMode: "always",
   sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  sessionIdFormat: "uuid",
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
   systemPromptWhen: "first",

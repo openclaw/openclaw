@@ -162,6 +162,7 @@ function pickSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
 ): string | undefined {
+  const requiresUuid = backend.sessionIdFormat === "uuid";
   const fields = backend.sessionIdFields ?? [
     "session_id",
     "sessionId",
@@ -171,10 +172,18 @@ function pickSessionId(
   for (const field of fields) {
     const value = parsed[field];
     if (typeof value === "string" && value.trim()) {
-      return value.trim();
+      const candidate = value.trim();
+      if (requiresUuid && !isUuidSessionId(candidate)) {
+        continue;
+      }
+      return candidate;
     }
   }
   return undefined;
+}
+
+function isUuidSessionId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
 }
 
 export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {

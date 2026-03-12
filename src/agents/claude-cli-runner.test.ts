@@ -79,7 +79,14 @@ describe("runClaudeCliAgent", () => {
 
   it("starts a new session with --session-id when none is provided", async () => {
     mocks.spawn.mockResolvedValueOnce(
-      createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-1" }))),
+      createManagedRun(
+        Promise.resolve(
+          successExit({
+            message: "ok",
+            session_id: "550e8400-e29b-41d4-a716-446655440000",
+          }),
+        ),
+      ),
     );
 
     await runClaudeCliAgent({
@@ -102,7 +109,14 @@ describe("runClaudeCliAgent", () => {
 
   it("uses --resume when a claude session id is provided", async () => {
     mocks.spawn.mockResolvedValueOnce(
-      createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-2" }))),
+      createManagedRun(
+        Promise.resolve(
+          successExit({
+            message: "ok",
+            session_id: "550e8400-e29b-41d4-a716-446655440000",
+          }),
+        ),
+      ),
     );
 
     await runClaudeCliAgent({
@@ -154,11 +168,21 @@ describe("runClaudeCliAgent", () => {
 
     await waitForCalls(mocks.spawn, 1);
 
-    firstDeferred.resolve(successExit({ message: "ok", session_id: "sid-1" }));
+    firstDeferred.resolve(
+      successExit({
+        message: "ok",
+        session_id: "550e8400-e29b-41d4-a716-446655440000",
+      }),
+    );
 
     await waitForCalls(mocks.spawn, 2);
 
-    secondDeferred.resolve(successExit({ message: "ok", session_id: "sid-2" }));
+    secondDeferred.resolve(
+      successExit({
+        message: "ok",
+        session_id: "123e4567-e89b-12d3-a456-426614174000",
+      }),
+    );
 
     await Promise.all([firstRun, secondRun]);
   });

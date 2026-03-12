@@ -75,6 +75,8 @@ export type CliBackendConfig = {
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
   sessionIdFields?: string[];
+  /** Validation mode for parsed session ids before persisting them. */
+  sessionIdFormat?: "opaque" | "uuid";
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
   /** System prompt behavior (append vs replace). */
