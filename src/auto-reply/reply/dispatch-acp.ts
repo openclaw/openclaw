@@ -322,6 +322,7 @@ export async function tryDispatchAcpReply(params: {
           payload: { text: accumulatedBlockText },
           cfg: params.cfg,
           channel: params.ttsChannel,
+          accountId: params.ctx.AccountId,
           kind: "final",
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
