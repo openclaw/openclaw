@@ -123,7 +123,7 @@ export default defineConfig([
     }),
   ),
   nodeBuildConfig({
-    entry: { "gateway/server": "src/gateway/server.ts" },
+    entry: { "gateway/server": "src/gateway/server-public.ts" },
   }),
   nodeBuildConfig({
     entry: "src/extensionAPI.ts",
