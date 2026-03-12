@@ -6,7 +6,7 @@
 
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions.js";
 import type {
   GatewayStartupNotificationConfig,
   GatewayStartupNotificationTarget,
@@ -80,8 +80,8 @@ async function sendNotificationToTarget(params: {
     return false;
   }
 
-  // Use main session key for outbound context
-  const sessionKey = resolveMainSessionKeyFromConfig();
+  // Use main session key for outbound context (derived from runtime cfg)
+  const sessionKey = resolveMainSessionKey(cfg);
   const outboundSession = buildOutboundSessionContext({
     cfg,
     sessionKey,

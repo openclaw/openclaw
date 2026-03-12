@@ -58,5 +58,11 @@ describe("startup-notification", () => {
       });
       expect(result).toEqual({ sent: 0, failed: 0 });
     });
+
+    it("returns zero counts when enabled but no targets", async () => {
+      const cfg = createMockConfig({ enabled: true, targets: [] });
+      const result = await sendStartupNotifications({ cfg });
+      expect(result).toEqual({ sent: 0, failed: 0 });
+    });
   });
 });

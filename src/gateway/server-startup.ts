@@ -28,7 +28,7 @@ import {
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
-import { sendStartupNotifications } from "./startup-notification.js";
+import { isStartupNotificationEnabled, sendStartupNotifications } from "./startup-notification.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 
@@ -189,7 +189,7 @@ export async function startGatewaySidecars(params: {
   }
 
   // Send startup notifications if configured
-  if (params.cfg.gateway?.startupNotification?.enabled) {
+  if (isStartupNotificationEnabled(params.cfg.gateway?.startupNotification)) {
     setTimeout(() => {
       void sendStartupNotifications({
         cfg: params.cfg,
