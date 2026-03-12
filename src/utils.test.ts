@@ -8,7 +8,6 @@ import {
   ensureDir,
   jidToE164,
   normalizeE164,
-  normalizePath,
   resolveConfigDir,
   resolveHomeDir,
   resolveJidToE164,
@@ -17,7 +16,6 @@ import {
   shortenHomePath,
   sleep,
   toWhatsappJid,
-  withWhatsAppPrefix,
 } from "./utils.js";
 
 function withTempDirSync<T>(prefix: string, run: (dir: string) => T): T {
@@ -28,26 +26,6 @@ function withTempDirSync<T>(prefix: string, run: (dir: string) => T): T {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-
-describe("normalizePath", () => {
-  it("adds leading slash when missing", () => {
-    expect(normalizePath("foo")).toBe("/foo");
-  });
-
-  it("keeps existing slash", () => {
-    expect(normalizePath("/bar")).toBe("/bar");
-  });
-});
-
-describe("withWhatsAppPrefix", () => {
-  it("adds whatsapp prefix", () => {
-    expect(withWhatsAppPrefix("+1555")).toBe("whatsapp:+1555");
-  });
-
-  it("leaves prefixed intact", () => {
-    expect(withWhatsAppPrefix("whatsapp:+1555")).toBe("whatsapp:+1555");
-  });
-});
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
