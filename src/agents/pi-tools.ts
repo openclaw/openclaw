@@ -267,8 +267,9 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  /** When provided, targetIds of browser tabs opened during the run are tracked here for cleanup. */
-  openedBrowserTabTracker?: Set<string>;
+  /** When provided, browser tabs opened during the run are tracked here for cleanup.
+   *  Maps targetId → baseUrl so cleanup can close against the correct endpoint. */
+  openedBrowserTabTracker?: Map<string, string | undefined>;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;

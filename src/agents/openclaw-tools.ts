@@ -77,8 +77,9 @@ export function createOpenClawTools(
      * subagents inherit the real workspace path instead of the sandbox copy.
      */
     spawnWorkspaceDir?: string;
-    /** When provided, targetIds of browser tabs opened during the run are tracked here for cleanup. */
-    openedBrowserTabTracker?: Set<string>;
+    /** When provided, browser tabs opened during the run are tracked here for cleanup.
+     *  Maps targetId → baseUrl so cleanup can close against the correct endpoint. */
+    openedBrowserTabTracker?: Map<string, string | undefined>;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);

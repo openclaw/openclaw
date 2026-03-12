@@ -282,8 +282,9 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  /** When provided, targetIds of tabs opened via this tool are tracked here for cleanup. */
-  openedTabTracker?: Set<string>;
+  /** When provided, tabs opened via this tool are tracked here for cleanup.
+   *  Maps targetId → baseUrl so cleanup can close against the correct endpoint. */
+  openedTabTracker?: Map<string, string | undefined>;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -425,10 +426,11 @@ export function createBrowserTool(opts?: {
               profile,
               body: { url: targetUrl },
             });
-            // Track opened tab for automatic cleanup when the run ends
+            // Track opened tab (with baseUrl) for automatic cleanup when the run ends.
+            // Node-proxy tabs are excluded — their sandbox process is torn down independently.
             const tid = (result as { targetId?: string })?.targetId;
             if (tid && opts?.openedTabTracker) {
-              opts.openedTabTracker.add(tid);
+              opts.openedTabTracker.set(tid, undefined);
             }
             return jsonResult(result);
           }
@@ -440,9 +442,9 @@ export function createBrowserTool(opts?: {
               baseUrl,
               profile,
             });
-            // Track opened tab for automatic cleanup when the run ends
+            // Track opened tab (with baseUrl) for automatic cleanup when the run ends
             if (tab.targetId && opts?.openedTabTracker) {
-              opts.openedTabTracker.add(tab.targetId);
+              opts.openedTabTracker.set(tab.targetId, baseUrl);
             }
             return jsonResult(tab);
           }
@@ -478,7 +480,10 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: { kind: "close" },
                 });
-            // Remove from tracker so it won't be double-closed on run cleanup
+            // Remove from tracker so it won't be double-closed on run cleanup.
+            // When no targetId is provided (active-tab close), the tab stays in
+            // the tracker and will produce a harmless failed cleanup attempt
+            // (errors are swallowed in the finally block).
             if (targetId) {
               opts?.openedTabTracker?.delete(targetId);
             }
@@ -495,6 +500,9 @@ export function createBrowserTool(opts?: {
             // Remove from tracker so it won't be double-closed on run cleanup
             opts?.openedTabTracker?.delete(targetId);
           } else {
+            // Active-tab close without explicit targetId. The closed tab stays
+            // in the tracker — cleanup will attempt to close it again, but
+            // the error is silently swallowed (tab not found).
             await browserAct(baseUrl, { kind: "close" }, { profile });
           }
           return jsonResult({ ok: true });

@@ -849,7 +849,11 @@ export async function runEmbeddedAttempt(
     });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
-    const openedBrowserTabs = new Set<string>();
+    // Track browser tabs opened during this run for automatic cleanup.
+    // Maps targetId → baseUrl so we close against the correct endpoint
+    // (host vs sandbox browser). Node-proxy tabs are excluded since
+    // their sandbox process is torn down independently.
+    const openedBrowserTabs = new Map<string, string | undefined>();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -1793,7 +1797,6 @@ export async function runEmbeddedAttempt(
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
-
         } catch (err) {
           promptError = err;
           promptErrorSource = "prompt";
@@ -2019,13 +2022,15 @@ export async function runEmbeddedAttempt(
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
 
-        // Close browser tabs opened during this run to prevent leaked headless tabs
+        // Close browser tabs opened during this run to prevent leaked headless tabs.
+        // Each entry maps targetId → baseUrl so we close against the correct endpoint
+        // (host browser vs sandbox browser).
         if (openedBrowserTabs.size > 0) {
           log.debug(
             `closing ${openedBrowserTabs.size} browser tab(s) opened during run: runId=${params.runId}`,
           );
-          for (const targetId of openedBrowserTabs) {
-            browserCloseTab(undefined, targetId).catch((err) => {
+          for (const [targetId, baseUrl] of openedBrowserTabs) {
+            browserCloseTab(baseUrl, targetId).catch((err) => {
               log.debug(`failed to close browser tab ${targetId}: ${String(err)}`);
             });
           }
