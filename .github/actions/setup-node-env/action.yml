@@ -20,7 +20,7 @@ inputs:
     required: false
     default: "true"
   use-sticky-disk:
-    description: Use Blacksmith sticky disks for pnpm store caching.
+    description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
     required: false
     default: "false"
   install-deps:
