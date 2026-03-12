@@ -1,7 +1,9 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { createGatewayRequest, createHooksConfig } from "./hooks-test-helpers.js";
+import {
+  createHookRequest,
+  createHooksHandler,
+  createResponse,
+} from "./server-http.test-harness.js";
 
 const { readJsonBodyMock } = vi.hoisted(() => ({
   readJsonBodyMock: vi.fn(),
@@ -15,68 +17,6 @@ vi.mock("./hooks.js", async (importOriginal) => {
   };
 });
 
-import { createHooksRequestHandler } from "./server-http.js";
-
-type HooksHandlerDeps = Parameters<typeof createHooksRequestHandler>[0];
-
-function createRequest(params?: {
-  authorization?: string;
-  remoteAddress?: string;
-  url?: string;
-  headers?: Record<string, string>;
-}): IncomingMessage {
-  return createGatewayRequest({
-    method: "POST",
-    path: params?.url ?? "/hooks/wake",
-    host: "127.0.0.1:18789",
-    authorization: params?.authorization ?? "Bearer hook-secret",
-    remoteAddress: params?.remoteAddress,
-    headers: params?.headers,
-  });
-}
-
-function createResponse(): {
-  res: ServerResponse;
-  end: ReturnType<typeof vi.fn>;
-  setHeader: ReturnType<typeof vi.fn>;
-} {
-  const setHeader = vi.fn();
-  const end = vi.fn();
-  const res = {
-    statusCode: 200,
-    setHeader,
-    end,
-  } as unknown as ServerResponse;
-  return { res, end, setHeader };
-}
-
-function createHandler(params?: {
-  dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
-  dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
-  bindHost?: string;
-  getClientIpConfig?: HooksHandlerDeps["getClientIpConfig"];
-}) {
-  return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
-    bindHost: params?.bindHost ?? "127.0.0.1",
-    port: 18789,
-    logHooks: {
-      warn: vi.fn(),
-      debug: vi.fn(),
-      info: vi.fn(),
-      error: vi.fn(),
-    } as unknown as ReturnType<typeof createSubsystemLogger>,
-    getClientIpConfig: params?.getClientIpConfig,
-    dispatchWakeHook:
-      params?.dispatchWakeHook ??
-      ((() => {
-        return;
-      }) as HooksHandlerDeps["dispatchWakeHook"]),
-    dispatchAgentHook:
-      params?.dispatchAgentHook ?? ((() => "run-1") as HooksHandlerDeps["dispatchAgentHook"]),
-  });
-}
-
 describe("createHooksRequestHandler timeout status mapping", () => {
   beforeEach(() => {
     readJsonBodyMock.mockClear();
@@ -86,8 +26,8 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     readJsonBodyMock.mockResolvedValue({ ok: false, error: "request body timeout" });
     const dispatchWakeHook = vi.fn();
     const dispatchAgentHook = vi.fn(() => "run-1");
-    const handler = createHandler({ dispatchWakeHook, dispatchAgentHook });
-    const req = createRequest();
+    const handler = createHooksHandler({ dispatchWakeHook, dispatchAgentHook });
+    const req = createHookRequest();
     const { res, end } = createResponse();
 
     const handled = await handler(req, res);
@@ -100,10 +40,10 @@ describe("createHooksRequestHandler timeout status mapping", () => {
   });
 
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {
-    const handler = createHandler();
+    const handler = createHooksHandler({ bindHost: "127.0.0.1" });
 
     for (let i = 0; i < 20; i++) {
-      const req = createRequest({
+      const req = createHookRequest({
         authorization: "Bearer wrong",
         remoteAddress: "1.2.3.4",
       });
@@ -113,7 +53,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
       expect(res.statusCode).toBe(401);
     }
 
-    const mappedReq = createRequest({
+    const mappedReq = createHookRequest({
       authorization: "Bearer wrong",
       remoteAddress: "::ffff:1.2.3.4",
     });
@@ -126,12 +66,12 @@ describe("createHooksRequestHandler timeout status mapping", () => {
   });
 
   test("uses trusted proxy forwarded client ip for hook auth throttling", async () => {
-    const handler = createHandler({
+    const handler = createHooksHandler({
       getClientIpConfig: () => ({ trustedProxies: ["10.0.0.1"] }),
     });
 
     for (let i = 0; i < 20; i++) {
-      const req = createRequest({
+      const req = createHookRequest({
         authorization: "Bearer wrong",
         remoteAddress: "10.0.0.1",
         headers: { "x-forwarded-for": "1.2.3.4" },
@@ -142,7 +82,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
       expect(res.statusCode).toBe(401);
     }
 
-    const forwardedReq = createRequest({
+    const forwardedReq = createHookRequest({
       authorization: "Bearer wrong",
       remoteAddress: "10.0.0.1",
       headers: { "x-forwarded-for": "1.2.3.4, 10.0.0.1" },
@@ -158,8 +98,8 @@ describe("createHooksRequestHandler timeout status mapping", () => {
   test.each(["0.0.0.0", "::"])(
     "does not throw when bindHost=%s while parsing non-hook request URL",
     async (bindHost) => {
-      const handler = createHandler({ bindHost });
-      const req = createRequest({ url: "/" });
+      const handler = createHooksHandler({ bindHost });
+      const req = createHookRequest({ url: "/" });
       const { res, end } = createResponse();
 
       const handled = await handler(req, res);
