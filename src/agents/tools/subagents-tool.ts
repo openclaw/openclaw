@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { listAcpSessionEntries } from "../../acp/runtime/session-meta.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import {
   resolveSubagentLabel,
@@ -14,6 +16,7 @@ import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../co
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import {
+  isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
@@ -321,6 +324,7 @@ function buildListText(params: {
   active: Array<{ line: string }>;
   recent: Array<{ line: string }>;
   recentMinutes: number;
+  acpSessions?: Array<{ line: string }>;
 }) {
   const lines: string[] = [];
   lines.push("active subagents:");
@@ -336,6 +340,11 @@ function buildListText(params: {
   } else {
     lines.push(...params.recent.map((entry) => entry.line));
   }
+  if (params.acpSessions && params.acpSessions.length > 0) {
+    lines.push("");
+    lines.push("acp sessions:");
+    lines.push(...params.acpSessions.map((entry) => entry.line));
+  }
   return lines.join("\n");
 }
 
@@ -344,7 +353,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     label: "Subagents",
     name: "subagents",
     description:
-      "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+      "List, kill, or steer spawned sub-agents or ACP sessions. Use this for sub-agent and ACP session orchestration.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -404,7 +413,50 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
           );
 
-        const text = buildListText({ active, recent, recentMinutes });
+        // Include ACP sessions in listing
+        let acpSessionViews: Array<{
+          line: string;
+          view: {
+            sessionKey: string;
+            agent: string;
+            backend: string;
+            state: string;
+            mode: string;
+            lastActivityAt: number;
+          };
+        }> = [];
+        try {
+          const acpEntries = await listAcpSessionEntries({ cfg });
+          let acpIndex = 1;
+          acpSessionViews = acpEntries
+            .filter((e) => e.acp && e.sessionKey)
+            .map((e) => {
+              const meta = e.acp!;
+              const label = truncateLine(meta.agent, 48);
+              const line = `${acpIndex}. ${label} (${meta.backend}, ${meta.mode}) ${meta.state} - ${e.sessionKey}`;
+              acpIndex += 1;
+              return {
+                line,
+                view: {
+                  sessionKey: e.sessionKey,
+                  agent: meta.agent,
+                  backend: meta.backend,
+                  state: meta.state,
+                  mode: meta.mode,
+                  lastActivityAt: meta.lastActivityAt,
+                },
+              };
+            });
+        } catch {
+          // ACP listing is best-effort; continue with subagent-only list
+        }
+
+        const text = buildListText({
+          active,
+          recent,
+          recentMinutes,
+          acpSessions: acpSessionViews,
+        });
         return jsonResult({
           status: "ok",
           action: "list",
@@ -414,12 +466,62 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           total: runs.length,
           active: active.map((entry) => entry.view),
           recent: recent.map((entry) => entry.view),
+          acpSessions: acpSessionViews.map((entry) => entry.view),
           text,
         });
       }
 
       if (action === "kill") {
         const target = readStringParam(params, "target", { required: true });
+
+        // Handle ACP session key targets directly
+        if (isAcpSessionKey(target)) {
+          try {
+            const acpManager = getAcpSessionManager();
+            const resolution = acpManager.resolveSession({ cfg, sessionKey: target });
+            if (resolution.kind === "none") {
+              return jsonResult({
+                status: "error",
+                action: "kill",
+                target,
+                error: `Not an ACP session: ${target}`,
+              });
+            }
+            if (resolution.kind === "stale") {
+              return jsonResult({
+                status: "done",
+                action: "kill",
+                target,
+                sessionKey: target,
+                text: `ACP session is already stale/closed: ${target}`,
+              });
+            }
+            await acpManager.closeSession({
+              cfg,
+              sessionKey: target,
+              reason: "killed-via-subagents-tool",
+              clearMeta: false,
+              allowBackendUnavailable: true,
+            });
+            return jsonResult({
+              status: "ok",
+              action: "kill",
+              target,
+              sessionKey: target,
+              text: `killed ACP session: ${target}`,
+            });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            return jsonResult({
+              status: "error",
+              action: "kill",
+              target,
+              sessionKey: target,
+              error,
+            });
+          }
+        }
+
         if (target === "all" || target === "*") {
           const cache = new Map<string, Record<string, SessionEntry>>();
           const seenChildSessionKeys = new Set<string>();
@@ -528,6 +630,80 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             error: `Message too long (${message.length} chars, max ${MAX_STEER_MESSAGE_CHARS}).`,
           });
         }
+
+        // Handle ACP session key targets by sending a follow-up message
+        if (isAcpSessionKey(target)) {
+          const acpManager = getAcpSessionManager();
+          const resolution = acpManager.resolveSession({ cfg, sessionKey: target });
+          if (resolution.kind === "none") {
+            return jsonResult({
+              status: "error",
+              action: "steer",
+              target,
+              error: `Not an ACP session: ${target}`,
+            });
+          }
+          if (resolution.kind === "stale") {
+            return jsonResult({
+              status: "done",
+              action: "steer",
+              target,
+              sessionKey: target,
+              text: `ACP session is stale/closed and cannot be steered: ${target}`,
+            });
+          }
+          if (resolution.meta.state === "error") {
+            return jsonResult({
+              status: "error",
+              action: "steer",
+              target,
+              sessionKey: target,
+              error: `ACP session is in error state: ${resolution.meta.lastError ?? "unknown error"}`,
+            });
+          }
+
+          const idempotencyKey = crypto.randomUUID();
+          let runId: string = idempotencyKey;
+          try {
+            const response = await callGateway<{ runId: string }>({
+              method: "agent",
+              params: {
+                message,
+                sessionKey: target,
+                idempotencyKey,
+                deliver: false,
+                channel: INTERNAL_MESSAGE_CHANNEL,
+                lane: AGENT_LANE_SUBAGENT,
+                timeout: 0,
+              },
+              timeoutMs: 10_000,
+            });
+            if (typeof response?.runId === "string" && response.runId) {
+              runId = response.runId;
+            }
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            return jsonResult({
+              status: "error",
+              action: "steer",
+              target,
+              sessionKey: target,
+              error,
+            });
+          }
+
+          return jsonResult({
+            status: "accepted",
+            action: "steer",
+            target,
+            runId,
+            sessionKey: target,
+            mode: "acp",
+            label: resolution.meta.agent,
+            text: `steered ACP session (${resolution.meta.agent}): ${target}`,
+          });
+        }
+
         const resolved = resolveSubagentTarget(runs, target, { recentMinutes });
         if (!resolved.entry) {
           return jsonResult({
