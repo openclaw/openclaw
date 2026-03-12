@@ -130,7 +130,7 @@ function resolveProxyAwareClient(client: RequestClient): {
   abortState: RequestClientAbortState;
   client: ProxyAwareRequestClient;
 } | null {
-  const surface = client as RequestClientAbortState &
+  const surface = client as unknown as RequestClientAbortState &
     Partial<ProxyAwareRequestClient> & {
       options?: RequestClient["options"];
     };
