@@ -89,14 +89,40 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
   `;
 }
 
-function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
-  if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id);
+export const BUILTIN_CHANNEL_ORDER: ChannelKey[] = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "nostr",
+];
+
+function uniqPreserve<T>(items: T[]): T[] {
+  const seen = new Set<T>();
+  const out: T[] = [];
+  for (const item of items) {
+    if (seen.has(item)) {
+      continue;
+    }
+    seen.add(item);
+    out.push(item);
   }
-  if (snapshot?.channelOrder?.length) {
-    return snapshot.channelOrder;
-  }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  return out;
+}
+
+export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+  const preferred: ChannelKey[] = snapshot?.channelMeta?.length
+    ? snapshot.channelMeta.map((entry) => entry.id)
+    : snapshot?.channelOrder?.length
+      ? snapshot.channelOrder
+      : [];
+
+  // Even if the gateway snapshot only lists custom channels, we still want to show
+  // all built-in channel cards in the Control UI.
+  return uniqPreserve([...preferred, ...BUILTIN_CHANNEL_ORDER]);
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
