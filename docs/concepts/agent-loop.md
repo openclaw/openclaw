@@ -17,7 +17,7 @@ wired end-to-end.
 
 ## Entry points
 
-- Gateway RPC: `agent` and `agent.wait`.
+- Gateway RPC: `agent`, `agent.wait`, and `agent.timeline`.
 - CLI: `agent` command.
 
 ## How it works (high-level)
@@ -41,6 +41,9 @@ wired end-to-end.
 5. `agent.wait` uses `waitForAgentJob`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+6. `agent.timeline` returns the recent in-memory loop trace for `runId`:
+   - queryable spans for `plan -> tool -> observation -> replan`
+   - per-step IDs, durations, usage, and failure metadata when available
 
 ## Queueing + concurrency
 
@@ -129,6 +132,15 @@ See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration deta
 - `lifecycle`: emitted by `subscribeEmbeddedPiSession` (and as a fallback by `agentCommand`)
 - `assistant`: streamed deltas from pi-agent-core
 - `tool`: streamed tool events from pi-agent-core
+
+## Trace timelines
+
+- Recent runs keep an in-memory trace timeline keyed by `runId`.
+- Trace spans are derived from the real embedded-runner boundaries:
+  - model turns open `plan` / `replan`
+  - tool execution opens/closes `tool`
+  - completed tool calls leave an `observation` span until the next model turn
+- `agent.timeline` is intentionally short-lived and debug-focused. It is not a transcript archive.
 
 ## Chat channel handling
 

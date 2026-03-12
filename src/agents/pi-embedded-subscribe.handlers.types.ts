@@ -134,6 +134,7 @@ export type EmbeddedPiSubscribeContext = {
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
+  | "attemptNumber"
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"

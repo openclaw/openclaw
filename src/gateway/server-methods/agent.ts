@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { getAgentRunTraceTimeline } from "../../agents/agent-run-trace.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
@@ -44,6 +45,7 @@ import {
   formatValidationErrors,
   validateAgentIdentityParams,
   validateAgentParams,
+  validateAgentTimelineParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
@@ -684,6 +686,36 @@ export const agentHandlers: GatewayRequestHandlers = {
         basePath: cfg.gateway?.controlUi?.basePath,
       }) ?? identity.avatar;
     respond(true, { ...identity, avatar: avatarValue }, undefined);
+  },
+  "agent.timeline": ({ params, respond }) => {
+    if (!validateAgentTimelineParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.timeline params: ${formatValidationErrors(validateAgentTimelineParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const runId = (params.runId ?? "").trim();
+    const timeline = getAgentRunTraceTimeline(runId);
+    if (!timeline) {
+      respond(true, { runId, found: false });
+      return;
+    }
+    respond(true, {
+      runId,
+      found: true,
+      ...(timeline.sessionKey ? { sessionKey: timeline.sessionKey } : {}),
+      status: timeline.status,
+      ...(timeline.startedAt !== undefined ? { startedAt: timeline.startedAt } : {}),
+      ...(timeline.endedAt !== undefined ? { endedAt: timeline.endedAt } : {}),
+      attemptCount: timeline.attemptCount,
+      ...(timeline.totalCostUsd !== undefined ? { totalCostUsd: timeline.totalCostUsd } : {}),
+      spans: timeline.spans,
+    });
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

@@ -7,6 +7,10 @@ import {
   AgentIdentityParamsSchema,
   type AgentIdentityResult,
   AgentIdentityResultSchema,
+  type AgentTimelineParams,
+  AgentTimelineParamsSchema,
+  type AgentTimelineResult,
+  AgentTimelineResultSchema,
   AgentParamsSchema,
   type AgentSummary,
   AgentSummarySchema,
@@ -265,7 +269,11 @@ export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
 export const validateAgentIdentityParams =
   ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
+export const validateAgentTimelineParams =
+  ajv.compile<AgentTimelineParams>(AgentTimelineParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
+export const validateAgentTimelineResult =
+  ajv.compile<AgentTimelineResult>(AgentTimelineResultSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
 export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);

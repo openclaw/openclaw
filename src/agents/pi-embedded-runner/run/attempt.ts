@@ -32,6 +32,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
+import { startAgentRunTraceModelTurn } from "../../agent-run-trace.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
@@ -1800,6 +1801,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        attemptNumber: params.attemptNumber,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
@@ -1918,6 +1920,14 @@ export async function runEmbeddedAttempt(
       const prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
+        startAgentRunTraceModelTurn({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          attempt: params.attemptNumber ?? 1,
+          at: promptStartedAt,
+          provider: params.provider,
+          model: params.modelId,
+        });
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.

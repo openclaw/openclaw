@@ -674,6 +674,66 @@ public struct AgentIdentityResult: Codable, Sendable {
     }
 }
 
+public struct AgentTimelineParams: Codable, Sendable {
+    public let runid: String
+
+    public init(
+        runid: String)
+    {
+        self.runid = runid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+    }
+}
+
+public struct AgentTimelineResult: Codable, Sendable {
+    public let runid: String
+    public let found: Bool
+    public let sessionkey: String?
+    public let status: String?
+    public let startedat: Int?
+    public let endedat: Int?
+    public let attemptcount: Int?
+    public let totalcostusd: Double?
+    public let spans: [[String: AnyCodable]]?
+
+    public init(
+        runid: String,
+        found: Bool,
+        sessionkey: String?,
+        status: String?,
+        startedat: Int?,
+        endedat: Int?,
+        attemptcount: Int?,
+        totalcostusd: Double?,
+        spans: [[String: AnyCodable]]?)
+    {
+        self.runid = runid
+        self.found = found
+        self.sessionkey = sessionkey
+        self.status = status
+        self.startedat = startedat
+        self.endedat = endedat
+        self.attemptcount = attemptcount
+        self.totalcostusd = totalcostusd
+        self.spans = spans
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case found
+        case sessionkey = "sessionKey"
+        case status
+        case startedat = "startedAt"
+        case endedat = "endedAt"
+        case attemptcount = "attemptCount"
+        case totalcostusd = "totalCostUsd"
+        case spans
+    }
+}
+
 public struct AgentWaitParams: Codable, Sendable {
     public let runid: String
     public let timeoutms: Int?

@@ -389,6 +389,19 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.timeoutSeconds).toBe(0);
   });
 
+  it("maps and normalizes critic-loop payload hints", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "critic fields",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", criticSpec: "  include checklist  " },
+      criticThreshold: 1.7,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.criticSpec).toBe("include checklist");
+    expect(payload.criticThreshold).toBe(1);
+  });
+
   it("coerces sessionTarget and wakeMode casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "casing",

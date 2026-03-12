@@ -241,6 +241,40 @@ export const SandboxPruneSchema = z
   .strict()
   .optional();
 
+const SandboxExecutionAllowDenySchema = z
+  .object({
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const allow = new Set(
+      (value.allow ?? []).map((entry) => entry.trim().toLowerCase()).filter(Boolean),
+    );
+    const deny = new Set(
+      (value.deny ?? []).map((entry) => entry.trim().toLowerCase()).filter(Boolean),
+    );
+    for (const name of allow) {
+      if (!deny.has(name)) {
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `sandbox execution policy cannot list "${name}" in both allow and deny.`,
+      });
+      break;
+    }
+  });
+
+export const SandboxExecutionSchema = z
+  .object({
+    template: z.literal("python-research-v1").optional(),
+    imports: SandboxExecutionAllowDenySchema.optional(),
+    dependencies: SandboxExecutionAllowDenySchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolPolicyBaseSchema = z
   .object({
     allow: z.array(z.string()).optional(),
@@ -489,6 +523,7 @@ export const AgentSandboxSchema = z
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    execution: SandboxExecutionSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })

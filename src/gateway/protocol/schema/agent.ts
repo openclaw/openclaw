@@ -140,6 +140,66 @@ export const AgentWaitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentTimelineStepUsageSchema = Type.Object(
+  {
+    input: Type.Optional(Type.Integer({ minimum: 0 })),
+    output: Type.Optional(Type.Integer({ minimum: 0 })),
+    cacheRead: Type.Optional(Type.Integer({ minimum: 0 })),
+    cacheWrite: Type.Optional(Type.Integer({ minimum: 0 })),
+    total: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentTimelineStepSchema = Type.Object(
+  {
+    spanId: NonEmptyString,
+    stepId: NonEmptyString,
+    stepIndex: Type.Integer({ minimum: 1 }),
+    attempt: Type.Integer({ minimum: 1 }),
+    stage: Type.String({ enum: ["plan", "tool", "observation", "replan"] }),
+    status: Type.String({ enum: ["running", "ok", "error", "timeout"] }),
+    startedAt: Type.Integer({ minimum: 0 }),
+    endedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    toolName: Type.Optional(Type.String()),
+    toolCallId: Type.Optional(Type.String()),
+    usage: Type.Optional(AgentTimelineStepUsageSchema),
+    costUsd: Type.Optional(Type.Number({ minimum: 0 })),
+    stopReason: Type.Optional(Type.String()),
+    failureReason: Type.Optional(Type.String()),
+    error: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    silent: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentTimelineParamsSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentTimelineResultSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    found: Type.Boolean(),
+    sessionKey: Type.Optional(Type.String()),
+    status: Type.Optional(Type.String({ enum: ["running", "ok", "error", "timeout"] })),
+    startedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    endedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    attemptCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    totalCostUsd: Type.Optional(Type.Number({ minimum: 0 })),
+    spans: Type.Optional(Type.Array(AgentTimelineStepSchema)),
+  },
+  { additionalProperties: false },
+);
+
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),

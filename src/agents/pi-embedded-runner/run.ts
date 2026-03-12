@@ -12,6 +12,11 @@ import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import {
+  finalizeAgentRunTrace,
+  finishAgentRunTraceRetry,
+  isAgentRunTraceTerminal,
+} from "../agent-run-trace.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
@@ -60,6 +65,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import { resolvePlanSearchRuntimeConfig, runPlanSearch } from "./plan-search.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
@@ -68,7 +74,7 @@ import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -736,6 +742,49 @@ export async function runEmbeddedPiAgent(
         }
       };
 
+      const planSearchRuntimeConfig = resolvePlanSearchRuntimeConfig(params.config);
+      const planSearchResult = planSearchRuntimeConfig
+        ? runPlanSearch({
+            prompt: params.prompt,
+            runtimeConfig: planSearchRuntimeConfig,
+            modelCost: model.cost,
+          })
+        : undefined;
+      const executionPrompt = planSearchResult?.prompt ?? params.prompt;
+      const planSearchMeta = planSearchResult?.meta;
+      const withPlanSearchMeta = (meta: EmbeddedPiRunMeta): EmbeddedPiRunMeta =>
+        planSearchMeta ? { ...meta, planSearch: planSearchMeta } : meta;
+
+      if (planSearchResult && params.onAgentEvent) {
+        params.onAgentEvent({
+          stream: "planner",
+          data: {
+            phase: "plan_search_selected",
+            candidateCount: planSearchMeta?.candidateCount,
+            configuredScoringMode: planSearchMeta?.configuredScoringMode,
+            appliedScoringMode: planSearchMeta?.appliedScoringMode,
+            objective: planSearchMeta?.objective,
+            scoringFailed: planSearchMeta?.scoringFailed ?? false,
+            scoringError: planSearchMeta?.scoringError,
+            selectedCandidateId: planSearchMeta?.selectedCandidateId,
+            selectedScore: planSearchMeta?.selectedScore,
+            selectedPerformanceGain: planSearchMeta?.selectedPerformanceGain,
+            selectedComputeCost: planSearchMeta?.selectedComputeCost,
+            selectedWithinBudget: planSearchMeta?.selectedWithinBudget,
+            promptIncludesSelectedPlan: planSearchMeta?.promptIncludesSelectedPlan,
+            budget: planSearchMeta?.budget,
+            considered: planSearchMeta?.considered.map((candidate) => ({
+              id: candidate.id,
+              strategy: candidate.strategy,
+              score: candidate.score,
+              performanceGain: candidate.performanceGain,
+              computeCost: candidate.computeCost,
+              withinBudget: candidate.withinBudget,
+            })),
+          },
+        });
+      }
+
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -797,6 +846,37 @@ export async function runEmbeddedPiAgent(
           throw err;
         }
       };
+      let finalTrace: {
+        status: "ok" | "error" | "timeout";
+        failureReason?: string;
+        error?: string;
+        note?: string;
+      } | null = null;
+      const finishRetryTrace = (opts: {
+        status: "error" | "timeout";
+        failureReason?: string;
+        error?: string;
+        note?: string;
+      }) => {
+        finishAgentRunTraceRetry({
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          at: Date.now(),
+          ...opts,
+        });
+      };
+      const returnWithTrace = (
+        result: EmbeddedPiRunResult,
+        opts: {
+          status: "ok" | "error" | "timeout";
+          failureReason?: string;
+          error?: string;
+          note?: string;
+        },
+      ): EmbeddedPiRunResult => {
+        finalTrace = opts;
+        return result;
+      };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
@@ -815,28 +895,35 @@ export async function runEmbeddedPiAgent(
                 `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
                 `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
             );
-            return {
-              payloads: [
-                {
-                  text:
-                    "Request failed after repeated internal retries. " +
-                    "Please try again, or use /new to start a fresh session.",
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta: buildErrorAgentMeta({
-                  sessionId: params.sessionId,
-                  provider,
-                  model: model.id,
-                  usageAccumulator,
-                  lastRunPromptUsage,
-                  lastTurnTotal,
+            return returnWithTrace(
+              {
+                payloads: [
+                  {
+                    text:
+                      "Request failed after repeated internal retries. " +
+                      "Please try again, or use /new to start a fresh session.",
+                    isError: true,
+                  },
+                ],
+                meta: withPlanSearchMeta({
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: params.sessionId,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastTurnTotal,
+                  }),
+                  error: { kind: "retry_limit", message },
                 }),
-                error: { kind: "retry_limit", message },
               },
-            };
+              {
+                status: "error",
+                failureReason: "retry_limit",
+                error: message,
+              },
+            );
           }
           runLoopIterations += 1;
           const copilotAuthRetry = authRetryPending;
@@ -845,7 +932,9 @@ export async function runEmbeddedPiAgent(
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
           const prompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            provider === "anthropic"
+              ? scrubAnthropicRefusalMagic(executionPrompt)
+              : executionPrompt;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -919,6 +1008,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            attemptNumber: runLoopIterations,
           });
 
           const {
@@ -1008,6 +1098,12 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              finishRetryTrace({
+                status: "error",
+                failureReason: "context_overflow",
+                error: errorText,
+                note: "retry after in-attempt compaction",
+              });
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
@@ -1109,6 +1205,12 @@ export async function runEmbeddedPiAgent(
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                finishRetryTrace({
+                  status: "error",
+                  failureReason: "context_overflow",
+                  error: errorText,
+                  note: "retry after explicit compaction",
+                });
                 continue;
               }
               log.warn(
@@ -1152,6 +1254,12 @@ export async function runEmbeddedPiAgent(
                   );
                   // Do NOT reset overflowCompactionAttempts here — the global cap must remain
                   // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
+                  finishRetryTrace({
+                    status: "error",
+                    failureReason: "context_overflow",
+                    error: errorText,
+                    note: "retry after tool result truncation",
+                  });
                   continue;
                 }
                 log.warn(
@@ -1178,50 +1286,17 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-            return {
-              payloads: [
-                {
-                  text:
-                    "Context overflow: prompt too large for the model. " +
-                    "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta: buildErrorAgentMeta({
-                  sessionId: sessionIdUsed,
-                  provider,
-                  model: model.id,
-                  usageAccumulator,
-                  lastRunPromptUsage,
-                  lastAssistant,
-                  lastTurnTotal,
-                }),
-                systemPromptReport: attempt.systemPromptReport,
-                error: { kind, message: errorText },
-              },
-            };
-          }
-
-          if (promptError && !aborted) {
-            const errorText = describeUnknownError(promptError);
-            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
-              authRetryPending = true;
-              continue;
-            }
-            // Handle role ordering errors with a user-friendly message
-            if (/incorrect role information|roles must alternate/i.test(errorText)) {
-              return {
+            return returnWithTrace(
+              {
                 payloads: [
                   {
                     text:
-                      "Message ordering conflict - please try again. " +
-                      "If this persists, use /new to start a fresh session.",
+                      "Context overflow: prompt too large for the model. " +
+                      "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
                     isError: true,
                   },
                 ],
-                meta: {
+                meta: withPlanSearchMeta({
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
@@ -1233,9 +1308,63 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
-                  error: { kind: "role_ordering", message: errorText },
+                  error: { kind, message: errorText },
+                }),
+              },
+              {
+                status: "error",
+                failureReason: kind,
+                error: errorText,
+              },
+            );
+          }
+
+          if (promptError && !aborted) {
+            const errorText = describeUnknownError(promptError);
+            const promptFailoverReason = classifyFailoverReason(errorText);
+            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+              authRetryPending = true;
+              finishRetryTrace({
+                status: promptFailoverReason === "timeout" ? "timeout" : "error",
+                failureReason: promptFailoverReason ?? "prompt_error",
+                error: errorText,
+                note: "retry after copilot auth refresh",
+              });
+              continue;
+            }
+            // Handle role ordering errors with a user-friendly message
+            if (/incorrect role information|roles must alternate/i.test(errorText)) {
+              return returnWithTrace(
+                {
+                  payloads: [
+                    {
+                      text:
+                        "Message ordering conflict - please try again. " +
+                        "If this persists, use /new to start a fresh session.",
+                      isError: true,
+                    },
+                  ],
+                  meta: withPlanSearchMeta({
+                    durationMs: Date.now() - started,
+                    agentMeta: buildErrorAgentMeta({
+                      sessionId: sessionIdUsed,
+                      provider,
+                      model: model.id,
+                      usageAccumulator,
+                      lastRunPromptUsage,
+                      lastAssistant,
+                      lastTurnTotal,
+                    }),
+                    systemPromptReport: attempt.systemPromptReport,
+                    error: { kind: "role_ordering", message: errorText },
+                  }),
                 },
-              };
+                {
+                  status: "error",
+                  failureReason: "role_ordering",
+                  error: errorText,
+                },
+              );
             }
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
@@ -1244,32 +1373,38 @@ export async function runEmbeddedPiAgent(
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
-              return {
-                payloads: [
-                  {
-                    text:
-                      `Image too large for the model${maxBytesHint}. ` +
-                      "Please compress or resize the image and try again.",
-                    isError: true,
-                  },
-                ],
-                meta: {
-                  durationMs: Date.now() - started,
-                  agentMeta: buildErrorAgentMeta({
-                    sessionId: sessionIdUsed,
-                    provider,
-                    model: model.id,
-                    usageAccumulator,
-                    lastRunPromptUsage,
-                    lastAssistant,
-                    lastTurnTotal,
+              return returnWithTrace(
+                {
+                  payloads: [
+                    {
+                      text:
+                        `Image too large for the model${maxBytesHint}. ` +
+                        "Please compress or resize the image and try again.",
+                      isError: true,
+                    },
+                  ],
+                  meta: withPlanSearchMeta({
+                    durationMs: Date.now() - started,
+                    agentMeta: buildErrorAgentMeta({
+                      sessionId: sessionIdUsed,
+                      provider,
+                      model: model.id,
+                      usageAccumulator,
+                      lastRunPromptUsage,
+                      lastAssistant,
+                      lastTurnTotal,
+                    }),
+                    systemPromptReport: attempt.systemPromptReport,
+                    error: { kind: "image_size", message: errorText },
                   }),
-                  systemPromptReport: attempt.systemPromptReport,
-                  error: { kind: "image_size", message: errorText },
                 },
-              };
+                {
+                  status: "error",
+                  failureReason: "image_size",
+                  error: errorText,
+                },
+              );
             }
-            const promptFailoverReason = classifyFailoverReason(errorText);
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
             await maybeMarkAuthProfileFailure({
@@ -1298,6 +1433,12 @@ export async function runEmbeddedPiAgent(
             ) {
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              finishRetryTrace({
+                status: "error",
+                failureReason: promptFailoverReason ?? "prompt_error",
+                error: errorText,
+                note: "retry with next auth profile",
+              });
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1309,6 +1450,12 @@ export async function runEmbeddedPiAgent(
                 `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
               );
               thinkLevel = fallbackThinking;
+              finishRetryTrace({
+                status: "error",
+                failureReason: promptFailoverReason ?? "prompt_error",
+                error: errorText,
+                note: "retry with fallback thinking level",
+              });
               continue;
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
@@ -1318,6 +1465,11 @@ export async function runEmbeddedPiAgent(
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              finalTrace = {
+                status: promptFailoverReason === "timeout" ? "timeout" : "error",
+                failureReason: promptFailoverReason ?? "prompt_error",
+                error: errorText,
+              };
               throw new FailoverError(errorText, {
                 reason: promptFailoverReason ?? "unknown",
                 provider,
@@ -1329,6 +1481,11 @@ export async function runEmbeddedPiAgent(
             if (promptFailoverFailure || promptFailoverReason) {
               logPromptFailoverDecision("surface_error");
             }
+            finalTrace = {
+              status: promptFailoverReason === "timeout" ? "timeout" : "error",
+              failureReason: promptFailoverReason ?? "prompt_error",
+              error: errorText,
+            };
             throw promptError;
           }
 
@@ -1341,6 +1498,12 @@ export async function runEmbeddedPiAgent(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            finishRetryTrace({
+              status: "error",
+              failureReason: "assistant_error",
+              error: lastAssistant?.errorMessage?.trim(),
+              note: "retry with fallback thinking level",
+            });
             continue;
           }
 
@@ -1377,6 +1540,12 @@ export async function runEmbeddedPiAgent(
             ))
           ) {
             authRetryPending = true;
+            finishRetryTrace({
+              status: assistantFailoverReason === "timeout" ? "timeout" : "error",
+              failureReason: assistantFailoverReason ?? "assistant_error",
+              error: lastAssistant?.errorMessage?.trim(),
+              note: "retry after copilot auth refresh",
+            });
             continue;
           }
           if (imageDimensionError && lastProfileId) {
@@ -1427,6 +1596,15 @@ export async function runEmbeddedPiAgent(
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+              finishRetryTrace({
+                status: timedOut && !timedOutDuringCompaction ? "timeout" : "error",
+                failureReason:
+                  timedOut && !timedOutDuringCompaction
+                    ? "timeout"
+                    : (assistantFailoverReason ?? "assistant_error"),
+                error: lastAssistant?.errorMessage?.trim(),
+                note: "retry with next auth profile",
+              });
               continue;
             }
 
@@ -1459,6 +1637,14 @@ export async function runEmbeddedPiAgent(
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);
               logAssistantFailoverDecision("fallback_model", { status });
+              finalTrace = {
+                status: timedOut && !timedOutDuringCompaction ? "timeout" : "error",
+                failureReason:
+                  timedOut && !timedOutDuringCompaction
+                    ? "timeout"
+                    : (assistantFailoverReason ?? "assistant_error"),
+                error: message,
+              };
               throw new FailoverError(message, {
                 reason: assistantFailoverReason ?? "unknown",
                 provider: activeErrorContext.provider,
@@ -1513,28 +1699,35 @@ export async function runEmbeddedPiAgent(
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
           if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
-            return {
-              payloads: [
-                {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta,
-                aborted,
-                systemPromptReport: attempt.systemPromptReport,
+            return returnWithTrace(
+              {
+                payloads: [
+                  {
+                    text:
+                      "Request timed out before a response was generated. " +
+                      "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                    isError: true,
+                  },
+                ],
+                meta: withPlanSearchMeta({
+                  durationMs: Date.now() - started,
+                  agentMeta,
+                  aborted,
+                  systemPromptReport: attempt.systemPromptReport,
+                }),
+                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+                messagingToolSentTexts: attempt.messagingToolSentTexts,
+                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+                messagingToolSentTargets: attempt.messagingToolSentTargets,
+                successfulCronAdds: attempt.successfulCronAdds,
               },
-              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-              messagingToolSentTexts: attempt.messagingToolSentTexts,
-              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-              messagingToolSentTargets: attempt.messagingToolSentTargets,
-              successfulCronAdds: attempt.successfulCronAdds,
-            };
+              {
+                status: "timeout",
+                failureReason: "timeout",
+                error: "Request timed out before a response was generated.",
+              },
+            );
           }
 
           log.debug(
@@ -1553,38 +1746,76 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
-          return {
-            payloads: payloads.length ? payloads : undefined,
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              systemPromptReport: attempt.systemPromptReport,
-              // Handle client tool calls (OpenResponses hosted tools)
-              // Propagate the LLM stop reason so callers (lifecycle events,
-              // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : (lastAssistant?.stopReason as string | undefined),
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
+          return returnWithTrace(
+            {
+              payloads: payloads.length ? payloads : undefined,
+              meta: withPlanSearchMeta({
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                // Handle client tool calls (OpenResponses hosted tools)
+                // Propagate the LLM stop reason so callers (lifecycle events,
+                // ACP bridge) can distinguish end_turn from max_tokens.
+                stopReason: attempt.clientToolCall
+                  ? "tool_calls"
+                  : (lastAssistant?.stopReason as string | undefined),
+                pendingToolCalls: attempt.clientToolCall
+                  ? [
+                      {
+                        id: randomBytes(5).toString("hex").slice(0, 9),
+                        name: attempt.clientToolCall.name,
+                        arguments: JSON.stringify(attempt.clientToolCall.params),
+                      },
+                    ]
+                  : undefined,
+              }),
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
             },
-            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-            messagingToolSentTexts: attempt.messagingToolSentTexts,
-            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-            messagingToolSentTargets: attempt.messagingToolSentTargets,
-            successfulCronAdds: attempt.successfulCronAdds,
-          };
+            {
+              status:
+                lastAssistant?.stopReason === "error"
+                  ? timedOut && !timedOutDuringCompaction
+                    ? "timeout"
+                    : "error"
+                  : timedOut && !timedOutDuringCompaction
+                    ? "timeout"
+                    : "ok",
+              failureReason:
+                lastAssistant?.stopReason === "error"
+                  ? (assistantFailoverReason ?? "assistant_error")
+                  : timedOut && !timedOutDuringCompaction
+                    ? "timeout"
+                    : undefined,
+              error:
+                lastAssistant?.stopReason === "error"
+                  ? lastAssistant?.errorMessage?.trim()
+                  : undefined,
+            },
+          );
         }
       } finally {
+        if (finalTrace) {
+          finalizeAgentRunTrace({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            at: Date.now(),
+            ...finalTrace,
+          });
+        } else if (!isAgentRunTraceTerminal(params.runId)) {
+          finalizeAgentRunTrace({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            status: "error",
+            at: Date.now(),
+            failureReason: "run_failed",
+          });
+        }
         await contextEngine.dispose?.();
         stopCopilotRefreshTimer();
         process.chdir(prevCwd);
