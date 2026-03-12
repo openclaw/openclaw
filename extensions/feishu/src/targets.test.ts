@@ -78,6 +78,13 @@ describe("direct: prefix handling (OpenClaw internal peer format)", () => {
     expect(normalizeFeishuTarget("direct:oc_dm_chat")).toBe("oc_dm_chat");
   });
 
+  it("normalizeFeishuTarget strips feishu:direct: compound prefix", () => {
+    // Gateway passes targets as feishu:direct:ou_xxx from session key extraction
+    expect(normalizeFeishuTarget("feishu:direct:ou_abc123")).toBe("ou_abc123");
+    expect(normalizeFeishuTarget("lark:direct:ou_abc123")).toBe("ou_abc123");
+    expect(normalizeFeishuTarget("feishu:direct:oc_dm_chat")).toBe("oc_dm_chat");
+  });
+
   it("resolveReceiveIdType handles direct:ou_ as open_id", () => {
     expect(resolveReceiveIdType("direct:ou_abc123")).toBe("open_id");
   });
