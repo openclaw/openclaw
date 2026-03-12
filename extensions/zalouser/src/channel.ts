@@ -166,6 +166,10 @@ function resolveZalouserQrProfile(accountId?: string | null): string {
   return normalized;
 }
 
+function resolveZalouserOutboundChunkMode(cfg: OpenClawConfig, accountId?: string) {
+  return getZalouserRuntime().channel.text.resolveChunkMode(cfg, "zalouser", accountId);
+}
+
 function mapUser(params: {
   id: string;
   name?: string | null;
@@ -595,14 +599,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
-    chunkerMode: "markdown",
-    textChunkLimit: 2000,
     sendPayload: async (ctx) =>
       await sendPayloadWithChunkedTextAndMedia({
         ctx,
-        textChunkLimit: zalouserPlugin.outbound!.textChunkLimit,
-        chunker: zalouserPlugin.outbound!.chunker,
         sendText: (nextCtx) => zalouserPlugin.outbound!.sendText!(nextCtx),
         sendMedia: (nextCtx) => zalouserPlugin.outbound!.sendMedia!(nextCtx),
         emptyResult: { channel: "zalouser", messageId: "" },
@@ -614,6 +613,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         profile: account.profile,
         isGroup: target.isGroup,
         textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },
@@ -626,6 +626,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         mediaUrl,
         mediaLocalRoots,
         textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },

@@ -1,6 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
 import {
   installSendPayloadContractSuite,
   primeSendMock,
@@ -43,7 +42,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
     setZalouserRuntime({
       channel: {
         text: {
-          chunkMarkdownText,
+          resolveChunkMode: vi.fn(() => "length"),
         },
       },
     } as never);
@@ -101,10 +100,8 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
   });
 
-  it("uses markdown-aware chunking for long fenced code payloads", async () => {
-    const codeLine = "const value = 1234567890;";
-    const text = `\`\`\`ts\n${Array.from({ length: 140 }, () => codeLine).join("\n")}\n\`\`\``;
-    const expectedChunks = chunkMarkdownText(text, 2000);
+  it("passes long markdown through once so formatting happens before chunking", async () => {
+    const text = `**${"a".repeat(2501)}**`;
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" });
 
     const result = await zalouserPlugin.outbound!.sendPayload!({
@@ -112,13 +109,18 @@ describe("zalouserPlugin outbound sendPayload", () => {
       to: "987654321",
     });
 
-    expect(mockedSend.mock.calls.map((call) => call[1])).toEqual(expectedChunks);
+    expect(mockedSend).toHaveBeenCalledTimes(1);
+    expect(mockedSend).toHaveBeenCalledWith(
+      "987654321",
+      text,
+      expect.objectContaining({ isGroup: false, textMode: "markdown", textChunkMode: "length" }),
+    );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-code" });
   });
 
   installSendPayloadContractSuite({
     channel: "zalouser",
-    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
+    chunking: { mode: "passthrough", longTextLength: 3000 },
     createHarness: ({ payload, sendResults }) => {
       primeSendMock(mockedSend, { ok: true, messageId: "zlu-1" }, sendResults);
       return {

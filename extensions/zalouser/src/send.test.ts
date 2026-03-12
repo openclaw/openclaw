@@ -190,6 +190,49 @@ describe("zalouser send helpers", () => {
     expect(result).toEqual({ ok: true, messageId: "mid-2d-2" });
   });
 
+  it("preserves formatted text and styles when newline chunk mode splits after parsing", async () => {
+    const text = `**${"a".repeat(1995)}**\n\nsecond paragraph`;
+    const formatted = parseZalouserTextStyles(text);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-3" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-4" });
+
+    const result = await sendMessageZalouser("thread-2d-2", text, {
+      profile: "p2d-2",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2d-2",
+      `${"a".repeat(1995)}\n\n`,
+      expect.objectContaining({
+        profile: "p2d-2",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2d-2",
+      "second paragraph",
+      expect.objectContaining({
+        profile: "p2d-2",
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "newline",
+        textStyles: undefined,
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2d-4" });
+  });
+
   it("sends overflow markdown captions as follow-up text after the media message", async () => {
     const caption = "\t".repeat(500) + "a".repeat(1500);
     const formatted = parseZalouserTextStyles(caption);

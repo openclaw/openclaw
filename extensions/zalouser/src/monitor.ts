@@ -63,8 +63,6 @@ export type ZalouserMonitorResult = {
   stop: () => void;
 };
 
-const ZALOUSER_TEXT_LIMIT = 2000;
-
 function normalizeZalouserEntry(entry: string): string {
   return entry.replace(/^(zalouser|zlu):/i, "").trim();
 }
@@ -703,6 +701,7 @@ async function deliverZalouserReply(params: {
     params;
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+  const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
 
   const sentMedia = await sendMediaWithLeadingCaption({
     mediaUrls: resolveOutboundMediaUrls(payload),
@@ -714,6 +713,7 @@ async function deliverZalouserReply(params: {
         mediaUrl,
         isGroup,
         textMode: "markdown",
+        textChunkMode: chunkMode,
       });
       statusSink?.({ lastOutboundAt: Date.now() });
     },
@@ -726,24 +726,16 @@ async function deliverZalouserReply(params: {
   }
 
   if (text) {
-    const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(
-      text,
-      ZALOUSER_TEXT_LIMIT,
-      chunkMode,
-    );
-    logVerbose(core, runtime, `Sending ${chunks.length} text chunk(s) to ${chatId}`);
-    for (const chunk of chunks) {
-      try {
-        await sendMessageZalouser(chatId, chunk, {
-          profile,
-          isGroup,
-          textMode: "markdown",
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error(`Zalouser message send failed: ${String(err)}`);
-      }
+    try {
+      await sendMessageZalouser(chatId, text, {
+        profile,
+        isGroup,
+        textMode: "markdown",
+        textChunkMode: chunkMode,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    } catch (err) {
+      runtime.error(`Zalouser message send failed: ${String(err)}`);
     }
   }
 }

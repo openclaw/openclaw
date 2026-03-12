@@ -156,7 +156,9 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
       continue;
     }
 
-    const headingMatch = line.match(/^(#{1,4})\s(.*)$/);
+    const { text: markdownLine, size: markdownPadding } = stripOptionalMarkdownPadding(line);
+
+    const headingMatch = markdownLine.match(/^(#{1,4})\s(.*)$/);
     if (headingMatch) {
       const depth = headingMatch[1].length;
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.Bold });
@@ -174,9 +176,9 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
       continue;
     }
 
-    const indentMatch = line.match(/^(\s+)(.*)$/);
+    const indentMatch = markdownLine.match(/^(\s+)(.*)$/);
     let indentLevel = 0;
-    let content = line;
+    let content = markdownLine;
     if (indentMatch) {
       indentLevel = clampIndent(indentMatch[1].length);
       content = indentMatch[2];
@@ -220,6 +222,18 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
       }
       lineStyles.push({ lineIndex: outputLineIndex, style: TextStyle.UnorderedList });
       processedLines.push(unorderedListMatch[1]);
+      continue;
+    }
+
+    if (markdownPadding > 0) {
+      if (baseIndent > 0) {
+        lineStyles.push({
+          lineIndex: outputLineIndex,
+          style: TextStyle.Indent,
+          indentSize: baseIndent,
+        });
+      }
+      processedLines.push(line);
       continue;
     }
 
@@ -310,6 +324,17 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
 
 function clampIndent(spaceCount: number): number {
   return Math.min(5, Math.max(1, Math.floor(spaceCount / 2)));
+}
+
+function stripOptionalMarkdownPadding(line: string): { text: string; size: number } {
+  const match = line.match(/^( {1,3})(?=\S)/);
+  if (!match) {
+    return { text: line, size: 0 };
+  }
+  return {
+    text: line.slice(match[1].length),
+    size: match[1].length,
+  };
 }
 
 function hasClosingFence(lines: string[], startIndex: number, fence: ActiveFence): boolean {

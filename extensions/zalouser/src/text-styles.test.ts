@@ -35,8 +35,19 @@ describe("parseZalouserTextStyles", () => {
         { start: 0, len: 5, st: TextStyle.Bold },
         { start: 0, len: 5, st: TextStyle.Big },
         { start: 6, len: 6, st: TextStyle.Indent, indentSize: 1 },
-        { start: 13, len: 6, st: TextStyle.Indent, indentSize: 1 },
         { start: 13, len: 6, st: TextStyle.UnorderedList },
+      ],
+    });
+  });
+
+  it("treats 1-3 leading spaces as markdown padding for headings and lists", () => {
+    expect(parseZalouserTextStyles("  # Title\n   1. item\n  - bullet")).toEqual({
+      text: "Title\nitem\nbullet",
+      styles: [
+        { start: 0, len: 5, st: TextStyle.Bold },
+        { start: 0, len: 5, st: TextStyle.Big },
+        { start: 6, len: 4, st: TextStyle.OrderedList },
+        { start: 11, len: 6, st: TextStyle.UnorderedList },
       ],
     });
   });
