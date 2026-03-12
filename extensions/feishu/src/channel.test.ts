@@ -93,4 +93,34 @@ describe("feishuPlugin.status.buildAccountSnapshot", () => {
       port: 3000,
     });
   });
+
+  it("defaults reconnectAttempts to zero when runtime state is missing", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            main: {
+              appId: "cli_main",
+              appSecret: "secret_main",
+              enabled: true,
+              connectionMode: "websocket",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = feishuPlugin.config.resolveAccount(cfg, "main");
+    const snapshot = await feishuPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: undefined,
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "main",
+      reconnectAttempts: 0,
+    });
+  });
 });

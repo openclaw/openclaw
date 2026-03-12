@@ -355,7 +355,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       domain: account.domain,
       ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
       connected: runtime?.connected ?? false,
-      reconnectAttempts: runtime?.reconnectAttempts,
+      reconnectAttempts: runtime?.reconnectAttempts ?? 0,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastDisconnect: runtime?.lastDisconnect ?? null,
       lastEventAt: runtime?.lastEventAt ?? null,

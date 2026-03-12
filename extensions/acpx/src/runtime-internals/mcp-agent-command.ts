@@ -43,6 +43,22 @@ function toCommandLine(parts: string[]): string {
   return parts.map(quoteCommandPart).join(" ");
 }
 
+export function formatRawAgentCommandForCli(targetCommand: string): string {
+  const trimmed = targetCommand.trim();
+  if (!/\s/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // ACPX accepts `--agent` as a command line string. Quote bare path-like
+  // commands so bundled plugin-local binaries remain launchable when the
+  // plugin directory includes spaces.
+  if (/^(?:\.{1,2}[\\/]|\/|[A-Za-z]:[\\/])/.test(trimmed)) {
+    return toCommandLine([trimmed]);
+  }
+
+  return trimmed;
+}
+
 function readConfiguredAgentOverrides(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};

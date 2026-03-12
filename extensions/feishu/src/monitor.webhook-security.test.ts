@@ -92,7 +92,7 @@ async function withRunningWebhookMonitor(
     path: string;
     verificationToken: string;
   },
-  run: (url: string) => Promise<void>,
+  run: (url: string, statusSink: ReturnType<typeof vi.fn>) => Promise<void>,
 ) {
   const port = await getFreePort();
   const cfg = buildConfig({
@@ -104,17 +104,19 @@ async function withRunningWebhookMonitor(
 
   const abortController = new AbortController();
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const statusSink = vi.fn();
   const monitorPromise = monitorFeishuProvider({
     config: cfg,
     runtime,
     abortSignal: abortController.signal,
+    statusSink,
   });
 
   const url = `http://127.0.0.1:${port}${params.path}`;
   await waitUntilServerReady(url);
 
   try {
-    await run(url);
+    await run(url, statusSink);
   } finally {
     abortController.abort();
     await monitorPromise;
@@ -186,6 +188,28 @@ describe("Feishu webhook security hardening", () => {
         }
 
         expect(saw429).toBe(true);
+      },
+    );
+  });
+
+  it("marks webhook accounts connected once the server starts listening", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "webhook-connected",
+        path: "/hook-connected",
+        verificationToken: "verify_token",
+      },
+      async (_url, statusSink) => {
+        expect(statusSink).toHaveBeenCalledWith(
+          expect.objectContaining({
+            connected: true,
+            reconnectAttempts: 0,
+            lastConnectedAt: expect.any(Number),
+            lastDisconnect: null,
+            lastError: null,
+          }),
+        );
       },
     );
   });

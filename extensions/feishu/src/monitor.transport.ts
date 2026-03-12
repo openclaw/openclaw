@@ -203,6 +203,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -281,6 +282,13 @@ export async function monitorWebhook({
 
     server.listen(port, host, () => {
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
+      statusSink?.({
+        connected: true,
+        reconnectAttempts: 0,
+        lastConnectedAt: Date.now(),
+        lastDisconnect: null,
+        lastError: null,
+      });
     });
 
     server.on("error", (err) => {
