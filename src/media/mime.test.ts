@@ -8,6 +8,7 @@ import {
   isAudioFileName,
   kindFromMime,
   normalizeMimeType,
+  reclassifyMp4,
 } from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
@@ -120,6 +121,49 @@ describe("normalizeMimeType", () => {
     { input: undefined, expected: undefined },
   ] as const)("normalizes $input", ({ input, expected }) => {
     expect(normalizeMimeType(input)).toBe(expected);
+  });
+});
+
+/** Build a minimal ftyp box with the given 4-char major brand. */
+function makeFtypBuffer(brand: string): Buffer {
+  // ftyp box: [size(4)] [ftyp(4)] [major_brand(4)] [minor_version(4)] ...
+  const buf = Buffer.alloc(16);
+  buf.writeUInt32BE(16, 0); // box size
+  buf.write("ftyp", 4, 4, "ascii"); // box type
+  buf.write(brand, 8, 4, "ascii"); // major brand
+  buf.writeUInt32BE(0, 12); // minor version
+  return buf;
+}
+
+describe("reclassifyMp4", () => {
+  it.each([
+    { brand: "M4A ", expected: "audio/mp4" },
+    { brand: "M4B ", expected: "audio/mp4" },
+    { brand: "m4a ", expected: "audio/mp4" },
+    { brand: "f4a ", expected: "audio/mp4" },
+  ])("reclassifies ftyp major brand $brand as audio/mp4", ({ brand, expected }) => {
+    const buf = makeFtypBuffer(brand);
+    expect(reclassifyMp4("video/mp4", buf)).toBe(expected);
+  });
+
+  it("keeps video/mp4 for isom brand", () => {
+    const buf = makeFtypBuffer("isom");
+    expect(reclassifyMp4("video/mp4", buf)).toBe("video/mp4");
+  });
+
+  it("keeps video/mp4 for mp42 brand", () => {
+    const buf = makeFtypBuffer("mp42");
+    expect(reclassifyMp4("video/mp4", buf)).toBe("video/mp4");
+  });
+
+  it("does not reclassify non-video/mp4 mimes", () => {
+    const buf = makeFtypBuffer("M4A ");
+    expect(reclassifyMp4("audio/mpeg", buf)).toBe("audio/mpeg");
+  });
+
+  it("returns original mime when buffer is too short", () => {
+    const buf = Buffer.alloc(8);
+    expect(reclassifyMp4("video/mp4", buf)).toBe("video/mp4");
   });
 });
 

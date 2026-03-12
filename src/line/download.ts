@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { messagingApi } from "@line/bot-sdk";
 import { logVerbose } from "../globals.js";
+import { reclassifyMp4 } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 
 interface DownloadResult {
@@ -8,8 +9,6 @@ interface DownloadResult {
   contentType?: string;
   size: number;
 }
-
-const AUDIO_BRANDS = new Set(["m4a ", "m4b ", "m4p ", "m4r ", "f4a ", "f4b "]);
 
 export async function downloadLineMedia(
   messageId: string,
@@ -55,13 +54,6 @@ export async function downloadLineMedia(
 }
 
 function detectContentType(buffer: Buffer): string {
-  const hasFtypBox =
-    buffer.length >= 12 &&
-    buffer[4] === 0x66 &&
-    buffer[5] === 0x74 &&
-    buffer[6] === 0x79 &&
-    buffer[7] === 0x70;
-
   // Check magic bytes
   if (buffer.length >= 2) {
     // JPEG
@@ -89,14 +81,15 @@ function detectContentType(buffer: Buffer): string {
     ) {
       return "image/webp";
     }
-    if (hasFtypBox) {
-      // ISO BMFF containers share `ftyp`; use major brand to separate common
-      // M4A audio payloads from video mp4 containers.
-      const majorBrand = buffer.toString("ascii", 8, 12).toLowerCase();
-      if (AUDIO_BRANDS.has(majorBrand)) {
-        return "audio/mp4";
-      }
-      return "video/mp4";
+    // ISO BMFF (ftyp) – delegate audio/video classification to shared helper
+    if (
+      buffer.length >= 12 &&
+      buffer[4] === 0x66 &&
+      buffer[5] === 0x74 &&
+      buffer[6] === 0x79 &&
+      buffer[7] === 0x70
+    ) {
+      return reclassifyMp4("video/mp4", buffer);
     }
   }
 
