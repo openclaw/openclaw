@@ -4,14 +4,13 @@
  */
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
-import { resolveThinkingDefault } from "../../../../src/agents/model-selection.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  resolveThinkingDefaultForModel,
 } from "../../../../src/auto-reply/thinking.js";
 import type { HealthSummary } from "../../../../src/commands/health.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -528,8 +527,7 @@ function resolveCurrentThinkingLevel(
   if (!session?.modelProvider || !session.model) {
     return "off";
   }
-  return resolveThinkingDefault({
-    cfg: {} as OpenClawConfig,
+  return resolveThinkingDefaultForModel({
     provider: session.modelProvider,
     model: session.model,
     catalog: models,
