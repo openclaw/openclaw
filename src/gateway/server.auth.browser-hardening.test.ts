@@ -15,6 +15,7 @@ import {
   connectOk,
   installGatewayTestHooks,
   readConnectChallengeNonce,
+  rpcReq,
   testState,
   trackConnectChallengeNonce,
   withGatewayServer,
@@ -144,6 +145,47 @@ describe("gateway auth browser hardening", () => {
           device: null,
         });
         expect(payload.type).toBe("hello-ok");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("preserves scopes for trusted-proxy non-control-ui browser sessions", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+        },
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: ALLOWED_BROWSER_ORIGIN,
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "operator@example.com",
+      });
+      try {
+        const payload = await connectOk(ws, {
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+          scopes: ["operator.read"],
+        });
+        expect(payload.type).toBe("hello-ok");
+
+        const status = await rpcReq(ws, "status");
+        expect(status.ok).toBe(true);
       } finally {
         ws.close();
       }
