@@ -1,6 +1,7 @@
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   logTypingFailure,
   type ClawdbotConfig,
   type ReplyPayload,
@@ -77,6 +78,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
+    maxDurationMs: resolveChannelTypingTtlMs(cfg),
     start: async () => {
       // Check if typing indicator is enabled (default: true)
       if (!(account.config.typingIndicator ?? true)) {

@@ -10,6 +10,7 @@ import {
   buildModelsProviderData,
   createReplyPrefixOptions,
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   logTypingFailure,
   type OpenClawConfig,
   type ReplyPayload,
@@ -477,6 +478,7 @@ async function handleSlashCommandAsync(params: {
 
   const typingCallbacks = createTypingCallbacks({
     start: () => sendMattermostTyping(client, { channelId }),
+    maxDurationMs: resolveChannelTypingTtlMs(cfg),
     onStartError: (err) => {
       logTypingFailure({
         log: (message) => log?.(message),

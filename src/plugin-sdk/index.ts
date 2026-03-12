@@ -103,6 +103,9 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  SearchProviderRegistration,
+  SearchProviderParams,
+  SearchProviderResult,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
@@ -495,7 +498,7 @@ export {
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
-export { createTypingCallbacks } from "../channels/typing.js";
+export { createTypingCallbacks, resolveChannelTypingTtlMs } from "../channels/typing.js";
 export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
@@ -799,6 +802,9 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Audio transcription for plugins
+export { transcribeFirstAudio } from "../media-understanding/audio-preflight.js";
 
 // Context engine
 export type {

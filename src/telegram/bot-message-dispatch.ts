@@ -13,7 +13,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
-import { createTypingCallbacks } from "../channels/typing.js";
+import { createTypingCallbacks, resolveChannelTypingTtlMs } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import {
   loadSessionStore,
@@ -524,6 +524,7 @@ export const dispatchTelegramMessage = async ({
         error: err,
       });
     },
+    maxDurationMs: resolveChannelTypingTtlMs(cfg),
   });
 
   let dispatchError: unknown;

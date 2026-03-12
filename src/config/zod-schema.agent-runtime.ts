@@ -267,6 +267,7 @@ export const ToolsWebSearchSchema = z
         z.literal("brave"),
         z.literal("perplexity"),
         z.literal("grok"),
+        z.literal("duckduckgo"),
         z.literal("gemini"),
         z.literal("kimi"),
       ])
@@ -290,6 +291,17 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    duckduckgo: z
+      .object({
+        proxy: z.string().optional(),
+        region: z.string().optional(),
+        safesearch: z.union([z.literal("on"), z.literal("moderate"), z.literal("off")]).optional(),
+        timelimit: z
+          .union([z.literal("d"), z.literal("w"), z.literal("m"), z.literal("y")])
+          .optional(),
       })
       .strict()
       .optional(),

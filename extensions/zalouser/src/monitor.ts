@@ -16,6 +16,7 @@ import type {
 } from "openclaw/plugin-sdk/zalouser";
 import {
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   evaluateGroupRouteAccessForPolicy,
@@ -638,6 +639,7 @@ async function processMessage(
         isGroup,
       });
     },
+    maxDurationMs: resolveChannelTypingTtlMs(config),
     onStartError: (err) => {
       runtime.error?.(
         `[${account.accountId}] zalouser typing start failed for ${chatId}: ${String(err)}`,

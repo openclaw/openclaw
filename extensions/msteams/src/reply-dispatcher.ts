@@ -1,6 +1,7 @@
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
+  resolveChannelTypingTtlMs,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -75,6 +76,7 @@ export function createMSTeamsReplyDispatcher(params: {
 
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
+    maxDurationMs: resolveChannelTypingTtlMs(params.cfg),
     onStartError: (err) => {
       logTypingFailure({
         log: (message) => params.log.debug?.(message),

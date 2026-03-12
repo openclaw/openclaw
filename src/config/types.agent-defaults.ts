@@ -217,6 +217,8 @@ export type AgentDefaultsConfig = {
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
+  /** Maximum duration (ms) before the typing indicator auto-stops. Default: 120000 (2 min). */
+  typingTtlMs?: number;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
