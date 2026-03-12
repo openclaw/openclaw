@@ -302,6 +302,28 @@ describe("runMessageAction context isolation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("rejects send actions that include attachment-only params", async () => {
+    await expect(
+      runDrySend({
+        cfg: {
+          channels: {
+            telegram: {
+              token: "tg-test",
+            },
+          },
+        } as OpenClawConfig,
+        actionParams: {
+          channel: "telegram",
+          target: "telegram:12345",
+          message: "test attachment",
+          buffer: Buffer.from("hello").toString("base64"),
+          filename: "test.txt",
+          mimeType: "text/plain",
+        },
+      }),
+    ).rejects.toThrow(/action "sendAttachment"/i);
+  });
+
   it("blocks send when target differs from current channel", async () => {
     const result = await runDrySend({
       cfg: slackConfig,

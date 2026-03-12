@@ -158,6 +158,18 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
+function rejectUnsupportedSendAttachmentParams(params: Record<string, unknown>): void {
+  const unsupported = ["buffer", "filename", "contentType", "mimeType"].filter(
+    (key) => params[key] != null,
+  );
+  if (unsupported.length === 0) {
+    return;
+  }
+  throw new Error(
+    `send does not support ${unsupported.join(", ")}; use media/path/filePath or action "sendAttachment" instead.`,
+  );
+}
+
 function applyCrossContextMessageDecoration({
   params,
   message,
@@ -769,6 +781,9 @@ export async function runMessageAction(
 
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
+  }
+  if (action === "send") {
+    rejectUnsupportedSendAttachmentParams(params);
   }
 
   const gateway = resolveGateway(input);
