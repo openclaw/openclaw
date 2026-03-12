@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry } from "./session-files.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
 
-describe("buildSessionEntry", () => {
+describe("session files", () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -12,7 +12,31 @@ describe("buildSessionEntry", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("lists live and archived session transcripts from the agent sessions root", async () => {
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
+    const sessionsDir = path.join(tmpDir, ".openclaw", "agents", "coder", "sessions");
+    await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
+
+    await fs.writeFile(path.join(sessionsDir, "live.jsonl"), "");
+    await fs.writeFile(path.join(sessionsDir, "archived.jsonl.reset.2026-03-12T08-50-29.182Z"), "");
+    await fs.writeFile(
+      path.join(sessionsDir, "deleted.jsonl.deleted.2026-03-11T22-41-34.394Z"),
+      "",
+    );
+    await fs.writeFile(path.join(sessionsDir, "ignore.jsonl.lock"), "");
+    await fs.writeFile(path.join(sessionsDir, "archive", "nested.jsonl"), "");
+
+    const files = await listSessionFilesForAgent("coder");
+
+    expect(files.map((file) => path.basename(file)).toSorted()).toEqual([
+      "archived.jsonl.reset.2026-03-12T08-50-29.182Z",
+      "deleted.jsonl.deleted.2026-03-11T22-41-34.394Z",
+      "live.jsonl",
+    ]);
   });
 
   it("returns lineMap tracking original JSONL line numbers", async () => {
