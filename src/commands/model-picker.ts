@@ -290,6 +290,8 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
+  // agentDir is required: SGLang/vLLM credentials are stored per-agent.
+  // Callers must pass agentDir (use resolveAgentDir(cfg, DEFAULT_AGENT_ID) for global flows).
   if (includeSglang && agentDir) {
     options.push({
       value: SGLANG_VALUE,

@@ -1,4 +1,6 @@
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -464,6 +466,7 @@ export async function runOnboardingWizard(
       includeSglang: true,
       includeVllm: true,
       preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      agentDir: resolveAgentDir(nextConfig, DEFAULT_AGENT_ID),
     });
     if (modelSelection.config) {
       nextConfig = modelSelection.config;

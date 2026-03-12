@@ -1,5 +1,7 @@
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -110,6 +112,7 @@ export async function promptAuthConfig(
       includeSglang: true,
       includeVllm: true,
       preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      agentDir: resolveAgentDir(next, DEFAULT_AGENT_ID),
     });
     if (modelSelection.config) {
       next = modelSelection.config;
