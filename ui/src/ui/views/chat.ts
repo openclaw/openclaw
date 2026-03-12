@@ -1380,21 +1380,19 @@ function shouldFilterToolMessage(normalizedRole: string, raw: Record<string, unk
     return true;
   }
 
-  // Filter assistant messages that contain ONLY tool-call content blocks (no text).
-  // These are intermediate tool invocation turns the user doesn't need to see.
-  if (normalizedRole === "assistant" && Array.isArray(raw.content)) {
-    const hasText = (raw.content as Array<Record<string, unknown>>).some((block) => {
-      const type = typeof block?.type === "string" ? block.type.toLowerCase() : "";
-      return type === "text" && typeof block.text === "string" && block.text.trim().length > 0;
-    });
-    if (!hasText) {
-      const hasToolCall = (raw.content as Array<Record<string, unknown>>).some((block) => {
+  // Filter assistant messages whose content blocks are exclusively tool-call plumbing
+  // (no text, images, or other meaningful output). Mixed-content turns (e.g. text +
+  // tool_use, or image + tool_use) are kept so non-tool output still renders.
+  if (normalizedRole.toLowerCase() === "assistant" && Array.isArray(raw.content)) {
+    const blocks = raw.content as Array<Record<string, unknown>>;
+    const allToolCall =
+      blocks.length > 0 &&
+      blocks.every((block) => {
         const type = typeof block?.type === "string" ? block.type.toLowerCase() : "";
         return TOOL_CALL_CONTENT_TYPES.has(type);
       });
-      if (hasToolCall) {
-        return true;
-      }
+    if (allToolCall) {
+      return true;
     }
   }
 

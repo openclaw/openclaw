@@ -11,10 +11,10 @@ const thinkingCache = new WeakMap<object, string | null>();
  * These are AI-facing context and must never surface in user-visible UI.
  */
 const EXTERNAL_CONTENT_BLOCK_RE =
-  /^SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>\s*/;
+  /SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>\s*/g;
 const EXTERNAL_CONTENT_MARKERS_RE = /<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>/g;
 const SECURITY_NOTICE_PREFIX_RE =
-  /^SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[^\n]*(?:\n- [^\n]+)*/;
+  /SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source[^\n]*(?:\n- [^\n]+)*/g;
 
 function stripExternalContentMarkers(text: string): string {
   if (!text.includes("EXTERNAL_UNTRUSTED_CONTENT") && !text.includes("SECURITY NOTICE:")) {
