@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/gateway service audit: canonicalize service entrypoint paths before comparing them so symlink-vs-realpath installs no longer trigger false "entrypoint does not match the current install" repair prompts. (#43882) Thanks @ngutman.
 - Doctor/gateway service audit: earlier groundwork for this fix landed in the superseded #28338 branch. Thanks @realriphub.
 - Gateway/session stores: regenerate the Swift push-test protocol models and align Windows native session-store realpath handling so protocol checks and sync session discovery stop drifting on Windows. (#44266) thanks @jalehman.
+- Context engine/session routing: forward optional `sessionKey` through context-engine lifecycle calls so plugins can see structured routing metadata during bootstrap, assembly, post-turn ingestion, and compaction. (#44157) thanks @jalehman.
 
 ## 2026.3.11
 
@@ -144,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/session reset auth: split conversation `/new` and `/reset` handling away from the admin-only `sessions.reset` control-plane RPC so write-scoped gateway callers can no longer reach the privileged reset path through `agent`. Thanks @tdjackey for reporting.
 - Security/plugin runtime: stop unauthenticated plugin HTTP routes from inheriting synthetic admin gateway scopes when they call `runtime.subagent.*`, so admin-only methods like `sessions.delete` stay blocked without gateway auth.
 - Security/nodes: treat the `nodes` agent tool as owner-only fallback policy so non-owner senders cannot reach paired-node approval or invoke paths through the shared tool set.
+- Sandbox/sessions_spawn: restore real workspace handoff for read-only sandboxed sessions so spawned subagents mount the configured workspace at `/agent` instead of inheriting the sandbox copy. Related #40582.
 - Security/external content: treat whitespace-delimited `EXTERNAL UNTRUSTED CONTENT` boundary markers like underscore-delimited variants so prompt wrappers cannot bypass marker sanitization. (#35983) Thanks @urianpaul94.
 - Telegram/exec approvals: reject `/approve` commands aimed at other bots, keep deterministic approval prompts visible when tool-result delivery fails, and stop resolved exact IDs from matching other pending approvals by prefix. (#37233) Thanks @huntharo.
 - Subagents/authority: persist leaf vs orchestrator control scope at spawn time and route tool plus slash-command control through shared ownership checks, so leaf sessions cannot regain orchestration privileges after restore or flat-key lookups. Thanks @tdjackey.
