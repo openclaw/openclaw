@@ -65,3 +65,47 @@ describe("resolveOpenClawMetadata install validation", () => {
     expect(install).toBeUndefined();
   });
 });
+
+describe("resolveOpenClawMetadata references parsing", () => {
+  function resolveRefs(frontmatter: Record<string, string>) {
+    return resolveOpenClawMetadata(frontmatter)?.references;
+  }
+
+  it("parses autoLoad and onDemand lists", () => {
+    const refs = resolveRefs({
+      metadata: '{"openclaw":{"references":{"autoLoad":["a.md","b.md"],"onDemand":["c.md"]}}}',
+    });
+    expect(refs).toEqual({
+      autoLoad: ["a.md", "b.md"],
+      onDemand: ["c.md"],
+    });
+  });
+
+  it("parses autoLoad only", () => {
+    const refs = resolveRefs({
+      metadata: '{"openclaw":{"references":{"autoLoad":["guide.md"]}}}',
+    });
+    expect(refs).toEqual({ autoLoad: ["guide.md"] });
+  });
+
+  it("returns undefined references when not specified", () => {
+    const refs = resolveRefs({
+      metadata: '{"openclaw":{"always":true}}',
+    });
+    expect(refs).toBeUndefined();
+  });
+
+  it("returns undefined references when references block is empty", () => {
+    const refs = resolveRefs({
+      metadata: '{"openclaw":{"references":{}}}',
+    });
+    expect(refs).toBeUndefined();
+  });
+
+  it("handles comma-separated string for autoLoad", () => {
+    const refs = resolveRefs({
+      metadata: '{"openclaw":{"references":{"autoLoad":"a.md, b.md"}}}',
+    });
+    expect(refs).toEqual({ autoLoad: ["a.md", "b.md"] });
+  });
+});

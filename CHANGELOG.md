@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
+- Skills/references: load `references/` markdown files alongside `SKILL.md` so agents automatically receive supplemental context without growing the main skill file. Files are merged in alphabetical order by default; list specific files via frontmatter `references.autoLoad` to control which are included. Thanks @leejini92.
 
 ### Fixes
 
