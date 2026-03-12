@@ -31,6 +31,16 @@ const log = createSubsystemLogger("agents/model-providers");
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
 
+const SGLANG_BASE_URL = "http://127.0.0.1:30000/v1";
+const SGLANG_DEFAULT_CONTEXT_WINDOW = 128000;
+const SGLANG_DEFAULT_MAX_TOKENS = 8192;
+const SGLANG_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
 const VLLM_DEFAULT_MAX_TOKENS = 8192;
@@ -42,6 +52,12 @@ const VLLM_DEFAULT_COST = {
 };
 
 type VllmModelsResponse = {
+  data?: Array<{
+    id?: string;
+  }>;
+};
+
+type SglangModelsResponse = {
   data?: Array<{
     id?: string;
   }>;
@@ -145,6 +161,55 @@ async function discoverVllmModels(
   }
 }
 
+async function discoverSglangModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
+  const url = `${trimmedBaseUrl}/models`;
+
+  try {
+    const trimmedApiKey = apiKey?.trim();
+    const response = await fetch(url, {
+      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      log.warn(`Failed to discover SGLang models: ${response.status}`);
+      return [];
+    }
+    const data = (await response.json()) as SglangModelsResponse;
+    const models = data.data ?? [];
+    if (models.length === 0) {
+      log.warn("No SGLang models found on local instance");
+      return [];
+    }
+
+    return models
+      .map((model) => ({ id: typeof model.id === "string" ? model.id.trim() : "" }))
+      .filter((model) => Boolean(model.id))
+      .map((model) => {
+        const modelId = model.id;
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoningModelHeuristic(modelId),
+          input: ["text"],
+          cost: SGLANG_DEFAULT_COST,
+          contextWindow: SGLANG_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: SGLANG_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      });
+  } catch (error) {
+    log.warn(`Failed to discover SGLang models: ${String(error)}`);
+    return [];
+  }
+}
+
 export async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -193,6 +258,19 @@ export async function buildVllmProvider(params?: {
 }): Promise<ProviderConfig> {
   const baseUrl = (params?.baseUrl?.trim() || VLLM_BASE_URL).replace(/\/+$/, "");
   const models = await discoverVllmModels(baseUrl, params?.apiKey);
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildSglangProvider(params?: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<ProviderConfig> {
+  const baseUrl = (params?.baseUrl?.trim() || SGLANG_BASE_URL).replace(/\/+$/, "");
+  const models = await discoverSglangModels(baseUrl, params?.apiKey);
   return {
     baseUrl,
     api: "openai-completions",
