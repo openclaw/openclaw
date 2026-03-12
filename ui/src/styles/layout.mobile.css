@@ -15,6 +15,11 @@
     scrollbar-width: none;
   }
 
+  .shell--nav-collapsed .nav,
+  .nav.nav--collapsed {
+    display: none;
+    display: none;
+
   .nav::-webkit-scrollbar {
     display: none;
   }
