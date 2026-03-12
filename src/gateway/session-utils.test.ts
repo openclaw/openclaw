@@ -2,14 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
+import { clearConfigCache, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
+  loadSessionEntry,
   parseGroupKey,
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -17,6 +21,10 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+function resolveSyncRealpath(filePath: string): string {
+  return fs.realpathSync.native(filePath);
+}
 
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
@@ -260,6 +268,66 @@ describe("gateway session utils", () => {
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:MAIN"]));
   });
 
+  test("resolveGatewaySessionStoreTarget preserves discovered store paths for non-round-tripping agent dirs", async () => {
+    await withStateDirEnv("session-utils-discovered-store-", async ({ stateDir }) => {
+      const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+      fs.mkdirSync(retiredSessionsDir, { recursive: true });
+      const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+      fs.writeFileSync(
+        retiredStorePath,
+        JSON.stringify({
+          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
+
+      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+    });
+  });
+
+  test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
+    clearConfigCache();
+    try {
+      await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
+        const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
+        fs.mkdirSync(retiredSessionsDir, { recursive: true });
+        const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
+        fs.writeFileSync(
+          retiredStorePath,
+          JSON.stringify({
+            "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
+          }),
+          "utf8",
+        );
+        await writeConfigFile({
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        });
+        clearConfigCache();
+
+        const loaded = loadSessionEntry("agent:retired-agent:main");
+
+        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+        expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      clearConfigCache();
+    }
+  });
+
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
@@ -309,6 +377,21 @@ describe("gateway session utils", () => {
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
       `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
     );
+  });
+
+  test("listAgentsForGateway keeps explicit agents.list scope over disk-only agents (scope boundary)", async () => {
+    await withStateDirEnv("openclaw-agent-list-scope-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
+
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const { agents } = listAgentsForGateway(cfg);
+      expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+    });
   });
 });
 
@@ -399,17 +482,23 @@ describe("resolveSessionModelRef", () => {
 });
 
 describe("resolveSessionModelIdentityRef", () => {
+  const resolveLegacyIdentityRef = (
+    cfg: OpenClawConfig,
+    modelProvider: string | undefined = undefined,
+  ) =>
+    resolveSessionModelIdentityRef(cfg, {
+      sessionId: "legacy-session",
+      updatedAt: Date.now(),
+      model: "claude-sonnet-4-6",
+      modelProvider,
+    });
+
   test("does not inherit default provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
       primary: "google-gemini-cli/gemini-3-pro-preview",
     });
 
-    const resolved = resolveSessionModelIdentityRef(cfg, {
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-      model: "claude-sonnet-4-6",
-      modelProvider: undefined,
-    });
+    const resolved = resolveLegacyIdentityRef(cfg);
 
     expect(resolved).toEqual({ model: "claude-sonnet-4-6" });
   });
@@ -422,12 +511,7 @@ describe("resolveSessionModelIdentityRef", () => {
       },
     });
 
-    const resolved = resolveSessionModelIdentityRef(cfg, {
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-      model: "claude-sonnet-4-6",
-      modelProvider: undefined,
-    });
+    const resolved = resolveLegacyIdentityRef(cfg);
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
@@ -441,12 +525,7 @@ describe("resolveSessionModelIdentityRef", () => {
       },
     });
 
-    const resolved = resolveSessionModelIdentityRef(cfg, {
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-      model: "claude-sonnet-4-6",
-      modelProvider: undefined,
-    });
+    const resolved = resolveLegacyIdentityRef(cfg);
 
     expect(resolved).toEqual({ model: "claude-sonnet-4-6" });
   });
@@ -748,5 +827,48 @@ describe("listSessionsFromStore search", () => {
     expect(stale?.totalTokensFresh).toBe(false);
     expect(missing?.totalTokens).toBeUndefined();
     expect(missing?.totalTokensFresh).toBe(false);
+  });
+});
+
+describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("ACP agent sessions are visible even when agents.list is configured", async () => {
+    await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const codexDir = path.join(agentsDir, "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]).toBeDefined();
+      expect(store["agent:codex:acp-task"]).toBeDefined();
+    });
   });
 });

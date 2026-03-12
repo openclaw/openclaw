@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
+import {
+  beginWebhookRequestPipelineOrReject,
+  type WebhookInFlightLimiter,
+} from "./webhook-request-guards.js";
 
 export type RegisteredWebhookTarget<T> = {
   target: T;
@@ -107,10 +112,76 @@ export function resolveWebhookTargets<T>(
   return { path, targets };
 }
 
+export async function withResolvedWebhookRequestPipeline<T>(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  targetsByPath: Map<string, T[]>;
+  allowMethods?: readonly string[];
+  rateLimiter?: FixedWindowRateLimiter;
+  rateLimitKey?: string;
+  nowMs?: number;
+  requireJsonContentType?: boolean;
+  inFlightLimiter?: WebhookInFlightLimiter;
+  inFlightKey?: string | ((args: { req: IncomingMessage; path: string; targets: T[] }) => string);
+  inFlightLimitStatusCode?: number;
+  inFlightLimitMessage?: string;
+  handle: (args: { path: string; targets: T[] }) => Promise<boolean | void> | boolean | void;
+}): Promise<boolean> {
+  const resolved = resolveWebhookTargets(params.req, params.targetsByPath);
+  if (!resolved) {
+    return false;
+  }
+
+  const inFlightKey =
+    typeof params.inFlightKey === "function"
+      ? params.inFlightKey({ req: params.req, path: resolved.path, targets: resolved.targets })
+      : (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
+  const requestLifecycle = beginWebhookRequestPipelineOrReject({
+    req: params.req,
+    res: params.res,
+    allowMethods: params.allowMethods,
+    rateLimiter: params.rateLimiter,
+    rateLimitKey: params.rateLimitKey,
+    nowMs: params.nowMs,
+    requireJsonContentType: params.requireJsonContentType,
+    inFlightLimiter: params.inFlightLimiter,
+    inFlightKey,
+    inFlightLimitStatusCode: params.inFlightLimitStatusCode,
+    inFlightLimitMessage: params.inFlightLimitMessage,
+  });
+  if (!requestLifecycle.ok) {
+    return true;
+  }
+
+  try {
+    await params.handle(resolved);
+    return true;
+  } finally {
+    requestLifecycle.release();
+  }
+}
+
 export type WebhookTargetMatchResult<T> =
   | { kind: "none" }
   | { kind: "single"; target: T }
   | { kind: "ambiguous" };
+
+function updateMatchedWebhookTarget<T>(
+  matched: T | undefined,
+  target: T,
+): { ok: true; matched: T } | { ok: false; result: WebhookTargetMatchResult<T> } {
+  if (matched) {
+    return { ok: false, result: { kind: "ambiguous" } };
+  }
+  return { ok: true, matched: target };
+}
+
+function finalizeMatchedWebhookTarget<T>(matched: T | undefined): WebhookTargetMatchResult<T> {
+  if (!matched) {
+    return { kind: "none" };
+  }
+  return { kind: "single", target: matched };
+}
 
 export function resolveSingleWebhookTarget<T>(
   targets: readonly T[],
@@ -121,15 +192,13 @@ export function resolveSingleWebhookTarget<T>(
     if (!isMatch(target)) {
       continue;
     }
-    if (matched) {
-      return { kind: "ambiguous" };
+    const updated = updateMatchedWebhookTarget(matched, target);
+    if (!updated.ok) {
+      return updated.result;
     }
-    matched = target;
+    matched = updated.matched;
   }
-  if (!matched) {
-    return { kind: "none" };
-  }
-  return { kind: "single", target: matched };
+  return finalizeMatchedWebhookTarget(matched);
 }
 
 export async function resolveSingleWebhookTargetAsync<T>(
@@ -141,15 +210,64 @@ export async function resolveSingleWebhookTargetAsync<T>(
     if (!(await isMatch(target))) {
       continue;
     }
-    if (matched) {
-      return { kind: "ambiguous" };
+    const updated = updateMatchedWebhookTarget(matched, target);
+    if (!updated.ok) {
+      return updated.result;
     }
-    matched = target;
+    matched = updated.matched;
   }
-  if (!matched) {
-    return { kind: "none" };
+  return finalizeMatchedWebhookTarget(matched);
+}
+
+export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean | Promise<boolean>;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): Promise<T | null> {
+  const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
+    Boolean(await params.isMatch(target)),
+  );
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): T | null {
+  const match = resolveSingleWebhookTarget(params.targets, params.isMatch);
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+function resolveWebhookTargetMatchOrReject<T>(
+  params: {
+    res: ServerResponse;
+    unauthorizedStatusCode?: number;
+    unauthorizedMessage?: string;
+    ambiguousStatusCode?: number;
+    ambiguousMessage?: string;
+  },
+  match: WebhookTargetMatchResult<T>,
+): T | null {
+  if (match.kind === "single") {
+    return match.target;
   }
-  return { kind: "single", target: matched };
+  if (match.kind === "ambiguous") {
+    params.res.statusCode = params.ambiguousStatusCode ?? 401;
+    params.res.end(params.ambiguousMessage ?? "ambiguous webhook target");
+    return null;
+  }
+  params.res.statusCode = params.unauthorizedStatusCode ?? 401;
+  params.res.end(params.unauthorizedMessage ?? "unauthorized");
+  return null;
 }
 
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {

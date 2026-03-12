@@ -8,11 +8,26 @@ const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
   chatId: "123",
 }));
+const sendPollTelegram = vi.fn(async () => ({
+  messageId: "790",
+  chatId: "123",
+  pollId: "poll-1",
+}));
 const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const editMessageTelegram = vi.fn(async () => ({
+  ok: true,
+  messageId: "456",
+  chatId: "123",
+}));
+const createForumTopicTelegram = vi.fn(async () => ({
+  topicId: 99,
+  name: "Topic",
+  chatId: "123",
+}));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -20,10 +35,15 @@ vi.mock("../../telegram/send.js", () => ({
     reactMessageTelegram(...args),
   sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
     sendMessageTelegram(...args),
+  sendPollTelegram: (...args: Parameters<typeof sendPollTelegram>) => sendPollTelegram(...args),
   sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
+  editMessageTelegram: (...args: Parameters<typeof editMessageTelegram>) =>
+    editMessageTelegram(...args),
+  createForumTopicTelegram: (...args: Parameters<typeof createForumTopicTelegram>) =>
+    createForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -51,6 +71,22 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
   }
 
+  async function sendInlineButtonsMessage(params: {
+    to: string;
+    buttons: Array<Array<{ text: string; callback_data: string; style?: string }>>;
+    inlineButtons: "dm" | "group" | "all";
+  }) {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: params.to,
+        content: "Choose",
+        buttons: params.buttons,
+      },
+      telegramConfig({ capabilities: { inlineButtons: params.inlineButtons } }),
+    );
+  }
+
   async function expectReactionAdded(reactionLevel: "minimal" | "extensive") {
     await handleTelegramAction(defaultReactionAction, reactionConfig(reactionLevel));
     expect(reactMessageTelegram).toHaveBeenCalledWith(
@@ -65,8 +101,11 @@ describe("handleTelegramAction", () => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
+    sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    editMessageTelegram.mockClear();
+    createForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -103,9 +142,6 @@ describe("handleTelegramAction", () => {
   });
 
   it("accepts snake_case message_id for reactions", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as OpenClawConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -113,7 +149,7 @@ describe("handleTelegramAction", () => {
         message_id: "456",
         emoji: "✅",
       },
-      cfg,
+      reactionConfig("minimal"),
     );
     expect(reactMessageTelegram).toHaveBeenCalledWith(
       "123",
@@ -143,9 +179,6 @@ describe("handleTelegramAction", () => {
   });
 
   it("removes reactions on empty emoji", async () => {
-    const cfg = {
-      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
-    } as OpenClawConfig;
     await handleTelegramAction(
       {
         action: "react",
@@ -153,7 +186,7 @@ describe("handleTelegramAction", () => {
         messageId: "456",
         emoji: "",
       },
-      cfg,
+      reactionConfig("minimal"),
     );
     expect(reactMessageTelegram).toHaveBeenCalledWith(
       "123",
@@ -281,6 +314,70 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("sends a poll", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        allowMultiselect: true,
+        durationSeconds: 60,
+        isAnonymous: false,
+        silent: true,
+      },
+      telegramConfig(),
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      {
+        question: "Ready?",
+        options: ["Yes", "No"],
+        maxSelections: 2,
+        durationSeconds: 60,
+        durationHours: undefined,
+      },
+      expect.objectContaining({
+        token: "tok",
+        isAnonymous: false,
+        silent: true,
+      }),
+    );
+    expect(result.details).toMatchObject({
+      ok: true,
+      messageId: "790",
+      chatId: "123",
+      pollId: "poll-1",
+    });
+  });
+
+  it("parses string booleans for poll flags", async () => {
+    await handleTelegramAction(
+      {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+        allowMultiselect: "true",
+        isAnonymous: "false",
+        silent: "true",
+      },
+      telegramConfig(),
+    );
+    expect(sendPollTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      expect.objectContaining({
+        question: "Ready?",
+        options: ["Yes", "No"],
+        maxSelections: 2,
+      }),
+      expect.objectContaining({
+        isAnonymous: false,
+        silent: true,
+      }),
+    );
+  });
+
   it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
     await handleTelegramAction(
       {
@@ -296,6 +393,85 @@ describe("handleTelegramAction", () => {
       "Hello with local media",
       expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
+  });
+
+  it.each([
+    {
+      name: "react",
+      params: { action: "react", chatId: "123", messageId: 456, emoji: "✅" },
+      cfg: reactionConfig("minimal"),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(reactMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "sendMessage",
+      params: { action: "sendMessage", to: "123", content: "hello" },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendMessageTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "poll",
+      params: {
+        action: "poll",
+        to: "123",
+        question: "Q?",
+        answers: ["A", "B"],
+      },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendPollTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "deleteMessage",
+      params: { action: "deleteMessage", chatId: "123", messageId: 1 },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(deleteMessageTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "editMessage",
+      params: { action: "editMessage", chatId: "123", messageId: 1, content: "updated" },
+      cfg: telegramConfig(),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(editMessageTelegram.mock.calls as unknown[][], 3),
+    },
+    {
+      name: "sendSticker",
+      params: { action: "sendSticker", to: "123", fileId: "sticker-1" },
+      cfg: telegramConfig({ actions: { sticker: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(sendStickerTelegram.mock.calls as unknown[][], 2),
+    },
+    {
+      name: "createForumTopic",
+      params: { action: "createForumTopic", chatId: "123", name: "Topic" },
+      cfg: telegramConfig({ actions: { createForumTopic: true } }),
+      assertCall: (
+        readCallOpts: (calls: unknown[][], argIndex: number) => Record<string, unknown>,
+      ) => readCallOpts(createForumTopicTelegram.mock.calls as unknown[][], 2),
+    },
+  ])("forwards resolved cfg for $name action", async ({ params, cfg, assertCall }) => {
+    const readCallOpts = (calls: unknown[][], argIndex: number): Record<string, unknown> => {
+      const args = calls[0];
+      if (!Array.isArray(args)) {
+        throw new Error("Expected Telegram action call args");
+      }
+      const opts = args[argIndex];
+      if (!opts || typeof opts !== "object") {
+        throw new Error("Expected Telegram action options object");
+      }
+      return opts as Record<string, unknown>;
+    };
+    await handleTelegramAction(params as Record<string, unknown>, cfg);
+    const opts = assertCall(readCallOpts);
+    expect(opts.cfg).toBe(cfg);
   });
 
   it.each([
@@ -378,6 +554,25 @@ describe("handleTelegramAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Telegram sendMessage is disabled/);
+  });
+
+  it("respects poll gating", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { poll: false } },
+      },
+    } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "poll",
+          to: "@testchannel",
+          question: "Lunch?",
+          answers: ["Pizza", "Sushi"],
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram polls are disabled/);
   });
 
   it("deletes a message", async () => {
@@ -476,44 +671,29 @@ describe("handleTelegramAction", () => {
   });
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
-    const cfg = telegramConfig({ capabilities: { inlineButtons: "dm" } });
-    await handleTelegramAction(
-      {
-        action: "sendMessage",
-        to: "tg:5232990709",
-        content: "Choose",
-        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
-      },
-      cfg,
-    );
+    await sendInlineButtonsMessage({
+      to: "tg:5232990709",
+      buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+      inlineButtons: "dm",
+    });
     expect(sendMessageTelegram).toHaveBeenCalled();
   });
 
   it("allows inline buttons in groups with topic targets", async () => {
-    const cfg = telegramConfig({ capabilities: { inlineButtons: "group" } });
-    await handleTelegramAction(
-      {
-        action: "sendMessage",
-        to: "telegram:group:-1001234567890:topic:456",
-        content: "Choose",
-        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
-      },
-      cfg,
-    );
+    await sendInlineButtonsMessage({
+      to: "telegram:group:-1001234567890:topic:456",
+      buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+      inlineButtons: "group",
+    });
     expect(sendMessageTelegram).toHaveBeenCalled();
   });
 
   it("sends messages with inline keyboard buttons when enabled", async () => {
-    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
-    await handleTelegramAction(
-      {
-        action: "sendMessage",
-        to: "@testchannel",
-        content: "Choose",
-        buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
-      },
-      cfg,
-    );
+    await sendInlineButtonsMessage({
+      to: "@testchannel",
+      buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
+      inlineButtons: "all",
+    });
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "@testchannel",
       "Choose",
@@ -524,24 +704,19 @@ describe("handleTelegramAction", () => {
   });
 
   it("forwards optional button style", async () => {
-    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
-    await handleTelegramAction(
-      {
-        action: "sendMessage",
-        to: "@testchannel",
-        content: "Choose",
-        buttons: [
-          [
-            {
-              text: "Option A",
-              callback_data: "cmd:a",
-              style: "primary",
-            },
-          ],
+    await sendInlineButtonsMessage({
+      to: "@testchannel",
+      inlineButtons: "all",
+      buttons: [
+        [
+          {
+            text: "Option A",
+            callback_data: "cmd:a",
+            style: "primary",
+          },
         ],
-      },
-      cfg,
-    );
+      ],
+    });
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "@testchannel",
       "Choose",
@@ -601,6 +776,25 @@ describe("readTelegramButtons", () => {
 });
 
 describe("handleTelegramAction per-account gating", () => {
+  function accountTelegramConfig(params: {
+    accounts: Record<
+      string,
+      { botToken: string; actions?: { sticker?: boolean; reactions?: boolean } }
+    >;
+    topLevelBotToken?: string;
+    topLevelActions?: { reactions?: boolean };
+  }): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          ...(params.topLevelBotToken ? { botToken: params.topLevelBotToken } : {}),
+          ...(params.topLevelActions ? { actions: params.topLevelActions } : {}),
+          accounts: params.accounts,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   async function expectAccountStickerSend(cfg: OpenClawConfig, accountId = "media") {
     await handleTelegramAction(
       { action: "sendSticker", to: "123", fileId: "sticker-id", accountId },
@@ -614,15 +808,11 @@ describe("handleTelegramAction per-account gating", () => {
   }
 
   it("allows sticker when account config enables it", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            media: { botToken: "tok-media", actions: { sticker: true } },
-          },
-        },
+    const cfg = accountTelegramConfig({
+      accounts: {
+        media: { botToken: "tok-media", actions: { sticker: true } },
       },
-    } as OpenClawConfig;
+    });
     await expectAccountStickerSend(cfg);
   });
 
@@ -647,30 +837,22 @@ describe("handleTelegramAction per-account gating", () => {
 
   it("uses account-merged config, not top-level config", async () => {
     // Top-level has no sticker enabled, but the account does
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok-base",
-          accounts: {
-            media: { botToken: "tok-media", actions: { sticker: true } },
-          },
-        },
+    const cfg = accountTelegramConfig({
+      topLevelBotToken: "tok-base",
+      accounts: {
+        media: { botToken: "tok-media", actions: { sticker: true } },
       },
-    } as OpenClawConfig;
+    });
     await expectAccountStickerSend(cfg);
   });
 
   it("inherits top-level reaction gate when account overrides sticker only", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          actions: { reactions: false },
-          accounts: {
-            media: { botToken: "tok-media", actions: { sticker: true } },
-          },
-        },
+    const cfg = accountTelegramConfig({
+      topLevelActions: { reactions: false },
+      accounts: {
+        media: { botToken: "tok-media", actions: { sticker: true } },
       },
-    } as OpenClawConfig;
+    });
 
     const result = await handleTelegramAction(
       {
@@ -689,16 +871,12 @@ describe("handleTelegramAction per-account gating", () => {
   });
 
   it("allows account to explicitly re-enable top-level disabled reaction gate", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          actions: { reactions: false },
-          accounts: {
-            media: { botToken: "tok-media", actions: { sticker: true, reactions: true } },
-          },
-        },
+    const cfg = accountTelegramConfig({
+      topLevelActions: { reactions: false },
+      accounts: {
+        media: { botToken: "tok-media", actions: { sticker: true, reactions: true } },
       },
-    } as OpenClawConfig;
+    });
 
     await handleTelegramAction(
       {

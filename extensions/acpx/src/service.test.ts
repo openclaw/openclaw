@@ -1,4 +1,4 @@
-import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
+import type { AcpRuntime, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/acpx";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../../src/acp/runtime/errors.js";
 import {
@@ -89,6 +89,11 @@ describe("createAcpxRuntimeService", () => {
 
     await vi.waitFor(() => {
       expect(ensureAcpxSpy).toHaveBeenCalledOnce();
+      expect(ensureAcpxSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripProviderAuthEnvVars: true,
+        }),
+      );
       expect(probeAvailabilitySpy).toHaveBeenCalledOnce();
     });
 

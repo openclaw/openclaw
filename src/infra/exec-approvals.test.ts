@@ -47,6 +47,22 @@ function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; c
   return { analysis, allowlistEval };
 }
 
+function createPathExecutableFixture(params?: { executable?: string }): {
+  exeName: string;
+  exePath: string;
+  binDir: string;
+} {
+  const dir = makeTempDir();
+  const binDir = path.join(dir, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const baseName = params?.executable ?? "rg";
+  const exeName = process.platform === "win32" ? `${baseName}.exe` : baseName;
+  const exePath = path.join(binDir, exeName);
+  fs.writeFileSync(exePath, "");
+  fs.chmodSync(exePath, 0o755);
+  return { exeName, exePath, binDir };
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -82,13 +98,35 @@ describe("exec approvals allowlist matching", () => {
     expect(match?.pattern).toBe("*");
   });
 
-  it("requires a resolved path", () => {
-    const match = matchAllowlist([{ pattern: "bin/rg" }], {
-      rawExecutable: "bin/rg",
-      resolvedPath: undefined,
-      executableName: "rg",
+  it("matches absolute paths containing regex metacharacters", () => {
+    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"];
+    for (const candidatePath of plusPathCases) {
+      const match = matchAllowlist([{ pattern: candidatePath }], {
+        rawExecutable: candidatePath,
+        resolvedPath: candidatePath,
+        executableName: candidatePath.split("/").at(-1) ?? candidatePath,
+      });
+      expect(match?.pattern).toBe(candidatePath);
+    }
+  });
+
+  it("does not throw when wildcard globs are mixed with + in path", () => {
+    const match = matchAllowlist([{ pattern: "/usr/bin/*++" }], {
+      rawExecutable: "/usr/bin/g++",
+      resolvedPath: "/usr/bin/g++",
+      executableName: "g++",
     });
-    expect(match).toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/*++");
+  });
+
+  it("matches paths containing []() regex tokens literally", () => {
+    const literalPattern = "/opt/builds/tool[1](stable)";
+    const match = matchAllowlist([{ pattern: literalPattern }], {
+      rawExecutable: literalPattern,
+      resolvedPath: literalPattern,
+      executableName: "tool[1](stable)",
+    });
+    expect(match?.pattern).toBe(literalPattern);
   });
 });
 
@@ -199,19 +237,13 @@ describe("exec approvals command resolution", () => {
       {
         name: "PATH executable",
         setup: () => {
-          const dir = makeTempDir();
-          const binDir = path.join(dir, "bin");
-          fs.mkdirSync(binDir, { recursive: true });
-          const exeName = process.platform === "win32" ? "rg.exe" : "rg";
-          const exe = path.join(binDir, exeName);
-          fs.writeFileSync(exe, "");
-          fs.chmodSync(exe, 0o755);
+          const fixture = createPathExecutableFixture();
           return {
             command: "rg -n foo",
             cwd: undefined as string | undefined,
-            envPath: makePathEnv(binDir),
-            expectedPath: exe,
-            expectedExecutableName: exeName,
+            envPath: makePathEnv(fixture.binDir),
+            expectedPath: fixture.exePath,
+            expectedExecutableName: fixture.exeName,
           };
         },
       },
@@ -264,21 +296,15 @@ describe("exec approvals command resolution", () => {
   });
 
   it("unwraps transparent env wrapper argv to resolve the effective executable", () => {
-    const dir = makeTempDir();
-    const binDir = path.join(dir, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const exeName = process.platform === "win32" ? "rg.exe" : "rg";
-    const exe = path.join(binDir, exeName);
-    fs.writeFileSync(exe, "");
-    fs.chmodSync(exe, 0o755);
+    const fixture = createPathExecutableFixture();
 
     const resolution = resolveCommandResolutionFromArgv(
       ["/usr/bin/env", "rg", "-n", "needle"],
       undefined,
-      makePathEnv(binDir),
+      makePathEnv(fixture.binDir),
     );
-    expect(resolution?.resolvedPath).toBe(exe);
-    expect(resolution?.executableName).toBe(exeName);
+    expect(resolution?.resolvedPath).toBe(fixture.exePath);
+    expect(resolution?.executableName).toBe(fixture.exeName);
   });
 
   it("blocks semantic env wrappers from allowlist/safeBins auto-resolution", () => {
@@ -625,6 +651,36 @@ describe("exec approvals shell allowlist (chained commands)", () => {
 });
 
 describe("exec approvals allowlist evaluation", () => {
+  function evaluateAutoAllowSkills(params: {
+    analysis: {
+      ok: boolean;
+      segments: Array<{
+        raw: string;
+        argv: string[];
+        resolution: {
+          rawExecutable: string;
+          executableName: string;
+          resolvedPath?: string;
+        };
+      }>;
+    };
+    resolvedPath: string;
+  }) {
+    return evaluateExecAllowlist({
+      analysis: params.analysis,
+      allowlist: [],
+      safeBins: new Set(),
+      skillBins: [{ name: "skill-bin", resolvedPath: params.resolvedPath }],
+      autoAllowSkills: true,
+      cwd: "/tmp",
+    });
+  }
+
+  function expectAutoAllowSkillsMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+  }
+
   it("satisfies allowlist on exact match", () => {
     const analysis = {
       ok: true,
@@ -696,13 +752,9 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/opt/skills/skill-bin",
     });
     expect(result.allowlistSatisfied).toBe(true);
   });
@@ -722,16 +774,11 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/tmp/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/tmp/skill-bin",
     });
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expectAutoAllowSkillsMiss(result);
   });
 
   it("does not satisfy auto-allow skills when command resolution is missing", () => {
@@ -748,16 +795,11 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/opt/skills/skill-bin",
     });
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expectAutoAllowSkillsMiss(result);
   });
 
   it("returns empty segment details for chain misses", () => {

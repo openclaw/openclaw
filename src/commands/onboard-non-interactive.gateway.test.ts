@@ -9,7 +9,7 @@ const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
   password?: string;
-  onHelloOk?: () => void;
+  onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
@@ -20,13 +20,13 @@ vi.mock("../gateway/client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
     };
     constructor(params: {
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
     }) {
       this.params = params;
       gatewayClientCalls.push(params);
@@ -35,7 +35,7 @@ vi.mock("../gateway/client.js", () => ({
       return { ok: true };
     }
     start() {
-      queueMicrotask(() => this.params.onHelloOk?.());
+      queueMicrotask(() => this.params.onHelloOk?.({ features: { methods: ["health"] } }));
     }
     stop() {}
   },
@@ -141,9 +141,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const cfg = await readJsonFile<{
         gateway?: { auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
+        tools?: { profile?: string };
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
     });
@@ -184,6 +186,84 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           delete process.env.OPENCLAW_GATEWAY_TOKEN;
         } else {
           process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        }
+      }
+    });
+  }, 60_000);
+
+  it("writes gateway token SecretRef from --gateway-token-ref-env", async () => {
+    await withStateDir("state-env-token-ref-", async (stateDir) => {
+      const envToken = "tok_env_ref_123";
+      const workspace = path.join(stateDir, "openclaw");
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+
+      try {
+        await runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace,
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: true,
+            installDaemon: false,
+            gatewayBind: "loopback",
+            gatewayAuth: "token",
+            gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+          },
+          runtime,
+        );
+
+        const configPath = resolveStateConfigPath(process.env, stateDir);
+        const cfg = await readJsonFile<{
+          gateway?: { auth?: { mode?: string; token?: unknown } };
+        }>(configPath);
+
+        expect(cfg?.gateway?.auth?.mode).toBe("token");
+        expect(cfg?.gateway?.auth?.token).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        });
+      } finally {
+        if (prevToken === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        }
+      }
+    });
+  }, 60_000);
+
+  it("fails when --gateway-token-ref-env points to a missing env var", async () => {
+    await withStateDir("state-env-token-ref-missing-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      const previous = process.env.MISSING_GATEWAY_TOKEN_ENV;
+      delete process.env.MISSING_GATEWAY_TOKEN_ENV;
+      try {
+        await expect(
+          runNonInteractiveOnboarding(
+            {
+              nonInteractive: true,
+              mode: "local",
+              workspace,
+              authChoice: "skip",
+              skipSkills: true,
+              skipHealth: true,
+              installDaemon: false,
+              gatewayBind: "loopback",
+              gatewayAuth: "token",
+              gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV",
+            },
+            runtime,
+          ),
+        ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_ENV/);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MISSING_GATEWAY_TOKEN_ENV;
+        } else {
+          process.env.MISSING_GATEWAY_TOKEN_ENV = previous;
         }
       }
     });

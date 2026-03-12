@@ -1,7 +1,7 @@
 import { join, parse } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("openclaw/plugin-sdk/google-gemini-cli-auth", () => ({
   isWSL2Sync: () => false,
   fetchWithSsrFGuard: async (params: {
     url: string;
@@ -239,14 +239,15 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "LINUX" {
+  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
     if (process.platform === "win32") {
       return "WINDOWS";
     }
-    if (process.platform === "linux") {
-      return "LINUX";
+    if (process.platform === "darwin") {
+      return "MACOS";
     }
-    return "MACOS";
+    // Matches updated resolvePlatform() which uses PLATFORM_UNSPECIFIED for Linux
+    return "PLATFORM_UNSPECIFIED";
   }
 
   function getRequestUrl(input: string | URL | Request): string {
@@ -307,7 +308,7 @@ describe("loginGeminiCliOAuth", () => {
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
-    process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET = "GOCSPX-test-client-secret";
+    process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET = "GOCSPX-test-client-secret"; // pragma: allowlist secret
     delete process.env.GEMINI_CLI_OAUTH_CLIENT_ID;
     delete process.env.GEMINI_CLI_OAUTH_CLIENT_SECRET;
     delete process.env.GOOGLE_CLOUD_PROJECT;

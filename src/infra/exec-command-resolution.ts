@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
@@ -46,6 +47,33 @@ function tryResolveRealpath(filePath: string | undefined): string | undefined {
   }
 }
 
+function buildCommandResolution(params: {
+  rawExecutable: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  effectiveArgv: string[];
+  wrapperChain: string[];
+  policyBlocked: boolean;
+  blockedWrapper?: string;
+}): CommandResolution {
+  const resolvedPath = resolveExecutableCandidatePath(params.rawExecutable, {
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : params.rawExecutable;
+  return {
+    rawExecutable: params.rawExecutable,
+    resolvedPath,
+    resolvedRealPath,
+    executableName,
+    effectiveArgv: params.effectiveArgv,
+    wrapperChain: params.wrapperChain,
+    policyBlocked: params.policyBlocked,
+    blockedWrapper: params.blockedWrapper,
+  };
+}
+
 export function resolveCommandResolution(
   command: string,
   cwd?: string,
@@ -55,18 +83,14 @@ export function resolveCommandResolution(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return {
+  return buildCommandResolution({
     rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
     effectiveArgv: [rawExecutable],
     wrapperChain: [],
     policyBlocked: false,
-  };
+    cwd,
+    env,
+  });
 }
 
 export function resolveCommandResolutionFromArgv(
@@ -80,82 +104,15 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return {
+  return buildCommandResolution({
     rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
     effectiveArgv,
     wrapperChain: plan.wrappers,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
-  };
-}
-
-function normalizeMatchTarget(value: string): string {
-  if (process.platform === "win32") {
-    const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return stripped.replace(/\\/g, "/").toLowerCase();
-  }
-  return value.replace(/\\\\/g, "/").toLowerCase();
-}
-
-function tryRealpath(value: string): string | null {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return null;
-  }
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let regex = "^";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      const next = pattern[i + 1];
-      if (next === "*") {
-        regex += ".*";
-        i += 2;
-        continue;
-      }
-      regex += "[^/]*";
-      i += 1;
-      continue;
-    }
-    if (ch === "?") {
-      regex += ".";
-      i += 1;
-      continue;
-    }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
-    i += 1;
-  }
-  regex += "$";
-  return new RegExp(regex, "i");
-}
-
-function matchesPattern(pattern: string, target: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
-  const hasWildcard = /[*?]/.test(expanded);
-  let normalizedPattern = expanded;
-  let normalizedTarget = target;
-  if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = tryRealpath(expanded) ?? expanded;
-    normalizedTarget = tryRealpath(target) ?? target;
-  }
-  normalizedPattern = normalizeMatchTarget(normalizedPattern);
-  normalizedTarget = normalizeMatchTarget(normalizedTarget);
-  const regex = globToRegExp(normalizedPattern);
-  return regex.test(normalizedTarget);
+    cwd,
+    env,
+  });
 }
 
 export function resolveAllowlistCandidatePath(
@@ -210,7 +167,7 @@ export function matchAllowlist(
     if (!hasPath) {
       continue;
     }
-    if (matchesPattern(pattern, resolvedPath)) {
+    if (matchesExecAllowlistPattern(pattern, resolvedPath)) {
       return entry;
     }
   }

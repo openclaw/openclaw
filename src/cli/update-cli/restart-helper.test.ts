@@ -98,6 +98,9 @@ describe("restart-helper", () => {
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      // Should clear disabled state and fall back to bootstrap when kickstart fails.
+      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -223,6 +226,45 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("expands HOME in plist path instead of leaving literal $HOME", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_PROFILE: "default",
+      });
+      // The plist path must contain the resolved home dir, not literal $HOME
+      expect(content).toMatch(/[\\/]Users[\\/]testuser[\\/]Library[\\/]LaunchAgents[\\/]/);
+      expect(content).not.toContain("$HOME");
+      await cleanupScript(scriptPath);
+    });
+
+    it("prefers env parameter HOME over process.env.HOME for plist path", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 502;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/envhome",
+        OPENCLAW_PROFILE: "default",
+      });
+      expect(content).toMatch(/[\\/]Users[\\/]envhome[\\/]Library[\\/]LaunchAgents[\\/]/);
+      await cleanupScript(scriptPath);
+    });
+
+    it("shell-escapes the label in the plist path on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
+      });
+      // The plist path must also shell-escape the label to prevent injection
+      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
+      await cleanupScript(scriptPath);
+    });
+
     it("rejects unsafe batch profile names on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = await prepareRestartScript({
@@ -257,11 +299,25 @@ describe("restart-helper", () => {
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/c", scriptPath], {
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
         detached: true,
         stdio: "ignore",
       });
       expect(mockChild.unref).toHaveBeenCalled();
+    });
+
+    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
+      const mockChild = { unref: vi.fn() };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript(scriptPath);
+
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
+        detached: true,
+        stdio: "ignore",
+      });
     });
   });
 });

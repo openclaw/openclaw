@@ -35,7 +35,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.2": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
@@ -43,7 +43,7 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
   it("does not override existing aliases", () => {
@@ -67,8 +67,9 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "google/gemini-3-pro-preview": { alias: "" },
+            "google/gemini-3.1-pro-preview": { alias: "" },
             "google/gemini-3-flash-preview": {},
+            "google/gemini-3.1-flash-lite-preview": {},
           },
         },
       },
@@ -76,9 +77,12 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("");
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]?.alias).toBe("");
     expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
       "gemini-flash",
+    );
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite-preview"]?.alias).toBe(
+      "gemini-flash-lite",
     );
   });
 
@@ -111,7 +115,7 @@ describe("applyModelDefaults", () => {
         providers: {
           anthropic: {
             baseUrl: "https://relay.example.com/api",
-            apiKey: "cr_xxxx",
+            apiKey: "cr_xxxx", // pragma: allowlist secret
             models: [
               {
                 id: "claude-opus-4-6",

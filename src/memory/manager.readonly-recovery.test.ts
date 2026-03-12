@@ -58,6 +58,18 @@ describe("memory manager readonly recovery", () => {
     });
   }
 
+  async function expectReadonlyRetry(params: { firstError: unknown; expectedLastError: string }) {
+    const currentManager = await createManager();
+    const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
+    runSyncSpy.mockRejectedValueOnce(params.firstError).mockResolvedValueOnce(undefined);
+
+    await currentManager.sync({ reason: "test" });
+
+    expect(runSyncSpy).toHaveBeenCalledTimes(2);
+    expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
+    expectReadonlyRecoveryStatus(params.expectedLastError);
+  }
+
   beforeEach(async () => {
     resetEmbeddingMocks();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-readonly-"));
@@ -75,31 +87,17 @@ describe("memory manager readonly recovery", () => {
   });
 
   it("reopens sqlite and retries once when sync hits SQLITE_READONLY", async () => {
-    const currentManager = await createManager();
-    const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
-    runSyncSpy
-      .mockRejectedValueOnce(new Error("attempt to write a readonly database"))
-      .mockResolvedValueOnce(undefined);
-
-    await currentManager.sync({ reason: "test" });
-
-    expect(runSyncSpy).toHaveBeenCalledTimes(2);
-    expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
-    expectReadonlyRecoveryStatus("attempt to write a readonly database");
+    await expectReadonlyRetry({
+      firstError: new Error("attempt to write a readonly database"),
+      expectedLastError: "attempt to write a readonly database",
+    });
   });
 
   it("reopens sqlite and retries when readonly appears in error code", async () => {
-    const currentManager = await createManager();
-    const { runSyncSpy, openDatabaseSpy } = createSyncSpies(currentManager);
-    runSyncSpy
-      .mockRejectedValueOnce({ message: "write failed", code: "SQLITE_READONLY" })
-      .mockResolvedValueOnce(undefined);
-
-    await currentManager.sync({ reason: "test" });
-
-    expect(runSyncSpy).toHaveBeenCalledTimes(2);
-    expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
-    expectReadonlyRecoveryStatus("write failed");
+    await expectReadonlyRetry({
+      firstError: { message: "write failed", code: "SQLITE_READONLY" },
+      expectedLastError: "write failed",
+    });
   });
 
   it("does not retry non-readonly sync errors", async () => {
@@ -110,5 +108,15 @@ describe("memory manager readonly recovery", () => {
     await expect(currentManager.sync({ reason: "test" })).rejects.toThrow("embedding timeout");
     expect(runSyncSpy).toHaveBeenCalledTimes(1);
     expect(openDatabaseSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("sets busy_timeout on memory sqlite connections", async () => {
+    const currentManager = await createManager();
+    const db = (currentManager as unknown as { db: DatabaseSync }).db;
+    const row = db.prepare("PRAGMA busy_timeout").get() as
+      | { busy_timeout?: number; timeout?: number }
+      | undefined;
+    const busyTimeout = row?.busy_timeout ?? row?.timeout;
+    expect(busyTimeout).toBe(5000);
   });
 });

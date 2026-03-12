@@ -86,10 +86,39 @@ Approve via:
 - Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Restrict to an allowlist with:
   - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (keys are group IDs or names)
+  - `channels.zalouser.groups` (keys are group IDs or names; controls which groups are allowed)
+  - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
 - On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- If `groupAllowFrom` is unset, runtime falls back to `allowFrom` for group sender checks.
+- Sender checks apply to both normal group messages and control commands (for example `/new`, `/reset`).
+
+Example:
+
+```json5
+{
+  channels: {
+    zalouser: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["1471383327500481391"],
+      groups: {
+        "123456789": { allow: true },
+        "Work Chat": { allow: true },
+      },
+    },
+  },
+}
+```
+
+### Group mention gating
+
+- `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
+- Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
+- This applies both to allowlisted groups and open group mode.
+- Authorized control commands (for example `/new`) can bypass mention gating.
+- When a group message is skipped because mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
+- Group history limit defaults to `messages.groupChat.historyLimit` (fallback `50`). You can override per account with `channels.zalouser.historyLimit`.
 
 Example:
 
@@ -99,8 +128,8 @@ Example:
     zalouser: {
       groupPolicy: "allowlist",
       groups: {
-        "123456789": { allow: true },
-        "Work Chat": { allow: true },
+        "*": { allow: true, requireMention: true },
+        "Work Chat": { allow: true, requireMention: false },
       },
     },
   },
@@ -125,6 +154,14 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 }
 ```
 
+## Typing, reactions, and delivery acknowledgements
+
+- OpenClaw sends a typing event before dispatching a reply (best-effort).
+- Message reaction action `react` is supported for `zalouser` in channel actions.
+  - Use `remove: true` to remove a specific reaction emoji from a message.
+  - Reaction semantics: [Reactions](/tools/reactions)
+- For inbound messages that include event metadata, OpenClaw sends delivered + seen acknowledgements (best-effort).
+
 ## Troubleshooting
 
 **Login doesn't stick:**
@@ -134,7 +171,7 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 **Allowlist/group name didn't resolve:**
 
-- Use numeric IDs in `allowFrom`/`groups`, or exact friend/group names.
+- Use numeric IDs in `allowFrom`/`groupAllowFrom`/`groups`, or exact friend/group names.
 
 **Upgraded from old CLI-based setup:**
 

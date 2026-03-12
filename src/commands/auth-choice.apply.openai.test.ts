@@ -28,7 +28,7 @@ describe("applyAuthChoiceOpenAI", () => {
 
   it("writes env-backed OpenAI key as plaintext by default", async () => {
     const agentDir = await setupTempState();
-    process.env.OPENAI_API_KEY = "sk-openai-env";
+    process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
 
     const confirm = vi.fn(async () => true);
     const text = vi.fn(async () => "unused");
@@ -62,7 +62,7 @@ describe("applyAuthChoiceOpenAI", () => {
 
   it("writes env-backed OpenAI key as keyRef when secret-input-mode=ref", async () => {
     const agentDir = await setupTempState();
-    process.env.OPENAI_API_KEY = "sk-openai-env";
+    process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
 
     const confirm = vi.fn(async () => true);
     const text = vi.fn(async () => "unused");

@@ -10,16 +10,33 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
+const MEMORY_FLUSH_TARGET_HINT =
+  "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
+const MEMORY_FLUSH_APPEND_ONLY_HINT =
+  "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
+const MEMORY_FLUSH_READ_ONLY_HINT =
+  "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+const MEMORY_FLUSH_REQUIRED_HINTS = [
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+];
+
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
-  "Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).",
-  "IMPORTANT: If the file already exists, APPEND new content only and do not overwrite existing entries.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the canonical YYYY-MM-DD.md filename.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
   "The session is near auto-compaction; capture durable memories to disk.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
   `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
 ].join(" ");
 
@@ -39,14 +56,29 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
 
+export function resolveMemoryFlushRelativePathForRun(params: {
+  cfg?: OpenClawConfig;
+  nowMs?: number;
+}): string {
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
+  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
+  return `memory/${dateStamp}.md`;
+}
+
 export function resolveMemoryFlushPromptForRun(params: {
   prompt: string;
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const { userTimezone, timeLine } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
-  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
+  const { timeLine } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
+  const dateStamp = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs,
+  })
+    .replace(/^memory\//, "")
+    .replace(/\.md$/, "");
   const withDate = params.prompt.replaceAll("YYYY-MM-DD", dateStamp).trimEnd();
   if (!withDate) {
     return timeLine;
@@ -89,8 +121,12 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
-  const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
-  const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+  const prompt = ensureMemoryFlushSafetyHints(
+    defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT,
+  );
+  const systemPrompt = ensureMemoryFlushSafetyHints(
+    defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
+  );
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
@@ -110,6 +146,16 @@ function ensureNoReplyHint(text: string): string {
     return text;
   }
   return `${text}\n\nIf no user-visible reply is needed, start with ${SILENT_REPLY_TOKEN}.`;
+}
+
+function ensureMemoryFlushSafetyHints(text: string): string {
+  let next = text.trim();
+  for (const hint of MEMORY_FLUSH_REQUIRED_HINTS) {
+    if (!next.includes(hint)) {
+      next = next ? `${next}\n\n${hint}` : hint;
+    }
+  }
+  return next;
 }
 
 export function resolveMemoryFlushContextWindowTokens(params: {
@@ -161,11 +207,22 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
 
-  const compactionCount = params.entry.compactionCount ?? 0;
-  const lastFlushAt = params.entry.memoryFlushCompactionCount;
-  if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {
+  if (hasAlreadyFlushedForCurrentCompaction(params.entry)) {
     return false;
   }
 
   return true;
+}
+
+/**
+ * Returns true when a memory flush has already been performed for the current
+ * compaction cycle. This prevents repeated flush runs within the same cycle —
+ * important for both the token-based and transcript-size–based trigger paths.
+ */
+export function hasAlreadyFlushedForCurrentCompaction(
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+): boolean {
+  const compactionCount = entry.compactionCount ?? 0;
+  const lastFlushAt = entry.memoryFlushCompactionCount;
+  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
 }

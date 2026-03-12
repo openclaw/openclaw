@@ -26,6 +26,9 @@ jobs:
         with:
           submodules: false
 
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@v3
+
       - name: Build minimal sandbox base (USER sandbox)
         shell: bash
         run: |
