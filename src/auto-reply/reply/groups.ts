@@ -63,7 +63,7 @@ export function resolveGroupRequireMention(params: {
   if (!channel) {
     return true;
   }
-  const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
+  const groupId = groupResolution?.id ?? ctx.GroupId?.trim() ?? extractGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
   let requireMention: boolean | undefined;
@@ -153,7 +153,10 @@ export function buildGroupIntro(params: {
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
+  const groupId =
+    params.sessionEntry?.groupId ??
+    params.sessionCtx.GroupId?.trim() ??
+    extractGroupId(params.sessionCtx.From);
   const groupChannel =
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();

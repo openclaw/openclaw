@@ -3,7 +3,7 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import { sanitizeAgentId } from "../routing/session-key.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
-export type ConfiguredAcpBindingChannel = "discord" | "telegram";
+export type ConfiguredAcpBindingChannel = "discord" | "matrix" | "telegram";
 
 export type ConfiguredAcpBindingSpec = {
   channel: ConfiguredAcpBindingChannel;

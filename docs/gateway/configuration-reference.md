@@ -651,6 +651,7 @@ Run multiple accounts per channel (each with its own `accountId`):
 ### Other extension channels
 
 Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+Matrix also supports top-level `bindings[]` entries with `type: "acp"` for persistent ACP bindings. Use the Matrix room id or Matrix thread root event id in `match.peer.id`.
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
@@ -1358,7 +1359,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 
 Within each tier, the first matching `bindings` entry wins.
 
-For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`match.channel` + account + `match.peer.id`) and does not use the route binding tier order above.
+For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`match.channel` + account + `match.peer.id`) and does not use the route binding tier order above. For example, use a Discord channel/thread id, a Matrix room id or thread root event id, or a Telegram canonical topic id.
 
 ### Per-agent access profiles
 

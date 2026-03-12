@@ -27,6 +27,7 @@ Pairing codes:
 
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
+- Some channels may also send reminder replies for still-pending requests. Matrix reuses the same code and can send a reminder again after a short cooldown if the sender keeps messaging before approval.
 - Pending DM pairing requests are capped at **3 per channel** by default; additional requests are ignored until one expires or is approved.
 
 ### Approve a sender
@@ -36,7 +37,7 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
-Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`, `feishu`.
+Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`, `feishu`, `matrix`.
 
 ### Where the state lives
 
@@ -108,3 +109,4 @@ Stored under `~/.openclaw/devices/`:
   - iMessage (legacy): [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)
+  - Matrix: [Matrix](/channels/matrix)

@@ -8,27 +8,33 @@ import {
   resolveThreadBindingThreadName,
 } from "../../../channels/thread-bindings-messages.js";
 import {
+  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
   resolveDiscordChannelIdForFocus,
   resolveFocusTargetSession,
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
   resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
 
 type FocusBindingContext = {
-  channel: "discord" | "telegram";
+  channel: "discord" | "telegram" | "matrix";
   accountId: string;
   conversationId: string;
+  parentConversationId?: string;
   placement: "current" | "child";
   labelNoun: "thread" | "conversation";
 };
@@ -65,6 +71,41 @@ function resolveFocusBindingContext(
       labelNoun: "conversation",
     };
   }
+  if (isMatrixSurface(params)) {
+    const currentThreadId =
+      params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
+    const conversationId = resolveMatrixConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+    if (!conversationId) {
+      return null;
+    }
+    const parentConversationId = resolveMatrixParentConversationId({
+      ctx: {
+        MessageThreadId: params.ctx.MessageThreadId,
+        OriginatingTo: params.ctx.OriginatingTo,
+        To: params.ctx.To,
+      },
+      command: {
+        to: params.command.to,
+      },
+    });
+    return {
+      channel: "matrix",
+      accountId: resolveChannelAccountId(params),
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+      placement: currentThreadId ? "current" : "child",
+      labelNoun: "thread",
+    };
+  }
   return null;
 }
 
@@ -73,8 +114,8 @@ export async function handleSubagentsFocusAction(
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /focus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "telegram" && channel !== "matrix") {
+    return stopWithText("⚠️ /focus is only available on Discord, Matrix, and Telegram.");
   }
 
   const token = restTokens.join(" ").trim();
@@ -89,11 +130,20 @@ export async function handleSubagentsFocusAction(
     accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    const label = channel === "discord" ? "Discord thread" : "Telegram conversation";
+    const label =
+      channel === "discord"
+        ? "Discord thread"
+        : channel === "telegram"
+          ? "Telegram conversation"
+          : "Matrix thread";
     return stopWithText(`⚠️ ${label} bindings are unavailable for this account.`);
   }
 
-  const focusTarget = await resolveFocusTargetSession({ runs, token });
+  const focusTarget = await resolveFocusTargetSession({
+    cfg: params.cfg,
+    runs,
+    token,
+  });
   if (!focusTarget) {
     return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }
@@ -105,6 +155,9 @@ export async function handleSubagentsFocusAction(
         "⚠️ /focus on Telegram requires a topic context in groups, or a direct-message conversation.",
       );
     }
+    if (channel === "matrix") {
+      return stopWithText("⚠️ Could not resolve a Matrix conversation for /focus.");
+    }
     return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
   }
 
@@ -113,6 +166,9 @@ export async function handleSubagentsFocusAction(
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
     conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
   });
   const boundBy =
     typeof existingBinding?.metadata?.boundBy === "string"
@@ -133,6 +189,23 @@ export async function handleSubagentsFocusAction(
   if (!capabilities.placements.includes(bindingContext.placement)) {
     return stopWithText(`⚠️ ${channel} bindings are unavailable for this account.`);
   }
+  if (bindingContext.channel === "matrix" && bindingContext.placement === "child") {
+    const spawnPolicy = resolveThreadBindingSpawnPolicy({
+      cfg: params.cfg,
+      channel: bindingContext.channel,
+      accountId,
+      kind: focusTarget.targetKind === "acp" ? "acp" : "subagent",
+    });
+    if (!spawnPolicy.spawnEnabled) {
+      return stopWithText(
+        `⚠️ ${formatThreadBindingSpawnDisabledError({
+          channel: spawnPolicy.channel,
+          accountId: spawnPolicy.accountId,
+          kind: focusTarget.targetKind === "acp" ? "acp" : "subagent",
+        })}`,
+      );
+    }
+  }
 
   let binding;
   try {
@@ -143,6 +216,9 @@ export async function handleSubagentsFocusAction(
         channel: bindingContext.channel,
         accountId: bindingContext.accountId,
         conversationId: bindingContext.conversationId,
+        ...(bindingContext.parentConversationId
+          ? { parentConversationId: bindingContext.parentConversationId }
+          : {}),
       },
       placement: bindingContext.placement,
       metadata: {

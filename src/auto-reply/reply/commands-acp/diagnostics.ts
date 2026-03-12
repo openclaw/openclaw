@@ -2,8 +2,10 @@ import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
-import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
-import { loadSessionStore } from "../../../config/sessions.js";
+import {
+  listAcpSessionEntries,
+  type AcpSessionStoreEntry,
+} from "../../../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -144,10 +146,10 @@ function formatAcpSessionLine(params: {
   return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
 }
 
-export function handleAcpSessionsAction(
+export async function handleAcpSessionsAction(
   params: HandleCommandsParams,
   restTokens: string[],
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   if (restTokens.length > 0) {
     return stopWithText(ACP_SESSIONS_USAGE);
   }
@@ -157,28 +159,27 @@ export function handleAcpSessionsAction(
     return stopWithText("⚠️ Missing session key.");
   }
 
-  const { storePath } = resolveSessionStorePathForAcp({
-    cfg: params.cfg,
-    sessionKey: currentSessionKey,
-  });
-
-  let store: Record<string, SessionEntry>;
+  let sessions: Awaited<ReturnType<typeof listAcpSessionEntries>>;
   try {
-    store = loadSessionStore(storePath);
+    sessions = await listAcpSessionEntries({ cfg: params.cfg });
   } catch {
-    store = {};
+    sessions = [];
   }
 
   const bindingContext = resolveAcpCommandBindingContext(params);
   const normalizedChannel = bindingContext.channel;
   const normalizedAccountId = bindingContext.accountId || undefined;
   const bindingService = getSessionBindingService();
+  const sessionsWithEntry = sessions.filter(
+    (session): session is AcpSessionStoreEntry & { entry: SessionEntry } =>
+      Boolean(session.entry?.acp),
+  );
 
-  const rows = Object.entries(store)
-    .filter(([, entry]) => Boolean(entry?.acp))
-    .toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))
+  const rows = sessionsWithEntry
+    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))
     .slice(0, 20)
-    .map(([key, entry]) => {
+    .map((session) => {
+      const key = session.sessionKey;
       const bindingThreadId = bindingService
         .listBySession(key)
         .find(
@@ -188,7 +189,7 @@ export function handleAcpSessionsAction(
         )?.conversation.conversationId;
       return formatAcpSessionLine({
         key,
-        entry,
+        entry: session.entry,
         currentSessionKey,
         threadId: bindingThreadId,
       });

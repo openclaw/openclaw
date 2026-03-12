@@ -44,9 +44,9 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   throw new Error(`Invalid channel: ${value}`);
 }
 
-async function notifyApproved(channel: PairingChannel, id: string) {
+async function notifyApproved(channel: PairingChannel, id: string, accountId?: string) {
   const cfg = loadConfig();
-  await notifyPairingApproved({ channelId: channel, id, cfg });
+  await notifyPairingApproved({ channelId: channel, id, cfg, accountId });
 }
 
 export function registerPairingCli(program: Command) {
@@ -166,8 +166,11 @@ export function registerPairingCli(program: Command) {
       if (!opts.notify) {
         return;
       }
-      await notifyApproved(channel, approved.id).catch((err) => {
-        defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
-      });
+      const approvedAccountId = String(approved.entry?.meta?.accountId ?? "").trim();
+      await notifyApproved(channel, approved.id, accountId || approvedAccountId || undefined).catch(
+        (err) => {
+          defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
+        },
+      );
     });
 }

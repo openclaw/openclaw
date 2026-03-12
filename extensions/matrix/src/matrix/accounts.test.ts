@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./accounts.js";
+import {
+  listMatrixAccountIds,
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+} from "./accounts.js";
 
 vi.mock("./credentials.js", () => ({
   loadMatrixCredentials: () => null,
@@ -79,48 +83,64 @@ describe("resolveMatrixAccount", () => {
     const account = resolveMatrixAccount({ cfg });
     expect(account.configured).toBe(true);
   });
-});
 
-describe("resolveDefaultMatrixAccountId", () => {
-  it("prefers channels.matrix.defaultAccount when it matches a configured account", () => {
+  it("normalizes and de-duplicates configured account ids", () => {
     const cfg: CoreConfig = {
       channels: {
         matrix: {
-          defaultAccount: "alerts",
+          defaultAccount: "Main Bot",
           accounts: {
-            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
-            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            "Main Bot": {
+              homeserver: "https://matrix.example.org",
+              accessToken: "main-token",
+            },
+            "main-bot": {
+              homeserver: "https://matrix.example.org",
+              accessToken: "duplicate-token",
+            },
+            OPS: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
           },
         },
       },
     };
 
-    expect(resolveDefaultMatrixAccountId(cfg)).toBe("alerts");
+    expect(listMatrixAccountIds(cfg)).toEqual(["main-bot", "ops"]);
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("main-bot");
   });
 
-  it("normalizes channels.matrix.defaultAccount before lookup", () => {
+  it("returns the only named account when no explicit default is set", () => {
     const cfg: CoreConfig = {
       channels: {
         matrix: {
-          defaultAccount: "Team Alerts",
           accounts: {
-            "team-alerts": { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
           },
         },
       },
     };
 
-    expect(resolveDefaultMatrixAccountId(cfg)).toBe("team-alerts");
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
   });
 
-  it("falls back when channels.matrix.defaultAccount is not configured", () => {
+  it('uses the synthetic "default" account when multiple named accounts need explicit selection', () => {
     const cfg: CoreConfig = {
       channels: {
         matrix: {
-          defaultAccount: "missing",
           accounts: {
-            default: { homeserver: "https://matrix.example.org", accessToken: "tok-default" },
-            alerts: { homeserver: "https://matrix.example.org", accessToken: "tok-alerts" },
+            alpha: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "alpha-token",
+            },
+            beta: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "beta-token",
+            },
           },
         },
       },

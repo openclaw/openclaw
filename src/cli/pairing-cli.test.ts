@@ -220,6 +220,50 @@ describe("pairing cli", () => {
     });
   });
 
+  it("forwards --account to approval notifications", async () => {
+    mockApprovedPairing();
+
+    await runPairing([
+      "pairing",
+      "approve",
+      "--channel",
+      "telegram",
+      "--account",
+      "yy",
+      "--notify",
+      "ABCDEFGH",
+    ]);
+
+    expect(notifyPairingApproved).toHaveBeenCalledWith({
+      channelId: "telegram",
+      id: "123",
+      cfg: {},
+      accountId: "yy",
+    });
+  });
+
+  it("uses the approved request accountId for notifications when --account is omitted", async () => {
+    approveChannelPairingCode.mockResolvedValueOnce({
+      id: "123",
+      entry: {
+        id: "123",
+        code: "ABCDEFGH",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+        meta: { accountId: "ops" },
+      },
+    });
+
+    await runPairing(["pairing", "approve", "--channel", "telegram", "--notify", "ABCDEFGH"]);
+
+    expect(notifyPairingApproved).toHaveBeenCalledWith({
+      channelId: "telegram",
+      id: "123",
+      cfg: {},
+      accountId: "ops",
+    });
+  });
+
   it("defaults approve to the sole available channel when only code is provided", async () => {
     listPairingChannels.mockReturnValueOnce(["slack"]);
     mockApprovedPairing();

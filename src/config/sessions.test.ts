@@ -134,6 +134,17 @@ describe("sessions", () => {
       ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       expected: "whatsapp:group:12345-678@g.us",
     },
+    {
+      name: "uses explicit group ids when inbound routing does not encode the group",
+      scope: "per-sender" as const,
+      ctx: {
+        From: "matrix:@alice:example.org",
+        ChatType: "channel",
+        Provider: "matrix",
+        GroupId: "!room:example.org",
+      },
+      expected: "matrix:channel:!room:example.org",
+    },
   ] as const;
 
   for (const testCase of deriveSessionKeyCases) {

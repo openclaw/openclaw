@@ -13,7 +13,6 @@ export function resolveMatrixRoomConfig(params: {
   rooms?: Record<string, MatrixRoomConfig>;
   roomId: string;
   aliases: string[];
-  name?: string | null;
 }): MatrixRoomConfigResolved {
   const rooms = params.rooms ?? {};
   const keys = Object.keys(rooms);

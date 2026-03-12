@@ -70,6 +70,8 @@ install method aligned:
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
+By default, `openclaw update` also restarts the gateway after the core and plugin update finishes. That matters for migrations that complete on startup, including the Matrix in-place upgrade flow.
+
 ## Git checkout flow
 
 Channels:
@@ -87,8 +89,17 @@ High-level:
 5. Rebases onto the selected commit (dev only).
 6. Installs deps (pnpm preferred; npm fallback).
 7. Builds + builds the Control UI.
-8. Runs `openclaw doctor` as the final “safe update” check.
+8. Runs `openclaw doctor --fix` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+
+For package-manager installs, `openclaw update` updates the package, runs a non-interactive doctor pass when possible, syncs plugins, and restarts the gateway by default.
+
+If you use `--no-restart`, startup-backed migrations do not finish until you later restart the gateway yourself. For Matrix upgrades, the recommended follow-up is:
+
+```bash
+openclaw doctor --fix
+openclaw gateway restart
+```
 
 ## `--update` shorthand
 

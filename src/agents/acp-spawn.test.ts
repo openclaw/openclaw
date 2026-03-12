@@ -963,6 +963,18 @@ describe("spawnAcpDirect", () => {
   });
 
   it("keeps inline delivery for thread-bound ACP session mode", async () => {
+    hoisted.state.cfg = {
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        telegram: {
+          threadBindings: {
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    };
+
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",

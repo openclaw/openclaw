@@ -72,7 +72,8 @@ export function deriveInboundMessageHookContext(
           : "");
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const explicitGroupId = ctx.GroupId?.trim();
+  const isGroup = Boolean(explicitGroupId || ctx.GroupSubject || ctx.GroupChannel);
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -105,9 +106,9 @@ export function deriveInboundMessageHookContext(
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
-    channelName: ctx.GroupChannel,
+    channelName: ctx.GroupChannel ?? ctx.GroupSubject,
     isGroup,
-    groupId: isGroup ? conversationId : undefined,
+    groupId: explicitGroupId ?? (isGroup ? conversationId : undefined),
   };
 }
 
@@ -144,6 +145,7 @@ export function toPluginMessageContext(
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+    groupId: canonical.groupId,
   };
 }
 
@@ -168,6 +170,7 @@ export function toPluginMessageReceivedEvent(
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      groupId: canonical.groupId,
     },
   };
 }
@@ -205,6 +208,7 @@ export function toInternalMessageReceivedContext(
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      groupId: canonical.groupId,
     },
   };
 }

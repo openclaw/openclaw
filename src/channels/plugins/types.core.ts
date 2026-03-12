@@ -273,6 +273,12 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  /**
+   * Optional direct-chat participant identifier for channels whose outbound
+   * tool targets can address either the backing conversation id or the direct
+   * participant id.
+   */
+  currentDirectUserId?: string;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**

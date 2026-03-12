@@ -71,6 +71,40 @@ export function resolveTelegramAutoThreadId(params: {
   return context.currentThreadTs;
 }
 
+function normalizeMatrixThreadTarget(raw: string): string | undefined {
+  let normalized = raw.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.toLowerCase().startsWith("matrix:")) {
+    normalized = normalized.slice("matrix:".length).trim();
+  }
+  normalized = normalized.replace(/^(room|channel|user):/i, "").trim();
+  return normalized || undefined;
+}
+
+export function resolveMatrixAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const target = normalizeMatrixThreadTarget(params.to);
+  const currentChannel = normalizeMatrixThreadTarget(context.currentChannelId);
+  if (!target || !currentChannel) {
+    return undefined;
+  }
+  // Matrix user:@ targets resolve to a DM room at send time, which can differ
+  // from the current room after DM recreation or stale m.direct ordering.
+  // Only auto-thread when the explicit room target already matches.
+  if (target.toLowerCase() !== currentChannel.toLowerCase()) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;

@@ -123,10 +123,19 @@ It runs a safe-ish update flow:
 - Requires a clean worktree.
 - Switches to the selected channel (tag or branch).
 - Fetches + rebases against the configured upstream (dev channel).
-- Installs deps, builds, builds the Control UI, and runs `openclaw doctor`.
+- Installs deps, builds, builds the Control UI, and runs `openclaw doctor --fix`.
 - Restarts the gateway by default (use `--no-restart` to skip).
 
-If you installed via **npm/pnpm** (no git metadata), `openclaw update` will try to update via your package manager. If it can’t detect the install, use “Update (global install)” instead.
+That default restart matters for migrations that complete on startup. If you skip restart, run:
+
+```bash
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+For Matrix upgrades specifically, `openclaw doctor --fix` or the next gateway startup will create or reuse a pre-migration snapshot under `~/Backups/openclaw-migrations/` before actionable Matrix state changes run. Startup is still what finishes the in-place Matrix state migration and any pending backed-up room-key restore. See [Matrix migration](/install/migrating-matrix).
+
+If you installed via **npm/pnpm** (no git metadata), `openclaw update` will try to update via your package manager, run a non-interactive doctor pass when possible, and restart the gateway by default. If it can’t detect the install, use “Update (global install)” instead.
 
 ## Update (Control UI / RPC)
 

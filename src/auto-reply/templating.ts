@@ -111,6 +111,8 @@ export type MsgContext = {
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
+  /** Stable provider-side group/channel identity when one exists (for example, a Matrix room ID). */
+  GroupId?: string;
   /** Human label for channel-like group conversations (e.g. #general, #support). */
   GroupChannel?: string;
   GroupSpace?: string;

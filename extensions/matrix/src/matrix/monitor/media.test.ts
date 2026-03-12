@@ -22,12 +22,14 @@ describe("downloadMatrixMedia", () => {
     setMatrixRuntime(runtimeStub);
   });
 
-  function makeEncryptedMediaFixture() {
+  it("decrypts encrypted media when file payloads are present", async () => {
     const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
+
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+    } as unknown as import("../sdk.js").MatrixClient;
+
     const file = {
       url: "mxc://example/file",
       key: {
@@ -41,11 +43,6 @@ describe("downloadMatrixMedia", () => {
       hashes: { sha256: "hash" },
       v: "v2",
     };
-    return { decryptMedia, client, file };
-  }
-
-  it("decrypts encrypted media when file payloads are present", async () => {
-    const { decryptMedia, client, file } = makeEncryptedMediaFixture();
 
     const result = await downloadMatrixMedia({
       client,
@@ -55,8 +52,10 @@ describe("downloadMatrixMedia", () => {
       file,
     });
 
-    // decryptMedia should be called with just the file object (it handles download internally)
-    expect(decryptMedia).toHaveBeenCalledWith(file);
+    expect(decryptMedia).toHaveBeenCalledWith(file, {
+      maxBytes: 1024,
+      readIdleTimeoutMs: 30_000,
+    });
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("decrypted"),
       "image/png",
@@ -67,7 +66,26 @@ describe("downloadMatrixMedia", () => {
   });
 
   it("rejects encrypted media that exceeds maxBytes before decrypting", async () => {
-    const { decryptMedia, client, file } = makeEncryptedMediaFixture();
+    const decryptMedia = vi.fn().mockResolvedValue(Buffer.from("decrypted"));
+
+    const client = {
+      crypto: { decryptMedia },
+      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
+    } as unknown as import("../sdk.js").MatrixClient;
+
+    const file = {
+      url: "mxc://example/file",
+      key: {
+        kty: "oct",
+        key_ops: ["encrypt", "decrypt"],
+        alg: "A256CTR",
+        k: "secret",
+        ext: true,
+      },
+      iv: "iv",
+      hashes: { sha256: "hash" },
+      v: "v2",
+    };
 
     await expect(
       downloadMatrixMedia({
@@ -82,5 +100,25 @@ describe("downloadMatrixMedia", () => {
 
     expect(decryptMedia).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes byte limits through plain media downloads", async () => {
+    const downloadContent = vi.fn().mockResolvedValue(Buffer.from("plain"));
+
+    const client = {
+      downloadContent,
+    } as unknown as import("../sdk.js").MatrixClient;
+
+    await downloadMatrixMedia({
+      client,
+      mxcUrl: "mxc://example/file",
+      contentType: "image/png",
+      maxBytes: 4096,
+    });
+
+    expect(downloadContent).toHaveBeenCalledWith("mxc://example/file", {
+      maxBytes: 4096,
+      readIdleTimeoutMs: 30_000,
+    });
   });
 });

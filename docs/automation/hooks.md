@@ -232,6 +232,7 @@ Each event includes:
     to?: string,               // message:sent
     content?: string,
     channelId?: string,
+    groupId?: string,          // message:received/message:sent group correlation
     success?: boolean,         // message:sent
   }
 }
@@ -289,6 +290,7 @@ Message events include rich context about the message:
   channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
   accountId?: string,     // Provider account ID for multi-account setups
   conversationId?: string, // Chat/conversation ID
+  groupId?: string,       // Stable group/channel identifier when applicable
   messageId?: string,     // Message ID from the provider
   metadata?: {            // Additional provider-specific data
     to?: string,
@@ -299,6 +301,7 @@ Message events include rich context about the message:
     senderName?: string,
     senderUsername?: string,
     senderE164?: string,
+    groupId?: string,
   }
 }
 

@@ -51,6 +51,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "kick",
   "ban",
   "set-presence",
+  "set-profile",
   "download-file",
 ] as const;
 

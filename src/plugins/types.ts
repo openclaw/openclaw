@@ -560,6 +560,7 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  groupId?: string;
 };
 
 // message_received hook

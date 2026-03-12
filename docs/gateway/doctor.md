@@ -178,6 +178,11 @@ Doctor only auto-migrates `notify: true` jobs when it can do so without
 changing behavior. If a job combines legacy notify fallback with an existing
 non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
+Matrix upgrades use the same repair flow. When `openclaw doctor --fix` has actionable
+Matrix migration work, it creates or reuses a pre-migration snapshot under
+`~/Backups/openclaw-migrations/` before mutating Matrix state. If that snapshot
+step fails, doctor warns and skips the Matrix migration changes for that run.
+
 ### 4) State integrity checks (session persistence, routing, and safety)
 
 The state directory is the operational brainstem. If it vanishes, you lose

@@ -9,6 +9,7 @@ import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mock
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
@@ -17,6 +18,7 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingUnbindMock = vi.fn();
   return {
     callGatewayMock,
+    listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
@@ -29,6 +31,8 @@ const hoisted = vi.hoisted(() => {
 function buildFocusSessionBindingService() {
   return {
     touch: vi.fn(),
+    setIdleTimeoutBySession: vi.fn(async () => []),
+    setMaxAgeBySession: vi.fn(async () => []),
     listBySession(targetSessionKey: string) {
       return hoisted.sessionBindingListBySessionMock(targetSessionKey);
     },
@@ -55,6 +59,7 @@ vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../acp/runtime/session-meta.js")>();
   return {
     ...actual,
+    listAcpSessionEntries: (params: unknown) => hoisted.listAcpSessionEntriesMock(params),
     readAcpSessionEntry: (params: unknown) => hoisted.readAcpSessionEntryMock(params),
   };
 });
@@ -98,6 +103,19 @@ function createTelegramTopicCommandParams(commandBody: string) {
     OriginatingTo: "-100200300:topic:77",
     AccountId: "default",
     MessageThreadId: "77",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+function createMatrixCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "matrix",
+    Surface: "matrix",
+    OriginatingChannel: "matrix",
+    OriginatingTo: "room:!room:example",
+    To: "room:!room:example",
+    AccountId: "default",
   });
   params.command.senderId = "user-1";
   return params;
@@ -173,6 +191,7 @@ describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
+    hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
@@ -218,6 +237,104 @@ describe("/focus, /unfocus, /agents", () => {
         }),
       }),
     );
+  });
+
+  it("/focus creates Matrix child thread bindings from top-level rooms", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            spawnAcpSessions: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const result = await focusCodexAcp(createMatrixCommandParams("/focus codex-acp", cfg));
+
+    expect(result?.reply?.text).toContain("created thread");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          conversationId: "!room:example",
+          parentConversationId: "!room:example",
+        }),
+      }),
+    );
+  });
+
+  it("/focus resolves ACP session key shorthand from the ACP key suffix", async () => {
+    hoisted.callGatewayMock.mockRejectedValue(new Error("not found"));
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(null);
+    hoisted.sessionBindingBindMock.mockImplementation(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { channel: string; accountId: string; conversationId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBindingRecord({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: input.conversation.channel,
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1",
+          },
+        }),
+    );
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([
+      {
+        cfg: baseCfg,
+        storePath: "/tmp/agents/codex/sessions.json",
+        sessionKey: "agent:codex:acp:982649c1-143b-40e4-9bb8-d90ae83f174f",
+        storeSessionKey: "agent:codex:acp:982649c1-143b-40e4-9bb8-d90ae83f174f",
+        entry: {
+          sessionId: "session-random-id",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "runtime-1",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      },
+    ]);
+
+    const result = await handleSubagentsCommand(
+      createDiscordCommandParams("/focus acp:982649c1-143b-40e4-9bb8-d90ae83f174f"),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("bound this thread");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: "agent:codex:acp:982649c1-143b-40e4-9bb8-d90ae83f174f",
+      }),
+    );
+  });
+
+  it("/focus rejects Matrix child thread creation when spawn config is not enabled", async () => {
+    const result = await focusCodexAcp(createMatrixCommandParams("/focus codex-acp"));
+
+    expect(result?.reply?.text).toContain("channels.matrix.threadBindings.spawnAcpSessions=true");
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("/focus includes ACP session identifiers in intro text when available", async () => {
@@ -401,6 +518,6 @@ describe("/focus, /unfocus, /agents", () => {
   it("/focus rejects unsupported channels", async () => {
     const params = buildCommandTestParams("/focus codex-acp", baseCfg);
     const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
+    expect(result?.reply?.text).toContain("only available on Discord, Matrix, and Telegram");
   });
 });

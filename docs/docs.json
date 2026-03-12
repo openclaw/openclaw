@@ -870,7 +870,12 @@
               },
               {
                 "group": "Maintenance",
-                "pages": ["install/updating", "install/migrating", "install/uninstall"]
+                "pages": [
+                  "install/updating",
+                  "install/migrating",
+                  "install/migrating-matrix",
+                  "install/uninstall"
+                ]
               },
               {
                 "group": "Hosting and deployment",

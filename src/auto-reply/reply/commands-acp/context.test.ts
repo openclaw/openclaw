@@ -126,4 +126,24 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
+
+  it("resolves Matrix thread conversation ids from room targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "matrix",
+      Surface: "matrix",
+      OriginatingChannel: "matrix",
+      OriginatingTo: "room:!room:example",
+      MessageThreadId: "$thread-42",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "matrix",
+      accountId: "work",
+      threadId: "$thread-42",
+      conversationId: "$thread-42",
+      parentConversationId: "!room:example",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("$thread-42");
+  });
 });

@@ -131,9 +131,13 @@ async function bindSpawnedAcpSessionToThread(params: {
     ((requiresThreadIdForHere && !currentThreadId) ||
       (!requiresThreadIdForHere && !currentConversationId))
   ) {
+    const hereError =
+      channel === "matrix"
+        ? "--thread here requires running /acp spawn inside an existing Matrix thread. In a top-level Matrix room or DM, use --thread auto to create and bind a new thread."
+        : `--thread here requires running /acp spawn inside an active ${channel} thread/conversation.`;
     return {
       ok: false,
-      error: `--thread here requires running /acp spawn inside an active ${channel} thread/conversation.`,
+      error: hereError,
     };
   }
 
@@ -157,6 +161,9 @@ async function bindSpawnedAcpSessionToThread(params: {
       channel: spawnPolicy.channel,
       accountId: spawnPolicy.accountId,
       conversationId: currentConversationId,
+      ...(bindingContext.parentConversationId
+        ? { parentConversationId: bindingContext.parentConversationId }
+        : {}),
     });
     const boundBy =
       typeof existingBinding?.metadata?.boundBy === "string"
@@ -181,6 +188,9 @@ async function bindSpawnedAcpSessionToThread(params: {
         channel: spawnPolicy.channel,
         accountId: spawnPolicy.accountId,
         conversationId,
+        ...(bindingContext.parentConversationId
+          ? { parentConversationId: bindingContext.parentConversationId }
+          : {}),
       },
       placement,
       metadata: {

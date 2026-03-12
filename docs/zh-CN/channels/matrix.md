@@ -164,7 +164,8 @@ E2EE 配置（启用端到端加密）：
 - 每个房间的 `users` 允许列表可以进一步限制特定房间内的发送者（需完整 Matrix 用户 ID）。
 - 配置向导会提示输入房间允许列表（房间 ID、别名或名称），仅在精确且唯一匹配时解析名称。
 - 启动时，OpenClaw 将允许列表中的房间/用户名称解析为 ID 并记录映射；未解析的条目不会参与允许列表匹配。
-- 默认自动加入邀请；使用 `channels.matrix.autoJoin` 和 `channels.matrix.autoJoinAllowlist` 控制。
+- 运行时的房间/会话标识使用稳定的 Matrix 房间 ID。房间自行声明的别名只作为查找输入，不作为长期会话键或稳定的群组标识。
+- 默认**不**自动加入邀请；使用 `channels.matrix.autoJoin` 和 `channels.matrix.autoJoinAllowlist` 控制。
 - 要**禁止所有房间**，设置 `channels.matrix.groupPolicy: "disabled"`（或保持空的允许列表）。
 - 旧版键名：`channels.matrix.rooms`（与 `groups` 相同的结构）。
 
@@ -212,10 +213,10 @@ E2EE 配置（启用端到端加密）：
 - `channels.matrix.groupPolicy`：`allowlist | open | disabled`（默认：allowlist）。
 - `channels.matrix.groupAllowFrom`：群组消息的允许发送者列表（需完整 Matrix 用户 ID）。
 - `channels.matrix.allowlistOnly`：强制私信 + 房间使用允许列表规则。
-- `channels.matrix.groups`：群组允许列表 + 每个房间的设置映射。
+- `channels.matrix.groups`：群组允许列表 + 每个房间的设置映射。运行时解析后，会话/群组身份使用稳定的房间 ID，而人类可读标签仍来自房间名称。
 - `channels.matrix.rooms`：旧版群组允许列表/配置。
 - `channels.matrix.replyToMode`：话题/标签的 reply-to 模式。
 - `channels.matrix.mediaMaxMb`：入站/出站媒体上限（MB）。
-- `channels.matrix.autoJoin`：邀请处理（`always | allowlist | off`，默认：always）。
-- `channels.matrix.autoJoinAllowlist`：自动加入的允许房间 ID/别名。
+- `channels.matrix.autoJoin`：邀请处理（`always | allowlist | off`，默认：off）。
+- `channels.matrix.autoJoinAllowlist`：自动加入的允许房间 ID/别名。邀请处理时会先把别名解析为房间 ID；OpenClaw 不会信任被邀请房间自行声明的别名状态。
 - `channels.matrix.actions`：每个操作的工具限制（reactions/messages/pins/memberInfo/channelInfo）。

@@ -11,17 +11,16 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   SessionEntry,
   loadSessionStore as loadSessionStoreFn,
   resolveStorePath as resolveStorePathFn,
 } from "../../../config/sessions.js";
 import { parseDiscordTarget } from "../../../discord/targets.js";
-import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   formatDurationCompact,
@@ -30,12 +29,18 @@ import {
 } from "../../../shared/subagents-format.js";
 import {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
 } from "../channel-context.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
+import {
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
+} from "../matrix-context.ts";
+import { resolveSessionKeyByReference } from "../session-target-resolution.js";
 import {
   formatRunLabel,
   formatRunStatus,
@@ -47,10 +52,13 @@ import { resolveTelegramConversationId } from "../telegram-context.js";
 export { extractAssistantText, stripToolMessages };
 export {
   isDiscordSurface,
+  isMatrixSurface,
   isTelegramSurface,
   resolveCommandSurfaceChannel,
   resolveDiscordAccountId,
   resolveChannelAccountId,
+  resolveMatrixConversationId,
+  resolveMatrixParentConversationId,
   resolveTelegramConversationId,
 };
 
@@ -348,6 +356,7 @@ export function resolveDiscordChannelIdForFocus(
 }
 
 export async function resolveFocusTargetSession(params: {
+  cfg: OpenClawConfig;
   runs: SubagentRunRecord[];
   token: string;
 }): Promise<FocusTargetResolution | null> {
@@ -368,33 +377,18 @@ export async function resolveFocusTargetSession(params: {
     return null;
   }
 
-  const attempts: Array<Record<string, string>> = [];
-  attempts.push({ key: token });
-  if (looksLikeSessionId(token)) {
-    attempts.push({ sessionId: token });
-  }
-  attempts.push({ label: token });
-
-  for (const attempt of attempts) {
-    try {
-      const resolved = await callGateway<{ key?: string }>({
-        method: "sessions.resolve",
-        params: attempt,
-      });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
-      if (!key) {
-        continue;
-      }
-      const parsed = parseAgentSessionKey(key);
-      return {
-        targetKind: key.includes(":subagent:") ? "subagent" : "acp",
-        targetSessionKey: key,
-        agentId: parsed?.agentId ?? "main",
-        label: token,
-      };
-    } catch {
-      // Try the next resolution strategy.
-    }
+  const key = await resolveSessionKeyByReference({
+    cfg: params.cfg,
+    token,
+  });
+  if (key) {
+    const parsed = parseAgentSessionKey(key);
+    return {
+      targetKind: key.includes(":subagent:") ? "subagent" : "acp",
+      targetSessionKey: key,
+      agentId: parsed?.agentId ?? "main",
+      label: token,
+    };
   }
   return null;
 }

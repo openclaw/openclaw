@@ -21,7 +21,7 @@ import {
 
 function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "discord" || normalized === "telegram") {
+  if (normalized === "discord" || normalized === "matrix" || normalized === "telegram") {
     return normalized;
   }
   return null;
@@ -146,10 +146,10 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
     if (!targetConversationId) {
       continue;
     }
-    if (channel === "discord") {
+    if (channel === "discord" || channel === "matrix") {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
-        channel: "discord",
+        channel,
         accountId: parsedSessionKey.accountId,
         conversationId: targetConversationId,
         binding,
@@ -205,14 +205,14 @@ export function resolveConfiguredAcpBindingRecord(params: {
     return null;
   }
 
-  if (channel === "discord") {
+  if (channel === "discord" || channel === "matrix") {
     const bindings = listAcpBindings(params.cfg);
-    const resolveDiscordBindingForConversation = (
+    const resolveChannelBindingForConversation = (
       targetConversationId: string,
     ): ResolvedConfiguredAcpBinding | null => {
       let wildcardMatch: AgentAcpBinding | null = null;
       for (const binding of bindings) {
-        if (normalizeBindingChannel(binding.match.channel) !== "discord") {
+        if (normalizeBindingChannel(binding.match.channel) !== channel) {
           continue;
         }
         const accountMatchPriority = resolveAccountMatchPriority(
@@ -229,9 +229,10 @@ export function resolveConfiguredAcpBindingRecord(params: {
         if (accountMatchPriority === 2) {
           const spec = toConfiguredBindingSpec({
             cfg: params.cfg,
-            channel: "discord",
+            channel,
             accountId,
             conversationId: targetConversationId,
+            parentConversationId,
             binding,
           });
           return {
@@ -246,9 +247,10 @@ export function resolveConfiguredAcpBindingRecord(params: {
       if (wildcardMatch) {
         const spec = toConfiguredBindingSpec({
           cfg: params.cfg,
-          channel: "discord",
+          channel,
           accountId,
           conversationId: targetConversationId,
+          parentConversationId,
           binding: wildcardMatch,
         });
         return {
@@ -259,12 +261,12 @@ export function resolveConfiguredAcpBindingRecord(params: {
       return null;
     };
 
-    const directMatch = resolveDiscordBindingForConversation(conversationId);
+    const directMatch = resolveChannelBindingForConversation(conversationId);
     if (directMatch) {
       return directMatch;
     }
     if (parentConversationId && parentConversationId !== conversationId) {
-      const inheritedMatch = resolveDiscordBindingForConversation(parentConversationId);
+      const inheritedMatch = resolveChannelBindingForConversation(parentConversationId);
       if (inheritedMatch) {
         return inheritedMatch;
       }

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { createJiti } from "jiti";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -196,6 +198,100 @@ describe("session binding service", () => {
       bindSupported: false,
       unbindSupported: false,
       placements: [],
+    });
+  });
+
+  it("shares adapter registrations across native ESM and Jiti loader paths", () => {
+    const serviceModulePath = path.join(
+      process.cwd(),
+      "src/infra/outbound/session-binding-service.ts",
+    );
+    const jiti = createJiti(import.meta.url, {
+      interopDefault: true,
+      extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json"],
+    });
+    const viaJiti = jiti(serviceModulePath) as typeof import("./session-binding-service.js");
+
+    viaJiti.registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "default",
+      capabilities: {
+        placements: ["current", "child"],
+      },
+      bind: async (input) => createRecord(input),
+      listBySession: () => [],
+      resolveByConversation: () => null,
+    });
+
+    expect(
+      getSessionBindingService().getCapabilities({ channel: "matrix", accountId: "default" }),
+    ).toEqual({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: false,
+      placements: ["current", "child"],
+    });
+  });
+
+  it("routes lifecycle updates through the channel/account adapter", async () => {
+    const setIdleTimeoutBySession = vi.fn(() => [
+      {
+        bindingId: "default:thread-1",
+        targetSessionKey: "agent:main:subagent:child-1",
+        targetKind: "subagent" as const,
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "thread-1",
+        },
+        status: "active" as const,
+        boundAt: 1,
+      },
+    ]);
+    const setMaxAgeBySession = vi.fn(() => [
+      {
+        bindingId: "default:thread-1",
+        targetSessionKey: "agent:main:subagent:child-1",
+        targetKind: "subagent" as const,
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "thread-1",
+        },
+        status: "active" as const,
+        boundAt: 1,
+      },
+    ]);
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => null,
+      setIdleTimeoutBySession,
+      setMaxAgeBySession,
+    });
+
+    const service = getSessionBindingService();
+    await service.setIdleTimeoutBySession({
+      channel: "discord",
+      accountId: "default",
+      targetSessionKey: " agent:main:subagent:child-1 ",
+      idleTimeoutMs: 3_601_999,
+    });
+    await service.setMaxAgeBySession({
+      channel: "discord",
+      accountId: "default",
+      targetSessionKey: " agent:main:subagent:child-1 ",
+      maxAgeMs: 7_202_999,
+    });
+
+    expect(setIdleTimeoutBySession).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:child-1",
+      idleTimeoutMs: 3601999,
+    });
+    expect(setMaxAgeBySession).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:child-1",
+      maxAgeMs: 7202999,
     });
   });
 });

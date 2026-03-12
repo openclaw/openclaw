@@ -23,6 +23,9 @@ export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   ) {
     return true;
   }
+  if (warning.message?.includes("`--localstorage-file` was provided without a valid path")) {
+    return true;
+  }
   return false;
 }
 

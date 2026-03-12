@@ -96,6 +96,25 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
+describe("legacy migrate Matrix config", () => {
+  it("removes the obsolete channels.matrix.register toggle", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        matrix: {
+          register: false,
+          homeserver: "https://matrix.example.org",
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed obsolete channels.matrix.register.");
+    expect(
+      (res.config?.channels?.matrix as { register?: unknown } | undefined)?.register,
+    ).toBeUndefined();
+    expect(res.config?.channels?.matrix?.homeserver).toBe("https://matrix.example.org");
+  });
+});
+
 describe("legacy migrate heartbeat config", () => {
   it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
     const res = migrateLegacyConfig({

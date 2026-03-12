@@ -73,6 +73,7 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       conversationId: "telegram:chat:456",
+      groupId: "telegram:chat:456",
     });
     expect(toPluginMessageReceivedEvent(canonical)).toEqual({
       from: "telegram:user:123",
@@ -97,6 +98,35 @@ describe("message hook mappers", () => {
         senderE164: "+15551234567",
       }),
     });
+  });
+
+  it("prefers explicit group ids and preserves human-readable channel names", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        To: "room:!room:example.org",
+        OriginatingTo: "room:!room:example.org",
+        GroupId: "!room:example.org",
+        GroupChannel: undefined,
+        GroupSubject: "Ops Room",
+      }),
+    );
+
+    expect(canonical.groupId).toBe("!room:example.org");
+    expect(canonical.channelName).toBe("Ops Room");
+    expect(toPluginMessageContext(canonical)).toEqual({
+      channelId: "telegram",
+      accountId: "acc-1",
+      conversationId: "room:!room:example.org",
+      groupId: "!room:example.org",
+    });
+    expect(toPluginMessageReceivedEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          channelName: "Ops Room",
+          groupId: "!room:example.org",
+        }),
+      }),
+    );
   });
 
   it("maps transcribed and preprocessed internal payloads", () => {
@@ -131,6 +161,7 @@ describe("message hook mappers", () => {
       channelId: "telegram",
       accountId: "acc-1",
       conversationId: "telegram:chat:456",
+      groupId: "telegram:chat:456",
     });
     expect(toPluginMessageSentEvent(canonical)).toEqual({
       to: "telegram:chat:456",

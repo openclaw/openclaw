@@ -2,6 +2,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
+export const MATRIX_THREAD_BINDING_CHANNEL = "matrix";
+export const TELEGRAM_THREAD_BINDING_CHANNEL = "telegram";
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
@@ -106,6 +108,22 @@ function resolveSpawnFlagKey(
   return kind === "subagent" ? "spawnSubagentSessions" : "spawnAcpSessions";
 }
 
+function resolveSpawnConfigPath(params: {
+  channel: string;
+  kind: ThreadBindingSpawnKind;
+}): string | undefined {
+  const suffix =
+    params.kind === "subagent" ? "spawnSubagentSessions=true" : "spawnAcpSessions=true";
+  if (
+    params.channel === DISCORD_THREAD_BINDING_CHANNEL ||
+    params.channel === MATRIX_THREAD_BINDING_CHANNEL ||
+    params.channel === TELEGRAM_THREAD_BINDING_CHANNEL
+  ) {
+    return `channels.${params.channel}.threadBindings.${suffix}`;
+  }
+  return undefined;
+}
+
 export function resolveThreadBindingSpawnPolicy(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -127,8 +145,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  // Non-Discord channels currently have no dedicated spawn gate config keys.
-  const spawnEnabled = spawnEnabledRaw ?? channel !== DISCORD_THREAD_BINDING_CHANNEL;
+  const spawnEnabled = spawnEnabledRaw ?? false;
   return {
     channel,
     accountId,
@@ -191,11 +208,21 @@ export function formatThreadBindingSpawnDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Discord thread-bound ACP spawns are disabled for this account (set channels.discord.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
+  const configPath = resolveSpawnConfigPath({
+    channel: params.channel,
+    kind: params.kind,
+  });
+  const label =
+    params.channel === DISCORD_THREAD_BINDING_CHANNEL
+      ? "Discord"
+      : params.channel === MATRIX_THREAD_BINDING_CHANNEL
+        ? "Matrix"
+        : params.channel === TELEGRAM_THREAD_BINDING_CHANNEL
+          ? "Telegram"
+          : params.channel;
+  if (configPath) {
+    const noun = params.kind === "acp" ? "ACP" : "subagent";
+    return `${label} thread-bound ${noun} spawns are disabled for this account (set ${configPath} to enable).`;
   }
   return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
 }

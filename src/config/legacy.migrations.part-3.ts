@@ -98,6 +98,19 @@ function mergeLegacyIntoDefaults(params: {
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   {
+    id: "channels.matrix.register-remove",
+    describe: "Remove obsolete Matrix registration toggle",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      const matrix = getRecord(channels?.matrix);
+      if (!matrix || !("register" in matrix)) {
+        return;
+      }
+      delete matrix.register;
+      changes.push("Removed obsolete channels.matrix.register.");
+    },
+  },
+  {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated
     // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade

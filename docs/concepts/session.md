@@ -305,6 +305,10 @@ Each session entry records where it came from (best-effort) in `origin`:
   connector only updates delivery routing (for example, to keep a DM main session
   fresh), it should still provide inbound context so the session keeps its
   explainer metadata. Extensions can do this by sending `ConversationLabel`,
-  `GroupSubject`, `GroupChannel`, `GroupSpace`, and `SenderName` in the inbound
-  context and calling `recordSessionMetaFromInbound` (or passing the same context
-  to `updateLastRoute`).
+  `GroupSubject`, `GroupId`, `GroupChannel`, `GroupSpace`, and `SenderName` in
+  the inbound context and calling `recordSessionMetaFromInbound` (or passing the
+  same context to `updateLastRoute`).
+  `GroupId` should carry the stable provider-side group/channel identity when one
+  exists. `GroupChannel` remains the human-readable channel label. For example,
+  Matrix now uses the room ID in `GroupId` and keeps room labels separate from
+  that stable identity.
