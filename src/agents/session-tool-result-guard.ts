@@ -24,12 +24,6 @@ const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
 
-const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
-
-type SessionManagerWithRawAppend = SessionManager & {
-  [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
-};
-
 /**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
@@ -81,16 +75,6 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
-/**
- * Return the unguarded appendMessage implementation for a session manager.
- */
-export function getRawSessionAppendMessage(
-  sessionManager: SessionManager,
-): SessionManager["appendMessage"] {
-  const rawAppend = (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE];
-  return rawAppend ?? sessionManager.appendMessage.bind(sessionManager);
-}
-
 /** Redact options resolved once at guard installation time. */
 type ResolvedRedactOptions = { mode?: RedactSensitiveMode; patterns?: string[] };
 
@@ -104,19 +88,62 @@ function redactTextBlocks(
 ): { changed: boolean; content: unknown[] } {
   let changed = false;
   const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+    if (!block || typeof block !== "object") {
       return block;
     }
-    const textBlock = block as TextContent;
-    if (typeof textBlock.text !== "string" || !textBlock.text) {
-      return block;
+    const blockType = (block as { type?: string }).type;
+
+    // Redact text blocks.
+    if (blockType === "text") {
+      const textBlock = block as TextContent;
+      if (typeof textBlock.text !== "string" || !textBlock.text) {
+        return block;
+      }
+      const redacted = redactSensitiveText(textBlock.text, options);
+      if (redacted === textBlock.text) {
+        return block;
+      }
+      changed = true;
+      return { ...textBlock, text: redacted };
     }
-    const redacted = redactSensitiveText(textBlock.text, options);
-    if (redacted === textBlock.text) {
-      return block;
+
+    // Redact toolCall / toolUse argument values.
+    // Arguments are an object whose string values may contain secrets (e.g. Bearer tokens
+    // in curl commands). We redact string values at the persistence boundary only —
+    // the in-memory representation used for execution is never touched.
+    if (blockType === "toolCall" || blockType === "toolUse") {
+      const toolBlock = block as Record<string, unknown>;
+      const argsKey =
+        "arguments" in toolBlock ? "arguments" : "input" in toolBlock ? "input" : undefined;
+      if (!argsKey) {
+        return block;
+      }
+      const args = toolBlock[argsKey];
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        return block;
+      }
+      const argsObj = args as Record<string, unknown>;
+      let argsChanged = false;
+      const redactedArgs: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(argsObj)) {
+        if (typeof v === "string" && v) {
+          const rv = redactSensitiveText(v, options);
+          if (rv !== v) {
+            redactedArgs[k] = rv;
+            argsChanged = true;
+            continue;
+          }
+        }
+        redactedArgs[k] = v;
+      }
+      if (!argsChanged) {
+        return block;
+      }
+      changed = true;
+      return { ...toolBlock, [argsKey]: redactedArgs };
     }
-    changed = true;
-    return { ...textBlock, text: redacted };
+
+    return block;
   });
   return { changed, content: newContent };
 }
@@ -188,8 +215,6 @@ export function redactEntryForPersistence(
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
-    /** Optional session key for transcript update broadcasts. */
-    sessionKey?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -226,8 +251,7 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   getPendingIds: () => string[];
 } {
-  const originalAppend = getRawSessionAppendMessage(sessionManager);
-  (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE] = originalAppend;
+  const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
@@ -445,12 +469,7 @@ export function installSessionToolResultGuard(
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
     if (sessionFile) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        message: finalMessage,
-        messageId: typeof result === "string" ? result : undefined,
-      });
+      emitSessionTranscriptUpdate(sessionFile);
     }
 
     if (toolCalls.length > 0) {

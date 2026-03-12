@@ -216,6 +216,97 @@ describe("redactEntryForPersistence", () => {
     // Should return the same reference when nothing changed
     expect(result).toBe(entry);
   });
+
+  it("redacts secrets in toolCall arguments at persistence boundary", () => {
+    const bearerToken = "xoxb-toolcall-bearer-secret-abcdefghij12345";
+    const entry = {
+      type: "message" as const,
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_01",
+            name: "exec",
+            arguments: {
+              command: `curl -H "Authorization: Bearer ${bearerToken}" https://api.example.com`,
+            },
+          },
+        ],
+      },
+    };
+    const redacted = redactEntryForPersistence(entry as never);
+    const block = (
+      redacted as {
+        message: { content: Array<{ arguments: { command: string } }> };
+      }
+    ).message.content[0];
+    expect(block.arguments.command).not.toContain(bearerToken);
+    // Original entry must be untouched — execution path depends on it
+    expect(
+      (entry.message.content[0] as { arguments: { command: string } }).arguments.command,
+    ).toContain(bearerToken);
+  });
+
+  it("redacts secrets in toolUse input at persistence boundary", () => {
+    const apiKey = "sk-ant-tooluse-secret-key-abcdefghijklmnopqrstuvwxyz";
+    const entry = {
+      type: "message" as const,
+      id: "m2",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "toolu_02",
+            name: "exec",
+            input: {
+              command: `export API_KEY=${apiKey}`,
+            },
+          },
+        ],
+      },
+    };
+    const redacted = redactEntryForPersistence(entry as never);
+    const block = (
+      redacted as {
+        message: { content: Array<{ input: { command: string } }> };
+      }
+    ).message.content[0];
+    expect(block.input.command).not.toContain(apiKey);
+    // Original entry must be untouched
+    expect((entry.message.content[0] as { input: { command: string } }).input.command).toContain(
+      apiKey,
+    );
+  });
+
+  it("does not modify toolCall entry when arguments contain no secrets", () => {
+    const entry = {
+      type: "message" as const,
+      id: "m3",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_03",
+            name: "read",
+            arguments: { file_path: "/home/user/workspace/README.md" },
+          },
+        ],
+      },
+    };
+    const result = redactEntryForPersistence(entry as never);
+    // Should return the same reference when nothing changed
+    expect(result).toBe(entry);
+  });
 });
 
 describe("installSessionToolResultGuard", () => {
