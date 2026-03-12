@@ -837,7 +837,8 @@ export async function startGatewayServer(
     hasExecApprovalClients: (params) => {
       const excludedConnIds = params?.excludeConnIds;
       for (const gatewayClient of clients) {
-        if (excludedConnIds?.has(gatewayClient.connId)) {
+        const connId = gatewayClient.connId;
+        if (excludedConnIds && typeof connId === "string" && excludedConnIds.has(connId)) {
           continue;
         }
         const role = gatewayClient.connect.role ?? "operator";
