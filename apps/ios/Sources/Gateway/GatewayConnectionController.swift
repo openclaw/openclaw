@@ -101,6 +101,7 @@ final class GatewayConnectionController {
             return "Missing instanceId (node.instanceId). Try restarting the app."
         }
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
@@ -151,6 +152,7 @@ final class GatewayConnectionController {
             gatewayStableID: stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
         return nil
     }
@@ -163,6 +165,7 @@ final class GatewayConnectionController {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
@@ -203,6 +206,7 @@ final class GatewayConnectionController {
             gatewayStableID: stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
     }
 
@@ -229,6 +233,7 @@ final class GatewayConnectionController {
             stableID: cfg.stableID,
             tls: cfg.tls,
             token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
         appModel.applyGatewayConnectConfig(refreshedConfig)
@@ -261,6 +266,7 @@ final class GatewayConnectionController {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let tlsParams = GatewayTLSParams(
             required: true,
@@ -274,6 +280,7 @@ final class GatewayConnectionController {
             gatewayStableID: pending.stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
     }
 
@@ -319,6 +326,7 @@ final class GatewayConnectionController {
         guard !instanceId.isEmpty else { return }
 
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         if manualEnabled {
@@ -353,6 +361,7 @@ final class GatewayConnectionController {
                 gatewayStableID: stableID,
                 tls: tlsParams,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password)
             return
         }
@@ -379,6 +388,7 @@ final class GatewayConnectionController {
                     gatewayStableID: stableID,
                     tls: tlsParams,
                     token: token,
+                    bootstrapToken: bootstrapToken,
                     password: password)
                 return
             }
@@ -448,6 +458,7 @@ final class GatewayConnectionController {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
+        bootstrapToken: String?,
         password: String?)
     {
         guard let appModel else { return }
@@ -463,6 +474,7 @@ final class GatewayConnectionController {
                 stableID: gatewayStableID,
                 tls: tls,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password,
                 nodeOptions: connectOptions)
             appModel.applyGatewayConnectConfig(cfg)

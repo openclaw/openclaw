@@ -767,11 +767,21 @@ struct SettingsTab: View {
         }
 
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBootstrapToken =
+            payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedInstanceId.isEmpty {
+            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+        }
         if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
             self.gatewayToken = trimmedToken
             if !trimmedInstanceId.isEmpty {
                 GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
+            }
+        } else if !trimmedBootstrapToken.isEmpty {
+            self.gatewayToken = ""
+            if !trimmedInstanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
             }
         }
         if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -779,6 +789,11 @@ struct SettingsTab: View {
             self.gatewayPassword = trimmedPassword
             if !trimmedInstanceId.isEmpty {
                 GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
+            }
+        } else if !trimmedBootstrapToken.isEmpty {
+            self.gatewayPassword = ""
+            if !trimmedInstanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
             }
         }
 

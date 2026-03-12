@@ -77,6 +77,7 @@ final class MacNodeModeCoordinator {
                 try await self.session.connect(
                     url: config.url,
                     token: config.token,
+                    bootstrapToken: nil,
                     password: config.password,
                     connectOptions: connectOptions,
                     sessionBox: sessionBox,
