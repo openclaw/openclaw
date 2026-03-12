@@ -1,35 +1,68 @@
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import { lookupContextTokens } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveCompactionReserveTokensFloor } from "../../agents/pi-settings.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { formatTokenCount } from "../../utils/usage-format.js";
 
-function resolveEffectiveContextWindowTokens(params: {
+function resolveConfiguredModelContextWindow(params: {
   cfg: OpenClawConfig;
-  provider: string;
   model: string;
 }): number | undefined {
-  const resolved = resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-  });
-  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+  const providers = params.cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
     return undefined;
   }
 
-  const modelContextTokens = Math.floor(resolved);
+  let smallest: number | undefined;
+  for (const providerConfig of Object.values(providers)) {
+    const models = providerConfig?.models;
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    for (const modelConfig of models) {
+      if (
+        modelConfig?.id !== params.model ||
+        typeof modelConfig.contextWindow !== "number" ||
+        !Number.isFinite(modelConfig.contextWindow) ||
+        modelConfig.contextWindow <= 0
+      ) {
+        continue;
+      }
+      const contextWindow = Math.floor(modelConfig.contextWindow);
+      if (smallest === undefined || contextWindow < smallest) {
+        smallest = contextWindow;
+      }
+    }
+  }
+  return smallest;
+}
+
+function resolveEffectiveContextWindowTokens(params: {
+  cfg: OpenClawConfig;
+  model: string;
+}): number | undefined {
+  const cachedWindow = lookupContextTokens(params.model);
+  const configuredWindow = resolveConfiguredModelContextWindow(params);
+  const rawContextWindow =
+    (typeof cachedWindow === "number" && Number.isFinite(cachedWindow) && cachedWindow > 0
+      ? cachedWindow
+      : undefined) ??
+    configuredWindow ??
+    DEFAULT_CONTEXT_TOKENS;
+
+  const contextWindow = Math.floor(rawContextWindow);
   const configuredCap = params.cfg.agents?.defaults?.contextTokens;
   if (
     typeof configuredCap === "number" &&
     Number.isFinite(configuredCap) &&
     configuredCap > 0 &&
-    configuredCap < modelContextTokens
+    configuredCap < contextWindow
   ) {
     return Math.floor(configuredCap);
   }
 
-  return modelContextTokens;
+  return contextWindow;
 }
 
 export function maybeBlockOversizedModelSwitch(params: {
@@ -56,7 +89,6 @@ export function maybeBlockOversizedModelSwitch(params: {
 
   const contextWindowTokens = resolveEffectiveContextWindowTokens({
     cfg: params.cfg,
-    provider: targetProvider,
     model: targetModel,
   });
   if (
