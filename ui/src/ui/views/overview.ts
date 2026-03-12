@@ -6,7 +6,7 @@ import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { formatNextRun } from "../presenter.ts";
 import type { UiSettings } from "../storage.ts";
-import { shouldShowPairingHint } from "./overview-hints.ts";
+import { resolveAuthHintKind, shouldShowPairingHint } from "./overview-hints.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -71,41 +71,17 @@ export function renderOverview(props: OverviewProps) {
   })();
 
   const authHint = (() => {
-    if (props.connected || !props.lastError) {
+    const authHintKind = resolveAuthHintKind({
+      connected: props.connected,
+      lastError: props.lastError,
+      lastErrorCode: props.lastErrorCode,
+      hasToken: Boolean(props.settings.token.trim()),
+      hasPassword: Boolean(props.password.trim()),
+    });
+    if (authHintKind == null) {
       return null;
     }
-    const lower = props.lastError.toLowerCase();
-    const authRequiredCodes = new Set<string>([
-      ConnectErrorDetailCodes.AUTH_REQUIRED,
-      ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-      ConnectErrorDetailCodes.AUTH_TOKEN_NOT_CONFIGURED,
-      ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
-    ]);
-    const authFailureCodes = new Set<string>([
-      ...authRequiredCodes,
-      ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
-      ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-      ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-      ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
-      ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
-      ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING,
-      ConnectErrorDetailCodes.AUTH_TAILSCALE_PROXY_MISSING,
-      ConnectErrorDetailCodes.AUTH_TAILSCALE_WHOIS_FAILED,
-      ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
-    ]);
-    const authFailed = props.lastErrorCode
-      ? authFailureCodes.has(props.lastErrorCode)
-      : lower.includes("unauthorized") || lower.includes("connect failed");
-    if (!authFailed) {
-      return null;
-    }
-    const hasToken = Boolean(props.settings.token.trim());
-    const hasPassword = Boolean(props.password.trim());
-    const isAuthRequired = props.lastErrorCode
-      ? authRequiredCodes.has(props.lastErrorCode)
-      : !hasToken && !hasPassword;
-    if (isAuthRequired) {
+    if (authHintKind === "required") {
       return html`
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
