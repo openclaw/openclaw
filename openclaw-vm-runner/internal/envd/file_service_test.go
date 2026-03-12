@@ -19,11 +19,11 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func setupFileTestServer(t *testing.T) (pb.FileServiceClient, func()) {
+func setupFileTestServer(t *testing.T, root string) (pb.FileServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
-	pb.RegisterFileServiceServer(srv, NewFileServer())
+	pb.RegisterFileServiceServer(srv, NewFileServerWithRoot(root))
 
 	go func() { _ = srv.Serve(lis) }()
 
@@ -47,17 +47,16 @@ func setupFileTestServer(t *testing.T) (pb.FileServiceClient, func()) {
 // --- Stat tests ---
 
 func TestStat_RegularFile(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "test.txt")
-	require.NoError(t, os.WriteFile(path, []byte("hello"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "test.txt"), []byte("hello"), 0644))
 
-	resp, err := client.Stat(context.Background(), &pb.StatRequest{Path: path})
+	resp, err := client.Stat(context.Background(), &pb.StatRequest{Path: "test.txt"})
 	require.NoError(t, err)
 
-	assert.Equal(t, path, resp.GetPath())
+	assert.Equal(t, "test.txt", resp.GetPath())
 	assert.Equal(t, int64(5), resp.GetSize())
 	assert.False(t, resp.GetIsDir())
 	assert.NotZero(t, resp.GetModTimeUnix())
@@ -65,22 +64,25 @@ func TestStat_RegularFile(t *testing.T) {
 }
 
 func TestStat_Directory(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	resp, err := client.Stat(context.Background(), &pb.StatRequest{Path: tmp})
+	require.NoError(t, os.Mkdir(filepath.Join(tmp, "subdir"), 0755))
+
+	resp, err := client.Stat(context.Background(), &pb.StatRequest{Path: "subdir"})
 	require.NoError(t, err)
 
 	assert.True(t, resp.GetIsDir())
-	assert.Equal(t, tmp, resp.GetPath())
+	assert.Equal(t, "subdir", resp.GetPath())
 }
 
 func TestStat_NotFound(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	_, err := client.Stat(context.Background(), &pb.StatRequest{Path: "/nonexistent/file"})
+	_, err := client.Stat(context.Background(), &pb.StatRequest{Path: "nonexistent.txt"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
@@ -88,15 +90,15 @@ func TestStat_NotFound(t *testing.T) {
 // --- ListDir tests ---
 
 func TestListDir_WithEntries(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("aaa"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "b.txt"), []byte("bb"), 0644))
 	require.NoError(t, os.Mkdir(filepath.Join(tmp, "subdir"), 0755))
 
-	resp, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: tmp})
+	resp, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: "."})
 	require.NoError(t, err)
 
 	assert.Len(t, resp.GetEntries(), 3)
@@ -121,33 +123,33 @@ func TestListDir_WithEntries(t *testing.T) {
 }
 
 func TestListDir_EmptyDirectory(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	resp, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: tmp})
+	resp, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: "."})
 	require.NoError(t, err)
 	assert.Empty(t, resp.GetEntries())
 }
 
 func TestListDir_NotFound(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	_, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: "/nonexistent/dir"})
+	_, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: "nonexistent"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
 func TestListDir_NotADirectory(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "file.txt")
-	require.NoError(t, os.WriteFile(path, []byte("data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "file.txt"), []byte("data"), 0644))
 
-	_, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: path})
+	_, err := client.ListDir(context.Background(), &pb.ListDirRequest{Path: "file.txt"})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
@@ -155,15 +157,14 @@ func TestListDir_NotADirectory(t *testing.T) {
 // --- ReadFile tests ---
 
 func TestReadFile_SmallFile(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
 	content := []byte("hello world from ReadFile test")
-	path := filepath.Join(tmp, "small.txt")
-	require.NoError(t, os.WriteFile(path, content, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "small.txt"), content, 0644))
 
-	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: path})
+	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "small.txt"})
 	require.NoError(t, err)
 
 	var collected []byte
@@ -186,16 +187,14 @@ func TestReadFile_SmallFile(t *testing.T) {
 }
 
 func TestReadFile_LargeFile(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	// Create a file larger than 64KB to test chunking.
 	content := []byte(strings.Repeat("X", 100_000))
-	path := filepath.Join(tmp, "large.bin")
-	require.NoError(t, os.WriteFile(path, content, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "large.bin"), content, 0644))
 
-	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: path})
+	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "large.bin"})
 	require.NoError(t, err)
 
 	var collected []byte
@@ -218,14 +217,13 @@ func TestReadFile_LargeFile(t *testing.T) {
 }
 
 func TestReadFile_EmptyFile(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "empty.txt")
-	require.NoError(t, os.WriteFile(path, []byte{}, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "empty.txt"), []byte{}, 0644))
 
-	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: path})
+	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "empty.txt"})
 	require.NoError(t, err)
 
 	resp, err := stream.Recv()
@@ -235,16 +233,11 @@ func TestReadFile_EmptyFile(t *testing.T) {
 }
 
 func TestReadFile_NotFound(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	_, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "/nonexistent/file"})
-	// For server-streaming, the error comes on Recv, not on the initial call.
-	if err == nil {
-		_, err = client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "/nonexistent/file"})
-	}
-	// Try to receive - the error should come back.
-	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "/nonexistent/file"})
+	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{Path: "nonexistent.txt"})
 	if err == nil {
 		_, err = stream.Recv()
 	}
@@ -255,18 +248,17 @@ func TestReadFile_NotFound(t *testing.T) {
 // --- WriteFile tests ---
 
 func TestWriteFile_SingleChunk(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "written.txt")
 	content := []byte("written via gRPC WriteFile")
 
 	stream, err := client.WriteFile(context.Background())
 	require.NoError(t, err)
 
 	err = stream.Send(&pb.WriteFileRequest{
-		Path: path,
+		Path: "written.txt",
 		Mode: 0644,
 		Data: content,
 	})
@@ -276,30 +268,26 @@ func TestWriteFile_SingleChunk(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(len(content)), resp.GetBytesWritten())
 
-	actual, err := os.ReadFile(path)
+	actual, err := os.ReadFile(filepath.Join(tmp, "written.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, content, actual)
 }
 
 func TestWriteFile_MultipleChunks(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
-	defer cleanup()
-
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "multi.txt")
+	client, cleanup := setupFileTestServer(t, tmp)
+	defer cleanup()
 
 	stream, err := client.WriteFile(context.Background())
 	require.NoError(t, err)
 
-	// First chunk with path.
 	err = stream.Send(&pb.WriteFileRequest{
-		Path: path,
+		Path: "multi.txt",
 		Mode: 0644,
 		Data: []byte("chunk1-"),
 	})
 	require.NoError(t, err)
 
-	// Subsequent chunks.
 	err = stream.Send(&pb.WriteFileRequest{Data: []byte("chunk2-")})
 	require.NoError(t, err)
 	err = stream.Send(&pb.WriteFileRequest{Data: []byte("chunk3")})
@@ -309,23 +297,21 @@ func TestWriteFile_MultipleChunks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(20), resp.GetBytesWritten())
 
-	actual, err := os.ReadFile(path)
+	actual, err := os.ReadFile(filepath.Join(tmp, "multi.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "chunk1-chunk2-chunk3", string(actual))
 }
 
 func TestWriteFile_CreatesParentDirs(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
-	defer cleanup()
-
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "a", "b", "c", "deep.txt")
+	client, cleanup := setupFileTestServer(t, tmp)
+	defer cleanup()
 
 	stream, err := client.WriteFile(context.Background())
 	require.NoError(t, err)
 
 	err = stream.Send(&pb.WriteFileRequest{
-		Path: path,
+		Path: "a/b/c/deep.txt",
 		Data: []byte("deep"),
 	})
 	require.NoError(t, err)
@@ -334,24 +320,21 @@ func TestWriteFile_CreatesParentDirs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), resp.GetBytesWritten())
 
-	actual, err := os.ReadFile(path)
+	actual, err := os.ReadFile(filepath.Join(tmp, "a", "b", "c", "deep.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "deep", string(actual))
 }
 
 func TestWriteFile_DefaultMode(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
-	defer cleanup()
-
 	tmp := t.TempDir()
-	path := filepath.Join(tmp, "default-mode.txt")
+	client, cleanup := setupFileTestServer(t, tmp)
+	defer cleanup()
 
 	stream, err := client.WriteFile(context.Background())
 	require.NoError(t, err)
 
-	// Mode=0 should default to 0644.
 	err = stream.Send(&pb.WriteFileRequest{
-		Path: path,
+		Path: "default-mode.txt",
 		Data: []byte("test"),
 	})
 	require.NoError(t, err)
@@ -359,19 +342,19 @@ func TestWriteFile_DefaultMode(t *testing.T) {
 	_, err = stream.CloseAndRecv()
 	require.NoError(t, err)
 
-	info, err := os.Stat(path)
+	info, err := os.Stat(filepath.Join(tmp, "default-mode.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0644), info.Mode().Perm())
 }
 
 func TestWriteFile_MissingPath(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
 	stream, err := client.WriteFile(context.Background())
 	require.NoError(t, err)
 
-	// Send chunk without path.
 	err = stream.Send(&pb.WriteFileRequest{Data: []byte("data")})
 	require.NoError(t, err)
 
@@ -383,41 +366,36 @@ func TestWriteFile_MissingPath(t *testing.T) {
 // --- MakeDir tests ---
 
 func TestMakeDir_NewDirectory(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "a", "b", "c")
-
-	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: path})
+	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: "a/b/c"})
 	require.NoError(t, err)
 
-	info, err := os.Stat(path)
+	info, err := os.Stat(filepath.Join(tmp, "a", "b", "c"))
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 }
 
 func TestMakeDir_AlreadyExists(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	// MkdirAll on existing dir is not an error.
-	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: tmp})
+	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: "."})
 	require.NoError(t, err)
 }
 
 func TestMakeDir_CustomMode(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "custom-mode")
-
-	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: path, Mode: 0700})
+	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{Path: "custom-mode", Mode: 0700})
 	require.NoError(t, err)
 
-	info, err := os.Stat(path)
+	info, err := os.Stat(filepath.Join(tmp, "custom-mode"))
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
@@ -426,70 +404,67 @@ func TestMakeDir_CustomMode(t *testing.T) {
 // --- Remove tests ---
 
 func TestRemove_File(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "to-delete.txt")
-	require.NoError(t, os.WriteFile(path, []byte("bye"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "to-delete.txt"), []byte("bye"), 0644))
 
-	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: path})
+	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "to-delete.txt"})
 	require.NoError(t, err)
 
-	_, err = os.Stat(path)
+	_, err = os.Stat(filepath.Join(tmp, "to-delete.txt"))
 	assert.True(t, os.IsNotExist(err))
 }
 
 func TestRemove_EmptyDir(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "empty-dir")
-	require.NoError(t, os.Mkdir(path, 0755))
+	require.NoError(t, os.Mkdir(filepath.Join(tmp, "empty-dir"), 0755))
 
-	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: path})
+	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "empty-dir"})
 	require.NoError(t, err)
 
-	_, err = os.Stat(path)
+	_, err = os.Stat(filepath.Join(tmp, "empty-dir"))
 	assert.True(t, os.IsNotExist(err))
 }
 
 func TestRemove_NonEmptyDirNonRecursive(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
 	dir := filepath.Join(tmp, "non-empty")
 	require.NoError(t, os.Mkdir(dir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("data"), 0644))
 
-	// Non-recursive remove of non-empty dir should fail.
-	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: dir, Recursive: false})
+	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "non-empty", Recursive: false})
 	require.Error(t, err)
 }
 
 func TestRemove_RecursiveDir(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	tmp := t.TempDir()
-	dir := filepath.Join(tmp, "recursive-del")
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "file.txt"), []byte("data"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "recursive-del", "sub"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "recursive-del", "sub", "file.txt"), []byte("data"), 0644))
 
-	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: dir, Recursive: true})
+	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "recursive-del", Recursive: true})
 	require.NoError(t, err)
 
-	_, err = os.Stat(dir)
+	_, err = os.Stat(filepath.Join(tmp, "recursive-del"))
 	assert.True(t, os.IsNotExist(err))
 }
 
 func TestRemove_NotFound(t *testing.T) {
-	client, cleanup := setupFileTestServer(t)
+	tmp := t.TempDir()
+	client, cleanup := setupFileTestServer(t, tmp)
 	defer cleanup()
 
-	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "/nonexistent/path"})
+	_, err := client.Remove(context.Background(), &pb.RemoveRequest{Path: "nonexistent"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }

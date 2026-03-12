@@ -38,9 +38,13 @@ func TestServer_AllServicesRegistered(t *testing.T) {
 	assert.NotNil(t, listResp)
 
 	// Verify FileService is accessible.
+	// Use a relative path; /workspace may not exist on the test host,
+	// so we just check the error is NOT Unimplemented (which would
+	// mean the service is not registered).
 	fileClient := pb.NewFileServiceClient(conn)
-	_, statErr := fileClient.Stat(context.Background(), &pb.StatRequest{Path: t.TempDir()})
-	require.NoError(t, statErr)
+	_, statErr := fileClient.Stat(context.Background(), &pb.StatRequest{Path: "."})
+	assert.NotEqual(t, codes.Unimplemented, status.Code(statErr),
+		"FileService should be registered (got Unimplemented means not registered)")
 
 	// Verify HealthService is accessible.
 	healthClient := pb.NewHealthServiceClient(conn)
