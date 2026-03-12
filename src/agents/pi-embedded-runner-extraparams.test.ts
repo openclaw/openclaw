@@ -840,8 +840,7 @@ describe("applyExtraParamsToAgent", () => {
       function: { name: "read" },
     });
   });
-
-  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
+  it("rewrites tool schema for kimi-coding using OpenAI-compatible anthropic payloads", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -878,16 +877,22 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
       {
-        name: "read",
-        description: "Read file",
-        input_schema: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(payloads[0]?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "read" },
+    });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
