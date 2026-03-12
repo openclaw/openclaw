@@ -3,10 +3,12 @@ import { captureFullEnv } from "../test-utils/env.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const spawnSyncMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
+  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
@@ -34,6 +36,7 @@ afterEach(() => {
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
+  spawnSyncMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -74,6 +77,43 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.mode).toBe("supervised");
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("detects launchd supervision from launchctl runtime when env hints are missing", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: `pid = ${process.pid}\n`,
+      stderr: "",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "launchctl",
+      ["print", `gui/${uid}/ai.openclaw.gateway`],
+      expect.objectContaining({ encoding: "utf8" }),
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to detached spawn when launchctl runtime pid does not match current process", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: "pid = 424242\n",
+      stderr: "",
+    });
+    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "spawned", pid: 4242 });
+    expect(spawnMock).toHaveBeenCalledOnce();
   });
 
   it("returns supervised on macOS when launchd label is set (no kickstart)", () => {

@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+
 const LAUNCHD_SUPERVISOR_HINT_ENV_VARS = [
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
@@ -30,12 +33,52 @@ function hasAnyHint(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
   });
 }
 
+function detectLaunchdFromRuntime(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
+  if (platform !== "darwin" || typeof process.getuid !== "function") {
+    return false;
+  }
+
+  const uid = process.getuid();
+  if (!Number.isInteger(uid) || uid < 0) {
+    return false;
+  }
+
+  const label = (
+    env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE)
+  ).trim();
+  if (!label) {
+    return false;
+  }
+
+  const domain = `gui/${uid}`;
+  const target = `${domain}/${label}`;
+  const result = spawnSync("launchctl", ["print", target], {
+    encoding: "utf8",
+    timeout: 1500,
+  });
+  if (result.error || result.status !== 0) {
+    return false;
+  }
+
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const pidMatch = output.match(/^\s*pid\s*=\s*(\d+)\s*$/m);
+  if (!pidMatch?.[1]) {
+    return false;
+  }
+
+  const pid = Number.parseInt(pidMatch[1], 10);
+  return Number.isFinite(pid) && pid > 1 && pid === process.pid;
+}
+
 export function detectRespawnSupervisor(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): RespawnSupervisor | null {
   if (platform === "darwin") {
-    return hasAnyHint(env, LAUNCHD_SUPERVISOR_HINT_ENV_VARS) ? "launchd" : null;
+    if (hasAnyHint(env, LAUNCHD_SUPERVISOR_HINT_ENV_VARS)) {
+      return "launchd";
+    }
+    return detectLaunchdFromRuntime(env, platform) ? "launchd" : null;
   }
   if (platform === "linux") {
     return hasAnyHint(env, SYSTEMD_SUPERVISOR_HINT_ENV_VARS) ? "systemd" : null;
