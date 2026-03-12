@@ -43,4 +43,19 @@ export function collectTtsApiKeyAssignments(params: {
       },
     });
   }
+  const deepgram = params.tts.deepgram;
+  if (isRecord(deepgram)) {
+    collectSecretInputAssignment({
+      value: deepgram.apiKey,
+      path: `${params.pathPrefix}.deepgram.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        deepgram.apiKey = value;
+      },
+    });
+  }
 }
