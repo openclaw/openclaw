@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Security/host env: block inherited `GIT_EXEC_PATH` from sanitized host exec environments so Git helper resolution cannot be steered by host environment state. (`GHSA-jf5v-pqgw-gm5m`)(#43685) Thanks @zpbrent and @vincentkoc.
 - Security/session_status: enforce sandbox session-tree visibility and shared agent-to-agent access guards before reading or mutating target session state, so sandboxed subagents can no longer inspect parent session metadata or write parent model overrides via `session_status`. (`GHSA-wcxr-59v9-rxr8`)(#43754) Thanks @tdjackey and @vincentkoc.
 - Models/secrets: enforce source-managed SecretRef markers in generated `models.json` so runtime-resolved provider secrets are not persisted when runtime projection is skipped. (#43759) Thanks @joshavant.
+- Security/exec allowlist: preserve POSIX case sensitivity and keep `?` within a single path segment so exact-looking allowlist patterns no longer overmatch executables across case or directory boundaries. (`GHSA-f8r2-vg7x-gh8m`)(#43798) Thanks @zpbrent and @vincentkoc.
 
 ### Changes
 
