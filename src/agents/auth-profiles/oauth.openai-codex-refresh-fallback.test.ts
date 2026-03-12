@@ -17,7 +17,7 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
