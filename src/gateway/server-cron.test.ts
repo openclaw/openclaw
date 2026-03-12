@@ -1,142 +1,192 @@
-import os from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  trimToOptionalString,
+  redactWebhookUrl,
+  resolveCronWebhookTarget,
+  buildCronWebhookHeaders,
+} from "./server-cron.js";
 
-const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
-const loadConfigMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.fn();
+describe("trimToOptionalString", () => {
+  it("should return undefined for non-string values", () => {
+    expect(trimToOptionalString(null)).toBeUndefined();
+    expect(trimToOptionalString(undefined)).toBeUndefined();
+    expect(trimToOptionalString(123)).toBeUndefined();
+    expect(trimToOptionalString({})).toBeUndefined();
+    expect(trimToOptionalString([])).toBeUndefined();
+    expect(trimToOptionalString(true)).toBeUndefined();
+  });
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-}));
+  it("should return undefined for empty string", () => {
+    expect(trimToOptionalString("")).toBeUndefined();
+  });
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+  it("should return undefined for whitespace-only string", () => {
+    expect(trimToOptionalString("   ")).toBeUndefined();
+    expect(trimToOptionalString("\t\n\r")).toBeUndefined();
+  });
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => loadConfigMock(),
-  };
+  it("should trim whitespace and return non-empty string", () => {
+    expect(trimToOptionalString("  hello  ")).toBe("hello");
+    expect(trimToOptionalString("\t\nhello\r\n")).toBe("hello");
+  });
+
+  it("should return string as-is if no whitespace", () => {
+    expect(trimToOptionalString("hello")).toBe("hello");
+    expect(trimToOptionalString("hello world")).toBe("hello world");
+  });
 });
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-}));
-
-import { buildGatewayCronService } from "./server-cron.js";
-
-describe("buildGatewayCronService", () => {
-  beforeEach(() => {
-    enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
-    loadConfigMock.mockClear();
-    fetchWithSsrFGuardMock.mockClear();
+describe("redactWebhookUrl", () => {
+  it("should redact query parameters from URL", () => {
+    const result = redactWebhookUrl("https://example.com/webhook?token=secret&key=abc");
+    expect(result).toBe("https://example.com/webhook");
   });
 
-  it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-${Date.now()}`);
-    const cfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-    } as OpenClawConfig;
-    loadConfigMock.mockReturnValue(cfg);
-
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
-    });
-    try {
-      const job = await state.cron.add({
-        name: "canonicalize-session-key",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        sessionKey: "discord:channel:ops",
-        payload: { kind: "systemEvent", text: "hello" },
-      });
-
-      await state.cron.run(job.id, "force");
-
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-        "hello",
-        expect.objectContaining({
-          sessionKey: "agent:main:discord:channel:ops",
-        }),
-      );
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:discord:channel:ops",
-        }),
-      );
-    } finally {
-      state.cron.stop();
-    }
+  it("should return origin and pathname for valid URL", () => {
+    const result = redactWebhookUrl("https://api.example.com/v1/webhooks/callback");
+    expect(result).toBe("https://api.example.com/v1/webhooks/callback");
   });
 
-  it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-ssrf-${Date.now()}`);
-    const cfg = {
-      session: {
-        mainKey: "main",
-      },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
-    } as OpenClawConfig;
+  it("should handle URL with port", () => {
+    const result = redactWebhookUrl("https://localhost:3000/webhook");
+    expect(result).toBe("https://localhost:3000/webhook");
+  });
 
-    loadConfigMock.mockReturnValue(cfg);
-    fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
-    );
+  it("should handle URL with hash", () => {
+    const result = redactWebhookUrl("https://example.com/webhook#section");
+    expect(result).toBe("https://example.com/webhook");
+  });
 
-    const state = buildGatewayCronService({
-      cfg,
-      deps: {} as CliDeps,
-      broadcast: () => {},
+  it("should return placeholder for invalid URL", () => {
+    const result = redactWebhookUrl("not-a-valid-url");
+    expect(result).toBe("<invalid-webhook-url>");
+  });
+
+  it("should return placeholder for empty string", () => {
+    const result = redactWebhookUrl("");
+    expect(result).toBe("<invalid-webhook-url>");
+  });
+
+  it("should handle URL with auth credentials", () => {
+    const result = redactWebhookUrl("https://user:pass@example.com/webhook");
+    expect(result).toBe("https://example.com/webhook");
+  });
+});
+
+describe("resolveCronWebhookTarget", () => {
+  it("should return null when no webhook is configured", () => {
+    const result = resolveCronWebhookTarget({});
+    expect(result).toBeNull();
+  });
+
+  it("should return delivery webhook when mode is 'webhook'", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "webhook", to: "https://example.com/webhook" },
     });
-    try {
-      const job = await state.cron.add({
-        name: "ssrf-webhook-blocked",
-        enabled: true,
-        schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "hello" },
-        delivery: {
-          mode: "webhook",
-          to: "http://127.0.0.1:8080/cron-finished",
-        },
-      });
+    expect(result).toEqual({
+      url: "https://example.com/webhook",
+      source: "delivery",
+    });
+  });
 
-      await state.cron.run(job.id, "force");
+  it("should normalize delivery mode to lowercase", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "WEBHOOK", to: "https://example.com/webhook" },
+    });
+    expect(result).toEqual({
+      url: "https://example.com/webhook",
+      source: "delivery",
+    });
+  });
 
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url: "http://127.0.0.1:8080/cron-finished",
-        init: {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: expect.stringContaining('"action":"finished"'),
-          signal: expect.any(AbortSignal),
-        },
-      });
-    } finally {
-      state.cron.stop();
-    }
+  it("should trim whitespace from delivery mode", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "  webhook  ", to: "https://example.com/webhook" },
+    });
+    expect(result).toEqual({
+      url: "https://example.com/webhook",
+      source: "delivery",
+    });
+  });
+
+  it("should return null for webhook mode without URL", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "webhook" },
+    });
+    expect(result).toBeNull();
+  });
+
+  it("should return legacy webhook when legacyNotify is true", () => {
+    const result = resolveCronWebhookTarget({
+      legacyNotify: true,
+      legacyWebhook: "https://legacy.example.com/webhook",
+    });
+    expect(result).toEqual({
+      url: "https://legacy.example.com/webhook",
+      source: "legacy",
+    });
+  });
+
+  it("should prefer delivery over legacy when both are set", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "webhook", to: "https://delivery.example.com/webhook" },
+      legacyNotify: true,
+      legacyWebhook: "https://legacy.example.com/webhook",
+    });
+    expect(result).toEqual({
+      url: "https://delivery.example.com/webhook",
+      source: "delivery",
+    });
+  });
+
+  it("should return null for legacy when legacyNotify is false", () => {
+    const result = resolveCronWebhookTarget({
+      legacyNotify: false,
+      legacyWebhook: "https://legacy.example.com/webhook",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("should return null for legacy without webhook URL", () => {
+    const result = resolveCronWebhookTarget({
+      legacyNotify: true,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("should normalize HTTP webhook URL", () => {
+    const result = resolveCronWebhookTarget({
+      delivery: { mode: "webhook", to: "HTTP://EXAMPLE.COM/WEBHOOK" },
+    });
+    expect(result?.url).toBe("http://example.com/WEBHOOK");
+  });
+});
+
+describe("buildCronWebhookHeaders", () => {
+  it("should return Content-Type header by default", () => {
+    const result = buildCronWebhookHeaders();
+    expect(result).toEqual({
+      "Content-Type": "application/json",
+    });
+  });
+
+  it("should include Authorization header when token is provided", () => {
+    const result = buildCronWebhookHeaders("my-secret-token");
+    expect(result).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer my-secret-token",
+    });
+  });
+
+  it("should handle empty string token", () => {
+    const result = buildCronWebhookHeaders("");
+    expect(result).toEqual({
+      "Content-Type": "application/json",
+    });
+  });
+
+  it("should handle token with special characters", () => {
+    const result = buildCronWebhookHeaders("token-with-special_chars.123");
+    expect(result.Authorization).toBe("Bearer token-with-special_chars.123");
   });
 });

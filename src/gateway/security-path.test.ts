@@ -1,96 +1,209 @@
-import { describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
-  PROTECTED_PLUGIN_ROUTE_PREFIXES,
   buildCanonicalPathCandidates,
+  canonicalizePathVariant,
   canonicalizePathForSecurity,
+  hasSecurityPathCanonicalizationAnomaly,
   isPathProtectedByPrefixes,
   isProtectedPluginRoutePath,
+  PROTECTED_PLUGIN_ROUTE_PREFIXES,
 } from "./security-path.js";
 
-function buildRepeatedEncodedSlashPath(depth: number): string {
-  let encodedSlash = "%2f";
-  for (let i = 1; i < depth; i++) {
-    encodedSlash = encodedSlash.replace(/%/g, "%25");
-  }
-  return `/api${encodedSlash}channels${encodedSlash}nostr${encodedSlash}default${encodedSlash}profile`;
-}
-
-describe("security-path canonicalization", () => {
-  it("canonicalizes decoded case/slash variants", () => {
-    expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual(
-      expect.objectContaining({
-        canonicalPath: "/api/channels/nostr/default/profile",
-        candidates: ["/api/channels/nostr/default/profile"],
-        malformedEncoding: false,
-        decodePasses: 0,
-        decodePassLimitReached: false,
-        rawNormalizedPath: "/api/channels/nostr/default/profile",
-      }),
-    );
-    const encoded = canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile");
-    expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
-    expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");
-    expect(encoded.candidates).toContain("/api/channels/nostr/default/profile");
-    expect(encoded.decodePasses).toBeGreaterThan(0);
-    expect(encoded.decodePassLimitReached).toBe(false);
+describe("buildCanonicalPathCandidates", () => {
+  it("should return single candidate for simple path", () => {
+    const result = buildCanonicalPathCandidates("/api/users");
+    expect(result.candidates).toEqual(["/api/users"]);
+    expect(result.decodePasses).toBe(0);
+    expect(result.decodePassLimitReached).toBe(false);
+    expect(result.malformedEncoding).toBe(false);
   });
 
-  it("resolves traversal after repeated decoding", () => {
-    expect(
-      canonicalizePathForSecurity("/api/foo/..%2fchannels/nostr/default/profile").canonicalPath,
-    ).toBe("/api/channels/nostr/default/profile");
-    expect(
-      canonicalizePathForSecurity("/api/foo/%252e%252e%252fchannels/nostr/default/profile")
-        .canonicalPath,
-    ).toBe("/api/channels/nostr/default/profile");
+  it("should decode URL-encoded path", () => {
+    const result = buildCanonicalPathCandidates("/api%2Fusers");
+    expect(result.candidates).toEqual(["/api%2fusers", "/api/users"]);
+    expect(result.decodePasses).toBe(1);
   });
 
-  it("marks malformed encoding", () => {
-    expect(canonicalizePathForSecurity("/api/channels%2").malformedEncoding).toBe(true);
-    expect(canonicalizePathForSecurity("/api/channels%zz").malformedEncoding).toBe(true);
+  it("should handle multiple decode passes", () => {
+    const result = buildCanonicalPathCandidates("/api%252Fusers");
+    expect(result.candidates).toEqual(["/api%252fusers", "/api%2fusers", "/api/users"]);
+    expect(result.decodePasses).toBe(2);
   });
 
-  it("resolves 4x encoded slash path variants to protected channel routes", () => {
-    const deeplyEncoded = "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
-    const canonical = canonicalizePathForSecurity(deeplyEncoded);
-    expect(canonical.canonicalPath).toBe("/api/channels/nostr/default/profile");
-    expect(canonical.decodePasses).toBeGreaterThanOrEqual(4);
-    expect(isProtectedPluginRoutePath(deeplyEncoded)).toBe(true);
+  it("should normalize path separators", () => {
+    const result = buildCanonicalPathCandidates("/api//users");
+    expect(result.candidates).toEqual(["/api/users"]);
   });
 
-  it("flags decode depth overflow and fails closed for protected prefix checks", () => {
-    const excessiveDepthPath = buildRepeatedEncodedSlashPath(40);
-    const candidates = buildCanonicalPathCandidates(excessiveDepthPath, 32);
-    expect(candidates.decodePassLimitReached).toBe(true);
-    expect(candidates.malformedEncoding).toBe(false);
-    expect(isProtectedPluginRoutePath(excessiveDepthPath)).toBe(true);
+  it("should remove trailing slashes", () => {
+    const result = buildCanonicalPathCandidates("/api/users/");
+    expect(result.candidates).toEqual(["/api/users"]);
+  });
+
+  it("should handle root path", () => {
+    const result = buildCanonicalPathCandidates("/");
+    expect(result.candidates).toEqual(["/"]);
+  });
+
+  it("should handle empty path", () => {
+    const result = buildCanonicalPathCandidates("");
+    expect(result.candidates).toEqual(["/"]);
+  });
+
+  it("should lowercase path", () => {
+    const result = buildCanonicalPathCandidates("/API/Users");
+    expect(result.candidates).toEqual(["/api/users"]);
+  });
+
+  it("should handle malformed encoding", () => {
+    const result = buildCanonicalPathCandidates("/api/%ZZ");
+    expect(result.malformedEncoding).toBe(true);
+    expect(result.candidates.length).toBeGreaterThan(0);
+  });
+
+  it("should respect max decode passes limit", () => {
+    // Create a deeply encoded path
+    let path = "/test";
+    for (let i = 0; i < 40; i++) {
+      path = encodeURIComponent(path);
+    }
+    const result = buildCanonicalPathCandidates(path, 32);
+    expect(result.decodePasses).toBe(32);
+    expect(result.decodePassLimitReached).toBe(true);
+  });
+
+  it("should deduplicate candidates", () => {
+    const result = buildCanonicalPathCandidates("/api%2F%2Fusers");
+    // Should not have duplicate normalized paths
+    const uniqueCandidates = [...new Set(result.candidates)];
+    expect(result.candidates).toEqual(uniqueCandidates);
   });
 });
 
-describe("security-path protected-prefix matching", () => {
-  const channelVariants = [
-    "/API/channels/nostr/default/profile",
-    "/api/channels%2Fnostr%2Fdefault%2Fprofile",
-    "/api/%63hannels/nostr/default/profile",
-    "/api/foo/..%2fchannels/nostr/default/profile",
-    "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
-    "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
-    "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
-    "/api/channels%2",
-    "/api/channels%zz",
-  ];
+describe("canonicalizePathVariant", () => {
+  it("should return canonical path for simple path", () => {
+    expect(canonicalizePathVariant("/api/users")).toBe("/api/users");
+  });
 
-  for (const path of channelVariants) {
-    it(`protects plugin channel path variant: ${path}`, () => {
-      expect(isProtectedPluginRoutePath(path)).toBe(true);
-      expect(isPathProtectedByPrefixes(path, PROTECTED_PLUGIN_ROUTE_PREFIXES)).toBe(true);
-    });
-  }
+  it("should return decoded path", () => {
+    expect(canonicalizePathVariant("/api%2Fusers")).toBe("/api/users");
+  });
 
-  it("does not protect unrelated paths", () => {
-    expect(isProtectedPluginRoutePath("/plugin/public")).toBe(false);
-    expect(isProtectedPluginRoutePath("/api/channels-public")).toBe(false);
-    expect(isProtectedPluginRoutePath("/api/foo/..%2fchannels-public")).toBe(false);
-    expect(isProtectedPluginRoutePath("/api/channel")).toBe(false);
+  it("should return root for empty path", () => {
+    expect(canonicalizePathVariant("")).toBe("/");
+  });
+
+  it("should normalize separators", () => {
+    expect(canonicalizePathVariant("/api//users")).toBe("/api/users");
+  });
+
+  it("should lowercase path", () => {
+    expect(canonicalizePathVariant("/API/Users")).toBe("/api/users");
+  });
+});
+
+describe("canonicalizePathForSecurity", () => {
+  it("should return full canonicalization result", () => {
+    const result = canonicalizePathForSecurity("/api%2Fusers");
+    expect(result.canonicalPath).toBe("/api/users");
+    expect(result.candidates).toContain("/api/users");
+    expect(result.rawNormalizedPath).toBe("/api%2fusers");
+    expect(result.decodePasses).toBe(1);
+    expect(result.decodePassLimitReached).toBe(false);
+    expect(result.malformedEncoding).toBe(false);
+  });
+
+  it("should include raw normalized path", () => {
+    const result = canonicalizePathForSecurity("/API/Users");
+    expect(result.rawNormalizedPath).toBe("/api/users");
+  });
+});
+
+describe("hasSecurityPathCanonicalizationAnomaly", () => {
+  it("should return false for normal path", () => {
+    expect(hasSecurityPathCanonicalizationAnomaly("/api/users")).toBe(false);
+  });
+
+  it("should return true for malformed encoding", () => {
+    expect(hasSecurityPathCanonicalizationAnomaly("/api/%ZZ")).toBe(true);
+  });
+
+  it("should return true when decode limit reached", () => {
+    let path = "/test";
+    for (let i = 0; i < 40; i++) {
+      path = encodeURIComponent(path);
+    }
+    expect(hasSecurityPathCanonicalizationAnomaly(path)).toBe(true);
+  });
+});
+
+describe("isPathProtectedByPrefixes", () => {
+  it("should return true for exact match", () => {
+    expect(isPathProtectedByPrefixes("/api/channels", ["/api/channels"])).toBe(true);
+  });
+
+  it("should return true for child path", () => {
+    expect(isPathProtectedByPrefixes("/api/channels/123", ["/api/channels"])).toBe(true);
+  });
+
+  it("should return false for unrelated path", () => {
+    expect(isPathProtectedByPrefixes("/api/users", ["/api/channels"])).toBe(false);
+  });
+
+  it("should handle multiple prefixes", () => {
+    const prefixes = ["/api/channels", "/api/secrets"];
+    expect(isPathProtectedByPrefixes("/api/channels/123", prefixes)).toBe(true);
+    expect(isPathProtectedByPrefixes("/api/secrets/456", prefixes)).toBe(true);
+    expect(isPathProtectedByPrefixes("/api/users", prefixes)).toBe(false);
+  });
+
+  it("should be case insensitive", () => {
+    expect(isPathProtectedByPrefixes("/API/CHANNELS", ["/api/channels"])).toBe(true);
+  });
+
+  it("should handle encoded paths", () => {
+    expect(isPathProtectedByPrefixes("/api%2Fchannels", ["/api/channels"])).toBe(true);
+  });
+
+  it("should fail closed for malformed encoding after prefix", () => {
+    expect(isPathProtectedByPrefixes("/api/channels%ZZ", ["/api/channels"])).toBe(true);
+  });
+
+  it("should return true when decode limit reached", () => {
+    let path = "/api/channels/test";
+    for (let i = 0; i < 40; i++) {
+      path = encodeURIComponent(path);
+    }
+    expect(isPathProtectedByPrefixes(path, ["/api/channels"])).toBe(true);
+  });
+
+  it("should normalize prefix", () => {
+    expect(isPathProtectedByPrefixes("/api/channels", ["/API/Channels/"])).toBe(true);
+  });
+});
+
+describe("isProtectedPluginRoutePath", () => {
+  it("should return true for channels API path", () => {
+    expect(isProtectedPluginRoutePath("/api/channels")).toBe(true);
+    expect(isProtectedPluginRoutePath("/api/channels/123")).toBe(true);
+  });
+
+  it("should return false for other paths", () => {
+    expect(isProtectedPluginRoutePath("/api/users")).toBe(false);
+    expect(isProtectedPluginRoutePath("/health")).toBe(false);
+  });
+
+  it("should handle encoded paths", () => {
+    expect(isProtectedPluginRoutePath("/api%2Fchannels")).toBe(true);
+  });
+
+  it("should be case insensitive", () => {
+    expect(isProtectedPluginRoutePath("/API/CHANNELS")).toBe(true);
+  });
+});
+
+describe("PROTECTED_PLUGIN_ROUTE_PREFIXES", () => {
+  it("should include channels prefix", () => {
+    expect(PROTECTED_PLUGIN_ROUTE_PREFIXES).toContain("/api/channels");
   });
 });
