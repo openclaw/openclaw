@@ -1384,6 +1384,7 @@ validate_changelog_merge_hygiene() {
 
 prepare_gates() {
   local pr="$1"
+  local skip_test="${2:-false}"
   enter_worktree "$pr" false
 
   checkout_prep_branch "$pr"
@@ -1418,7 +1419,9 @@ prepare_gates() {
   run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
   run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
 
-  if [ "$docs_only" = "true" ]; then
+  if [ "$skip_test" = "true" ]; then
+    echo "Test skipped (--no-test). Full suite deferred to Test phase."
+  elif [ "$docs_only" = "true" ]; then
     echo "Docs-only change detected with high confidence; skipping pnpm test."
   else
     run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
@@ -1987,7 +1990,7 @@ main() {
       prepare_validate_commit "$pr"
       ;;
     prepare-gates)
-      prepare_gates "$pr"
+      prepare_gates "$pr" "${3:-false}"
       ;;
     prepare-push)
       prepare_push "$pr"
