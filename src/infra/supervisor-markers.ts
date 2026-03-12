@@ -43,9 +43,9 @@ function detectLaunchdFromRuntime(env: NodeJS.ProcessEnv, platform: NodeJS.Platf
     return false;
   }
 
-  const label = (
-    env.OPENCLAW_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE)
-  ).trim();
+  // OPENCLAW_LAUNCHD_LABEL is a launchd hint handled by the caller before runtime probing.
+  // Runtime detection falls back to the canonical label derived from OPENCLAW_PROFILE.
+  const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE).trim();
   if (!label) {
     return false;
   }

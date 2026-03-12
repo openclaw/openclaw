@@ -58,6 +58,7 @@ function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: str
   const result = restartGatewayProcessWithFreshPid();
   expect(result.mode).toBe("supervised");
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+  expect(spawnSyncMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
 
@@ -95,6 +96,28 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "launchctl",
       ["print", `gui/${uid}/ai.openclaw.gateway`],
+      expect.objectContaining({ encoding: "utf8" }),
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("uses OPENCLAW_PROFILE-derived label for launchctl runtime detection", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.OPENCLAW_PROFILE = "work";
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: `pid = ${process.pid}\n`,
+      stderr: "",
+    });
+
+    const result = restartGatewayProcessWithFreshPid();
+    const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "launchctl",
+      ["print", `gui/${uid}/ai.openclaw.work`],
       expect.objectContaining({ encoding: "utf8" }),
     );
     expect(spawnMock).not.toHaveBeenCalled();
