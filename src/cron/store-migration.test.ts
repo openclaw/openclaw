@@ -75,4 +75,60 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not report legacyPayloadKind when payload.kind is already canonical", () => {
+    const jobs = [
+      {
+        id: "canonical-kind",
+        name: "canonical-kind",
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "isolated",
+        state: {},
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+        },
+        delivery: { mode: "announce" },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(false);
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect(jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "ping",
+    });
+  });
+
+  it("normalizes payload.kind casing and reports legacyPayloadKind when needed", () => {
+    const jobs = [
+      {
+        id: "legacy-kind",
+        name: "legacy-kind",
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "isolated",
+        state: {},
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentturn",
+          message: "ping",
+        },
+        delivery: { mode: "announce" },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(1);
+    expect(jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "ping",
+    });
+  });
 });
