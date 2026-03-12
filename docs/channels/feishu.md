@@ -204,6 +204,8 @@ When using webhook mode, set both `channels.feishu.verificationToken` and `chann
 3. Open the **Encryption** tab (加密策略)
 4. Copy **Verification Token** and **Encrypt Key**
 
+The screenshot below shows where to find the **Verification Token**. The **Encrypt Key** is listed in the same **Encryption** section.
+
 ![Verification Token location](../images/feishu-verification-token.png)
 
 ### Configure via environment variables
