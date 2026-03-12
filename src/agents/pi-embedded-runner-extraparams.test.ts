@@ -173,7 +173,7 @@ describe("resolveExtraParams", () => {
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
     const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
       return {} as ReturnType<StreamFn>;
     };
@@ -274,7 +274,7 @@ describe("applyExtraParamsToAgent", () => {
     // reasoning: { effort: "none" }, causing a 400 on models that require
     // reasoning (e.g. deepseek/deepseek-r1).
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { model: "deepseek/deepseek-r1" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -306,7 +306,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -330,7 +330,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -355,7 +355,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not inject effort when payload already has reasoning.max_tokens", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning: { max_tokens: 256 } };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -379,7 +379,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "medium" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -586,7 +586,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -617,7 +617,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("keeps thinking=off unchanged for non-Pro SiliconFlow model IDs", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -648,7 +648,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("maps thinkingLevel=off to Moonshot thinking.type=disabled", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -672,7 +672,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("maps non-off thinking levels to Moonshot thinking.type=enabled and normalizes tool_choice", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { tool_choice: "required" };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -724,7 +724,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("respects explicit Moonshot thinking param from model config", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
@@ -840,7 +840,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         tools: [
           {
@@ -889,7 +889,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         tools: [
           {
@@ -928,7 +928,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("uses explicit compat metadata for anthropic tool payload normalization", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         tools: [
           {
@@ -979,7 +979,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         contents: [
           {
@@ -1040,7 +1040,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("keeps valid Google thinkingBudget unchanged", () => {
     const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {
         config: {
           thinkingConfig: {
@@ -1469,7 +1469,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const baseStreamFn: StreamFn = (model, _context, options) => {
       calls.push(options);
       return {} as ReturnType<StreamFn>;
     };
