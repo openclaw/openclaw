@@ -355,20 +355,36 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 }
 
 /**
- * Read the gateway port from the installed scheduled task's command line.
+ * Read the gateway port from the installed scheduled task's script file.
  * Falls back to default port 18789 if not found or on error.
  */
 async function readScheduledTaskPort(taskName: string): Promise<number> {
+  // First, get the task script path from schtasks query
   const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
   if (res.code !== 0) {
     return 18789;
   }
 
   const output = res.stdout || res.stderr || "";
-  // Extract --port argument from task command line
-  const portMatch = output.match(/--port\s+(\d+)/);
-  if (portMatch) {
-    return parseInt(portMatch[1], 10);
+  
+  // Extract the task script path (the .cmd file)
+  const taskPathMatch = output.match(/Run As User\s+:.*?\r?\nTask To Run\s+:.*?\r?\nStart In\s+:.*?\r?\nComment\s+:.*?\r?\nStatus\s+:.*?\r?\nLast Run Time\s+:.*?\r?\nLast Result\s+:.*?\r?\nAuthor\s+:.*?\r?\nSchedule To Run\s+:.*?\r?\nSchedule\s+:.*?\r?\nSchedule Type\s+:.*?\r?\nModifying User\s+:.*?\r?\nSecurity Options\s+:.*?\r?\nPower Management\s+:.*?\r?\nRun As User\s+:.*?\r?\nTask To Run\s+: (.+?)\r?\n/);
+  
+  // Alternative: look for the .cmd path in the output
+  const cmdPathMatch = output.match(/(.*?gateway\.cmd)/i);
+  
+  if (cmdPathMatch) {
+    const scriptPath = cmdPathMatch[1].trim();
+    try {
+      // Read the script file and extract --port argument
+      const scriptContent = await fs.readFile(scriptPath, "utf8");
+      const portMatch = scriptContent.match(/--port\s+(\d+)/);
+      if (portMatch) {
+        return parseInt(portMatch[1], 10);
+      }
+    } catch {
+      // Failed to read script file, fall back to default
+    }
   }
 
   // Fall back to default port
