@@ -343,7 +343,7 @@ describe("backup create — exclude patterns", () => {
       backupCreateCommand(runtime, {
         excludeFile: "/tmp/nonexistent-exclude-file.txt",
       }),
-    ).rejects.toThrow(/file not found/i);
+    ).rejects.toThrow(/--exclude-file.*nonexistent/i);
   });
 
   it("--exclude credentials/ without --allow-exclude-protected warns", async () => {

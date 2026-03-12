@@ -12,13 +12,6 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
-type BackupManifestExcludedEntry = {
-  path: string;
-  pattern: string;
-  source: string;
-  bytes: number;
-};
-
 // P2-012: Tolerant reader manifest extends shared base with optional/permissive types.
 // Omit 'excludedStats' from the base so the local definition (source: string)
 // does not conflict with the strict PatternSource when TypeScript intersects the two.
@@ -46,8 +39,6 @@ type BackupManifest = Omit<Partial<BackupManifestBase>, "excludedStats"> & {
     reason?: string;
     coveredBy?: string;
   }>;
-  /** Optional field added in the exclude patterns feature. Absent in v1 archives. */
-  excluded?: BackupManifestExcludedEntry[];
   /** Per-pattern exclusion stats. Present in new archives; absent in legacy archives. */
   excludedStats?: {
     totalFiles: number;
@@ -160,22 +151,6 @@ function parseManifest(raw: string): BackupManifest {
     });
   }
 
-  // Tolerant reader: parse excluded[] if present (absent in v1 archives — safe default).
-  let excluded: BackupManifestExcludedEntry[] | undefined;
-  if (Array.isArray(parsed.excluded)) {
-    excluded = [];
-    for (const entry of parsed.excluded) {
-      if (isRecord(entry) && typeof entry.path === "string") {
-        excluded.push({
-          path: entry.path,
-          pattern: typeof entry.pattern === "string" ? entry.pattern : "",
-          source: typeof entry.source === "string" ? entry.source : "cli",
-          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
-        });
-      }
-    }
-  }
-
   return {
     schemaVersion: 1,
     archiveRoot: parsed.archiveRoot,
@@ -207,7 +182,6 @@ function parseManifest(raw: string): BackupManifest {
       : undefined,
     assets,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
-    excluded,
   };
 }
 
@@ -266,9 +240,6 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 
   // excludedStats provides auditability only; asset presence is verified unconditionally.
-  // When both legacy excluded[] and excludedStats are present (transition archives),
-  // excluded[] is ignored for all verification decisions.
-
   const payloadRoot = path.posix.join(archiveRoot, "payload");
   for (const asset of manifest.assets) {
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");

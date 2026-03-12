@@ -6,8 +6,6 @@ import ignore from "ignore";
 // ---------------------------------------------------------------------------
 import type { ExcludedStats, PatternSource } from "../commands/backup-shared.js";
 
-export type { PatternSource };
-
 export interface ExcludeSpec {
   readonly exclude: readonly string[];
   readonly excludeFile?: string;
@@ -140,7 +138,8 @@ async function readPatternFile(filePath: string, opts: ReadPatternFileOpts): Pro
       return [];
     }
     if (opts.throwOnError) {
-      throw new ExcludeFileError(filePath, "file not found");
+      const reason = err instanceof Error ? err.message : "file not found";
+      throw new ExcludeFileError(filePath, reason);
     }
     return [];
   }
@@ -174,23 +173,19 @@ export async function resolveExcludePatterns(
     }
   }
 
-  // Layer 2: auto-detect .backupignore in stateDir (P2-013: uses shared helper)
+  // Layer 2: auto-detect .backupignore in stateDir
+  // readPatternFile with throwOnError:false returns [] if the file is missing.
   const autoIgnoreFile = resolve(stateDir, ".backupignore");
-  try {
-    await fs.access(autoIgnoreFile);
-    const lines = await readPatternFile(autoIgnoreFile, {
-      permissionCheck: true,
-      symLinkCheck: true,
-      throwOnError: false,
-    });
-    for (const l of lines) {
-      patterns.push(l);
-      if (!sources.has(l)) {
-        sources.set(l, "auto-file");
-      }
+  const autoLines = await readPatternFile(autoIgnoreFile, {
+    permissionCheck: true,
+    symLinkCheck: true,
+    throwOnError: false,
+  });
+  for (const l of autoLines) {
+    patterns.push(l);
+    if (!sources.has(l)) {
+      sources.set(l, "auto-file");
     }
-  } catch {
-    // Auto-detected file doesn't exist — that's fine.
   }
 
   // Layer 3: --exclude-file (P2-011: symlink check, P2-013: shared helper)
@@ -379,7 +374,7 @@ export function buildExcludeFilter(
   };
 
   const getExcludedStats = (): ExcludedStats => {
-    const byPattern = [...patternCounters.values()];
+    const byPattern = [...patternCounters.values()].map((p) => ({ ...p }));
     return {
       totalFiles: byPattern.reduce((sum, p) => sum + p.files, 0),
       totalBytes: byPattern.reduce((sum, p) => sum + p.bytes, 0),
