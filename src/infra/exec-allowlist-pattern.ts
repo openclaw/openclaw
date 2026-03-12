@@ -9,7 +9,7 @@ function normalizeMatchTarget(value: string): string {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
     return stripped.replace(/\\/g, "/").toLowerCase();
   }
-  return value.replace(/\\\\/g, "/").toLowerCase();
+  return value.replace(/\\\\/g, "/");
 }
 
 function tryRealpath(value: string): string | null {
@@ -46,7 +46,7 @@ function compileGlobRegex(pattern: string): RegExp {
       continue;
     }
     if (ch === "?") {
-      regex += ".";
+      regex += "[^/]";
       i += 1;
       continue;
     }
@@ -55,7 +55,7 @@ function compileGlobRegex(pattern: string): RegExp {
   }
   regex += "$";
 
-  const compiled = new RegExp(regex, "i");
+  const compiled = new RegExp(regex, process.platform === "win32" ? "i" : "");
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
