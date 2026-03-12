@@ -1,8 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
+} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+} from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -382,6 +390,16 @@ export function resolveDefaultModelForAgent(params: {
   });
 }
 
+function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
+  if (params.agentId) {
+    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+    if (override !== undefined) {
+      return override;
+    }
+  }
+  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+}
+
 export function resolveSubagentConfiguredModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -419,6 +437,7 @@ export function buildAllowedModelSet(params: {
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
+  agentId?: string;
 }): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
@@ -466,6 +485,25 @@ export function buildAllowedModelSet(params: {
         name: parsed.model,
         provider: parsed.provider,
       });
+    }
+  }
+
+  for (const fallback of resolveAllowedFallbacks({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  })) {
+    const parsed = parseModelRef(String(fallback), params.defaultProvider);
+    if (parsed) {
+      const key = modelKey(parsed.provider, parsed.model);
+      allowedKeys.add(key);
+
+      if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+        syntheticCatalogEntries.set(key, {
+          id: parsed.model,
+          name: parsed.model,
+          provider: parsed.provider,
+        });
+      }
     }
   }
 
