@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -449,7 +450,7 @@ export async function sendMessageBlueBubbles(
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -477,6 +478,21 @@ export async function sendMessageBlueBubbles(
   const effectId = resolveEffectId(opts.effectId);
   const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
   const wantsEffect = Boolean(effectId);
+
+  // Lazy-refresh Private API status when it's unknown and we need it for reply/effect.
+  // The cache expires after 10 minutes; without this, replies silently degrade to plain sends.
+  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+    const serverInfo = await fetchBlueBubblesServerInfo({
+      baseUrl,
+      password,
+      accountId: account.accountId,
+      timeoutMs: 5000,
+    }).catch(() => null);
+    if (serverInfo) {
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+    }
+  }
+
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,
     wantsReplyThread,
