@@ -1,9 +1,11 @@
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  promptAccountId,
+  patchScopedAccountConfig,
   promptChannelAccessConfig,
+  resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type DmPolicy,
@@ -58,64 +60,30 @@ function updateIrcAccountConfig(
   accountId: string,
   patch: Partial<IrcAccountConfig>,
 ): CoreConfig {
-  const current = cfg.channels?.irc ?? {};
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        irc: {
-          ...current,
-          ...patch,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...current,
-        accounts: {
-          ...current.accounts,
-          [accountId]: {
-            ...current.accounts?.[accountId],
-            ...patch,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch,
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  }) as CoreConfig;
 }
 
 function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.irc?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "irc",
+    dmPolicy,
+  }) as CoreConfig;
 }
 
 function setIrcAllowFrom(cfg: CoreConfig, allowFrom: string[]): CoreConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        allowFrom,
-      },
-    },
-  };
+  return setTopLevelChannelAllowFrom({
+    cfg,
+    channel: "irc",
+    allowFrom,
+  }) as CoreConfig;
 }
 
 function setIrcNickServ(
@@ -308,19 +276,16 @@ export const ircOnboardingAdapter: ChannelOnboardingAdapter = {
     forceAllowFrom,
   }) => {
     let next = cfg as CoreConfig;
-    const ircOverride = accountOverrides.irc?.trim();
     const defaultAccountId = resolveDefaultIrcAccountId(next);
-    let accountId = ircOverride || defaultAccountId;
-    if (shouldPromptAccountIds && !ircOverride) {
-      accountId = await promptAccountId({
-        cfg: next,
-        prompter,
-        label: "IRC",
-        currentId: accountId,
-        listAccountIds: listIrcAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg: next,
+      prompter,
+      label: "IRC",
+      accountOverride: accountOverrides.irc,
+      shouldPromptAccountIds,
+      listAccountIds: listIrcAccountIds,
+      defaultAccountId,
+    });
 
     const resolved = resolveIrcAccount({ cfg: next, accountId });
     const isDefaultAccount = accountId === DEFAULT_ACCOUNT_ID;

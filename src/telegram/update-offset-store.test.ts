@@ -78,4 +78,32 @@ describe("deleteTelegramUpdateOffset", () => {
       ).toBeNull();
     });
   });
+
+  it("ignores invalid persisted update IDs from disk", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const offsetPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(offsetPath), { recursive: true });
+      await fs.writeFile(
+        offsetPath,
+        `${JSON.stringify({ version: 2, lastUpdateId: -1, botId: "111111" }, null, 2)}\n`,
+        "utf-8",
+      );
+      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+
+      await fs.writeFile(
+        offsetPath,
+        `${JSON.stringify({ version: 2, lastUpdateId: Number.POSITIVE_INFINITY, botId: "111111" }, null, 2)}\n`,
+        "utf-8",
+      );
+      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+    });
+  });
+
+  it("rejects writing invalid update IDs", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await expect(
+        writeTelegramUpdateOffset({ accountId: "default", updateId: -1 as number }),
+      ).rejects.toThrow(/non-negative safe integer/i);
+    });
+  });
 });

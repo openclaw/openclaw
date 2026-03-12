@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("Ollama auto-discovery", () => {
   let originalVitest: string | undefined;
@@ -55,7 +55,7 @@ describe("Ollama auto-discovery", () => {
     }) as unknown as typeof fetch;
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
 
     expect(providers?.ollama).toBeDefined();
     expect(providers?.ollama?.apiKey).toBe("ollama-local");
@@ -73,7 +73,7 @@ describe("Ollama auto-discovery", () => {
     mockOllamaUnreachable();
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProviders({ agentDir });
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
 
     expect(providers?.ollama).toBeUndefined();
     const ollamaWarnings = warnSpy.mock.calls.filter(
@@ -89,7 +89,7 @@ describe("Ollama auto-discovery", () => {
     mockOllamaUnreachable();
 
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await resolveImplicitProviders({
+    await resolveImplicitProvidersForTest({
       agentDir,
       explicitProviders: {
         ollama: {

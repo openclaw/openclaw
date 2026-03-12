@@ -9,6 +9,17 @@ export function formatAllowFromLowercase(params: {
     .map((entry) => entry.toLowerCase());
 }
 
+export function formatNormalizedAllowFromEntries(params: {
+  allowFrom: Array<string | number>;
+  normalizeEntry: (entry: string) => string | undefined | null;
+}): string[] {
+  return params.allowFrom
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
+    .map((entry) => params.normalizeEntry(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
 export function isNormalizedSenderAllowed(params: {
   senderId: string | number;
   allowFrom: Array<string | number>;

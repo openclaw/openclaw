@@ -23,6 +23,11 @@ function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
   return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
 }
 
+function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
+  return (model.compat as { supportsUsageInStreaming?: boolean } | undefined)
+    ?.supportsUsageInStreaming;
+}
+
 function createTemplateModel(provider: string, id: string): Model<Api> {
   return {
     id,
@@ -34,6 +39,36 @@ function createTemplateModel(provider: string, id: string): Model<Api> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 8_192,
+  } as Model<Api>;
+}
+
+function createOpenAITemplateModel(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    input: ["text", "image"],
+    reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_768,
+  } as Model<Api>;
+}
+
+function createOpenAICodexTemplateModel(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "openai-codex",
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    input: ["text", "image"],
+    reasoning: true,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 272_000,
+    maxTokens: 128_000,
   } as Model<Api>;
 }
 
@@ -50,6 +85,13 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): 
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
   expect(supportsDeveloperRole(normalized)).toBe(false);
+}
+
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsUsageInStreaming(normalized)).toBe(false);
 }
 
 function expectResolvedForwardCompat(
@@ -177,6 +219,13 @@ describe("normalizeModelCompat", () => {
     });
   });
 
+  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
+    expectSupportsUsageInStreamingForcedOff({
+      provider: "custom-cpa",
+      baseUrl: "https://cpa.example.com/v1",
+    });
+  });
+
   it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
     expectSupportsDeveloperRoleForcedOff({
       provider: "qwen-proxy",
@@ -213,6 +262,17 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
+  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsUsageInStreaming: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
     const model = {
       ...baseModel(),
@@ -223,18 +283,27 @@ describe("normalizeModelCompat", () => {
     const normalized = normalizeModelCompat(model);
     expect(normalized).not.toBe(model);
     expect(supportsDeveloperRole(model)).toBeUndefined();
+    expect(supportsUsageInStreaming(model)).toBeUndefined();
     expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
   it("does not override explicit compat false", () => {
     const model = baseModel();
-    model.compat = { supportsDeveloperRole: false };
+    model.compat = { supportsDeveloperRole: false, supportsUsageInStreaming: false };
     const normalized = normalizeModelCompat(model);
     expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 });
 
 describe("isModernModelRef", () => {
+  it("includes OpenAI gpt-5.4 variants in modern selection", () => {
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+  });
+
   it("excludes opencode minimax variants from modern selection", () => {
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
@@ -244,9 +313,66 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
   });
+
+  it("accepts all opencode-go models without zen exclusions", () => {
+    expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(true);
+  });
 });
 
 describe("resolveForwardCompatModel", () => {
+  it("resolves openai gpt-5.4 via gpt-5.2 template", () => {
+    const registry = createRegistry({
+      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
+    });
+    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai gpt-5.4 without templates using normalized fallback defaults", () => {
+    const registry = createRegistry({});
+
+    const model = resolveForwardCompatModel("openai", "gpt-5.4", registry);
+
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("resolves openai gpt-5.4-pro via template fallback", () => {
+    const registry = createRegistry({
+      "openai/gpt-5.2": createOpenAITemplateModel("gpt-5.2"),
+    });
+    const model = resolveForwardCompatModel("openai", "gpt-5.4-pro", registry);
+    expectResolvedForwardCompat(model, { provider: "openai", id: "gpt-5.4-pro" });
+    expect(model?.api).toBe("openai-responses");
+    expect(model?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("resolves openai-codex gpt-5.4 via codex template fallback", () => {
+    const registry = createRegistry({
+      "openai-codex/gpt-5.2-codex": createOpenAICodexTemplateModel("gpt-5.2-codex"),
+    });
+    const model = resolveForwardCompatModel("openai-codex", "gpt-5.4", registry);
+    expectResolvedForwardCompat(model, { provider: "openai-codex", id: "gpt-5.4" });
+    expect(model?.api).toBe("openai-codex-responses");
+    expect(model?.baseUrl).toBe("https://chatgpt.com/backend-api");
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
   it("resolves anthropic opus 4.6 via 4.5 template", () => {
     const registry = createRegistry({
       "anthropic/claude-opus-4-5": createTemplateModel("anthropic", "claude-opus-4-5"),
