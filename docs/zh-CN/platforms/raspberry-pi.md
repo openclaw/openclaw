@@ -6,10 +6,10 @@ read_when:
 summary: 在 Raspberry Pi 上运行 OpenClaw（低成本自托管设置）
 title: Raspberry Pi
 x-i18n:
-  generated_at: "2026-02-03T07:53:30Z"
+  generated_at: "2026-03-12T02:06:39Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 6741eaf0115a4fa0efd6599a99e0526a20ceb30eda1d9b04cba9dd5dec84bee2
+  source_hash: 9c17d2d0ee7f0a3d671e9ea3b2512c41f7f59b7b9d43c3d06ea19751c0f3c1dc
   source_path: platforms/raspberry-pi.md
   workflow: 15
 ---
