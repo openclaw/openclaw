@@ -318,4 +318,67 @@ describe("runServiceRestart token drift", () => {
     );
     expect(service.restart).not.toHaveBeenCalled();
   });
+
+  describe("repairNotLoaded (#43602)", () => {
+    it("restart: repairs unloaded service when onNotLoaded returns null", async () => {
+      service.isLoaded.mockResolvedValue(false);
+      const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+      const serviceWithRepair = { ...service, repairNotLoaded };
+
+      const result = await runServiceRestart({
+        serviceNoun: "Gateway",
+        service: serviceWithRepair,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded: async () => null,
+      });
+
+      expect(result).toBe(true);
+      expect(repairNotLoaded).toHaveBeenCalledTimes(1);
+      const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+      const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+      expect(payload.result).toBe("restarted");
+      expect(payload.message).toContain("re-registered");
+    });
+
+    it("restart: skips repair when onNotLoaded handles it", async () => {
+      service.isLoaded.mockResolvedValue(false);
+      const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+      const serviceWithRepair = { ...service, repairNotLoaded };
+
+      const result = await runServiceRestart({
+        serviceNoun: "Gateway",
+        service: serviceWithRepair,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded: async () => ({
+          result: "restarted" as const,
+          message: "handled by SIGUSR1",
+        }),
+      });
+
+      expect(result).toBe(true);
+      expect(repairNotLoaded).not.toHaveBeenCalled();
+    });
+
+    it("restart: falls through to hints when repair returns ok:false", async () => {
+      service.isLoaded.mockResolvedValue(false);
+      const repairNotLoaded = vi.fn().mockResolvedValue({ ok: false });
+      const serviceWithRepair = { ...service, repairNotLoaded };
+
+      const result = await runServiceRestart({
+        serviceNoun: "Gateway",
+        service: serviceWithRepair,
+        renderStartHints: () => ["openclaw gateway install"],
+        opts: { json: true },
+        onNotLoaded: async () => null,
+      });
+
+      expect(result).toBe(false);
+      expect(repairNotLoaded).toHaveBeenCalledTimes(1);
+      const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+      const payload = JSON.parse(jsonLine ?? "{}") as { result?: string };
+      expect(payload.result).toBe("not-loaded");
+    });
+  });
 });

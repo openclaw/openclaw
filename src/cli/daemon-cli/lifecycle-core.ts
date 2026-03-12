@@ -350,7 +350,7 @@ export async function runServiceRestart(params: {
     return true;
   };
 
-  const loaded = await resolveServiceLoadedOrFail({
+  let loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
     fail,
@@ -377,6 +377,26 @@ export async function runServiceRestart(params: {
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
+    }
+    if (!handledNotLoaded && params.service.repairNotLoaded) {
+      // No running process to signal, but the service definition may still
+      // exist on disk (e.g. macOS LaunchAgent unloaded after sleep/idle).
+      // Re-register it so `restart` can proceed normally.  See #43602.
+      try {
+        const repair = await params.service.repairNotLoaded({ env: process.env });
+        if (repair.ok) {
+          loaded = true;
+          handledNotLoaded = {
+            result: "restarted",
+            message: `${params.serviceNoun} was not loaded — re-registered from existing service definition.`,
+          };
+          if (!json) {
+            defaultRuntime.log(handledNotLoaded.message);
+          }
+        }
+      } catch {
+        // Best-effort repair; fall through to normal not-loaded handling.
+      }
     }
     if (!handledNotLoaded) {
       await handleServiceNotLoaded({
