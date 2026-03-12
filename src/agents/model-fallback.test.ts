@@ -1399,6 +1399,69 @@ describe("runWithModelFallback", () => {
       });
     });
   });
+
+  describe("HTTP 500 cross-provider failover", () => {
+    it("falls back to cross-provider model on Anthropic HTTP 500", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["together/Qwen3.5-397B", "anthropic/claude-sonnet-4-20250514"],
+            },
+          },
+        },
+      });
+      // Simulate Anthropic SDK APIError with status 500
+      const apiError = Object.assign(new Error("Internal server error"), {
+        status: 500,
+        name: "APIError",
+      });
+      const run = vi.fn().mockRejectedValueOnce(apiError).mockResolvedValueOnce("qwen-ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("qwen-ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6");
+      expect(run).toHaveBeenNthCalledWith(2, "together", "Qwen3.5-397B");
+      expect(result.attempts).toHaveLength(1);
+      expect(result.attempts[0]?.reason).toBe("timeout");
+    });
+
+    it("classifies Anthropic 500 as timeout reason in failover attempts", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["together/Qwen3.5-397B"],
+            },
+          },
+        },
+      });
+      const apiError = Object.assign(new Error("Internal server error"), {
+        status: 500,
+        name: "APIError",
+      });
+      const run = vi.fn().mockRejectedValueOnce(apiError).mockResolvedValueOnce("fallback-ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+      });
+
+      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.attempts[0]?.status).toBe(500);
+    });
+  });
 });
 
 describe("runWithImageModelFallback", () => {
