@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -149,6 +150,23 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectCompletedWithoutBootstrap(tempDir);
+  });
+
+  it("writes onboarding state under OPENCLAW_WORKSPACE_META_DIR when configured", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await withEnvAsync({ OPENCLAW_WORKSPACE_META_DIR: "openclaw-meta" }, async () => {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    });
+
+    await expect(
+      fs.access(path.join(tempDir, "openclaw-meta", "workspace-state.json")),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(tempDir, ".openclaw", "workspace-state.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 

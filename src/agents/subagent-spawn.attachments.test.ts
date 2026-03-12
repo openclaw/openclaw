@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { decodeStrictBase64, spawnSubagentDirect } from "./subagent-spawn.js";
 
@@ -260,5 +261,25 @@ describe("spawnSubagentDirect filename validation", () => {
       deleteTranscript: true,
       emitLifecycleHooks: false,
     });
+  });
+
+  it("stores materialized attachments under OPENCLAW_WORKSPACE_META_DIR when configured", async () => {
+    const result = await withEnvAsync({ OPENCLAW_WORKSPACE_META_DIR: "openclaw-meta" }, async () =>
+      spawnSubagentDirect(
+        {
+          task: "test",
+          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+        },
+        ctx,
+      ),
+    );
+
+    expect(result.status).toBe("accepted");
+    const attachmentsRoot = path.join(workspaceDirOverride, "openclaw-meta", "attachments");
+    const retainedDirs = fs.existsSync(attachmentsRoot)
+      ? fs.readdirSync(attachmentsRoot).filter((entry) => !entry.startsWith("."))
+      : [];
+    expect(retainedDirs).toHaveLength(1);
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath, resolveWorkspaceMetaDir } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
 export type PluginSourceRoots = {
@@ -21,7 +21,9 @@ export function resolvePluginSourceRoots(params: {
   const workspaceRoot = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
   const stock = resolveBundledPluginsDir(env);
   const global = path.join(resolveConfigDir(env), "extensions");
-  const workspace = workspaceRoot ? path.join(workspaceRoot, ".openclaw", "extensions") : undefined;
+  const workspace = workspaceRoot
+    ? path.join(resolveWorkspaceMetaDir(workspaceRoot, env), "extensions")
+    : undefined;
   return { stock, global, workspace };
 }
 

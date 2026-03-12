@@ -314,6 +314,42 @@ export function resolveConfigDir(
   return newDir;
 }
 
+const DEFAULT_WORKSPACE_META_DIRNAME = ".openclaw";
+
+function normalizeWorkspaceMetaDirname(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "." || trimmed === "..") {
+    return undefined;
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\u0000")) {
+    return undefined;
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\r\n\t\u0000-\u001F\u007F]/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+export function resolveWorkspaceMetaDirname(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    normalizeWorkspaceMetaDirname(
+      env.OPENCLAW_WORKSPACE_META_DIR?.trim() || env.CLAWDBOT_WORKSPACE_META_DIR?.trim(),
+    ) ?? DEFAULT_WORKSPACE_META_DIRNAME
+  );
+}
+
+export function resolveWorkspaceMetaDir(
+  workspaceDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return path.join(resolveUserPath(workspaceDir, env, homedir), resolveWorkspaceMetaDirname(env));
+}
+
 export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }

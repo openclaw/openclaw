@@ -12,6 +12,8 @@ import {
   resolveHomeDir,
   resolveJidToE164,
   resolveUserPath,
+  resolveWorkspaceMetaDir,
+  resolveWorkspaceMetaDirname,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -135,6 +137,38 @@ describe("resolveConfigDir", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
+  });
+});
+
+describe("resolveWorkspaceMetaDirname", () => {
+  it("defaults to .openclaw", () => {
+    expect(resolveWorkspaceMetaDirname({} as NodeJS.ProcessEnv)).toBe(".openclaw");
+  });
+
+  it("uses OPENCLAW_WORKSPACE_META_DIR when set", () => {
+    expect(
+      resolveWorkspaceMetaDirname({
+        OPENCLAW_WORKSPACE_META_DIR: "openclaw-meta",
+      } as NodeJS.ProcessEnv),
+    ).toBe("openclaw-meta");
+  });
+
+  it("falls back to .openclaw for invalid overrides", () => {
+    expect(
+      resolveWorkspaceMetaDirname({
+        OPENCLAW_WORKSPACE_META_DIR: "../bad-path",
+      } as NodeJS.ProcessEnv),
+    ).toBe(".openclaw");
+  });
+});
+
+describe("resolveWorkspaceMetaDir", () => {
+  it("joins the workspace root with the configured meta dir name", () => {
+    expect(
+      resolveWorkspaceMetaDir("/tmp/workspace", {
+        OPENCLAW_WORKSPACE_META_DIR: "openclaw-meta",
+      } as NodeJS.ProcessEnv),
+    ).toBe(path.join(path.resolve("/tmp/workspace"), "openclaw-meta"));
   });
 });
 

@@ -112,4 +112,18 @@ describe("formatPluginSourceForTable", () => {
       workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
     });
   });
+
+  it("resolves workspace roots from OPENCLAW_WORKSPACE_META_DIR", () => {
+    const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
+    const roots = resolvePluginSourceRoots({
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        OPENCLAW_WORKSPACE_META_DIR: "openclaw-meta",
+      },
+      workspaceDir: "~/ws",
+    });
+
+    expect(roots.workspace).toBe(path.join(homeDir, "ws", "openclaw-meta", "extensions"));
+  });
 });

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveWorkspaceMetaDir, resolveWorkspaceMetaDirname } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
@@ -120,8 +121,10 @@ export async function materializeSubagentAttachments(params: {
 
   const attachmentId = crypto.randomUUID();
   const childWorkspaceDir = resolveAgentWorkspaceDir(params.config, params.targetAgentId);
-  const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
-  const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
+  const workspaceMetaDir = resolveWorkspaceMetaDir(childWorkspaceDir);
+  const workspaceMetaDirname = resolveWorkspaceMetaDirname();
+  const absRootDir = path.join(workspaceMetaDir, "attachments");
+  const relDir = path.posix.join(workspaceMetaDirname, "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
 
   const fail = (error: string): never => {
