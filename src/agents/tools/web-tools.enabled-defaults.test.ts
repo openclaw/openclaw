@@ -978,6 +978,22 @@ describe("web_search tavily provider", () => {
     expect(body.include_domains).toBeUndefined();
   });
 
+  it("allows mixed allowlist and denylist in domain_filter for Tavily", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const result = await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: ["nature.com", "science.org", "-reddit.com", "-pinterest.com"],
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.include_domains).toEqual(["nature.com", "science.org"]);
+    expect(body.exclude_domains).toEqual(["reddit.com", "pinterest.com"]);
+    expect((result?.details as { error?: string })?.error).toBeUndefined();
+  });
+
   it("exposes Tavily-specific schema params", () => {
     const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
     const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)

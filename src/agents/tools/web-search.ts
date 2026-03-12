@@ -305,7 +305,7 @@ function createWebSearchSchema(params: {
       domain_filter: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "Domain filter. Allowlist: ['nature.com'] or denylist (prefix with '-'): ['-reddit.com']. Cannot mix.",
+            "Domain filter. Allowlist: ['nature.com'], denylist (prefix with '-'): ['-reddit.com'], or both: ['nature.com', '-reddit.com'].",
         }),
       ),
     });
@@ -2366,7 +2366,7 @@ export function createWebSearchTool(options?: {
       if (domainFilter && domainFilter.length > 0) {
         const hasDenylist = domainFilter.some((d) => d.startsWith("-"));
         const hasAllowlist = domainFilter.some((d) => !d.startsWith("-"));
-        if (hasDenylist && hasAllowlist) {
+        if (hasDenylist && hasAllowlist && provider !== "tavily") {
           return jsonResult({
             error: "invalid_domain_filter",
             message:
