@@ -373,10 +373,7 @@ export function createHooksRequestHandler(
     bindHost: string;
     port: number;
     logHooks: SubsystemLogger;
-    getClientIpConfig?: () => {
-      trustedProxies?: string[];
-      allowRealIpFallback?: boolean;
-    };
+    getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
