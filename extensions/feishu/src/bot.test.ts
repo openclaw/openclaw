@@ -1976,6 +1976,120 @@ describe("broadcast dispatch", () => {
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
   });
 
+  it("allows first topic message without mention when firstMessageInTopicTrigger=true", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-topic-group": {
+              requireMention: true,
+              firstMessageInTopicTrigger: true,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-topic-first-no-mention",
+        chat_id: "oc-topic-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "first topic message" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects non-first topic messages without mention when firstMessageInTopicTrigger=true", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-topic-group": {
+              requireMention: true,
+              firstMessageInTopicTrigger: true,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-topic-follow-up-no-mention",
+        chat_id: "oc-topic-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "follow-up in thread" }),
+        root_id: "msg-root-123",
+        parent_id: "msg-root-123",
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps one active broadcast dispatcher for first topic trigger messages", async () => {
+    const cfg: ClawdbotConfig = {
+      broadcast: { "oc-broadcast-group": ["susan", "main"] },
+      agents: { list: [{ id: "main" }, { id: "susan" }] },
+      channels: {
+        feishu: {
+          groups: {
+            "oc-broadcast-group": {
+              requireMention: true,
+              firstMessageInTopicTrigger: true,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-broadcast-topic-first-no-mention",
+        chat_id: "oc-broadcast-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "first topic message" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
+    // Both agents still receive context/inference in broadcast mode.
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+    // One active agent must own real Feishu reply dispatch.
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
   it("preserves single-agent dispatch when no broadcast config", async () => {
     const cfg: ClawdbotConfig = {
       channels: {

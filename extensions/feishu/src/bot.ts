@@ -990,6 +990,7 @@ export async function handleFeishuMessage(params: {
     : null;
 
   let requireMention = false; // DMs never require mention; groups may override below
+  let allowWithoutMention = false;
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -1050,7 +1051,12 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    const firstMessageInTopicTrigger =
+      groupConfig?.firstMessageInTopicTrigger ?? feishuCfg?.firstMessageInTopicTrigger ?? false;
+    const isFirstMessageInTopic = !ctx.rootId && !ctx.parentId;
+    allowWithoutMention = firstMessageInTopicTrigger && isFirstMessageInTopic;
+
+    if (requireMention && !ctx.mentionedBot && !allowWithoutMention) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -1070,6 +1076,11 @@ export async function handleFeishuMessage(params: {
         });
       }
       return;
+    }
+    if (requireMention && !ctx.mentionedBot && allowWithoutMention) {
+      log(
+        `feishu[${account.accountId}]: first topic message trigger enabled for group ${ctx.chatId}`,
+      );
     }
   } else {
   }
@@ -1376,7 +1387,9 @@ export async function handleFeishuMessage(params: {
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
       const activeAgentId =
-        ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
+        ctx.mentionedBot || !requireMention || allowWithoutMention
+          ? normalizeAgentId(route.agentId)
+          : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
       const hasKnownAgents = agentIds.length > 0;
 
