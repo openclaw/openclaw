@@ -152,7 +152,17 @@ async function writeCachedCommandHash(
     // state directory resolution (e.g., incomplete Windows extended-length
     // path prefix "\\?\" without a drive letter).
     // Fixes #44199: ENOENT mkdir '\\?' on Windows
-    if (!dirPath || dirPath === "." || dirPath.length < 2) {
+    //
+    // Check for:
+    // - Empty or current-directory paths
+    // - Incomplete Windows UNC/extended-length prefixes (\\?\, \\?\C:, etc.)
+    // - Non-absolute paths (relative paths should not appear here)
+    if (
+      !dirPath ||
+      dirPath === "." ||
+      /^\\\\[?]([/\\].*)?$/.test(dirPath) ||
+      !path.isAbsolute(dirPath)
+    ) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
     
