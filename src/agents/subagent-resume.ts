@@ -231,6 +231,106 @@ export function transcriptEndsWithCompletedAssistantTurn(transcriptPath: string)
   }
 }
 
+/**
+ * Return the timestamp (epoch ms) of the last **completed** assistant turn in
+ * the transcript, or `null` if no completed assistant turn exists.
+ *
+ * A "completed" turn is an assistant message whose `content` array contains no
+ * pending `tool_use` blocks.  The same backward-scan logic as
+ * `transcriptEndsWithCompletedAssistantTurn` is used, but this function also
+ * returns the turn's timestamp so callers can compare it against a run-start
+ * boundary to detect stale output left by a prior run on the same session.
+ *
+ * Timestamp parsing is best-effort: ISO-8601 strings and epoch-ms numbers are
+ * both accepted.  Returns `null` when the timestamp is absent or unparseable.
+ */
+export function transcriptLastCompletedAssistantTurnTimestamp(
+  transcriptPath: string,
+): number | null {
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.split("\n");
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]?.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+
+      if (parsed === null || typeof parsed !== "object") {
+        continue;
+      }
+
+      const record = parsed as Record<string, unknown>;
+      if (record.type !== "message") {
+        continue;
+      }
+
+      const msg = record.message;
+      if (msg === null || typeof msg !== "object") {
+        return null;
+      }
+
+      const msgRecord = msg as Record<string, unknown>;
+      if (msgRecord.role !== "assistant") {
+        // Last turn is not from the assistant — no completed assistant turn here.
+        return null;
+      }
+
+      const contentArr = msgRecord.content;
+      if (!Array.isArray(contentArr)) {
+        // Non-array content (plain string) — treat as a completed text turn.
+        return parseRecordTimestampToMs(record);
+      }
+
+      const hasPendingToolUse = contentArr.some(
+        (block) =>
+          block !== null &&
+          typeof block === "object" &&
+          (block as Record<string, unknown>).type === "tool_use",
+      );
+
+      if (hasPendingToolUse) {
+        // Last assistant turn has pending tool_use — not a completed turn.
+        return null;
+      }
+
+      return parseRecordTimestampToMs(record);
+    }
+
+    // No message lines found at all.
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a `timestamp` field from a JSONL transcript record into epoch ms.
+ * Accepts ISO-8601 strings and numeric epoch-ms values.  Returns `null` when
+ * the field is absent, empty, or cannot be parsed.
+ */
+function parseRecordTimestampToMs(record: Record<string, unknown>): number | null {
+  const ts = record.timestamp;
+  if (typeof ts === "number" && ts > 0 && Number.isFinite(ts)) {
+    return ts;
+  }
+  if (typeof ts === "string" && ts.trim()) {
+    const ms = Date.parse(ts);
+    if (!Number.isNaN(ms)) {
+      return ms;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Session-store helper (private)
 // ---------------------------------------------------------------------------
@@ -440,7 +540,15 @@ export async function rehydrateSessionStoreEntries(
  */
 export function resolveSubagentRunResumability(
   entry: SubagentRunRecord,
-  opts?: { transcriptPath?: string },
+  opts?: {
+    transcriptPath?: string;
+    /**
+     * Override the run-start boundary used for the stale-transcript check.
+     * Defaults to `entry.startedAt ?? entry.createdAt`.  Pass a value here in
+     * tests to control the comparison without manipulating real timestamps.
+     */
+    runStartMs?: number;
+  },
 ): SubagentRunResumability {
   // ① Already completed — just needs announce retry.
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
@@ -505,10 +613,29 @@ export function resolveSubagentRunResumability(
     return "resumable-fresh";
   }
 
-  if (transcriptEndsWithCompletedAssistantTurn(transcriptPath)) {
-    // The transcript ends with a completed assistant turn (no pending tool_use
-    // blocks) — the run finished but its completion was never recorded in the
-    // registry.  Capture the result from the transcript and complete.
+  const lastAssistantTurnMs = transcriptLastCompletedAssistantTurnTimestamp(transcriptPath);
+  if (lastAssistantTurnMs !== null) {
+    // The transcript has a completed assistant turn — but verify it belongs to
+    // the CURRENT run, not a prior run that shared the same childSessionKey.
+    //
+    // After replaceSubagentRunAfterSteer, the new run record is assigned a
+    // fresh runId and startedAt while keeping the same childSessionKey as the
+    // steered-away run.  If the gateway restarts before the new run has written
+    // anything to the transcript, the old run's final assistant turn is still
+    // the last line.  Without this boundary check we would incorrectly replay
+    // stale output from the prior run instead of re-dispatching the pending task.
+    //
+    // The run-start boundary defaults to startedAt (set by
+    // replaceSubagentRunAfterSteer) or falls back to createdAt if startedAt was
+    // never set (e.g. the run was registered but never actually started).
+    const runStartMs = opts?.runStartMs ?? entry.startedAt ?? entry.createdAt;
+    if (lastAssistantTurnMs < runStartMs) {
+      // The final assistant turn pre-dates this run's start time — it is stale
+      // output from a prior run on the same session.  Re-dispatch to avoid
+      // replaying the wrong result.
+      return "resumable-fresh";
+    }
+    // The turn was written during (or after) the current run — safe to replay.
     return "resumable-replay";
   }
 

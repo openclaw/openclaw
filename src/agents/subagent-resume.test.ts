@@ -118,6 +118,7 @@ import {
   routeResumedRun,
   transcriptEndsWithCompletedAssistantTurn,
   transcriptHasAssistantTurn,
+  transcriptLastCompletedAssistantTurnTimestamp,
 } from "./subagent-resume.js";
 
 // ---------------------------------------------------------------------------
@@ -557,6 +558,185 @@ describe("resolveSubagentRunResumability", () => {
     });
 
     expect(resolveSubagentRunResumability(entry, { transcriptPath })).toBe("resumable-fresh");
+  });
+
+  it("returns resumable-fresh (not resumable-replay) when the last assistant turn pre-dates the current run start", () => {
+    // Scenario: replaceSubagentRunAfterSteer was called, producing a new run
+    // with a fresh startedAt.  The gateway restarted before the new run wrote
+    // anything.  The transcript still ends with the OLD run's completed
+    // assistant turn.  Without the boundary check this would incorrectly become
+    // resumable-replay, replaying stale output.
+    const sessionId = "sess-stale-post-steer";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    // Build a transcript whose final assistant turn has a timestamp
+    // well before the current run's startedAt.
+    const priorRunEndMs = Date.now() - 10_000; // 10 seconds ago
+    const staleAssistantLine = JSON.stringify({
+      type: "message",
+      id: "msg-stale",
+      parentId: null,
+      timestamp: new Date(priorRunEndMs).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Prior run completed." }],
+      },
+    });
+
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), staleAssistantLine].join("\n"),
+    );
+
+    // The new (post-steer) run started 5 seconds ago — after the stale turn.
+    const newRunStartMs = Date.now() - 5_000;
+    const entry = makeRun({
+      childSessionKey: "agent:main:subagent:stale-post-steer",
+      startedAt: newRunStartMs,
+      createdAt: newRunStartMs - 100,
+    });
+    mockLoadSessionStore.mockReturnValue({
+      [entry.childSessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    // Provide explicit runStartMs override to be independent of wall-clock
+    // drift during the test (uses entry.startedAt by default, but the override
+    // makes the intent explicit).
+    expect(
+      resolveSubagentRunResumability(entry, { transcriptPath, runStartMs: newRunStartMs }),
+    ).toBe("resumable-fresh");
+  });
+
+  it("returns resumable-replay when the last assistant turn post-dates the current run start", () => {
+    // Normal completion scenario: the assistant turn was written AFTER the
+    // current run started — it genuinely belongs to this run.
+    const sessionId = "sess-current-run-replay";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+
+    const runStartMs = Date.now() - 5_000; // run started 5 seconds ago
+    const turnMs = Date.now() - 1_000; // turn written 1 second ago (after run start)
+
+    const currentAssistantLine = JSON.stringify({
+      type: "message",
+      id: "msg-current",
+      parentId: null,
+      timestamp: new Date(turnMs).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Current run completed." }],
+      },
+    });
+
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), currentAssistantLine].join("\n"),
+    );
+
+    const entry = makeRun({
+      childSessionKey: "agent:main:subagent:current-run-replay",
+      startedAt: runStartMs,
+      createdAt: runStartMs - 100,
+    });
+    mockLoadSessionStore.mockReturnValue({
+      [entry.childSessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    expect(resolveSubagentRunResumability(entry, { transcriptPath, runStartMs })).toBe(
+      "resumable-replay",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// transcriptLastCompletedAssistantTurnTimestamp
+// ---------------------------------------------------------------------------
+
+describe("transcriptLastCompletedAssistantTurnTimestamp", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-resume-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns the epoch-ms timestamp of a completed assistant turn", () => {
+    const sessionId = "lcat-1";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const expectedMs = Date.now() - 2_000;
+    const line = JSON.stringify({
+      type: "message",
+      id: "msg-a",
+      parentId: null,
+      timestamp: new Date(expectedMs).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+      },
+    });
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), line].join("\n"),
+    );
+    const result = transcriptLastCompletedAssistantTurnTimestamp(transcriptPath);
+    // Allow 1-second tolerance for ISO round-trip rounding.
+    expect(result).not.toBeNull();
+    expect(Math.abs((result as number) - expectedMs)).toBeLessThan(1_000);
+  });
+
+  it("returns null when the last message has a pending tool_use block", () => {
+    const sessionId = "lcat-2";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), assistantToolUseMessageLine("t1")].join(
+        "\n",
+      ),
+    );
+    expect(transcriptLastCompletedAssistantTurnTimestamp(transcriptPath)).toBeNull();
+  });
+
+  it("returns null when the last message is a user turn", () => {
+    const sessionId = "lcat-3";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, [sessionHeaderLine(sessionId), userMessageLine()].join("\n"));
+    expect(transcriptLastCompletedAssistantTurnTimestamp(transcriptPath)).toBeNull();
+  });
+
+  it("returns null when the file does not exist", () => {
+    expect(
+      transcriptLastCompletedAssistantTurnTimestamp(path.join(tmpDir, "missing.jsonl")),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty file", () => {
+    const transcriptPath = path.join(tmpDir, "empty.jsonl");
+    fs.writeFileSync(transcriptPath, "");
+    expect(transcriptLastCompletedAssistantTurnTimestamp(transcriptPath)).toBeNull();
+  });
+
+  it("accepts a numeric epoch-ms timestamp field", () => {
+    const sessionId = "lcat-4";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const expectedMs = Date.now() - 3_000;
+    const line = JSON.stringify({
+      type: "message",
+      id: "msg-b",
+      parentId: null,
+      timestamp: expectedMs, // numeric, not ISO string
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done (numeric ts)." }],
+      },
+    });
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), line].join("\n"),
+    );
+    const result = transcriptLastCompletedAssistantTurnTimestamp(transcriptPath);
+    expect(result).toBe(expectedMs);
   });
 });
 
