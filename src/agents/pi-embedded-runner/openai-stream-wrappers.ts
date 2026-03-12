@@ -250,7 +250,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };
