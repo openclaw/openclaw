@@ -204,11 +204,18 @@ export function resolveEnableState(
   if (config.slots.memory === id) {
     return { enabled: true };
   }
-  if (config.allow.length > 0 && !config.allow.includes(id)) {
+  const explicitlyAllowed = config.allow.includes(id);
+  if (config.allow.length > 0 && !explicitlyAllowed) {
     return { enabled: false, reason: "not in allowlist" };
   }
   if (entry?.enabled === true) {
     return { enabled: true };
+  }
+  if (origin === "workspace") {
+    if (explicitlyAllowed) {
+      return { enabled: true };
+    }
+    return { enabled: false, reason: "workspace plugin (disabled by default)" };
   }
   if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
     return { enabled: true };
