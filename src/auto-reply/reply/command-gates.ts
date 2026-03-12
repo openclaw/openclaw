@@ -18,6 +18,19 @@ export function rejectUnauthorizedCommand(
   return { shouldContinue: false };
 }
 
+export function rejectNonOwnerCommand(
+  params: HandleCommandsParams,
+  commandLabel: string,
+): CommandHandlerResult | null {
+  if (params.command.senderIsOwner) {
+    return null;
+  }
+  logVerbose(
+    `Ignoring ${commandLabel} from non-owner sender: ${params.command.senderId || "<unknown>"}`,
+  );
+  return { shouldContinue: false };
+}
+
 export function requireGatewayClientScopeForInternalChannel(
   params: HandleCommandsParams,
   config: {
