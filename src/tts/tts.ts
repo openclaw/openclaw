@@ -138,6 +138,7 @@ export type ResolvedTtsConfig = {
   cli: {
     command: string;
     args?: string[];
+    sampleRate?: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -329,6 +330,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     cli: {
       command: raw.cli?.command?.trim() ?? "",
       args: raw.cli?.args ?? [],
+      sampleRate: raw.cli?.sampleRate,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -810,8 +812,9 @@ export async function textToSpeechTelephony(params: {
           continue;
         }
 
-        const output = TELEPHONY_OUTPUT.cli;
-        const extension = `.${output.format}`;
+        const outputFormat = TELEPHONY_OUTPUT.cli.format;
+        const sampleRate = config.cli.sampleRate;
+        const extension = `.${outputFormat}`;
 
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
@@ -823,7 +826,7 @@ export async function textToSpeechTelephony(params: {
             text: params.text,
             config: config.cli,
             outputPath: audioPath,
-            outputFormat: output.format,
+            outputFormat: outputFormat,
             timeoutMs: config.timeoutMs,
           });
 
@@ -835,8 +838,8 @@ export async function textToSpeechTelephony(params: {
             audioBuffer,
             latencyMs: Date.now() - providerStart,
             provider,
-            outputFormat: output.format,
-            sampleRate: output.sampleRate,
+            outputFormat: outputFormat,
+            sampleRate: sampleRate,
           };
         } catch (err) {
           scheduleCleanup(tempDir);

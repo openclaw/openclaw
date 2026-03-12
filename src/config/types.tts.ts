@@ -82,6 +82,8 @@ export type TtsConfig = {
     command: string;
     /** CLI arguments with template variables. */
     args?: string[];
+    /** PCM sample rate produced by the CLI command (Hz). Used for telephony paths. */
+    sampleRate?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
