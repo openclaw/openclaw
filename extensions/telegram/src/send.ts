@@ -34,6 +34,7 @@ import {
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { isTelegramSupportedReactionEmoji } from "./status-reaction-variants.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
   normalizeTelegramChatId,
@@ -1010,6 +1011,14 @@ export async function reactMessageTelegram(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
+  // Pre-validate emoji against the known Telegram-supported set to avoid
+  // REACTION_INVALID errors from the API.
+  if (!remove && trimmedEmoji && !isTelegramSupportedReactionEmoji(trimmedEmoji)) {
+    return {
+      ok: false as const,
+      warning: `Reaction unavailable: ${trimmedEmoji} (not in Telegram supported emoji set)`,
+    };
+  }
   // Build the reaction array. We cast emoji to the grammY union type since
   // Telegram validates emoji server-side; invalid emojis fail gracefully.
   const reactions: ReactionType[] =

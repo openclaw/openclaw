@@ -488,7 +488,7 @@ export function resolveTelegramTransport(
         }
         if (!stickyIpv4FallbackEnabled) {
           stickyIpv4FallbackEnabled = true;
-          log.warn(
+          log.info(
             `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
           );
         }
