@@ -105,10 +105,18 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
+  const fallbackChatType = reactedMsg.chatType;
+  if (!event.chat_type && !event.chat_id && !fallbackChatType) {
+    logger?.(
+      `feishu[${accountId}]: skipping reaction ${emoji} on ${messageId} without chat type context`,
+    );
+    return null;
+  }
+
   const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
   const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
   const syntheticChatType: "p2p" | "group" | "private" =
-    event.chat_type === "group" ? "group" : "p2p";
+    event.chat_type ?? fallbackChatType ?? "p2p";
   return {
     sender: {
       sender_id: { open_id: senderId },
