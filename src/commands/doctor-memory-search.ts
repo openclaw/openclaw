@@ -256,14 +256,27 @@ export type MemorySearchDiagnosticResult = {
  *
  * @returns Structured diagnostic result with issues and fix suggestions
  */
-export function checkMemorySearch(cfg: OpenClawConfig): MemorySearchDiagnosticResult {
+export async function checkMemorySearch(
+  cfg: OpenClawConfig,
+): Promise<MemorySearchDiagnosticResult> {
   const agentId = resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const resolved = resolveMemorySearchConfig(cfg, agentId);
 
   // Memory search is explicitly disabled
   if (!resolved) {
     return {
       valid: true,
+      issues: [],
+    };
+  }
+
+  // QMD backend handles embeddings internally - skip validation
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig.backend === "qmd") {
+    return {
+      valid: true,
+      provider: resolved.provider,
       issues: [],
     };
   }
@@ -286,8 +299,10 @@ export function checkMemorySearch(cfg: OpenClawConfig): MemorySearchDiagnosticRe
 
   // Validate based on provider type
   if (resolved.provider === "openai") {
-    // Check for apiKey
-    const hasApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
+    // Check for apiKey - check both config and environment variables
+    const hasApiKey =
+      hasConfiguredMemorySecretInput(resolved.remote?.apiKey) ||
+      (await hasApiKeyForProvider("openai", cfg, agentDir));
     if (!hasApiKey) {
       issues.push({
         field: "remote.apiKey",
@@ -392,8 +407,8 @@ function generateConfigSnippet(provider: string): string {
  * - Suggested configuration snippet
  * - Documentation link
  */
-export function noteMemorySearchDiagnostics(cfg: OpenClawConfig): void {
-  const result = checkMemorySearch(cfg);
+export async function noteMemorySearchDiagnostics(cfg: OpenClawConfig): Promise<void> {
+  const result = await checkMemorySearch(cfg);
 
   // No issues - memory search is either disabled or properly configured
   if (result.valid) {

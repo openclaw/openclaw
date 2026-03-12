@@ -325,7 +325,7 @@ export async function doctorCommand(
       })
     : { checked: false, ready: false };
   await noteMemorySearchHealth(cfg, { gatewayMemoryProbe });
-  noteMemorySearchDiagnostics(cfg);
+  await noteMemorySearchDiagnostics(cfg);
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,
