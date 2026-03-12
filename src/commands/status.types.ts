@@ -50,7 +50,7 @@ export type StatusSummary = {
   sessions: {
     paths: string[];
     count: number;
-    defaults: { model: string | null; contextTokens: number | null };
+    defaults: { model: string | null; contextTokens: number | null; variesByAgent?: boolean };
     recent: SessionStatus[];
     byAgent: Array<{
       agentId: string;

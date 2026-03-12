@@ -316,6 +316,9 @@ export async function statusCommand(
   })();
 
   const defaults = summary.sessions.defaults;
+  const defaultModelLabel = defaults.variesByAgent
+    ? "varies by agent"
+    : (defaults.model ?? "unknown");
   const defaultCtx = defaults.contextTokens
     ? ` (${formatKTokens(defaults.contextTokens)} ctx)`
     : "";
@@ -438,7 +441,7 @@ export async function statusCommand(
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
       Item: "Sessions",
-      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
+      Value: `${summary.sessions.count} active · default ${defaultModelLabel}${defaultCtx} · ${storeLabel}`,
     },
   ];
 
