@@ -1,4 +1,4 @@
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { getMaxBufferedBytes } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -97,7 +97,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (!hasEventScope(c, event)) {
         continue;
       }
-      const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
+      const slow = c.socket.bufferedAmount > getMaxBufferedBytes();
       if (slow && opts?.dropIfSlow) {
         continue;
       }
