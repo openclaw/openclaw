@@ -576,6 +576,19 @@ describe("isFailoverErrorMessage", () => {
     }
   });
 
+  it("matches z.ai network_error stop reason as timeout", () => {
+    const samples = [
+      "Unhandled stop reason: network_error",
+      "stop reason: network_error",
+      "reason: network_error",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
     const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
     expect(isTimeoutErrorMessage(sample)).toBe(false);

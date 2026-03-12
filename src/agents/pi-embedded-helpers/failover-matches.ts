@@ -47,9 +47,9 @@ const ERROR_PATTERNS = {
     /\benotfound\b/i,
     /\beai_again\b/i,
     /without sending (?:any )?chunks?/i,
-    /\bstop reason:\s*(?:abort|error|malformed_response)\b/i,
-    /\breason:\s*(?:abort|error|malformed_response)\b/i,
-    /\bunhandled stop reason:\s*(?:abort|error|malformed_response)\b/i,
+    /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
