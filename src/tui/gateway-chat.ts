@@ -150,7 +150,7 @@ export class GatewayChatClient {
       url: connection.url,
       token: connection.token,
       password: connection.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
@@ -9,8 +9,29 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+const gatewayClientCtor = vi.fn();
+
+class MockGatewayClient {
+  constructor(opts: unknown) {
+    gatewayClientCtor(opts);
+  }
+
+  start(): void {}
+
+  stop(): void {}
+
+  async request<T = unknown>(): Promise<T> {
+    return {} as T;
+  }
+}
+
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: MockGatewayClient,
+}));
+
+const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -373,5 +394,24 @@ describe("resolveGatewayConnection", () => {
         expect(await fileExists(passwordMarker)).toBe(true);
       },
     );
+  });
+});
+
+describe("GatewayChatClient", () => {
+  it("uses a dedicated TUI gateway client id", () => {
+    gatewayClientCtor.mockClear();
+
+    const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789" });
+    const options = gatewayClientCtor.mock.calls[0]?.[0] as
+      | {
+          clientName?: string;
+          clientDisplayName?: string;
+        }
+      | undefined;
+
+    expect(options?.clientName).toBe(GATEWAY_CLIENT_NAMES.TUI);
+    expect(options?.clientDisplayName).toBe("openclaw-tui");
+
+    client.stop();
   });
 });
