@@ -53,6 +53,9 @@ export type CreateFeishuReplyDispatcherParams = {
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
+  /** Controls reply-to behaviour: "all" (default) = every message replies,
+   *  "first" = only the first outbound message replies, "off" = never reply. */
+  replyToMode?: "all" | "first" | "off";
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -68,8 +71,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     mentionTargets,
     accountId,
+    replyToMode,
   } = params;
-  const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  let sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  // Track whether the first reply has been sent for "first" mode
+  let firstReplySent = false;
+  /** Return the current reply-to ID and, when replyToMode is "first", clear it
+   *  after the first outbound message so subsequent messages are standalone. */
+  const consumeReplyToMessageId = (): string | undefined => {
+    const id = sendReplyToMessageId;
+    if (replyToMode === "first" && !firstReplySent) {
+      firstReplySent = true;
+      // Clear so subsequent sends in this dispatch don't reply-to
+      sendReplyToMessageId = undefined;
+    }
+    return id;
+  };
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
@@ -294,7 +311,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   cfg,
                   to: chatId,
                   mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
+                  replyToMessageId: consumeReplyToMessageId(),
                   replyInThread: effectiveReplyInThread,
                   accountId,
                 });
@@ -314,7 +331,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: sendReplyToMessageId,
+                replyToMessageId: consumeReplyToMessageId(),
                 replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
@@ -335,7 +352,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId: sendReplyToMessageId,
+                replyToMessageId: consumeReplyToMessageId(),
                 replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
@@ -354,7 +371,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               cfg,
               to: chatId,
               mediaUrl,
-              replyToMessageId: sendReplyToMessageId,
+              replyToMessageId: consumeReplyToMessageId(),
               replyInThread: effectiveReplyInThread,
               accountId,
             });

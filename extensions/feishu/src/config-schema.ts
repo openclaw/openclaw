@@ -131,6 +131,14 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Reply-to mode for group chats.
+ * - "all" (default): Bot replies to every triggering message (current behavior)
+ * - "first": Bot replies only to the first message in a session
+ * - "off": Bot never uses reply-to (sends as standalone messages)
+ */
+const ReplyToModeSchema = z.enum(["off", "first", "all"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -142,6 +150,7 @@ export const FeishuGroupSchema = z
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     replyInThread: ReplyInThreadSchema,
+    replyToMode: ReplyToModeSchema,
   })
   .strict();
 
@@ -172,6 +181,7 @@ const FeishuSharedConfigShape = {
   tools: FeishuToolsConfigSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
+  replyToMode: ReplyToModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
 };
