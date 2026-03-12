@@ -510,7 +510,7 @@ function tryParseToolCallArgumentsFromConcatenatedJsonSegments(
   let segmentCount = 0;
   let latestObject: Record<string, unknown> | undefined;
   while (remainder.length > 0) {
-    const firstJsonChar = remainder.search(/[{\[]/);
+    const firstJsonChar = remainder.search(/[{[]/);
     if (firstJsonChar !== 0) {
       return undefined;
     }
