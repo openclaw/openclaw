@@ -7,12 +7,14 @@ function createMockDbClient() {
   return {
     putPairingCode: vi.fn(),
     getPairingCode: vi.fn(),
+    consumePairingCode: vi.fn(),
     deletePairingCode: vi.fn(),
     putChannelLink: vi.fn(),
     deleteChannelLink: vi.fn(),
   } as unknown as HyperionDynamoDBClient & {
     putPairingCode: ReturnType<typeof vi.fn>;
     getPairingCode: ReturnType<typeof vi.fn>;
+    consumePairingCode: ReturnType<typeof vi.fn>;
     deletePairingCode: ReturnType<typeof vi.fn>;
     putChannelLink: ReturnType<typeof vi.fn>;
     deleteChannelLink: ReturnType<typeof vi.fn>;
@@ -105,9 +107,8 @@ describe("HyperionPairingStore", () => {
     };
 
     it("creates ChannelLink with correct data, inherits agent_id from pairing code", async () => {
-      dbClient.getPairingCode.mockResolvedValueOnce(basePairingCode);
+      dbClient.consumePairingCode.mockResolvedValueOnce(basePairingCode);
       dbClient.putChannelLink.mockResolvedValueOnce(undefined);
-      dbClient.deletePairingCode.mockResolvedValueOnce(undefined);
 
       const link = await store.redeemPairingCode({
         code: "ABCD1234",
@@ -129,9 +130,8 @@ describe("HyperionPairingStore", () => {
     });
 
     it("normalizes code to uppercase", async () => {
-      dbClient.getPairingCode.mockResolvedValueOnce(basePairingCode);
+      dbClient.consumePairingCode.mockResolvedValueOnce(basePairingCode);
       dbClient.putChannelLink.mockResolvedValueOnce(undefined);
-      dbClient.deletePairingCode.mockResolvedValueOnce(undefined);
 
       await store.redeemPairingCode({
         code: "  abcd1234  ",
@@ -139,7 +139,7 @@ describe("HyperionPairingStore", () => {
         platformUserId: "tg-user-99",
       });
 
-      expect(dbClient.getPairingCode).toHaveBeenCalledWith("ABCD1234");
+      expect(dbClient.consumePairingCode).toHaveBeenCalledWith("ABCD1234");
     });
 
     it("returns null for empty code", async () => {
@@ -153,8 +153,8 @@ describe("HyperionPairingStore", () => {
       expect(dbClient.getPairingCode).not.toHaveBeenCalled();
     });
 
-    it("returns null if pairing code not found", async () => {
-      dbClient.getPairingCode.mockResolvedValueOnce(null);
+    it("returns null if pairing code not found (already consumed)", async () => {
+      dbClient.consumePairingCode.mockResolvedValueOnce(null);
 
       const link = await store.redeemPairingCode({
         code: "NONEXIST",
@@ -167,7 +167,7 @@ describe("HyperionPairingStore", () => {
     });
 
     it("returns null if platform doesn't match", async () => {
-      dbClient.getPairingCode.mockResolvedValueOnce(basePairingCode);
+      dbClient.consumePairingCode.mockResolvedValueOnce(basePairingCode);
 
       const link = await store.redeemPairingCode({
         code: "ABCD1234",
@@ -177,22 +177,6 @@ describe("HyperionPairingStore", () => {
 
       expect(link).toBeNull();
       expect(dbClient.putChannelLink).not.toHaveBeenCalled();
-    });
-
-    it("deletes consumed code (best effort)", async () => {
-      dbClient.getPairingCode.mockResolvedValueOnce(basePairingCode);
-      dbClient.putChannelLink.mockResolvedValueOnce(undefined);
-      dbClient.deletePairingCode.mockRejectedValueOnce(new Error("Delete failed"));
-
-      const link = await store.redeemPairingCode({
-        code: "ABCD1234",
-        platform: "telegram",
-        platformUserId: "tg-user-99",
-      });
-
-      // Link should still be returned even though delete failed
-      expect(link).not.toBeNull();
-      expect(dbClient.deletePairingCode).toHaveBeenCalledWith("ABCD1234");
     });
   });
 

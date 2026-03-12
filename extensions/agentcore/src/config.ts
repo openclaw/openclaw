@@ -12,6 +12,8 @@ export type AgentCoreConfigSource = {
   region?: string;
   /** Override for local development (skip SSM, use provided config). */
   localOverride?: Partial<AgentCoreRuntimeConfig>;
+  /** AgentCore endpoint override — applied after SSM loading (does NOT skip SSM). */
+  endpointOverride?: string;
 };
 
 /**
@@ -73,6 +75,7 @@ export async function loadAgentCoreConfig(
     runtimeArns,
     memoryNamespacePrefix,
     defaultModel,
+    ...(source.endpointOverride ? { endpoint: source.endpointOverride } : {}),
   };
 }
 

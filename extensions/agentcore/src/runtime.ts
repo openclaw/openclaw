@@ -111,8 +111,10 @@ export class AgentCoreRuntime implements AcpRuntime {
 
     const runtimeArn = pickRuntimeArn(this.config.runtimeArns);
 
-    // For Hyperion, the OC agentId IS the tenant user_id.
-    const tenantId = agent;
+    // [claude-infra] Derive tenant user_id from the Hyperion session key
+    // (format: "tenant_{userId}:{agentId}:{rest}"), not from `agent` which
+    // may be a shared logical name like "main" across different tenants.
+    const tenantId = extractTenantId(sessionKey) ?? agent;
     // [claude-infra] Multi-instance: extract agent instance ID from session key.
     const agentId = extractAgentId(sessionKey);
 

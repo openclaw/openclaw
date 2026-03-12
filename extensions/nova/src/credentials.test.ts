@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { NovaConfig } from "./types.js";
 import { resolveNovaCredentials } from "./credentials.js";
+import type { NovaConfig } from "./types.js";
 
 describe("resolveNovaCredentials", () => {
   const savedEnv: Record<string, string | undefined> = {};
@@ -17,10 +17,13 @@ describe("resolveNovaCredentials", () => {
   });
 
   afterEach(() => {
-    process.env.NOVA_BASE_URL = savedEnv.NOVA_BASE_URL;
-    process.env.NOVA_API_KEY = savedEnv.NOVA_API_KEY;
-    process.env.NOVA_USER_ID = savedEnv.NOVA_USER_ID;
-    process.env.NOVA_DEVICE_ID = savedEnv.NOVA_DEVICE_ID;
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
   });
 
   it("resolves credentials from config", () => {

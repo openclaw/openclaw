@@ -175,6 +175,39 @@ export class HyperionDynamoDBClient {
     );
   }
 
+  /**
+   * Atomically consume a pairing code: deletes it only if it still exists.
+   * Returns the deleted item, or null if it was already consumed.
+   * Uses ConditionExpression to prevent double-redemption races.
+   */
+  async consumePairingCode(code: string): Promise<PairingCode | null> {
+    const { DeleteCommand } = await import("@aws-sdk/lib-dynamodb");
+    try {
+      const result = await this.docClient.send(
+        new DeleteCommand({
+          TableName: this.config.pairingCodesTableName,
+          Key: { code },
+          ConditionExpression: "attribute_exists(code)",
+          ReturnValues: "ALL_OLD",
+        }),
+      );
+      const item = (result as { Attributes?: PairingCode }).Attributes;
+      if (!item) {
+        return null;
+      }
+      // DynamoDB TTL is eventually consistent — check expiry explicitly.
+      if (item.expires_at <= Math.floor(Date.now() / 1000)) {
+        return null;
+      }
+      return item;
+    } catch (err) {
+      if ((err as { name?: string }).name === "ConditionalCheckFailedException") {
+        return null;
+      }
+      throw err;
+    }
+  }
+
   // -- User Credentials -- [claude-infra] composite key: user_id + agent_id
 
   async getUserCredentials(

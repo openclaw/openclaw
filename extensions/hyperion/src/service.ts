@@ -64,6 +64,7 @@ export function createHyperionPluginService(
         dynamoConfig,
         docClient,
         kmsClient,
+        defaultConfig: ctx.config,
       });
 
       setHyperionRuntime(runtime);

@@ -35,7 +35,7 @@ const plugin = {
         configSource: {
           ssmPrefix,
           region,
-          localOverride: pluginConfig.endpoint ? { endpoint: pluginConfig.endpoint } : undefined,
+          endpointOverride: pluginConfig.endpoint,
         },
       }),
     );

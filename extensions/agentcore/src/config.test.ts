@@ -180,6 +180,43 @@ describe("loadAgentCoreConfig", () => {
     });
   });
 
+  // ── endpointOverride (loads from SSM, applies endpoint after) ───────
+
+  describe("endpointOverride", () => {
+    it("applies endpoint override without skipping SSM", async () => {
+      mockSsmSend.mockImplementation((cmd: any) => {
+        const name = cmd.input?.Name;
+        if (name?.endsWith("/runtime-arns")) {
+          return {
+            Parameter: {
+              Value: '["arn:aws:agentcore:us-west-2:123:runtime/real"]',
+            },
+          };
+        }
+        return { Parameter: { Value: null } };
+      });
+
+      const config = await loadAgentCoreConfig({
+        ssmPrefix: "/hyperion/beta/agentcore",
+        endpointOverride: "https://localhost:9999",
+      });
+
+      expect(config.runtimeArns).toEqual(["arn:aws:agentcore:us-west-2:123:runtime/real"]);
+      expect(config.endpoint).toBe("https://localhost:9999");
+      expect(mockSsmSend).toHaveBeenCalled();
+    });
+
+    it("does not set endpoint when endpointOverride is undefined", async () => {
+      mockSsmSend.mockResolvedValue({ Parameter: { Value: null } });
+
+      const config = await loadAgentCoreConfig({
+        ssmPrefix: "/hyperion/beta/agentcore",
+      });
+
+      expect(config.endpoint).toBeUndefined();
+    });
+  });
+
   // ── SSM error handling ──────────────────────────────────────────────
 
   describe("SSM error handling", () => {

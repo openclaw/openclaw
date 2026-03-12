@@ -94,8 +94,9 @@ export class HyperionPairingStore {
       return null;
     }
 
-    // Fetch and validate the pairing code.
-    const pairingCode = await this.dbClient.getPairingCode(normalizedCode);
+    // Atomically consume the pairing code — conditional delete ensures only one
+    // concurrent redeem succeeds, preventing double-bind race conditions.
+    const pairingCode = await this.dbClient.consumePairingCode(normalizedCode);
     if (!pairingCode) {
       return null;
     }
@@ -117,9 +118,6 @@ export class HyperionPairingStore {
     };
 
     await this.dbClient.putChannelLink(channelLink);
-
-    // Delete the consumed code (best-effort — TTL will clean up regardless).
-    await this.dbClient.deletePairingCode(normalizedCode).catch(() => {});
 
     return channelLink;
   }

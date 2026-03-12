@@ -215,23 +215,29 @@ export class TenantConfigLoader {
     }
 
     // Inject per-user tool API keys from encrypted credential store.
+    // Each search provider resolves its key from a provider-specific path:
+    //   brave_search → tools.web.search.apiKey (default/brave)
+    //   gemini/grok/kimi/perplexity → tools.web.search.<provider>.apiKey
     if (credentials?.tool_keys) {
-      const web = config.tools?.web ?? {};
-      const search = web.search ?? {};
+      const web = { ...config.tools?.web };
+      const search = { ...web.search } as Record<string, unknown>;
       for (const [toolName, apiKey] of Object.entries(credentials.tool_keys)) {
-        if (
-          toolName === "brave_search" ||
+        if (toolName === "brave_search") {
+          search.apiKey = apiKey;
+        } else if (
           toolName === "gemini" ||
           toolName === "grok" ||
           toolName === "kimi" ||
           toolName === "perplexity"
         ) {
-          config.tools = {
-            ...config.tools,
-            web: { ...web, search: { ...search, apiKey } },
+          search[toolName] = {
+            ...(search[toolName] as Record<string, unknown> | undefined),
+            apiKey,
           };
         }
       }
+      web.search = search;
+      config.tools = { ...config.tools, web };
     }
 
     // Apply tenant-level skill permissions.
