@@ -157,7 +157,7 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
-    event: { prompt: string; messages: unknown[] },
+    event: { prompt: string; messages?: unknown[]; sessionKey?: string; agentId?: string },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
@@ -1439,6 +1439,8 @@ export async function resolvePromptBuildHookResult(params: {
             {
               prompt: params.prompt,
               messages: params.messages,
+              sessionKey: params.hookCtx.sessionKey,
+              agentId: params.hookCtx.agentId,
             },
             params.hookCtx,
           )
@@ -3078,6 +3080,8 @@ export async function runEmbeddedAttempt(
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
+                sessionKey: params.sessionKey,
+                agentId: hookAgentId,
               },
               {
                 agentId: hookAgentId,
