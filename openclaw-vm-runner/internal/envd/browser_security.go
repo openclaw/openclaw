@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -37,6 +38,9 @@ var blockedHostnames = map[string]bool{
 	// AWS IPv6 metadata endpoint (also covered by fc00::/7 CIDR above)
 	"fd00:ec2::254": true,
 }
+
+// ipv4LikeRegexp matches hostnames that look like dotted IPv4 notation.
+var ipv4LikeRegexp = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // URLPolicy validates URLs before browser navigation to prevent SSRF attacks.
 type URLPolicy struct {
@@ -102,6 +106,18 @@ func (p *URLPolicy) Validate(ctx context.Context, rawURL string) error {
 		return nil
 	}
 
+	// Check for octal/ambiguous IPv4 notation (e.g. 0177.0.0.1) that
+	// Go's net.ParseIP ignores but Chromium/WHATWG interprets as octal.
+	// Reject any dotted-quad with leading-zero octets to prevent mismatch.
+	if ip := parseOctalIPv4(hostname); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("blocked IP address (octal): %s", hostname)
+		}
+		// Even if not blocked, reject ambiguous representations to avoid
+		// parser-mismatch SSRF.
+		return fmt.Errorf("ambiguous IPv4 notation rejected: %s", hostname)
+	}
+
 	// Try parsing as a decimal-encoded IP (e.g. 2852039166 for 169.254.169.254).
 	if ip := parseDecimalIP(hostname); ip != nil {
 		if isBlockedIP(ip) {
@@ -139,6 +155,40 @@ func parseCIDR(cidr string) net.IPNet {
 		panic(fmt.Sprintf("invalid CIDR: %s", cidr))
 	}
 	return *ipnet
+}
+
+// parseOctalIPv4 detects dotted-quad hostnames where any octet has a leading
+// zero (WHATWG/Chromium octal notation). If found, it parses each octet using
+// C-style semantics (leading 0 = octal) and returns the resulting IP.
+// Returns nil if the hostname is not a dotted quad with leading zeros.
+func parseOctalIPv4(host string) net.IP {
+	if !ipv4LikeRegexp.MatchString(host) {
+		return nil
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) != 4 {
+		return nil
+	}
+
+	hasLeadingZero := false
+	octets := make([]byte, 4)
+	for i, part := range parts {
+		if len(part) > 1 && part[0] == '0' {
+			hasLeadingZero = true
+		}
+		// Parse with base 0: "0" prefix = octal, "0x" = hex, else decimal.
+		val, err := strconv.ParseUint(part, 0, 32)
+		if err != nil || val > 255 {
+			return nil
+		}
+		octets[i] = byte(val)
+	}
+
+	if !hasLeadingZero {
+		return nil
+	}
+
+	return net.IPv4(octets[0], octets[1], octets[2], octets[3])
 }
 
 // parseDecimalIP converts a decimal-encoded IP (e.g. "2852039166") to net.IP.

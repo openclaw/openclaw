@@ -91,16 +91,38 @@ func (s *ProcessServer) Start(req *pb.StartRequest, stream pb.ProcessService_Sta
 		return err
 	}
 
+	// Kill the entire process group when context is cancelled (timeout OR
+	// client disconnect). This prevents orphaned children from persisting
+	// and keeps pipe readers from blocking forever.
+	procExited := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Graceful: SIGTERM first, then SIGKILL after grace period.
+			_ = syscall.Kill(-tracked.Pgid, syscall.SIGTERM)
+			t := time.NewTimer(graceTimeout)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				_ = syscall.Kill(-tracked.Pgid, syscall.SIGKILL)
+			case <-procExited:
+			}
+		case <-procExited:
+		}
+	}()
+
 	// Stream stdout and stderr concurrently with mutex-protected sends.
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go s.streamPipe(stream, stdout, true, &mu, &wg)
-	go s.streamPipe(stream, stderr, false, &mu, &wg)
+	go s.streamPipe(ctx, stream, stdout, true, &mu, &wg)
+	go s.streamPipe(ctx, stream, stderr, false, &mu, &wg)
 	wg.Wait()
 
 	// Wait for process exit.
 	waitErr := cmd.Wait()
+	close(procExited)
+
 	exitCode := int32(0)
 	timedOut := false
 
@@ -111,8 +133,8 @@ func (s *ProcessServer) Start(req *pb.StartRequest, stream pb.ProcessService_Sta
 		if ctx.Err() == context.DeadlineExceeded {
 			timedOut = true
 			exitCode = 137
-			// Ensure the entire process group is killed.
-			_ = syscall.Kill(-tracked.Pgid, syscall.SIGKILL)
+		} else if ctx.Err() == context.Canceled {
+			exitCode = 137
 		}
 	}
 
@@ -184,7 +206,8 @@ func (s *ProcessServer) List(ctx context.Context, req *pb.ListRequest) (*pb.List
 }
 
 // streamPipe reads from a pipe and sends chunks over the gRPC stream.
-func (s *ProcessServer) streamPipe(stream pb.ProcessService_StartServer, pipe io.Reader, isStdout bool, mu *sync.Mutex, wg *sync.WaitGroup) {
+// It exits when the pipe closes or the context is cancelled.
+func (s *ProcessServer) streamPipe(ctx context.Context, stream pb.ProcessService_StartServer, pipe io.Reader, isStdout bool, mu *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
 	buf := make([]byte, readBufSize)
 	for {
@@ -201,11 +224,22 @@ func (s *ProcessServer) streamPipe(stream pb.ProcessService_StartServer, pipe io
 			}
 
 			mu.Lock()
-			_ = stream.Send(resp)
+			sendErr := stream.Send(resp)
 			mu.Unlock()
+			if sendErr != nil {
+				return
+			}
 		}
 		if err != nil {
-			break
+			return
+		}
+		// If context is done, the process group kill goroutine will close
+		// the pipes (via process termination), causing Read to return.
+		// This select provides immediate exit if pipes haven't closed yet.
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }

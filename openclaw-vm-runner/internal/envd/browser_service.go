@@ -29,6 +29,10 @@ const chromiumPath = "/usr/bin/chromium-browser"
 // screenshotChunkSize matches fileChunkSize (64KB) for consistent streaming.
 const screenshotChunkSize = 65536
 
+// maxScreenshotBytes is the hard limit on screenshot buffer size (10MB).
+// Prevents memory exhaustion from full-page captures on attacker-controlled pages.
+const maxScreenshotBytes = 10 << 20
+
 // BrowserSession holds the state for a single browser session driven by chromedp.
 type BrowserSession struct {
 	SessionID   string
@@ -406,6 +410,12 @@ func (s *BrowserServer) Screenshot(req *pb.ScreenshotRequest, stream grpc.Server
 		if err := stream.Send(chunk); err != nil {
 			return err
 		}
+	}
+
+
+	// Enforce maximum screenshot size to prevent memory exhaustion.
+	if len(buf) > maxScreenshotBytes {
+		return status.Errorf(codes.ResourceExhausted, "screenshot too large: %d bytes (max %d)", len(buf), maxScreenshotBytes)
 	}
 
 	// Edge case: empty screenshot (unlikely but handle for safety).
