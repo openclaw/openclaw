@@ -145,12 +145,12 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
     {
-      name: "blocks message_changed system events when dmPolicy is disabled",
+      name: "ignores message_changed system events regardless of dmPolicy (disabled)",
       input: { overrides: { dmPolicy: "disabled" }, event: makeChangedEvent() },
       calls: 0,
     },
     {
-      name: "blocks message_changed system events for unauthorized senders in allowlist mode",
+      name: "ignores message_changed system events regardless of dmPolicy (allowlist)",
       input: {
         overrides: { dmPolicy: "allowlist", allowFrom: ["U2"] },
         event: makeChangedEvent({ user: "U1" }),
@@ -158,12 +158,11 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
     {
-      name: "ignores message_deleted system events",
+      name: "ignores message_deleted system events regardless of channel auth config",
       input: {
         overrides: {
           dmPolicy: "open",
           channelType: "channel",
-          channelUsers: ["U_OWNER"],
         },
         event: makeDeletedEvent({ channel: "C1", user: "U_ATTACKER" }),
       },
