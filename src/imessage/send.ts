@@ -179,8 +179,11 @@ export async function sendMessageIMessage(
       timeoutMs: opts.timeoutMs,
     });
     const resolvedId = resolveMessageId(result);
+    if (!resolvedId && !result?.ok) {
+      throw new Error("iMessage send returned no message ID and no success indicator");
+    }
     return {
-      messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
+      messageId: resolvedId ?? "ok",
     };
   } finally {
     if (shouldClose) {

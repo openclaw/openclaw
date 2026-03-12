@@ -36,34 +36,39 @@ export async function deliverReplies(params: {
     if (!text && mediaList.length === 0) {
       continue;
     }
-    if (mediaList.length === 0) {
-      sentMessageCache?.remember(scope, { text });
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        const sent = await sendMessageIMessage(target, chunk, {
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+    try {
+      if (mediaList.length === 0) {
+        sentMessageCache?.remember(scope, { text });
+        for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+          const sent = await sendMessageIMessage(target, chunk, {
+            maxBytes,
+            client,
+            accountId,
+            replyToId: payload.replyToId,
+          });
+          sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+        }
+      } else {
+        let first = true;
+        for (const url of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          const sent = await sendMessageIMessage(target, caption, {
+            mediaUrl: url,
+            maxBytes,
+            client,
+            accountId,
+            replyToId: payload.replyToId,
+          });
+          sentMessageCache?.remember(scope, {
+            text: caption || undefined,
+            messageId: sent.messageId,
+          });
+        }
       }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        const sent = await sendMessageIMessage(target, caption, {
-          mediaUrl: url,
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, {
-          text: caption || undefined,
-          messageId: sent.messageId,
-        });
-      }
+    } catch (err) {
+      runtime.log?.(`imessage: send failed for ${target}: ${String(err)}`);
+      throw err;
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);
   }

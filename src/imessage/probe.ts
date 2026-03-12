@@ -98,7 +98,17 @@ export async function probeIMessage(
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    const msg = String(err);
+    // Detect macOS Full Disk Access denial so the user gets an actionable hint.
+    if (msg.includes("Operation not permitted") || msg.includes("EPERM") || msg.includes("tccd")) {
+      return {
+        ok: false,
+        error:
+          "Full Disk Access required. Open System Settings > Privacy & Security > Full Disk Access and enable imsg (or Terminal).",
+        fatal: true,
+      };
+    }
+    return { ok: false, error: msg };
   } finally {
     await client.stop();
   }
