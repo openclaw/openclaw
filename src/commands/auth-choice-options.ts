@@ -96,6 +96,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["byteplus-api-key"],
   },
   {
+    value: "ainft",
+    label: "AINFT",
+    hint: "API key",
+    choices: ["ainft-api-key"],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",

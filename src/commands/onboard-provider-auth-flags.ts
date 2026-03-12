@@ -2,6 +2,7 @@ import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
 type OnboardProviderAuthOptionKey = keyof Pick<
   OnboardOptions,
+  | "ainftApiKey"
   | "anthropicApiKey"
   | "openaiApiKey"
   | "mistralApiKey"
@@ -60,6 +61,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--mistral-api-key",
     cliOption: "--mistral-api-key <key>",
     description: "Mistral API key",
+  },
+  {
+    optionKey: "ainftApiKey",
+    authChoice: "ainft-api-key",
+    cliFlag: "--ainft-api-key",
+    cliOption: "--ainft-api-key <key>",
+    description: "AINFT API key",
   },
   {
     optionKey: "openrouterApiKey",

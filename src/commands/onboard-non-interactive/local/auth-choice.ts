@@ -26,6 +26,7 @@ import {
   applyMoonshotConfigCn,
   applyOpencodeGoConfig,
   applyOpencodeZenConfig,
+  applyAinftConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
@@ -52,6 +53,7 @@ import {
   setOpenaiApiKey,
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
+  setAinftApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setVolcengineApiKey,
@@ -614,6 +616,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "ainft-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "ainft",
+      cfg: baseConfig,
+      flagValue: opts.ainftApiKey,
+      flagName: "--ainft-api-key",
+      envVar: "AINFT_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setAinftApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "ainft:default",
+      provider: "ainft",
+      mode: "api_key",
+    });
+    return applyAinftConfig(nextConfig);
   }
 
   if (authChoice === "kilocode-api-key") {

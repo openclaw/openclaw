@@ -22,6 +22,7 @@ import {
   resolveOllamaApiBase,
 } from "./models-config.providers.discovery.js";
 import {
+  buildAinftProvider,
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
   buildDoubaoCodingProvider,
@@ -45,6 +46,7 @@ import {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 export {
+  buildAinftProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
   buildNvidiaProvider,
@@ -668,6 +670,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
+  withApiKey("ainft", async ({ apiKey }) => ({ ...buildAinftProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({
     ...(await buildKilocodeProviderWithDiscovery()),
