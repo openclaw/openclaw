@@ -86,11 +86,13 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("CRITICAL");
   });
 
-  it("skips warning for loopback bind", async () => {
+  it("uses a non-authoritative success message for the lightweight doctor pass", async () => {
     const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
+    expect(message).toContain("doctor's lightweight pass");
+    expect(message).toContain("not a full security audit");
+    expect(message).toContain("openclaw security audit --deep");
     expect(message).not.toContain("Gateway bound");
   });
 

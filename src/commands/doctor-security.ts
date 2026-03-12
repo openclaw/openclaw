@@ -227,7 +227,13 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
-  const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
+  const lines =
+    warnings.length > 0
+      ? warnings
+      : [
+          "- No channel security warnings detected in the doctor's lightweight pass.",
+          "  This is not a full security audit and may miss deeper findings.",
+        ];
   lines.push(auditHint);
   note(lines.join("\n"), "Security");
 }
