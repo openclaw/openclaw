@@ -64,28 +64,47 @@ let whatsappActionsPromise: Promise<
   typeof import("../../agents/tools/whatsapp-actions.js")
 > | null = null;
 
+/** Wrap a dynamic import promise so a missing @whiskeysockets/baileys produces a clear error. */
+function withBaileysCheck<T>(promise: Promise<T>): Promise<T> {
+  return promise.catch((err: unknown) => {
+    const msg = String(err);
+    if (
+      msg.includes("@whiskeysockets/baileys") ||
+      msg.includes("baileys") ||
+      msg.includes("libsignal")
+    ) {
+      const hint =
+        "WhatsApp channel unavailable: install @whiskeysockets/baileys to enable it " +
+        "(npm install @whiskeysockets/baileys)";
+      console.warn(hint);
+      throw Object.assign(new Error(hint), { cause: err });
+    }
+    throw err;
+  });
+}
+
 function loadWebOutbound() {
-  webOutboundPromise ??= import("./runtime-whatsapp-outbound.runtime.js");
+  webOutboundPromise ??= withBaileysCheck(import("./runtime-whatsapp-outbound.runtime.js"));
   return webOutboundPromise;
 }
 
 function loadWebLogin() {
-  webLoginPromise ??= import("./runtime-whatsapp-login.runtime.js");
+  webLoginPromise ??= withBaileysCheck(import("./runtime-whatsapp-login.runtime.js"));
   return webLoginPromise;
 }
 
 function loadWebLoginQr() {
-  webLoginQrPromise ??= import("../../web/login-qr.js");
+  webLoginQrPromise ??= withBaileysCheck(import("../../web/login-qr.js"));
   return webLoginQrPromise;
 }
 
 function loadWebChannel() {
-  webChannelPromise ??= import("../../channels/web/index.js");
+  webChannelPromise ??= withBaileysCheck(import("../../channels/web/index.js"));
   return webChannelPromise;
 }
 
 function loadWhatsAppActions() {
-  whatsappActionsPromise ??= import("../../agents/tools/whatsapp-actions.js");
+  whatsappActionsPromise ??= withBaileysCheck(import("../../agents/tools/whatsapp-actions.js"));
   return whatsappActionsPromise;
 }
 

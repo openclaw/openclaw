@@ -6,7 +6,7 @@ import {
   makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
+} from "./baileys.runtime.js";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";

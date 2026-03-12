@@ -1,4 +1,4 @@
-import { DisconnectReason } from "@whiskeysockets/baileys";
+import { DisconnectReason } from "./baileys.runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";

@@ -3,7 +3,7 @@ import {
   extractMessageContent,
   getContentType,
   normalizeMessageContent,
-} from "@whiskeysockets/baileys";
+} from "../baileys.runtime.js";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import { logVerbose } from "../../globals.js";
 import { jidToE164 } from "../../utils.js";
