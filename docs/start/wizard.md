@@ -83,6 +83,20 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 6. **Health check** — Starts the Gateway and verifies it's running.
 7. **Skills** — Installs recommended skills and optional dependencies.
 
+<Info>
+How the parts work:
+- OpenClaw is the harness (tools, routing, sessions, safety controls).
+- Your provider handles API connectivity and auth.
+- Your model (LLM) drives most response quality and reasoning strength.
+
+If outputs are weak but setup/tools are healthy, switch to a stronger state-of-the-art (SOTA) model first before treating it as an OpenClaw harness bug.
+
+Useful commands:
+
+- `openclaw models list --all`
+- `openclaw models set <provider/model>`
+  </Info>
+
 <Note>
 Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
 CLI `--reset` defaults to config, credentials, and sessions; use `--reset-scope full` to include workspace.

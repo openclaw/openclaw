@@ -70,6 +70,32 @@ async function requireRiskAcknowledgement(params: {
   }
 }
 
+async function maybeShowFirstInstallModelExpectations(params: {
+  snapshotExists: boolean;
+  prompter: WizardPrompter;
+}) {
+  if (params.snapshotExists) {
+    return;
+  }
+
+  await params.prompter.note(
+    [
+      "How this stack works:",
+      "- OpenClaw is the harness: tools, routing, session context, and safety controls.",
+      "- Your provider handles API connectivity and auth.",
+      "- Your model (LLM) drives most response quality and reasoning strength.",
+      "",
+      "If outputs are weak but setup/tools are working, switch to a stronger state-of-the-art (SOTA) model first.",
+      "Many quality complaints are model-capability issues, not harness bugs.",
+      "",
+      "Next:",
+      "openclaw models list --all",
+      "openclaw models set <provider/model>",
+    ].join("\n"),
+    "Model quality",
+  );
+}
+
 export async function runOnboardingWizard(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -408,6 +434,11 @@ export async function runOnboardingWizard(
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+
+  await maybeShowFirstInstallModelExpectations({
+    snapshotExists: snapshot.exists,
+    prompter,
+  });
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
