@@ -3,6 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAgentCortexModeStatus, resolveCortexChannelTarget } from "../../agents/cortex.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
@@ -22,6 +23,7 @@ import type { MediaUnderstandingDecision } from "../../media-understanding/types
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
+import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
@@ -30,6 +32,7 @@ import { resolveSubagentLabel } from "./subagents-utils.js";
 
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
+  ctx?: MsgContext;
   command: CommandContext;
   sessionEntry?: SessionEntry;
   sessionKey: string;
@@ -50,6 +53,7 @@ export async function buildStatusReply(params: {
 }): Promise<ReplyPayload | undefined> {
   const {
     cfg,
+    ctx,
     command,
     sessionEntry,
     sessionKey,
@@ -117,6 +121,7 @@ export async function buildStatusReply(params: {
   );
 
   let subagentsLine: string | undefined;
+  let cortexLine: string | undefined;
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
@@ -136,6 +141,29 @@ export async function buildStatusReply(params: {
         subagentsLine = `🤖 Subagents: ${active.length} active`;
       }
     }
+  }
+  const cortexStatus = await resolveAgentCortexModeStatus({
+    cfg,
+    agentId: statusAgentId,
+    sessionId: sessionEntry?.sessionId ?? undefined,
+    channelId: resolveCortexChannelTarget({
+      channel: command.channel,
+      channelId: command.channelId,
+      originatingChannel: String(ctx?.OriginatingChannel ?? command.channel),
+      originatingTo: ctx?.OriginatingTo,
+      nativeChannelId: ctx?.NativeChannelId,
+      to: command.to ?? ctx?.To,
+      from: command.from ?? ctx?.From,
+    }),
+  });
+  if (cortexStatus) {
+    const sourceLabel =
+      cortexStatus.source === "session-override"
+        ? "session override"
+        : cortexStatus.source === "channel-override"
+          ? "channel override"
+          : "agent config";
+    cortexLine = `🧠 Cortex: ${cortexStatus.mode} (${sourceLabel})`;
   }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
@@ -187,6 +215,7 @@ export async function buildStatusReply(params: {
     modelAuth: selectedModelAuth,
     activeModelAuth,
     usageLine: usageLine ?? undefined,
+    cortexLine,
     queue: {
       mode: queueSettings.mode,
       depth: queueDepth,
