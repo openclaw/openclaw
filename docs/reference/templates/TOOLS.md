@@ -9,7 +9,20 @@ read_when:
 
 Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
-## What Goes Here
+## Environment
+
+- **Server:** _(e.g. AWS EC2, local machine, VPS)_
+- **OS:** _(e.g. Ubuntu 24.04 ARM64, macOS)_
+- **IP:** _(internal/external as needed)_
+- **Runtime:** _(e.g. Node.js v22, Python 3.12)_
+
+## Projects
+
+_(List active projects and their key details)_
+
+- **project-name** — short description, special rules or conventions
+
+## What Else Goes Here
 
 Things like:
 
@@ -18,19 +31,22 @@ Things like:
 - Preferred voices for TTS
 - Speaker/room names
 - Device nicknames
+- API endpoints or service URLs
 - Anything environment-specific
 
 ## Examples
 
 ```markdown
-### Cameras
-
-- living-room → Main area, 180° wide angle
-- front-door → Entrance, motion-triggered
-
 ### SSH
 
-- home-server → 192.168.1.100, user: admin
+- prod-server → 10.0.0.1, user: deploy
+- staging → 10.0.0.2, user: deploy
+
+### Services
+
+- Config: ~/.openclaw/openclaw.json
+- Auth: ~/.openclaw/agents/main/agent/auth-profiles.json
+- Workspace: ~/workspace/
 
 ### TTS
 
