@@ -25,7 +25,8 @@ function escapeRegExpLiteral(input: string): string {
 }
 
 function compileGlobRegex(pattern: string): RegExp {
-  const cached = globRegexCache.get(pattern);
+  const cacheKey = `${process.platform}:${pattern}`;
+  const cached = globRegexCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -59,7 +60,7 @@ function compileGlobRegex(pattern: string): RegExp {
   if (globRegexCache.size >= GLOB_REGEX_CACHE_LIMIT) {
     globRegexCache.clear();
   }
-  globRegexCache.set(pattern, compiled);
+  globRegexCache.set(cacheKey, compiled);
   return compiled;
 }
 
