@@ -57,6 +57,7 @@ export type AgentsProps = {
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
   agentIdentityLoading: boolean;
+  agentFileWordWrap: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
   agentSkillsLoading: boolean;
@@ -76,6 +77,7 @@ export type AgentsProps = {
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
   onToolsProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
+  onToggleWordWrap: () => void;
   onToolsOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
   onConfigSave: () => void;
@@ -198,11 +200,13 @@ export function renderAgents(props: AgentsProps) {
                         agentFileContents: props.agentFileContents,
                         agentFileDrafts: props.agentFileDrafts,
                         agentFileSaving: props.agentFileSaving,
+                        agentFileWordWrap: props.agentFileWordWrap,
                         onLoadFiles: props.onLoadFiles,
                         onSelectFile: props.onSelectFile,
                         onFileDraftChange: props.onFileDraftChange,
                         onFileReset: props.onFileReset,
                         onFileSave: props.onFileSave,
+                        onToggleWordWrap: props.onToggleWordWrap,
                       })
                     : nothing
                 }
