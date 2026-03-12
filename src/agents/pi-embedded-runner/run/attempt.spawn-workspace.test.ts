@@ -10,6 +10,14 @@ import type {
   ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AssembleResult,
+  BootstrapResult,
+  CompactResult,
+  ContextEngineInfo,
+  IngestBatchResult,
+  IngestResult,
+} from "../../../context-engine/types.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "../../test-helpers/pi-tools-sandbox-context.js";
 
@@ -24,7 +32,7 @@ const hoisted = vi.hoisted(() => {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
-    buildSessionContext: vi.fn(() => ({ messages: [] })),
+    buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendCustomEntry: vi.fn(),
   };
   return {
@@ -408,17 +416,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionId: string;
       sessionKey?: string;
       sessionFile: string;
-    }) => Promise<unknown>;
+    }) => Promise<BootstrapResult>;
     assemble: (params: {
       sessionId: string;
       sessionKey?: string;
       messages: AgentMessage[];
       tokenBudget?: number;
-    }) => Promise<{
-      messages: AgentMessage[];
-      estimatedTokens: number;
-      systemPromptAddition?: string;
-    }>;
+    }) => Promise<AssembleResult>;
     afterTurn?: (params: {
       sessionId: string;
       sessionKey?: string;
@@ -432,23 +436,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionId: string;
       sessionKey?: string;
       messages: AgentMessage[];
-    }) => Promise<unknown>;
+    }) => Promise<IngestBatchResult>;
     ingest?: (params: {
       sessionId: string;
       sessionKey?: string;
       message: AgentMessage;
-    }) => Promise<unknown>;
-    info?: { id?: string; name?: string; version?: string };
+    }) => Promise<IngestResult>;
+    compact?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      sessionFile: string;
+      tokenBudget?: number;
+    }) => Promise<CompactResult>;
+    info?: Partial<ContextEngineInfo>;
   }) {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
     tempPaths.push(workspaceDir, agentDir);
     await fs.writeFile(sessionFile, "", "utf8");
+    const seedMessages: AgentMessage[] = [
+      { role: "user", content: "seed", timestamp: 1 } as AgentMessage,
+    ];
+    const infoId = contextEngine.info?.id ?? "test-context-engine";
+    const infoName = contextEngine.info?.name ?? "Test Context Engine";
+    const infoVersion = contextEngine.info?.version ?? "0.0.1";
 
-    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({
-      messages: [{ role: "user", content: "seed", timestamp: 1 }],
-    });
+    hoisted.sessionManager.buildSessionContext
+      .mockReset()
+      .mockReturnValue({ messages: seedMessages });
 
     hoisted.createAgentSessionMock.mockImplementation(async () => {
       const session: MutableSession = {
@@ -495,23 +511,37 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       disableMessageTool: true,
       contextTokenBudget: 2048,
       contextEngine: {
-        info: {
-          id: contextEngine.info?.id ?? "test-context-engine",
-          name: contextEngine.info?.name ?? "Test Context Engine",
-          version: contextEngine.info?.version ?? "0.0.1",
-        },
         ...contextEngine,
+        ingest:
+          contextEngine.ingest ??
+          (async () => ({
+            ingested: true,
+          })),
+        compact:
+          contextEngine.compact ??
+          (async () => ({
+            ok: false,
+            compacted: false,
+            reason: "not used in this test",
+          })),
+        info: {
+          id: infoId,
+          name: infoName,
+          version: infoVersion,
+        },
       },
     });
   }
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
-      messages,
-      estimatedTokens: 1,
-    }));
-    const afterTurn = vi.fn(async () => {});
+    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
+    const assemble = vi.fn(
+      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
+        messages,
+        estimatedTokens: 1,
+      }),
+    );
+    const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});
 
     const result = await runAttemptWithContextEngine({
       bootstrap,
@@ -538,12 +568,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
-      messages,
-      estimatedTokens: 1,
-    }));
-    const ingestBatch = vi.fn(async () => ({ ingestedCount: 1 }));
+    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
+    const assemble = vi.fn(
+      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
+        messages,
+        estimatedTokens: 1,
+      }),
+    );
+    const ingestBatch = vi.fn(
+      async (_params: { sessionKey?: string; messages: AgentMessage[] }) => ({ ingestedCount: 1 }),
+    );
 
     const result = await runAttemptWithContextEngine({
       bootstrap,
@@ -560,12 +594,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
-      messages,
-      estimatedTokens: 1,
+    const bootstrap = vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true }));
+    const assemble = vi.fn(
+      async ({ messages }: { messages: AgentMessage[]; sessionKey?: string }) => ({
+        messages,
+        estimatedTokens: 1,
+      }),
+    );
+    const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({
+      ingested: true,
     }));
-    const ingest = vi.fn(async () => ({ ingested: true }));
 
     const result = await runAttemptWithContextEngine({
       bootstrap,
@@ -575,6 +613,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(result.promptError).toBeNull();
     expect(ingest).toHaveBeenCalled();
-    expect(ingest.mock.calls.every(([params]) => params.sessionKey === sessionKey)).toBe(true);
+    expect(
+      ingest.mock.calls.every((call) => {
+        const params = call[0];
+        return params.sessionKey === sessionKey;
+      }),
+    ).toBe(true);
   });
 });
