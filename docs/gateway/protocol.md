@@ -182,6 +182,11 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
 
+### Chat methods
+
+- `chat.send`: the message body is limited to **512 KB** (UTF-8 byte length). Requests with a
+  larger body are rejected; clients should shorten or split the message.
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.

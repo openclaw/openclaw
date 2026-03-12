@@ -32,10 +32,13 @@ export const ChatHistoryParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Max character length for chat.send message (aligns with CHAT_SEND_MESSAGE_MAX_BYTES for ASCII). */
+const CHAT_SEND_MESSAGE_MAX_LENGTH = 512 * 1024;
+
 export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
-    message: Type.String(),
+    message: Type.String({ maxLength: CHAT_SEND_MESSAGE_MAX_LENGTH }),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
