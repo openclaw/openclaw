@@ -31,6 +31,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 import "./test-helpers/fast-core-tools.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
@@ -628,7 +629,7 @@ describe("sessions tools", () => {
     );
     expect(messageContextCalls).toHaveLength(2);
     for (const call of messageContextCalls) {
-      expect((call.params as { channel?: string }).channel).toBe("discord");
+      expect((call.params as { channel?: string }).channel).toBe(INTERNAL_MESSAGE_CHANNEL);
     }
     expect(
       agentCalls.some(
@@ -818,7 +819,7 @@ describe("sessions tools", () => {
     );
     expect(messageContextCalls).toHaveLength(1);
     expect((messageContextCalls[0]?.params as { channel?: string } | undefined)?.channel).toBe(
-      "discord",
+      INTERNAL_MESSAGE_CHANNEL,
     );
 
     const replySteps = calls.filter(
@@ -837,7 +838,7 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_send falls back to round-one reply and preserves Telegram threadId on announce skip", async () => {
+  it("sessions_send falls back to round-one reply and preserves Telegram threadId when announce reply is empty", async () => {
     const requesterKey = "agent:main:telegram:group:-1001879711349";
     const targetKey = "agent:main:telegram:direct:3718260:thread:3718260:1147978";
     let agentCallCount = 0;
@@ -866,7 +867,7 @@ describe("sessions tools", () => {
         };
         let reply = "round-one reply";
         if (params.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-          reply = "ANNOUNCE_SKIP";
+          reply = "";
         }
         replyByRunId.set(runId, reply);
         return { runId, status: "accepted", acceptedAt: 3000 + agentCallCount };
@@ -944,6 +945,99 @@ describe("sessions tools", () => {
       threadId: "3718260:1147978",
       message: "round-one reply",
     });
+  });
+
+  it("sessions_send suppresses announce delivery for explicit ANNOUNCE_SKIP", async () => {
+    const requesterKey = "agent:main:telegram:group:-1001879711349";
+    const targetKey = "agent:main:telegram:direct:3718260:thread:3718260:1147978";
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as { extraSystemPrompt?: string };
+        const reply = params.extraSystemPrompt?.includes("Agent-to-agent announce step")
+          ? "ANNOUNCE_SKIP"
+          : "round-one reply";
+        replyByRunId.set(runId, reply);
+        return { runId, status: "accepted", acceptedAt: 4000 + agentCallCount };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "telegram",
+                to: "telegram:3718260",
+                accountId: "default",
+              },
+              lastThreadId: "3718260:1147978",
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        throw new Error("send should not be called for ANNOUNCE_SKIP");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-telegram-sessions-send-skip", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "round-one reply",
+      delivery: { status: "pending", mode: "announce" },
+    });
+
+    await vi.waitFor(
+      () => {
+        const agentCalls = callGatewayMock.mock.calls.filter(
+          (call) => (call[0] as { method?: string }).method === "agent",
+        );
+        expect(agentCalls.length).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const sendCalls = callGatewayMock.mock.calls.filter(
+      (call) => (call[0] as { method?: string }).method === "send",
+    );
+    expect(sendCalls).toHaveLength(0);
   });
 
   it("subagents lists active and recent runs", async () => {

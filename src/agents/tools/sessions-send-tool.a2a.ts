@@ -120,15 +120,18 @@ export async function runSessionsSendA2AFlow(params: {
     });
     const effectiveAnnounceReply = (() => {
       const trimmed = announceReply?.trim() ?? "";
-      if (trimmed && !isAnnounceSkip(trimmed)) {
+      if (!trimmed) {
+        const roundOne = primaryReply?.trim() ?? "";
+        if (roundOne) {
+          return roundOne;
+        }
+        const latest = latestReply?.trim() ?? "";
+        return latest;
+      }
+      if (!isAnnounceSkip(trimmed)) {
         return trimmed;
       }
-      const roundOne = primaryReply?.trim() ?? "";
-      if (roundOne) {
-        return roundOne;
-      }
-      const latest = latestReply?.trim() ?? "";
-      return latest;
+      return "";
     })();
     if (announceTarget && effectiveAnnounceReply) {
       try {
