@@ -947,11 +947,7 @@ async function insertDoc(
   };
 }
 
-async function listComments(
-  client: Lark.Client,
-  docToken: string,
-  blockId?: string,
-) {
+async function listComments(client: Lark.Client, docToken: string, blockId?: string) {
   const params: Record<string, string> = {};
   if (blockId) {
     params.block_id = blockId;
@@ -972,11 +968,7 @@ async function listComments(
   };
 }
 
-async function getComment(
-  client: Lark.Client,
-  docToken: string,
-  commentId: string,
-) {
+async function getComment(client: Lark.Client, docToken: string, commentId: string) {
   const res = await client.docx.documentComment.get({
     path: { document_id: docToken, comment_id: commentId },
   });
@@ -1047,11 +1039,7 @@ async function updateComment(
   };
 }
 
-async function deleteComment(
-  client: Lark.Client,
-  docToken: string,
-  commentId: string,
-) {
+async function deleteComment(client: Lark.Client, docToken: string, commentId: string) {
   const res = await client.docx.documentComment.delete({
     path: { document_id: docToken, comment_id: commentId },
   });
@@ -1539,7 +1527,15 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                 case "get_comment":
                   return json(await getComment(client, p.doc_token, p.comment_id));
                 case "create_comment":
-                  return json(await createComment(client, p.doc_token, p.content, p.block_id, p.reply_to_comment_id));
+                  return json(
+                    await createComment(
+                      client,
+                      p.doc_token,
+                      p.content,
+                      p.block_id,
+                      p.reply_to_comment_id,
+                    ),
+                  );
                 case "update_comment":
                   return json(await updateComment(client, p.doc_token, p.comment_id, p.content));
                 case "delete_comment":

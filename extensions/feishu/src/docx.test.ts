@@ -499,7 +499,10 @@ describe("feishu_doc comment operations", () => {
     blockChildrenCreateMock.mockResolvedValue({ code: 0, data: { children: [] } });
     blockChildrenGetMock.mockResolvedValue({ code: 0, data: { items: [] } });
     blockDescendantCreateMock.mockResolvedValue({ code: 0, data: { children: [] } });
-    documentCreateMock.mockResolvedValue({ code: 0, data: { document: { document_id: "doc_created" } } });
+    documentCreateMock.mockResolvedValue({
+      code: 0,
+      data: { document: { document_id: "doc_created" } },
+    });
     permissionMemberCreateMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
 

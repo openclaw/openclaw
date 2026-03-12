@@ -181,7 +181,11 @@ export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list_comments"),
     doc_token: Type.String({ description: "Document token" }),
-    block_id: Type.Optional(Type.String({ description: "Block ID to list comments for (optional, default: document-level)" })),
+    block_id: Type.Optional(
+      Type.String({
+        description: "Block ID to list comments for (optional, default: document-level)",
+      }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("get_comment"),
@@ -192,8 +196,12 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create_comment"),
     doc_token: Type.String({ description: "Document token" }),
     content: Type.String({ description: "Comment content (text)" }),
-    block_id: Type.Optional(Type.String({ description: "Block ID to comment on (optional, default: document-level)" })),
-    reply_to_comment_id: Type.Optional(Type.String({ description: "Comment ID to reply to (optional, for nested comments)" })),
+    block_id: Type.Optional(
+      Type.String({ description: "Block ID to comment on (optional, default: document-level)" }),
+    ),
+    reply_to_comment_id: Type.Optional(
+      Type.String({ description: "Comment ID to reply to (optional, for nested comments)" }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("update_comment"),
