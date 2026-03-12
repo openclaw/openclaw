@@ -168,6 +168,7 @@ vi.mock("./bot.js", () => ({
     };
     return {
       on: vi.fn(),
+      use: vi.fn(),
       api,
       me: { username: "mybot" },
       init: initSpy,
@@ -564,8 +565,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
 
-    // Advance time past the stall threshold (90s) + watchdog interval (30s)
-    vi.advanceTimersByTime(120_000);
+    // Advance time past the derived stall threshold (>=120s) + watchdog interval.
+    vi.advanceTimersByTime(130_000);
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
