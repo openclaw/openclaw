@@ -294,6 +294,27 @@ describe("resolveMainSessionKey", () => {
     expect(resolveMainSessionKey(hello as never, null)).toBe("agent:main:main");
   });
 
+  it("falls back to snapshot mainKey when mainSessionKey is unavailable", () => {
+    const hello = {
+      snapshot: { sessionDefaults: { mainKey: "agent:main:main" } },
+    } as const;
+    expect(resolveMainSessionKey(hello as never, null)).toBe("agent:main:main");
+  });
+
+  it("returns explicit main when sessions list includes it", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 2,
+      defaults: { model: null, contextTokens: null },
+      sessions: [
+        row({ key: "agent:main:heartbeat", updatedAt: Date.now() }),
+        row({ key: "main", updatedAt: Date.now() }),
+      ],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("main");
+  });
+
   it("falls back to inferred canonical main key from sessions", () => {
     const sessions = {
       ts: Date.now(),
@@ -306,6 +327,31 @@ describe("resolveMainSessionKey", () => {
       ],
     } satisfies SessionsListResult;
     expect(resolveMainSessionKey(null, sessions)).toBe("agent:main:main");
+  });
+
+  it("returns trimmed inferred key from sessions", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      sessions: [row({ key: "  agent:main:main  ", updatedAt: Date.now() })],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("agent:main:main");
+  });
+
+  it("does not infer another agent main key when multiple are present", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 2,
+      defaults: { model: null, contextTokens: null },
+      sessions: [
+        row({ key: "agent:ops:main", updatedAt: Date.now() }),
+        row({ key: "agent:release:main", updatedAt: Date.now() }),
+      ],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("main");
   });
 
   it("falls back to main when snapshot and inferred keys are unavailable", () => {
