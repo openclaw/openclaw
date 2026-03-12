@@ -92,24 +92,21 @@ export function shouldSkipBackendSelfPairing(params: {
     return false;
   }
   // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
-  // tailscale: WS auth can also attest a backend client via verified Tailscale identity.
-  const usesSharedSecretAuth =
-    params.authMethod === "token" ||
-    params.authMethod === "password" ||
-    params.authMethod === "tailscale";
-  // device-token: a derived credential issued after initial shared-secret pairing. sharedAuthOk
-  // stays false for device-token in the WS flow (auth-context.ts only sets it for token/password/
-  // trusted-proxy), so we gate on authOk directly instead.
-  const usesDeviceTokenAuth = params.authMethod === "device-token";
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // device-token and tailscale: both are valid auth methods but sharedAuthOk is never set for
+  // either in the WS flow (auth-context.ts only sets it for token/password/trusted-proxy).
+  // Gate on authOk directly for these instead.
+  const usesAuthOkMethod =
+    params.authMethod === "device-token" || params.authMethod === "tailscale";
   // When auth is disabled entirely (mode="none"), there is no credential to verify. Restrict to
   // local connections only — remote + no-auth would be a security hole.
   const authIsDisabled = params.authMethod === "none";
-  // Remote backend clients (gateway.mode=remote) with shared-secret or device-token auth are
-  // trusted. Only the auth-disabled path requires isLocalClient.
+  // Remote backend clients (gateway.mode=remote) with any trusted credential are allowed.
+  // Only the auth-disabled path requires isLocalClient.
   return (
     !params.hasBrowserOriginHeader &&
     ((params.sharedAuthOk && usesSharedSecretAuth) ||
-      (params.authOk && usesDeviceTokenAuth) ||
+      (params.authOk && usesAuthOkMethod) ||
       (params.isLocalClient && authIsDisabled))
   );
 }
