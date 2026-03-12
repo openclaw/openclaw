@@ -62,6 +62,29 @@ describe("registerMatrixAutoJoin", () => {
     expect(client.joinRoom).toHaveBeenCalledWith("!room123:example.test");
   });
 
+  it("still auto-joins allowlisted room aliases", async () => {
+    const client = createClient();
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    client.getRoomStateEvent.mockResolvedValue({ alias: "#ops:example.test" });
+
+    registerMatrixAutoJoin({
+      client: client as never,
+      cfg: {
+        channels: {
+          matrix: {
+            autoJoin: "allowlist",
+            autoJoinAllowlist: ["#ops:example.test"],
+          },
+        },
+      },
+      runtime: runtime as never,
+    });
+
+    await client.emitInvite("!room123:example.test", { sender: "@other:example.test" });
+
+    expect(client.joinRoom).toHaveBeenCalledWith("!room123:example.test");
+  });
+
   it("still auto-joins allowlisted room ids", async () => {
     const client = createClient();
     const runtime = { log: vi.fn(), error: vi.fn() };
