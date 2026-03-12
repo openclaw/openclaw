@@ -5,6 +5,7 @@ import {
   evaluateMattermostMentionGate,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
+  resolveMattermostThreadSessionContext,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -196,5 +197,53 @@ describe("resolveMattermostEffectiveReplyToId", () => {
         replyToMode: "all",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolveMattermostThreadSessionContext", () => {
+  it("forks channel sessions by top-level post when replyToMode is all", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "post-123",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps existing thread roots for threaded follow-ups", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "first",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "root-456",
+      sessionKey: "agent:main:mattermost:default:chan-1:thread:root-456",
+      parentSessionKey: "agent:main:mattermost:default:chan-1",
+    });
+  });
+
+  it("keeps direct-message sessions linear", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:user-1",
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "all",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:user-1",
+      parentSessionKey: undefined,
+    });
   });
 });
