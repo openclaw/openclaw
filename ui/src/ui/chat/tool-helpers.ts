@@ -5,7 +5,14 @@
 import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants.ts";
 
 function fenceFor(text: string): string {
-  return text.includes("```") ? "````" : "```";
+  // Find longest run of consecutive backticks
+  const match = text.match(/`+/g);
+  if (!match) {
+    return "```";
+  }
+  const maxLen = Math.max(...match.map((s) => s.length));
+  // Use one more backtick than the longest run
+  return "`".repeat(maxLen + 1);
 }
 
 /**

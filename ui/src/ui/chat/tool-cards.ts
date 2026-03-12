@@ -16,17 +16,31 @@ export function extractToolCards(message: unknown): ToolCard[] {
   const content = normalizeContent(m.content);
   const cards: ToolCard[] = [];
 
+  // Build lookup maps from tool calls for result-card arg pairing
+  const argsByToolCallId = new Map<string, unknown>();
+  const argsByName = new Map<string, unknown>();
+
   for (const item of content) {
     const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
     const isToolCall =
       ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
       (typeof item.name === "string" && item.arguments != null);
     if (isToolCall) {
+      const name = (item.name as string) ?? "tool";
+      const args = coerceArgs(item.arguments ?? item.args);
       cards.push({
         kind: "call",
-        name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        name,
+        args,
       });
+      // Index by toolCallId if present
+      const toolCallId =
+        (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
+      if (toolCallId) {
+        argsByToolCallId.set(toolCallId, args);
+      }
+      // Also index by name (last wins for same name)
+      argsByName.set(name, args);
     }
   }
 
@@ -37,10 +51,23 @@ export function extractToolCards(message: unknown): ToolCard[] {
     }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
+    // Try to get args from the result block first, then look up paired tool call
+    let args = coerceArgs(item.arguments ?? item.args);
+    if (args === undefined || args === null) {
+      // Try matching by toolCallId first
+      const toolCallId =
+        (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
+      if (toolCallId && argsByToolCallId.has(toolCallId)) {
+        args = argsByToolCallId.get(toolCallId);
+      } else if (argsByName.has(name)) {
+        // Fallback to name-based matching
+        args = argsByName.get(name);
+      }
+    }
     cards.push({
       kind: "result",
       name,
-      args: coerceArgs(item.arguments ?? item.args),
+      args,
       text,
     });
   }
@@ -51,7 +78,12 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, text, args: coerceArgs(m.arguments ?? m.args) });
+    // Also try to look up args from any prior tool call by name
+    let args = coerceArgs(m.arguments ?? m.args);
+    if ((args === undefined || args === null) && argsByName.has(name)) {
+      args = argsByName.get(name);
+    }
+    cards.push({ kind: "result", name, text, args });
   }
 
   return cards;
@@ -60,12 +92,13 @@ export function extractToolCards(message: unknown): ToolCard[] {
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
-  const argsSections = formatToolArgsForSidebar(card.args);
   const hasText = Boolean(card.text?.trim());
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
+        // Lazy compute args sections only when sidebar is opened
+        const argsSections = formatToolArgsForSidebar(card.args);
         const headerParts = [`## ${display.label}`];
         if (argsSections.length > 0) {
           headerParts.push(
