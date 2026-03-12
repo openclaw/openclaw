@@ -44,35 +44,27 @@ export async function bootstrapPostgresRuntimeState(params: {
 
   let authStores = 0;
   let subagentRuns = 0;
+  let nextAuthStores:
+    | Awaited<ReturnType<typeof loadAuthProfileStoreSnapshotsFromPostgres>>
+    | undefined;
+  let nextSubagentRuns: Awaited<ReturnType<typeof loadSubagentRunsFromPostgres>> | undefined;
 
   if (params.auth !== false) {
-    const stores = await loadAuthProfileStoreSnapshotsFromPostgres({
+    nextAuthStores = await loadAuthProfileStoreSnapshotsFromPostgres({
       config: params.config,
       env: params.env,
       lookupMode: "runtime",
     });
-    authStores = stores.length;
-    bootstrappedAuthKeys.add(buildAuthBootstrapKey(params.config));
-    if (stores.length > 0) {
-      replaceRuntimeAuthProfileStoreSnapshots(stores);
-    } else {
-      clearRuntimeAuthProfileStoreSnapshots();
-    }
+    authStores = nextAuthStores.length;
   }
 
   if (params.subagents !== false) {
-    const runs = await loadSubagentRunsFromPostgres({
+    nextSubagentRuns = await loadSubagentRunsFromPostgres({
       config: params.config,
       env: params.env,
       lookupMode: "runtime",
     });
-    subagentRuns = runs.size;
-    bootstrappedSubagentKeys.add(buildAuthBootstrapKey(params.config));
-    if (runs.size > 0) {
-      replaceRuntimeSubagentRunsSnapshot(runs);
-    } else {
-      clearRuntimeSubagentRunsSnapshot();
-    }
+    subagentRuns = nextSubagentRuns.size;
   }
 
   const artifacts = await discoverPersistenceArtifacts(params.config, params.env);
@@ -89,6 +81,24 @@ export async function bootstrapPostgresRuntimeState(params: {
   }
   if (validationErrors.length > 0) {
     throw new Error(validationErrors.join("\n"));
+  }
+
+  const bootstrapKey = buildAuthBootstrapKey(params.config);
+  if (params.auth !== false) {
+    bootstrappedAuthKeys.add(bootstrapKey);
+    if (nextAuthStores && nextAuthStores.length > 0) {
+      replaceRuntimeAuthProfileStoreSnapshots(nextAuthStores);
+    } else {
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  }
+  if (params.subagents !== false) {
+    bootstrappedSubagentKeys.add(bootstrapKey);
+    if (nextSubagentRuns && nextSubagentRuns.size > 0) {
+      replaceRuntimeSubagentRunsSnapshot(nextSubagentRuns);
+    } else {
+      clearRuntimeSubagentRunsSnapshot();
+    }
   }
 
   return {

@@ -942,7 +942,7 @@ export const FIELD_HELP: Record<string, string> = {
   "persistence.postgres.maxConnections":
     "Maximum PostgreSQL pool size used by the persistence backend. Keep this small unless you have measured concurrent write pressure.",
   "persistence.postgres.encryptionKey":
-    "Application-level encryption key used to protect persisted credential blobs stored in PostgreSQL. Treat this as a required secret whenever encrypted auth storage is enabled.",
+    "Application-level encryption key used to protect persisted credential blobs stored in PostgreSQL. Treat this as a required high-entropy secret whenever encrypted auth storage is enabled.",
   "persistence.postgres.exportCompatibility":
     "When true, PostgreSQL-backed installs keep compatibility files such as sessions.json and transcript JSONL in sync for the current filesystem-based read path. Leave this enabled until the remaining synchronous readers move behind async repositories.",
   plugins:

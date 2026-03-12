@@ -127,6 +127,10 @@ function isPostgresAuthPersistenceEnabled(): boolean {
   return getRuntimePostgresPersistencePolicySync().enabled;
 }
 
+function isFileLockTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("file lock timeout for ");
+}
+
 function resolveCurrentConfigSnapshot() {
   const runtimeGetter =
     "getRuntimeConfigSnapshot" in configModule &&
@@ -252,8 +256,13 @@ export async function updateAuthProfileStoreWithLock(params: {
           return nextStore;
         });
       });
-    } catch {
-      return null;
+    } catch (error) {
+      // Null means "try again later" for lock contention only. Database/bootstrap
+      // failures must surface so callers do not silently overwrite canonical state.
+      if (isFileLockTimeoutError(error)) {
+        return null;
+      }
+      throw error;
     }
   }
 

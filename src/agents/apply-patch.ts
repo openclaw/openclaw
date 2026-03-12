@@ -65,6 +65,12 @@ export type ApplyPatchToolDetails = {
   affectedPaths: string[];
 };
 
+type ApplyPatchErrorWithAffectedPaths = Error & {
+  details?: {
+    affectedPaths?: string[];
+  };
+};
+
 type SandboxApplyPatchConfig = {
   root: string;
   bridge: SandboxFsBridge;
@@ -157,47 +163,51 @@ export async function applyPatch(
   const touched = new Set<string>();
   const fileOps = resolvePatchFileOps(options);
 
-  for (const hunk of parsed.hunks) {
-    if (options.signal?.aborted) {
-      const err = new Error("Aborted");
-      err.name = "AbortError";
-      throw err;
-    }
+  try {
+    for (const hunk of parsed.hunks) {
+      if (options.signal?.aborted) {
+        const err = new Error("Aborted");
+        err.name = "AbortError";
+        throw err;
+      }
 
-    if (hunk.kind === "add") {
+      if (hunk.kind === "add") {
+        const target = await resolvePatchPath(hunk.path, options);
+        await ensureDir(target.resolved, fileOps);
+        await fileOps.writeFile(target.resolved, hunk.contents);
+        recordSummary(summary, seen, "added", target.display);
+        recordAffectedPath(affectedPaths, touched, target.display);
+        continue;
+      }
+
+      if (hunk.kind === "delete") {
+        const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
+        await fileOps.remove(target.resolved);
+        recordSummary(summary, seen, "deleted", target.display);
+        recordAffectedPath(affectedPaths, touched, target.display);
+        continue;
+      }
+
       const target = await resolvePatchPath(hunk.path, options);
-      await ensureDir(target.resolved, fileOps);
-      await fileOps.writeFile(target.resolved, hunk.contents);
-      recordSummary(summary, seen, "added", target.display);
+      const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
+        readFile: (path) => fileOps.readFile(path),
+      });
       recordAffectedPath(affectedPaths, touched, target.display);
-      continue;
-    }
 
-    if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
-      await fileOps.remove(target.resolved);
-      recordSummary(summary, seen, "deleted", target.display);
-      recordAffectedPath(affectedPaths, touched, target.display);
-      continue;
+      if (hunk.movePath) {
+        const moveTarget = await resolvePatchPath(hunk.movePath, options);
+        await ensureDir(moveTarget.resolved, fileOps);
+        await fileOps.writeFile(moveTarget.resolved, applied);
+        await fileOps.remove(target.resolved);
+        recordSummary(summary, seen, "modified", moveTarget.display);
+        recordAffectedPath(affectedPaths, touched, moveTarget.display);
+      } else {
+        await fileOps.writeFile(target.resolved, applied);
+        recordSummary(summary, seen, "modified", target.display);
+      }
     }
-
-    const target = await resolvePatchPath(hunk.path, options);
-    const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
-      readFile: (path) => fileOps.readFile(path),
-    });
-    recordAffectedPath(affectedPaths, touched, target.display);
-
-    if (hunk.movePath) {
-      const moveTarget = await resolvePatchPath(hunk.movePath, options);
-      await ensureDir(moveTarget.resolved, fileOps);
-      await fileOps.writeFile(moveTarget.resolved, applied);
-      await fileOps.remove(target.resolved);
-      recordSummary(summary, seen, "modified", moveTarget.display);
-      recordAffectedPath(affectedPaths, touched, moveTarget.display);
-    } else {
-      await fileOps.writeFile(target.resolved, applied);
-      recordSummary(summary, seen, "modified", target.display);
-    }
+  } catch (error) {
+    throw annotateApplyPatchError(error, affectedPaths);
   }
 
   return {
@@ -205,6 +215,18 @@ export async function applyPatch(
     affectedPaths,
     text: formatSummary(summary),
   };
+}
+
+function annotateApplyPatchError(error: unknown, affectedPaths: string[]): unknown {
+  if (affectedPaths.length === 0 || !(error instanceof Error)) {
+    return error;
+  }
+  const patchError = error as ApplyPatchErrorWithAffectedPaths;
+  patchError.details = {
+    ...patchError.details,
+    affectedPaths: [...affectedPaths],
+  };
+  return patchError;
 }
 
 function recordSummary(

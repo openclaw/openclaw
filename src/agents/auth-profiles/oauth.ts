@@ -146,6 +146,10 @@ async function adoptNewerMainOAuthCredential(params: {
         },
       });
       if (!updated) {
+        // This is a best-effort fallback for lock contention only. The local
+        // store already carries the adopted main-agent credential, so retrying
+        // the canonical save is safe even though it may not include unrelated
+        // concurrent writes from other processes.
         await saveAuthProfileStoreAsync(params.store, params.agentDir);
       }
       log.info("adopted newer OAuth credentials from main agent", {
@@ -458,6 +462,9 @@ export async function resolveApiKeyForProfile(
             },
           });
           if (!updated) {
+            // This fallback only runs after the local secondary-agent snapshot
+            // has been updated with the fresh main-agent credential. It is a
+            // best-effort path for lock timeouts, not a way to mask DB errors.
             await saveAuthProfileStoreAsync(refreshedStore, params.agentDir);
           }
           log.info("inherited fresh OAuth credentials from main agent", {

@@ -226,17 +226,26 @@ function wrapApplyPatchToolWithMemoryDocumentSync(
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const result = await tool.execute(toolCallId, args, signal, onUpdate);
-      for (const filePath of collectApplyPatchAffectedPaths(result)) {
-        scheduleMemoryDocumentSyncForWorkspacePath({
-          workspaceRoot: options.workspaceRoot,
-          sourceRoot: options.sourceRoot,
-          agentId: options.agentId,
-          filePath,
-          containerWorkdir: options.containerWorkdir,
-        });
+      const syncAffectedMemoryDocs = (payload: unknown) => {
+        for (const filePath of collectApplyPatchAffectedPaths(payload)) {
+          scheduleMemoryDocumentSyncForWorkspacePath({
+            workspaceRoot: options.workspaceRoot,
+            sourceRoot: options.sourceRoot,
+            agentId: options.agentId,
+            filePath,
+            containerWorkdir: options.containerWorkdir,
+          });
+        }
+      };
+
+      try {
+        const result = await tool.execute(toolCallId, args, signal, onUpdate);
+        syncAffectedMemoryDocs(result);
+        return result;
+      } catch (error) {
+        syncAffectedMemoryDocs(error);
+        throw error;
       }
-      return result;
     },
   };
 }

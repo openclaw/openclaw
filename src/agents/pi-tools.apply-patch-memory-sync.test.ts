@@ -95,4 +95,35 @@ describe("createOpenClawCodingTools apply_patch memory sync", () => {
       });
     });
   });
+
+  it("schedules sync for touched memory docs even when apply_patch fails after earlier hunks", async () => {
+    await withTempDir(async (dir) => {
+      const tool = resolveApplyPatchTool(dir);
+
+      await expect(
+        tool.execute(
+          "call-2",
+          {
+            input: `*** Begin Patch
+*** Add File: MEMORY.md
++hello
+*** Update File: missing.txt
+@@
+-old
++new
+*** End Patch`,
+          },
+          undefined,
+        ),
+      ).rejects.toThrow();
+
+      expect(scheduleMemoryDocumentSyncToPostgresMock).toHaveBeenCalledTimes(1);
+      expect(scheduleMemoryDocumentSyncToPostgresMock).toHaveBeenCalledWith({
+        workspaceRoot: dir,
+        absolutePath: path.join(dir, "MEMORY.md"),
+        logicalPath: "MEMORY.md",
+        agentId: "main",
+      });
+    });
+  });
 });

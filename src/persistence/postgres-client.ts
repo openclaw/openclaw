@@ -300,6 +300,8 @@ function buildClientCacheKey(config: ResolvedPostgresPersistenceConfig): string 
     url: config.url,
     schema: config.schema,
     maxConnections: config.maxConnections,
+    encryptionKey: config.encryptionKey ?? null,
+    exportCompatibility: config.exportCompatibility,
   });
 }
 
@@ -307,16 +309,42 @@ export async function getPostgresPersistence(): Promise<PostgresPersistenceClien
   return await getPostgresPersistenceWithMode("runtime");
 }
 
+async function closeClientPromiseBestEffort(
+  promise: Promise<PostgresPersistenceClient | null> | null,
+): Promise<void> {
+  if (!promise) {
+    return;
+  }
+  try {
+    const resolved = await promise;
+    await resolved?.close().catch(() => undefined);
+  } catch {
+    // Ignore initialization/close failures while draining replaced clients.
+  }
+}
+
 async function getCachedPostgresPersistence(
   config: ResolvedPostgresPersistenceConfig | null,
 ): Promise<PostgresPersistenceClient | null> {
   if (!config) {
+    const current = clientPromise;
+    clientPromise = null;
+    clientCacheKey = null;
+    await closeClientPromiseBestEffort(current);
     return null;
   }
 
   const nextKey = buildClientCacheKey(config);
   if (clientPromise && clientCacheKey === nextKey) {
     return await clientPromise;
+  }
+
+  const previousClientPromise = clientPromise;
+  const previousClientKey = clientCacheKey;
+  if (previousClientPromise && previousClientKey !== nextKey) {
+    clientPromise = null;
+    clientCacheKey = null;
+    await closeClientPromiseBestEffort(previousClientPromise);
   }
 
   clientCacheKey = nextKey;
@@ -363,8 +391,5 @@ export async function resetPostgresPersistenceForTest(): Promise<void> {
   const current = clientPromise;
   clientPromise = null;
   clientCacheKey = null;
-  const resolved = await current;
-  if (resolved) {
-    await resolved.close().catch(() => undefined);
-  }
+  await closeClientPromiseBestEffort(current);
 }

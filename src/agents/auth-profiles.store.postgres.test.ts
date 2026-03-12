@@ -54,8 +54,11 @@ vi.mock("../persistence/service.js", () => ({
     persistAuthProfileStoreToPostgresMock(params),
 }));
 
-const { ensureAuthProfileStore, clearRuntimeAuthProfileStoreSnapshots } =
-  await import("./auth-profiles/store.js");
+const {
+  ensureAuthProfileStore,
+  clearRuntimeAuthProfileStoreSnapshots,
+  updateAuthProfileStoreWithLock,
+} = await import("./auth-profiles/store.js");
 const { upsertAuthProfile } = await import("./auth-profiles/profiles.js");
 
 describe("auth profile postgres runtime snapshot", () => {
@@ -103,5 +106,23 @@ describe("auth profile postgres runtime snapshot", () => {
       "opencode:default",
     ]);
     expect(persistAuthProfileStoreToPostgresMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rethrows hard postgres persistence failures instead of converting them to null", async () => {
+    persistAuthProfileStoreToPostgresMock.mockRejectedValueOnce(new Error("postgres unavailable"));
+
+    await expect(
+      updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: (store) => {
+          store.profiles["openai:default"] = {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-openai",
+          };
+          return true;
+        },
+      }),
+    ).rejects.toThrow("postgres unavailable");
   });
 });

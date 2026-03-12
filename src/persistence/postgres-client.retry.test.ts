@@ -61,4 +61,129 @@ describe("postgres persistence client cache", () => {
     await expect(getPostgresPersistenceForConfig({ config })).resolves.toBeTruthy();
     expect(postgresFactoryMock).toHaveBeenCalledTimes(2);
   });
+
+  it("closes the replaced client when the cache key changes", async () => {
+    const firstEnd = vi.fn(async () => undefined);
+    const secondEnd = vi.fn(async () => undefined);
+    postgresFactoryMock
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: firstEnd,
+      }))
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: secondEnd,
+      }));
+
+    const baseConfig = {
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+        },
+      },
+    };
+
+    await expect(getPostgresPersistenceForConfig({ config: baseConfig })).resolves.toBeTruthy();
+    await expect(
+      getPostgresPersistenceForConfig({
+        config: {
+          persistence: {
+            backend: "postgres" as const,
+            postgres: {
+              ...baseConfig.persistence.postgres,
+              schema: "alt_schema",
+            },
+          },
+        },
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(firstEnd).toHaveBeenCalledTimes(1);
+    expect(secondEnd).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds the cached client when the encryption policy changes", async () => {
+    const firstEnd = vi.fn(async () => undefined);
+    const secondEnd = vi.fn(async () => undefined);
+    postgresFactoryMock
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: firstEnd,
+      }))
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: secondEnd,
+      }));
+
+    const baseConfig = {
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+          encryptionKey: "alpha",
+        },
+      },
+    };
+
+    await expect(getPostgresPersistenceForConfig({ config: baseConfig })).resolves.toBeTruthy();
+    await expect(
+      getPostgresPersistenceForConfig({
+        config: {
+          persistence: {
+            backend: "postgres" as const,
+            postgres: {
+              ...baseConfig.persistence.postgres,
+              encryptionKey: "beta",
+            },
+          },
+        },
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(firstEnd).toHaveBeenCalledTimes(1);
+    expect(secondEnd).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds the cached client when compatibility export policy changes", async () => {
+    const firstEnd = vi.fn(async () => undefined);
+    const secondEnd = vi.fn(async () => undefined);
+    postgresFactoryMock
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: firstEnd,
+      }))
+      .mockImplementationOnce(() => ({
+        unsafe: vi.fn(async () => []),
+        end: secondEnd,
+      }));
+
+    const baseConfig = {
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+          exportCompatibility: true,
+        },
+      },
+    };
+
+    await expect(getPostgresPersistenceForConfig({ config: baseConfig })).resolves.toBeTruthy();
+    await expect(
+      getPostgresPersistenceForConfig({
+        config: {
+          persistence: {
+            backend: "postgres" as const,
+            postgres: {
+              ...baseConfig.persistence.postgres,
+              exportCompatibility: false,
+            },
+          },
+        },
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(firstEnd).toHaveBeenCalledTimes(1);
+    expect(secondEnd).not.toHaveBeenCalled();
+  });
 });
