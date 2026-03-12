@@ -5,6 +5,7 @@ import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
+const resolveTelegramFetch = vi.fn();
 
 vi.mock("../../media/store.js", () => ({
   saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
@@ -18,6 +19,10 @@ vi.mock("../../globals.js", () => ({
   danger: (s: string) => s,
   warn: (s: string) => s,
   logVerbose: () => {},
+}));
+
+vi.mock("../fetch.js", () => ({
+  resolveTelegramFetch: (...args: unknown[]) => resolveTelegramFetch(...args),
 }));
 
 vi.mock("../sticker-cache.js", () => ({
@@ -164,6 +169,8 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
+    resolveTelegramFetch.mockReset();
+    resolveTelegramFetch.mockReturnValue(vi.fn() as unknown as typeof fetch);
   });
 
   afterEach(() => {
@@ -346,6 +353,31 @@ describe("resolveMedia getFile retry", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
+      }),
+    );
+  });
+
+  it("falls back to proxy-aware telegram fetch when caller fetch is missing", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    const proxyAwareFetch = vi.fn() as unknown as typeof fetch;
+    resolveTelegramFetch.mockReturnValue(proxyAwareFetch);
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(result).not.toBeNull();
+    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchImpl: proxyAwareFetch,
       }),
     );
   });

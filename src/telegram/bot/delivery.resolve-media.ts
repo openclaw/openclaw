@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { resolveTelegramFetch } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -93,7 +94,7 @@ async function resolveTelegramFileWithRetry(
 }
 
 function resolveRequiredFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
-  const resolved = fetchImpl ?? globalThis.fetch;
+  const resolved = fetchImpl ?? resolveTelegramFetch();
   if (!resolved) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
