@@ -15,7 +15,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fork-pr-guard:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" || "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "External fork pull request detected; skipping install smoke jobs because GitHub does not provide a usable token for PR merge-ref checkout and third-party action downloads in this context."
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+
   docs-scope:
+    needs: [fork-pr-guard]
+    if: needs.fork-pr-guard.outputs.should_run == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
@@ -37,8 +56,8 @@ jobs:
         uses: ./.github/actions/detect-docs-changes
 
   install-smoke:
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
+    needs: [fork-pr-guard, docs-scope]
+    if: needs.fork-pr-guard.outputs.should_run == 'true' && needs.docs-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout CLI

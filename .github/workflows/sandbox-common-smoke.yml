@@ -22,7 +22,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  fork-pr-guard:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "pull_request" || "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "External fork pull request detected; skipping sandbox-common smoke because GitHub does not provide a usable token for PR merge-ref checkout and third-party action downloads in this context."
+          echo "should_run=false" >> "$GITHUB_OUTPUT"
+
   sandbox-common-smoke:
+    needs: [fork-pr-guard]
+    if: needs.fork-pr-guard.outputs.should_run == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
