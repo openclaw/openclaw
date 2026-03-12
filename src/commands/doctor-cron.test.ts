@@ -215,6 +215,55 @@ describe("maybeRepairLegacyCronStore", () => {
     );
   });
 
+  it("does not report already canonical payload kinds as legacy", async () => {
+    const storePath = await makeTempStorePath();
+    const createdAtMs = Date.parse("2026-02-01T00:00:00.000Z");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "canonical-job",
+              name: "Canonical job",
+              createdAtMs,
+              updatedAtMs: createdAtMs,
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: createdAtMs },
+              payload: {
+                kind: "agentTurn",
+                message: "Morning brief",
+              },
+              delivery: { mode: "announce" },
+              sessionTarget: "isolated",
+              state: {},
+              enabled: true,
+              wakeMode: "now",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expect(noteSpy).not.toHaveBeenCalled();
+  });
+
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });

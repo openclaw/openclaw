@@ -28,14 +28,21 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
 }
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
-  const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
-  if (raw === "agentturn") {
-    payload.kind = "agentTurn";
-    return true;
+  const raw = typeof payload.kind === "string" ? payload.kind.trim() : "";
+  const normalized = raw.toLowerCase();
+  if (normalized === "agentturn") {
+    if (raw !== "agentTurn") {
+      payload.kind = "agentTurn";
+      return true;
+    }
+    return false;
   }
-  if (raw === "systemevent") {
-    payload.kind = "systemEvent";
-    return true;
+  if (normalized === "systemevent") {
+    if (raw !== "systemEvent") {
+      payload.kind = "systemEvent";
+      return true;
+    }
+    return false;
   }
   return false;
 }
