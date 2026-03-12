@@ -266,9 +266,103 @@ Obsidian 프로젝트 폴더(`01.PROJECT/{NN}.MAI{PROJECT_NAME}/`)에 직접 생
 
 BOT Suite 편입 대상이면 BOT 이름도 함께 결정 (BOT + 키워드 패턴).
 
+### 9. Regression Guard Setup (자동 적용)
+
+모든 새 프로젝트에 회귀 방지 기반 구조를 자동으로 설치한다.
+
+#### 9.1 `benchmarks/baseline.json` 생성
+
+```powershell
+New-Item -ItemType Directory -Path "C:\TEST\MAI{PROJECT_NAME}\benchmarks" -Force | Out-Null
+```
+
+파일: `C:\TEST\MAI{PROJECT_NAME}\benchmarks\baseline.json`
+
+```json
+{
+  "project": "MAI{PROJECT_NAME}",
+  "benchmark_date": "TODO: fill after first benchmark run",
+  "status": "scaffold",
+  "note": "Run full pipeline on a sample input and fill in actual metrics",
+  "metrics": {
+    "TODO": "record key quality metrics here (accuracy, recall, precision, time_s, etc.)"
+  },
+  "critical_settings": {
+    "TODO": {
+      "value": "PLACEHOLDER",
+      "module": "your.module.path",
+      "reason": "why this value must not change",
+      "evidence": "TODO: benchmark evidence"
+    }
+  },
+  "anti_patterns": []
+}
+```
+
+#### 9.2 Regression Guard 섹션을 `CLAUDE.md`에 추가
+
+프로젝트 초기화 시 생성하는 `CLAUDE.md` 파일 끝에 다음 섹션을 추가한다:
+
+````markdown
+## ⚠️ Regression Guard
+
+All critical pipeline settings must be protected with guard tests.
+
+### When to Apply
+
+After the first AI/ML pipeline is implemented and a benchmark run is complete:
+
+1. Run full pipeline on a sample input → record metrics in `benchmarks/baseline.json`
+2. Generate guard tests:
+   ```bash
+   python C:\MAIBOT\skills\regression-guard\scripts\init_guards.py \
+       --project-dir . \
+       --benchmark-json benchmarks/baseline.json
+   ```
+````
+
+3. Verify: `pytest tests/test_regression_guard.py -v`
+4. Run guard tests before/after every pipeline parameter change
+
+### Key Anti-Patterns to Avoid
+
+See `C:\MAIBOT\skills\regression-guard\references\guard-patterns.md`:
+
+1. Mode switch "same accuracy" — always benchmark full pipeline, not just unit tests
+2. Quality filter hurts recall — measure before/after adding thresholds
+3. Falsy empty list (`if list:`) — use `is not None` for optional collections
+4. Shared config between providers — separate env vars per API provider
+5. Missing cache key params — include ALL mode-differentiating request params
+
+### Reference
+
+- Skill: `C:\MAIBOT\skills\regression-guard\`
+- Patterns: `C:\MAIBOT\skills\regression-guard\references\guard-patterns.md`
+- Generator: `C:\MAIBOT\skills\regression-guard\scripts\init_guards.py`
+
+````
+
+#### 9.3 Git 포함
+
+`benchmarks/` 폴더와 업데이트된 `CLAUDE.md`를 initial commit에 포함:
+
+```powershell
+cd C:\TEST\MAI{PROJECT_NAME}
+git add benchmarks/ CLAUDE.md
+git commit --amend --no-edit  # initial commit에 합치거나
+# 또는
+git commit -m "chore: add regression-guard scaffold"
+git push origin master
+````
+
+> **Note**: `benchmarks/baseline.json`은 실제 파이프라인 구현 후 채워야 한다.
+> 초기화 시점에는 스캐폴드만 생성. 파이프라인 코드가 완성되면 `regression-guard` 스킬을 다시 실행.
+
+---
+
 ## Post-Setup
 
-Confirm all 8 steps completed and share summary to Discord DM.
+Confirm all 9 steps completed and share summary to Discord DM.
 Summary should include:
 
 - 로컬 경로
@@ -277,3 +371,4 @@ Summary should include:
 - 칸반 보드 위치
 - Dashboard 등록 확인
 - MAI-Universe.md 업데이트 확인
+- `benchmarks/baseline.json` 생성 확인 ← **새로 추가**
