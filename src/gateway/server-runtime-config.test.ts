@@ -208,19 +208,31 @@ describe("resolveGatewayRuntimeConfig", () => {
       );
     });
 
-    it("rejects non-loopback control UI when allowed origins are missing", async () => {
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg: {
-            gateway: {
-              bind: "lan",
-              auth: TOKEN_AUTH,
+    it.each([
+      {
+        name: "token auth",
+        auth: TOKEN_AUTH,
+      },
+      {
+        name: "explicit none auth",
+        auth: { mode: "none" as const },
+      },
+    ])(
+      "rejects non-loopback control UI when allowed origins are missing ($name)",
+      async ({ auth }) => {
+        await expect(
+          resolveGatewayRuntimeConfig({
+            cfg: {
+              gateway: {
+                bind: "lan",
+                auth,
+              },
             },
-          },
-          port: 18789,
-        }),
-      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
-    });
+            port: 18789,
+          }),
+        ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
+      },
+    );
 
     it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
       const result = await resolveGatewayRuntimeConfig({
