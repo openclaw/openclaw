@@ -75,6 +75,27 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts tools.web.fetch.firecrawl config block", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            firecrawl: {
+              enabled: true,
+              apiKey: "firecrawl-test",
+              baseUrl: "https://firecrawl.example",
+              onlyMainContent: false,
+              maxAgeMs: 60_000,
+              timeoutSeconds: 45,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
