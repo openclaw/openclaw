@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { createReadStream, createWriteStream, constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import * as tar from "tar";
 import {
   buildExcludeFilter,
@@ -437,10 +439,7 @@ export async function createBackupArchive(
   try {
     const hasExcludes = excludePatterns.length > 0;
 
-    // Write manifest. The excluded[] field is populated after tar completes
-    // via the filter side-effect. The in-archive manifest records options
-    // but not the runtime excluded list (which is on the result object).
-    const manifest = buildManifest({
+    const manifestBuildParams = {
       createdAt,
       archiveRoot,
       includeWorkspace,
@@ -452,46 +451,89 @@ export async function createBackupArchive(
       configPath: plan.configPath,
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
-    });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-
-    const tarFilter = hasExcludes
-      ? (entryPath: string, stat: { size?: number }) => {
-          // Never filter out the manifest file itself.
-          if (path.resolve(entryPath) === manifestPath) {
-            return true;
-          }
-          return excludeFilter(entryPath, stat);
-        }
-      : undefined;
-
-    const tarOpts: tar.TarOptionsWithAliasesAsyncFile = {
-      file: tempArchivePath,
-      gzip: true,
-      portable: true,
-      preservePaths: true,
-      follow: false, // SECURITY: never follow symlinks
-      onWriteEntry: (entry) => {
-        entry.path = remapArchiveEntryPath({
-          entryPath: entry.path,
-          manifestPath,
-          archiveRoot,
-        });
-      },
     };
-    if (tarFilter) {
-      tarOpts.filter = tarFilter;
-    }
 
-    await tar.c(tarOpts, [manifestPath, ...result.assets.map((asset) => asset.sourcePath)]);
-
-    // Populate result with excluded entries from filter side-effect.
     if (hasExcludes) {
+      // Two-step archive creation: create uncompressed tar with payload only,
+      // collect excluded entries via filter side-effect, write the final
+      // manifest (with excluded[]) and append it, then gzip.
+      // This ensures the in-archive manifest accurately records what was excluded.
+      const uncompressedTarPath = `${tempArchivePath}.tar`;
+
+      const tarFilter = (entryPath: string, stat: { size?: number }) => {
+        return excludeFilter(entryPath, stat);
+      };
+
+      await tar.c(
+        {
+          file: uncompressedTarPath,
+          portable: true,
+          preservePaths: true,
+          follow: false,
+          filter: tarFilter,
+          onWriteEntry: (entry) => {
+            entry.path = buildBackupArchivePath(archiveRoot, path.resolve(entry.path));
+          },
+        },
+        result.assets.map((asset) => asset.sourcePath),
+      );
+
+      // Collect excluded entries from filter side-effect.
       const excluded = getExcluded();
       if (excluded.length > 0) {
         result.excluded = [...excluded];
         result.excludedStats = buildExcludedStats(excluded);
       }
+
+      // Write final manifest WITH excluded data.
+      const manifest = buildManifest({
+        ...manifestBuildParams,
+        excluded: result.excluded,
+        excludedStats: result.excludedStats,
+      });
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+      // Append manifest to uncompressed tar (single entry, no duplicates).
+      await tar.r(
+        {
+          file: uncompressedTarPath,
+          cwd: path.dirname(manifestPath),
+          onWriteEntry: (entry) => {
+            entry.path = path.posix.join(archiveRoot, "manifest.json");
+          },
+        },
+        [path.basename(manifestPath)],
+      );
+
+      // Gzip the uncompressed tar to produce the final .tar.gz.
+      await pipeline(
+        createReadStream(uncompressedTarPath),
+        createGzip(),
+        createWriteStream(tempArchivePath),
+      );
+      await fs.rm(uncompressedTarPath, { force: true });
+    } else {
+      // Simple path: no excludes — write manifest and create gzipped tar in one step.
+      const manifest = buildManifest(manifestBuildParams);
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+      await tar.c(
+        {
+          file: tempArchivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          follow: false,
+          onWriteEntry: (entry) => {
+            entry.path = remapArchiveEntryPath({
+              entryPath: entry.path,
+              manifestPath,
+              archiveRoot,
+            });
+          },
+        },
+        [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+      );
     }
 
     await publishTempArchive({ tempArchivePath, outputPath });

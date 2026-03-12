@@ -13,10 +13,12 @@ import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 export type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
 export type BackupSkipReason = "covered" | "missing";
 
+export type PatternSource = "default" | "cli" | "config-file" | "auto-file";
+
 export type ExcludedEntry = {
   readonly path: string;
   readonly pattern: string;
-  readonly source: "default" | "cli" | "config-file" | "auto-file";
+  readonly source: PatternSource;
   readonly bytes: number;
 };
 

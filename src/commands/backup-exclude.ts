@@ -2,19 +2,14 @@ import { readFileSync, statSync, existsSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
 import picomatch from "picomatch";
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+import type { ExcludedEntry } from "./backup-shared.js";
 
-export type PatternSource = "default" | "cli" | "config-file" | "auto-file";
+export type { ExcludedEntry };
 
-export interface ExcludedEntry {
-  readonly path: string;
-  readonly pattern: string;
-  readonly source: PatternSource;
-  readonly bytes: number;
-}
+export type PatternSource = ExcludedEntry["source"];
 
 export interface ExcludeSpec {
   readonly exclude: readonly string[];

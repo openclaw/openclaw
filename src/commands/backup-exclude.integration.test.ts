@@ -2,9 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { backupVerifyCommand } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
@@ -332,6 +331,15 @@ describe("backup create — exclude patterns", () => {
 
 describe("backup verify — tolerant manifest reader", () => {
   let tempHome: TempHomeEnv;
+  let realBackupVerifyCommand: (typeof import("./backup-verify.js"))["backupVerifyCommand"];
+
+  beforeAll(async () => {
+    // Import the REAL backupVerifyCommand — the module-scope vi.mock above
+    // replaces it with a mock for the create tests. We need the real implementation
+    // to actually verify archive integrity.
+    const real = await vi.importActual<typeof import("./backup-verify.js")>("./backup-verify.js");
+    realBackupVerifyCommand = real.backupVerifyCommand;
+  });
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-verify-exclude-test-");
@@ -357,8 +365,15 @@ describe("backup verify — tolerant manifest reader", () => {
         smartExclude: true,
       });
 
-      // Verify should pass — the actual backupVerifyCommand reads the archive
-      const verifyResult = await backupVerifyCommand(runtime, {
+      // Verify the archive has excluded entries
+      expect(result.excluded).toBeDefined();
+      expect(result.excluded!.some((e) => e.path === "venvs" || e.path.startsWith("venvs/"))).toBe(
+        true,
+      );
+
+      // Real verify should pass — excluded paths are in the manifest,
+      // so verify knows their absence is intentional.
+      const verifyResult = await realBackupVerifyCommand(runtime, {
         archive: result.archivePath,
       });
       expect(verifyResult.ok).toBe(true);
@@ -381,10 +396,71 @@ describe("backup verify — tolerant manifest reader", () => {
         output: archiveDir,
       });
 
-      const verifyResult = await backupVerifyCommand(runtime, {
+      // Real verify — v1 manifests have no excluded field, should work fine
+      const verifyResult = await realBackupVerifyCommand(runtime, {
         archive: result.archivePath,
       });
       expect(verifyResult.ok).toBe(true);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("in-archive manifest contains excluded[] with accurate data", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.mkdir(path.join(stateDir, "venvs/lib"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "venvs/lib/site.py"), "# python\n", "utf8");
+    await fs.mkdir(path.join(stateDir, "models"), { recursive: true });
+    await fs.writeFile(path.join(stateDir, "models/gpt2.bin"), "model data\n", "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-manifest-"));
+
+    try {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        smartExclude: true,
+      });
+
+      // Extract manifest from archive and verify excluded[] is populated
+      let manifestJson = "";
+      await tar.t({
+        file: result.archivePath,
+        gzip: true,
+        onentry: (entry) => {
+          if (entry.path.endsWith("manifest.json")) {
+            const chunks: Buffer[] = [];
+            entry.on("data", (chunk: Buffer | string) => {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            });
+            entry.on("end", () => {
+              manifestJson = Buffer.concat(chunks).toString("utf8");
+            });
+          } else {
+            entry.resume();
+          }
+        },
+      });
+
+      expect(manifestJson).toBeTruthy();
+      const manifest = JSON.parse(manifestJson);
+      expect(manifest.excluded).toBeDefined();
+      expect(Array.isArray(manifest.excluded)).toBe(true);
+      expect(manifest.excluded.length).toBeGreaterThan(0);
+
+      // Verify excluded entries have expected structure
+      const excludedPaths = manifest.excluded.map((e: { path: string }) => e.path);
+      expect(excludedPaths.some((p: string) => p === "venvs" || p.startsWith("venvs/"))).toBe(true);
+
+      // Each entry should have path, pattern, source, bytes
+      for (const entry of manifest.excluded) {
+        expect(typeof entry.path).toBe("string");
+        expect(typeof entry.pattern).toBe("string");
+        expect(typeof entry.source).toBe("string");
+        expect(typeof entry.bytes).toBe("number");
+      }
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

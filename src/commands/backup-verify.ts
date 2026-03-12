@@ -1,7 +1,7 @@
 import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
@@ -60,10 +60,6 @@ export type BackupVerifyResult = {
   assetCount: number;
   entryCount: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
@@ -266,12 +262,23 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     }
   }
 
+  // Build a set of excluded paths so we can skip them during asset checks.
+  // Their absence from the archive is intentional — not a verification failure.
+  const excludedPaths = new Set((manifest.excluded ?? []).map((e) => e.path));
+
   const payloadRoot = path.posix.join(archiveRoot, "payload");
   for (const asset of manifest.assets) {
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
+
+    // Skip verification for assets whose source paths are excluded.
+    // The asset was intentionally omitted from the archive.
+    if (excludedPaths.has(asset.sourcePath) || excludedPaths.has(asset.archivePath)) {
+      continue;
+    }
+
     const exact = normalizedEntrySet.has(assetArchivePath);
     const nested = normalizedEntries.some(
       (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
