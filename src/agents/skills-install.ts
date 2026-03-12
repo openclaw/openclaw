@@ -440,6 +440,24 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
+    // On Linux without brew, try apt-get as a fallback (common in Docker).
+    if (process.platform === "linux" && spec.formula && hasBinary("apt-get")) {
+      const isRoot = process.getuid?.() === 0;
+      const cmd = isRoot
+        ? ["apt-get", "install", "-y", spec.formula]
+        : hasBinary("sudo")
+          ? ["sudo", "apt-get", "install", "-y", spec.formula]
+          : null;
+      if (cmd) {
+        const aptResult = await runCommandSafely(cmd, { timeoutMs });
+        if (aptResult.code === 0) {
+          return withWarnings(
+            { ok: true, message: `Installed ${spec.formula} via apt-get (brew unavailable)` },
+            warnings,
+          );
+        }
+      }
+    }
     return withWarnings(resolveBrewMissingFailure(spec), warnings);
   }
 
