@@ -36,3 +36,4 @@ export {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
+export { getActiveSkillEnvKeys } from "../agents/skills/env-overrides.runtime.js";

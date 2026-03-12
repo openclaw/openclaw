@@ -231,6 +231,8 @@ export class AcpSessionManager {
         cfg: input.cfg,
         sessionKey,
       });
+      const { resolveAcpSpawnAgentEnv } = await import("../../agents/acp-spawn-agent-env.js");
+      const agentEnv = resolveAcpSpawnAgentEnv({ cfg: input.cfg, agentId: agent });
       const handle = await withAcpRuntimeErrorBoundary({
         run: async () =>
           await runtime.ensureSession({
@@ -239,6 +241,7 @@ export class AcpSessionManager {
             mode: input.mode,
             resumeSessionId: input.resumeSessionId,
             cwd: requestedCwd,
+            env: agentEnv,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -917,6 +920,17 @@ export class AcpSessionManager {
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
       if (backendMatches && agentMatches && modeMatches && cwdMatches) {
+        // Refresh per-agent env overrides on the cached runtime so credential
+        // rotations take effect without requiring a full session reinit.
+        const { resolveAcpSpawnAgentEnv } = await import("../../agents/acp-spawn-agent-env.js");
+        const agentEnv = resolveAcpSpawnAgentEnv({ cfg: params.cfg, agentId: agent });
+        await cached.runtime.ensureSession({
+          sessionKey: params.sessionKey,
+          agent,
+          mode,
+          cwd,
+          env: agentEnv,
+        });
         return {
           runtime: cached.runtime,
           handle: cached.handle,
@@ -933,6 +947,8 @@ export class AcpSessionManager {
 
     const backend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
     const runtime = backend.runtime;
+    const { resolveAcpSpawnAgentEnv } = await import("../../agents/acp-spawn-agent-env.js");
+    const agentEnv = resolveAcpSpawnAgentEnv({ cfg: params.cfg, agentId: agent });
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
@@ -940,6 +956,7 @@ export class AcpSessionManager {
           agent,
           mode,
           cwd,
+          env: agentEnv,
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",

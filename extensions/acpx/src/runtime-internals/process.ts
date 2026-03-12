@@ -128,6 +128,10 @@ export function spawnWithResolvedCommand(
     args: string[];
     cwd: string;
     stripProviderAuthEnvVars?: boolean;
+    /** Additional keys to strip (e.g. active skill env keys). */
+    stripKeys?: Iterable<string>;
+    /** Per-agent env overrides applied after stripping. */
+    env?: Record<string, string>;
   },
   options?: SpawnCommandOptions,
 ): ChildProcessWithoutNullStreams {
@@ -139,10 +143,20 @@ export function spawnWithResolvedCommand(
     options,
   );
 
-  const childEnv = omitEnvKeysCaseInsensitive(
-    process.env,
-    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
-  );
+  const keysToStrip: string[] = params.stripProviderAuthEnvVars
+    ? listKnownProviderAuthEnvVarNames()
+    : [];
+  if (params.stripKeys) {
+    for (const key of params.stripKeys) {
+      keysToStrip.push(key);
+    }
+  }
+  const childEnv = omitEnvKeysCaseInsensitive(process.env, keysToStrip);
+  if (params.env) {
+    for (const [key, value] of Object.entries(params.env)) {
+      childEnv[key] = value;
+    }
+  }
   childEnv.OPENCLAW_SHELL = "acp";
 
   return spawn(resolved.command, resolved.args, {
@@ -190,6 +204,8 @@ export async function spawnAndCollect(
     args: string[];
     cwd: string;
     stripProviderAuthEnvVars?: boolean;
+    stripKeys?: Iterable<string>;
+    env?: Record<string, string>;
   },
   options?: SpawnCommandOptions,
   runtime?: {

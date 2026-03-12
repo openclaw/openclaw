@@ -385,4 +385,81 @@ describe("spawnAndCollect", () => {
     expect(parsed.openclaw).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
   });
+
+  it("strips additional keys via stripKeys parameter", async () => {
+    vi.stubEnv("MY_SKILL_KEY", "skill-secret");
+    vi.stubEnv("ANOTHER_SKILL_KEY", "another-secret");
+    vi.stubEnv("KEEP_THIS", "keep-me");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({skill:process.env.MY_SKILL_KEY,another:process.env.ANOTHER_SKILL_KEY,keep:process.env.KEEP_THIS}))",
+      ],
+      cwd: process.cwd(),
+      stripKeys: ["MY_SKILL_KEY", "ANOTHER_SKILL_KEY"],
+    });
+
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout) as Record<string, string | undefined>;
+    expect(parsed.skill).toBeUndefined();
+    expect(parsed.another).toBeUndefined();
+    expect(parsed.keep).toBe("keep-me");
+  });
+
+  it("injects per-agent env overrides after stripping", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "stale-key");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OPENAI_API_KEY,custom:process.env.CUSTOM_VAR}))",
+      ],
+      cwd: process.cwd(),
+      stripProviderAuthEnvVars: true,
+      env: { OPENAI_API_KEY: "agent-specific-key", CUSTOM_VAR: "custom-value" },
+    });
+
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout) as Record<string, string | undefined>;
+    expect(parsed.openai).toBe("agent-specific-key");
+    expect(parsed.custom).toBe("custom-value");
+  });
+
+  it("combines stripKeys and env: strips all then injects correct key", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "stale-openai");
+    vi.stubEnv("MY_SKILL_KEY", "skill-secret");
+
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(JSON.stringify({openai:process.env.OPENAI_API_KEY,skill:process.env.MY_SKILL_KEY}))",
+      ],
+      cwd: process.cwd(),
+      stripProviderAuthEnvVars: true,
+      stripKeys: ["MY_SKILL_KEY"],
+      env: { OPENAI_API_KEY: "correct-agent-key" },
+    });
+
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout) as Record<string, string | undefined>;
+    expect(parsed.openai).toBe("correct-agent-key");
+    expect(parsed.skill).toBeUndefined();
+  });
+
+  it("env parameter cannot override OPENCLAW_SHELL", async () => {
+    const result = await spawnAndCollect({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write(process.env.OPENCLAW_SHELL || 'missing')"],
+      cwd: process.cwd(),
+      env: { OPENCLAW_SHELL: "should-be-overwritten" },
+    });
+
+    expect(result.code).toBe(0);
+    // OPENCLAW_SHELL is set after env overrides, so it should always be "acp"
+    expect(result.stdout).toBe("acp");
+  });
 });

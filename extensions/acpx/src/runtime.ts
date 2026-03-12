@@ -11,7 +11,7 @@ import type {
   AcpRuntimeTurnInput,
   PluginLogger,
 } from "openclaw/plugin-sdk/acpx";
-import { AcpRuntimeError } from "openclaw/plugin-sdk/acpx";
+import { AcpRuntimeError, getActiveSkillEnvKeys } from "openclaw/plugin-sdk/acpx";
 import { toAcpMcpServers, type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";
 import {
@@ -125,6 +125,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly mcpProxyAgentCommandCache = new Map<string, string>();
   private readonly spawnCommandOptions: SpawnCommandOptions;
   private readonly loggedSpawnResolutions = new Set<string>();
+  private readonly sessionEnvOverrides = new Map<string, Record<string, string>>();
 
   constructor(
     private readonly config: ResolvedAcpxPluginConfig,
@@ -163,6 +164,14 @@ export class AcpxRuntime implements AcpRuntime {
     this.logger?.debug?.(
       `acpx spawn resolver: command=${event.command} mode=${event.strictWindowsCmdWrapper ? "strict" : "compat"} resolution=${event.resolution}`,
     );
+  }
+
+  private getSkillEnvKeys(): ReadonlySet<string> {
+    try {
+      return getActiveSkillEnvKeys();
+    } catch {
+      return new Set();
+    }
   }
 
   async probeAvailability(): Promise<void> {
@@ -206,6 +215,14 @@ export class AcpxRuntime implements AcpRuntime {
     const cwd = asTrimmedString(input.cwd) || this.config.cwd;
     const mode = input.mode;
     const resumeSessionId = asTrimmedString(input.resumeSessionId);
+
+    // Cache per-agent env overrides for use in subsequent spawn calls.
+    if (input.env && Object.keys(input.env).length > 0) {
+      this.sessionEnvOverrides.set(sessionName, input.env);
+    } else {
+      this.sessionEnvOverrides.delete(sessionName);
+    }
+
     const ensureSubcommand = resumeSessionId
       ? ["sessions", "new", "--name", sessionName, "--resume-session", resumeSessionId]
       : ["sessions", "ensure", "--name", sessionName];
@@ -215,10 +232,15 @@ export class AcpxRuntime implements AcpRuntime {
       command: ensureSubcommand,
     });
 
+    const skillEnvKeys = this.getSkillEnvKeys();
+    const sessionEnv = this.sessionEnvOverrides.get(sessionName);
+
     let events = await this.runControlCommand({
       args: ensureCommand,
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
+      stripKeys: skillEnvKeys,
+      env: sessionEnv,
     });
     let ensuredEvent = events.find(
       (event) =>
@@ -237,6 +259,8 @@ export class AcpxRuntime implements AcpRuntime {
         args: newCommand,
         cwd,
         fallbackCode: "ACP_SESSION_INIT_FAILED",
+        stripKeys: skillEnvKeys,
+        env: sessionEnv,
       });
       ensuredEvent = events.find(
         (event) =>
@@ -312,6 +336,8 @@ export class AcpxRuntime implements AcpRuntime {
         args,
         cwd: state.cwd,
         stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
+        stripKeys: this.getSkillEnvKeys(),
+        env: this.sessionEnvOverrides.get(state.name),
       },
       this.spawnCommandOptions,
     );
@@ -423,6 +449,8 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
       signal: input.signal,
+      stripKeys: this.getSkillEnvKeys(),
+      env: this.sessionEnvOverrides.get(state.name),
     });
     const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
     if (!detail) {
@@ -467,6 +495,8 @@ export class AcpxRuntime implements AcpRuntime {
       args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
+      stripKeys: this.getSkillEnvKeys(),
+      env: this.sessionEnvOverrides.get(state.name),
     });
   }
 
@@ -490,6 +520,8 @@ export class AcpxRuntime implements AcpRuntime {
       args,
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
+      stripKeys: this.getSkillEnvKeys(),
+      env: this.sessionEnvOverrides.get(state.name),
     });
   }
 
@@ -588,6 +620,8 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
+      stripKeys: this.getSkillEnvKeys(),
+      env: this.sessionEnvOverrides.get(state.name),
     });
   }
 
@@ -604,6 +638,7 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
+    this.sessionEnvOverrides.delete(state.name);
   }
 
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
@@ -705,6 +740,8 @@ export class AcpxRuntime implements AcpRuntime {
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
     signal?: AbortSignal;
+    stripKeys?: Iterable<string>;
+    env?: Record<string, string>;
   }): Promise<AcpxJsonObject[]> {
     const result = await spawnAndCollect(
       {
@@ -712,6 +749,8 @@ export class AcpxRuntime implements AcpRuntime {
         args: params.args,
         cwd: params.cwd,
         stripProviderAuthEnvVars: this.config.stripProviderAuthEnvVars,
+        stripKeys: params.stripKeys,
+        env: params.env,
       },
       this.spawnCommandOptions,
       {
