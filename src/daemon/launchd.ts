@@ -392,22 +392,58 @@ async function waitForPidExit(pid: number): Promise<boolean> {
 }
 
 /**
+ * Return an opaque identity token for a PID (its start time as reported by
+ * `ps`), or null if the process no longer exists.  Used to guard against
+ * accidental SIGKILL of a recycled PID.
+ */
+async function getPidStartTime(pid: number): Promise<string | null> {
+  try {
+    const result = await execFileUtf8("ps", ["-p", String(pid), "-o", "lstart="]);
+    const ts = result.stdout.trim();
+    return ts.length > 0 ? ts : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Ensure the process is dead: wait for it to exit gracefully, then
  * SIGKILL if it is still running after the timeout.
  * Returns true if the process is confirmed gone, false if SIGKILL also
  * failed (e.g. permission denied or the PID was already recycled).
  */
 async function ensurePidGone(pid: number): Promise<boolean> {
+  // Capture process identity (start time) before waiting so we can validate
+  // the PID has not been recycled by the OS before we send SIGKILL.
+  const identityBefore = await getPidStartTime(pid);
+
   const exited = await waitForPidExit(pid);
   if (exited) {
+    return true;
+  }
+
+  // Re-validate identity: if the start time changed the original process is
+  // already gone and a new, unrelated process now owns this PID — do not kill it.
+  const identityNow = await getPidStartTime(pid);
+  if (identityBefore !== null && identityNow !== null && identityBefore !== identityNow) {
+    // Different process; the one we wanted is gone.
+    return true;
+  }
+  if (identityNow === null) {
+    // Process disappeared between the wait and our check — gone.
     return true;
   }
 
   // Process is still alive after SIGTERM timeout — send SIGKILL.
   try {
     process.kill(pid, "SIGKILL");
-  } catch {
-    // ESRCH means it exited between our check and the kill call — that is fine.
+  } catch (err) {
+    // ESRCH means it exited between our identity check and the kill — that is fine.
+    // Any other error (e.g. EPERM) means the process is still alive and unkillable;
+    // return false so callers know the port may not be free.
+    if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+      return false;
+    }
     return true;
   }
 
@@ -417,8 +453,12 @@ async function ensurePidGone(pid: number): Promise<boolean> {
     await sleepMs(100);
     try {
       process.kill(pid, 0);
-    } catch {
-      return true;
+    } catch (err) {
+      // ESRCH → process is gone (desired outcome).
+      // EPERM → process still exists but we can't signal it; keep polling.
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
+        return true;
+      }
     }
   }
   return false;
@@ -443,7 +483,12 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
 
   // Wait for the process to actually exit; SIGKILL as fallback.
   if (typeof currentPid === "number") {
-    await ensurePidGone(currentPid);
+    const gone = await ensurePidGone(currentPid);
+    if (!gone) {
+      stdout.write(
+        `Warning: PID ${currentPid} may still be running after SIGKILL; port may not be free yet.\n`,
+      );
+    }
   }
 
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
