@@ -259,6 +259,14 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toContain("assistant to=functions.exec");
   });
 
+  it("keeps route-marker explanations with inline JSON examples", () => {
+    const result = normalizeReplyPayload({
+      text: 'assistant to=functions.exec is internal; example: {"path":"/tmp"}',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain('{"path":"/tmp"}');
+  });
+
   it("does not flag fenced code samples as suspicious by default", () => {
     expect(
       hasSuspiciousReplyLeakage(
@@ -267,6 +275,17 @@ describe("normalizeReplyPayload", () => {
         ),
       ),
     ).toBe(false);
+  });
+
+  it("flags structured route marker text paired with tool JSON lines", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        [
+          "assistant to=functions.exec commentary to=functions.exec",
+          '{"command":"ls","yieldMs":1000}',
+        ].join("\n"),
+      ),
+    ).toBe(true);
   });
 });
 

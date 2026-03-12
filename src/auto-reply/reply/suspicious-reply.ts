@@ -1,9 +1,29 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
-const LEADING_ROUTE_MARKER_RE = /^(?:assistant|user|commentary)\s+to=\S+/i;
-const FUNCTION_TARGET_RE = /\bfunctions\.[a-z0-9_]+\b/i;
+const STRUCTURED_ROUTE_MARKER_LINE_RE =
+  /^(?:(?:assistant|user|commentary)\s+to=\S+)(?:\s+(?:(?:assistant|user|commentary)\s+to=\S+|[_\uFF3F]?json))*\s*$/i;
 const TOOL_JSON_KEY_RE =
-  /"(?:command|yieldMs|workdir|path|file_path|oldText|newText|old_string|new_string|sessionId|offset|limit|timeout|background|pty|elevated|security|ask|node)"\s*:/i;
+  /"(?:command|yieldMs|workdir|file_path|oldText|newText|old_string|new_string|sessionId|timeout|background|pty|elevated)"\s*:/i;
+
+function stripLeadingSilentToken(text: string): string {
+  return text.replace(new RegExp(`^\\s*${SILENT_REPLY_TOKEN}\\b`, "i"), "").trimStart();
+}
+
+function firstNonEmptyLine(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim()) {
+      return line.trim();
+    }
+  }
+  return "";
+}
+
+function hasStructuredToolJsonLine(text: string): boolean {
+  return text.split(/\r?\n/).some((line) => {
+    const trimmed = line.trimStart();
+    return trimmed.startsWith("{") && TOOL_JSON_KEY_RE.test(trimmed);
+  });
+}
 
 export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
   if (!text) {
@@ -14,20 +34,18 @@ export function hasSuspiciousReplyLeakage(text: string | undefined): boolean {
     return false;
   }
 
-  const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? "";
-  const hasLeadingRouteMarker = LEADING_ROUTE_MARKER_RE.test(firstLine);
   const hasLeadingSilentWithExtra =
     trimmed.toUpperCase().startsWith(SILENT_REPLY_TOKEN) && !isSilentReplyText(trimmed);
-  const hasInternalToolMarker = FUNCTION_TARGET_RE.test(trimmed);
-  const hasToolJsonArgs = trimmed.includes("{") && TOOL_JSON_KEY_RE.test(trimmed);
+  const candidate = hasLeadingSilentWithExtra ? stripLeadingSilentToken(trimmed) : trimmed;
+  const hasStructuredRouteMarkerLead = STRUCTURED_ROUTE_MARKER_LINE_RE.test(
+    firstNonEmptyLine(candidate),
+  );
+  const hasToolJsonArgs = candidate.includes("{") && hasStructuredToolJsonLine(candidate);
 
-  if (
-    hasLeadingSilentWithExtra &&
-    (hasLeadingRouteMarker || hasInternalToolMarker || hasToolJsonArgs)
-  ) {
+  if (hasLeadingSilentWithExtra && (hasStructuredRouteMarkerLead || hasToolJsonArgs)) {
     return true;
   }
-  if (hasLeadingRouteMarker && hasToolJsonArgs) {
+  if (hasStructuredRouteMarkerLead && hasToolJsonArgs) {
     return true;
   }
   return false;
