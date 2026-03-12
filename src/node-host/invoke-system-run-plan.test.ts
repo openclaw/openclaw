@@ -357,6 +357,20 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 3,
     },
     {
+      name: "pnpm js shim exec tsx file",
+      argv: ["./pnpm.js", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+    },
+    {
+      name: "pnpm exec double-dash tsx file",
+      argv: ["pnpm", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
       name: "npx tsx file",
       argv: ["npx", "tsx", "./run.ts"],
       scriptName: "run.ts",
@@ -390,6 +404,12 @@ describe("hardenApprovedExecutionPaths", () => {
           const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
           const fixture = createScriptOperandFixture(tmp, runtimeCase);
           fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+          const executablePath = fixture.command[0];
+          if (executablePath?.endsWith("pnpm.js")) {
+            const shimPath = path.join(tmp, "pnpm.js");
+            fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
+            fs.chmodSync(shimPath, 0o755);
+          }
           try {
             const prepared = buildSystemRunApprovalPlan({
               command: fixture.command,
