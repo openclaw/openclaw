@@ -681,13 +681,18 @@ export async function textToSpeech(params: {
         const extension = output.extension;
         const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
 
-        await cliTTS({
-          text: params.text,
-          config: config.cli,
-          outputFormat: outputFormat,
-          outputPath: audioPath,
-          timeoutMs: config.timeoutMs,
-        });
+        try {
+          await cliTTS({
+            text: params.text,
+            config: config.cli,
+            outputFormat: outputFormat,
+            outputPath: audioPath,
+            timeoutMs: config.timeoutMs,
+          });
+        } catch (err) {
+          scheduleCleanup(tempDir);
+          throw err;
+        }
 
         scheduleCleanup(tempDir);
         const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
