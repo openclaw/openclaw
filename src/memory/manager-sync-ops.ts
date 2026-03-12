@@ -663,7 +663,7 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    if (!this.provider && !this.fts.enabled) {
+    if (!this.provider && (!this.fts.enabled || !this.fts.available)) {
       return;
     }
     const files = await listMemoryFiles(
@@ -751,7 +751,7 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    if (!this.provider && !this.fts.enabled) {
+    if (!this.provider && (!this.fts.enabled || !this.fts.available)) {
       return;
     }
     const files = await listSessionFilesForAgent(this.agentId);
