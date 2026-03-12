@@ -414,7 +414,12 @@ export function classifyFailoverReasonFromHttpStatus(
     }
     return "timeout";
   }
-  if (status === 502 || status === 504) {
+  // Treat 5xx gateway/server errors as transient timeout-class failures so
+  // the failover loop skips the downed provider and auth-profile cooldowns
+  // are recorded correctly (previously 500 was unclassified, causing the
+  // primary to be re-probed on every request during an outage instead of
+  // falling back immediately).
+  if (status === 500 || status === 502 || status === 504) {
     return "timeout";
   }
   if (status === 529) {
