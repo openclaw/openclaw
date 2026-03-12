@@ -244,12 +244,14 @@ export async function runAgentTurnWithFallback(params: {
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
-              const sessionClone = params.isHeartbeat
-                ? await createEphemeralSessionFileClone(params.followupRun.run.sessionFile)
-                : null;
-              const sessionFile = sessionClone?.sessionFile ?? params.followupRun.run.sessionFile;
+              let sessionClone: Awaited<ReturnType<typeof createEphemeralSessionFileClone>> | null =
+                null;
               let lifecycleTerminalEmitted = false;
               try {
+                sessionClone = params.isHeartbeat
+                  ? await createEphemeralSessionFileClone(params.followupRun.run.sessionFile)
+                  : null;
+                const sessionFile = sessionClone?.sessionFile ?? params.followupRun.run.sessionFile;
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,

@@ -472,6 +472,48 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
       expect(await pathExists(String(cliCall?.sessionFile))).toBe(false);
     });
   });
+
+  it("emits a terminal lifecycle error when CLI heartbeat clone creation fails", async () => {
+    await withTempSessionFile("seed", async (sessionFile) => {
+      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(new Error("mkdtemp failed"));
+      const phases: string[] = [];
+      const lifecycleErrors: string[] = [];
+      const off = onAgentEvent((evt) => {
+        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+        if (evt.stream !== "lifecycle" || !phase) {
+          return;
+        }
+        phases.push(phase);
+        if (phase === "error" && typeof evt.data.error === "string") {
+          lifecycleErrors.push(evt.data.error);
+        }
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: {
+            sessionFile,
+            provider: "claude-cli",
+            model: "sonnet",
+          },
+        });
+
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
+
+        expect(state.runCliAgentMock).not.toHaveBeenCalled();
+        expect(payload?.text).toContain("mkdtemp failed");
+        expect(phases).toEqual(["start", "error"]);
+        expect(lifecycleErrors).toContain("Error: mkdtemp failed");
+      } finally {
+        off();
+        mkdtempSpy.mockRestore();
+      }
+    });
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
