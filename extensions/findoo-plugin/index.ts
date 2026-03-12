@@ -15,6 +15,16 @@ const findooPlugin = {
   register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
 
+    // ── License Gate: no key → skip all registration ──
+    if (!config.apiKey) {
+      api.log?.(
+        "warn",
+        "Findoo: license key not configured — plugin inactive. " +
+          "Set FINDOO_API_KEY env var or configure in Control UI → Plugins → Findoo.",
+      );
+      return;
+    }
+
     api.log?.("info", `findoo-plugin: connecting to ${config.strategyAgentUrl}`);
     api.log?.("info", `findoo-plugin: assistant ${config.strategyAssistantId}`);
 

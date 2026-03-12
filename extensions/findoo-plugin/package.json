@@ -11,6 +11,10 @@
   ],
   "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
   "type": "module",
+  "main": "./index.ts",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
   "devDependencies": {
     "openfinclaw": "workspace:*"
   },

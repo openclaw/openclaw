@@ -8,6 +8,11 @@
   "configSchema": {
     "type": "object",
     "properties": {
+      "apiKey": {
+        "type": "string",
+        "format": "password",
+        "description": "Findoo license key (required). Also accepted via FINDOO_API_KEY env var."
+      },
       "strategyAgentUrl": {
         "type": "string",
         "description": "Strategy Agent service URL (LangGraph A2A). Default: http://43.128.100.43:5085"
@@ -19,6 +24,11 @@
     }
   },
   "uiHints": {
+    "apiKey": {
+      "label": "License Key",
+      "help": "Findoo 分析服务授权密钥",
+      "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    },
     "strategyAgentUrl": {
       "label": "Strategy Agent URL",
       "help": "LangGraph A2A 策略分析服务地址",

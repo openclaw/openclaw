@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export type PluginConfig = {
+  apiKey: string;
   strategyAgentUrl: string;
   strategyAssistantId: string;
   requestTimeoutMs: number;
@@ -41,7 +42,13 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   const taskTimeoutRaw = raw?.taskTimeoutMs ?? readEnv(["OPENFINCLAW_FINDOO_TASK_TIMEOUT_MS"]);
   const taskTimeout = Number(taskTimeoutRaw);
 
+  const apiKey =
+    (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ??
+    readEnv(["FINDOO_API_KEY", "OPENFINCLAW_FINDOO_API_KEY"]) ??
+    "";
+
   return {
+    apiKey,
     strategyAgentUrl: strategyAgentUrl.replace(/\/+$/, ""),
     strategyAssistantId,
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 5000 ? Math.floor(timeout) : 120_000,

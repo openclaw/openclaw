@@ -16,7 +16,7 @@ describe("findoo-plugin registration", () => {
       tools,
       services,
       logs,
-      pluginConfig: {},
+      pluginConfig: { apiKey: "test-license-key" },
       resolvePath: (p: string) => `/tmp/test/${p}`,
       log: (level: string, msg: string) => logs.push({ level, msg }),
       registerTool: (tool: { name: string }) => {
@@ -68,6 +68,16 @@ describe("findoo-plugin registration", () => {
     expect(cfg.assistantId).toBe("d2310a07-b552-453c-a8bb-7b9b86de6b23");
 
     vi.restoreAllMocks();
+  });
+
+  it("skips registration without license key", () => {
+    const api = createMockApi();
+    (api as unknown as { pluginConfig: Record<string, unknown> }).pluginConfig = {};
+    findooPlugin.register(api);
+
+    expect(api.tools.size).toBe(0);
+    expect(api.services.size).toBe(0);
+    expect(api.logs.some((l) => l.msg.includes("license key not configured"))).toBe(true);
   });
 
   it("logs startup info", () => {
