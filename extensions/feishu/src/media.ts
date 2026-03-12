@@ -238,11 +238,12 @@ export function sanitizeFileNameForUpload(fileName: string): string {
 
 /**
  * Decode a filename that may have been URL-encoded by sanitizeFileNameForUpload.
- * This is used when receiving filenames from Feishu messages, * to ensure proper display of non-ASCII characters.
+ * This is used when receiving filenames from Feishu messages, to ensure proper
+ * display of non-ASCII characters.
  */
-export function decodeFileNameFromFeishu(fileName: string): string {
+export function decodeFileNameFromFeishu(fileName: string | undefined | null): string {
   if (!fileName) {
-    return fileName;
+    return fileName ?? "";
   }
   // Check if the filename looks URL-encoded
   const hasEncodedChars = /%[0-9A-Fa-f]{2}/.test(fileName);
