@@ -8,6 +8,7 @@ import {
   sendSeenZalouser,
   sendTypingZalouser,
 } from "./send.js";
+import { parseZalouserTextStyles } from "./text-styles.js";
 import {
   sendZaloDeliveredEvent,
   sendZaloLink,
@@ -130,6 +131,102 @@ describe("zalouser send helpers", () => {
         textStyles: undefined,
       }),
     );
+  });
+
+  it("rechunks normalized markdown text before sending to avoid transport truncation", async () => {
+    const text = "\t".repeat(500) + "a".repeat(1500);
+    const formatted = parseZalouserTextStyles(text);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2c-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2c-2" });
+
+    const result = await sendMessageZalouser("thread-2c", text, {
+      profile: "p2c",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(formatted.text.length).toBeGreaterThan(2000);
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText.mock.calls.every((call) => (call[1] as string).length <= 2000)).toBe(true);
+    expect(result).toEqual({ ok: true, messageId: "mid-2c-2" });
+  });
+
+  it("preserves text styles when splitting long formatted markdown", async () => {
+    const text = `**${"a".repeat(2501)}**`;
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2d-2" });
+
+    const result = await sendMessageZalouser("thread-2d", text, {
+      profile: "p2d",
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2d",
+      "a".repeat(2000),
+      expect.objectContaining({
+        profile: "p2d",
+        isGroup: false,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 2000, st: TextStyle.Bold }],
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2d",
+      "a".repeat(501),
+      expect.objectContaining({
+        profile: "p2d",
+        isGroup: false,
+        textMode: "markdown",
+        textStyles: [{ start: 0, len: 501, st: TextStyle.Bold }],
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2d-2" });
+  });
+
+  it("sends overflow markdown captions as follow-up text after the media message", async () => {
+    const caption = "\t".repeat(500) + "a".repeat(1500);
+    const formatted = parseZalouserTextStyles(caption);
+    mockSendText
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2e-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-2e-2" });
+
+    const result = await sendImageZalouser("thread-2e", "https://example.com/long.png", {
+      profile: "p2e",
+      caption,
+      isGroup: false,
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-2e",
+      expect.any(String),
+      expect.objectContaining({
+        profile: "p2e",
+        caption: undefined,
+        isGroup: false,
+        mediaUrl: "https://example.com/long.png",
+        textMode: "markdown",
+      }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-2e",
+      expect.any(String),
+      expect.not.objectContaining({
+        mediaUrl: "https://example.com/long.png",
+      }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-2e-2" });
   });
 
   it("delegates link helper to JS transport", async () => {
