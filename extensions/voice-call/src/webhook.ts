@@ -421,12 +421,16 @@ export class VoiceCallWebhookServer {
       return { statusCode: 401, body: "Unauthorized" };
     }
 
-    // Realtime mode: return TwiML <Connect><Stream> after verification so
-    // the request is still authenticated against the provider's signature.
-    // The WebSocket that Twilio opens in response is routed via the upgrade
-    // handler's isRealtimeWebSocketUpgrade() check.
+    // Realtime mode: return TwiML <Connect><Stream> for inbound ringing calls only.
+    // Status callbacks (CallStatus=completed, outbound calls, etc.) must fall
+    // through to the normal webhook pipeline so call state is updated correctly.
     if (this.realtimeHandler) {
-      return this.realtimeHandler.buildTwiMLPayload(req);
+      const params = new URLSearchParams(ctx.rawBody);
+      const callStatus = params.get("CallStatus");
+      const direction = params.get("Direction");
+      if (callStatus === "ringing" && (!direction || direction === "inbound")) {
+        return this.realtimeHandler.buildTwiMLPayload(req, params);
+      }
     }
 
     const parsed = this.provider.parseWebhookEvent(ctx, {
