@@ -145,6 +145,24 @@ export function stop(state: CronServiceState) {
   stopTimer(state);
 }
 
+/**
+ * Gracefully stop the cron scheduler: cancel the timer, wait for any
+ * in-flight locked operation to complete, and flush in-memory state to disk.
+ * This prevents a write-after-read race when the service is rebuilt during
+ * a hot config reload — without draining, the old service's in-flight
+ * persist can overwrite changes already loaded by the replacement service.
+ */
+export async function stopGraceful(state: CronServiceState) {
+  stopTimer(state);
+  // Drain the in-flight operation queue so no pending persist can fire
+  // after the caller creates a replacement CronService.
+  await locked(state, async () => {
+    if (state.store) {
+      await persist(state);
+    }
+  });
+}
+
 export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
