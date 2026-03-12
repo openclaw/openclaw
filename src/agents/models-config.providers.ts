@@ -15,10 +15,8 @@ import {
 import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
-  buildOllamaProvider,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
-  buildVllmProvider,
   resolveOllamaApiBase,
 } from "./models-config.providers.discovery.js";
 import {
@@ -58,8 +56,12 @@ export {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
+  groupPluginDiscoveryProvidersByOrder,
+  normalizePluginDiscoveryResult,
+  resolvePluginDiscoveryProviders,
+} from "../plugins/provider-discovery.js";
+import {
   MINIMAX_OAUTH_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -587,6 +589,7 @@ type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
 };
 
@@ -796,56 +799,35 @@ async function resolveCloudflareAiGatewayImplicitProvider(
   return undefined;
 }
 
-async function resolveOllamaImplicitProvider(
+async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const ollamaKey = ctx.resolveProviderApiKey("ollama").apiKey;
-  const explicitOllama = ctx.explicitProviders?.ollama;
-  const hasExplicitModels =
-    Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (hasExplicitModels && explicitOllama) {
-    return {
-      ollama: {
-        ...explicitOllama,
-        baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
-        api: explicitOllama.api ?? "ollama",
-        apiKey: ollamaKey ?? explicitOllama.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-      },
-    };
-  }
-
-  const ollamaBaseUrl = explicitOllama?.baseUrl;
-  const hasExplicitOllamaConfig = Boolean(explicitOllama);
-  const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
-    quiet: !ollamaKey && !hasExplicitOllamaConfig,
+  const providers = resolvePluginDiscoveryProviders({
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+    env: ctx.env,
   });
-  if (ollamaProvider.models.length === 0 && !ollamaKey && !explicitOllama?.apiKey) {
-    return undefined;
+  const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
+  const discovered: Record<string, ProviderConfig> = {};
+  for (const provider of byOrder[order]) {
+    const result = await provider.discovery?.run({
+      config: ctx.config ?? {},
+      agentDir: ctx.agentDir,
+      workspaceDir: ctx.workspaceDir,
+      env: ctx.env,
+      resolveProviderApiKey: (providerId) =>
+        ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+    });
+    mergeImplicitProviderSet(
+      discovered,
+      normalizePluginDiscoveryResult({
+        provider,
+        result,
+      }),
+    );
   }
-  return {
-    ollama: {
-      ...ollamaProvider,
-      apiKey: ollamaKey ?? explicitOllama?.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
-    },
-  };
-}
-
-async function resolveVllmImplicitProvider(
-  ctx: ImplicitProviderContext,
-): Promise<Record<string, ProviderConfig> | undefined> {
-  if (ctx.explicitProviders?.vllm) {
-    return undefined;
-  }
-  const { apiKey: vllmKey, discoveryApiKey } = ctx.resolveProviderApiKey("vllm");
-  if (!vllmKey) {
-    return undefined;
-  }
-  return {
-    vllm: {
-      ...(await buildVllmProvider({ apiKey: discoveryApiKey })),
-      apiKey: vllmKey,
-    },
-  };
+  return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
 export async function resolveImplicitProviders(
@@ -882,15 +864,17 @@ export async function resolveImplicitProviders(
   for (const loader of SIMPLE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
   for (const loader of PROFILE_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
   for (const loader of PAIRED_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveOllamaImplicitProvider(context));
-  mergeImplicitProviderSet(providers, await resolveVllmImplicitProvider(context));
+  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
 
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({

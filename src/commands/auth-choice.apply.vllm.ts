@@ -34,7 +34,6 @@ export async function applyAuthChoiceVllm(
   const { config: nextConfig, modelRef } = await promptAndConfigureVllm({
     cfg: params.config,
     prompter: params.prompter,
-    agentDir: params.agentDir,
   });
 
   if (!params.setDefaultModel) {
