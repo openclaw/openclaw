@@ -32,7 +32,7 @@ export type SidebarArgsSection = {
 };
 
 function jsonFence(value: unknown): string {
-  return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``.replace(/\`/g, "`");
+  return "```json\n" + JSON.stringify(value, null, 2) + "\n```";
 }
 
 /**
