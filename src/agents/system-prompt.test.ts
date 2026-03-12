@@ -657,22 +657,31 @@ describe("buildAgentSystemPrompt", () => {
     expect(section).toBeDefined();
     expect(section).toContain("## Adaptive Thinking");
     expect(section).toContain(
-      "Keep the current thinking level unless task complexity clearly changes.",
+      "Raise thinking with `set_thinking_level` when the next step requires deeper reasoning to choose the right action, not just to carry out an already-made decision.",
     );
     expect(section).toContain(
-      '- Use `set_thinking_level` with `scope: "turn"` for one-off difficult work or current run adjustments.',
+      '- Prefer `set_thinking_level` with `scope: "turn"` for one-off hard work or current run adjustments; do this early instead of waiting until you are stuck.',
     );
     expect(section).toContain(
       '- Use `scope: "session"` only for lasting or user-requested changes.',
     );
     expect(section).toContain(
-      "Raise thinking for harder work like complex debugging, multi-step design, subtle refactors, or other correctness-critical tasks.",
+      "Raise thinking for diagnosis, decision-making, or ambiguity: complex debugging, merge/conflict resolution, multi-file refactors, prompt or policy changes, ambiguous requirements, root-cause investigation, or tasks that require both code changes and verification.",
     );
     expect(section).toContain(
       "Keep default or low thinking for straightforward commands, simple lookups, and other mechanical work.",
     );
     expect(section).toContain(
-      "Avoid repeated or thrashing thinking-level changes within the same flow.",
+      "Lower thinking once the hard part is resolved and the next step is mostly execution of an already-made decision.",
+    );
+    expect(section).toContain(
+      "Lower for execution, cleanup, or routine verification: after root cause is identified and only implementation remains, after conflicts are resolved and only cleanup remains, after the key design choice is made and only straightforward edits remain, or when work shifts to routine test reruns, formatting, or status checks.",
+    );
+    expect(section).toContain(
+      "Do not keep high thinking just because the task started hard; lower it once the remaining work is routine.",
+    );
+    expect(section).toContain(
+      "Avoid repeated or thrashing thinking-level changes within the same flow; one deliberate downgrade after the difficult phase ends is fine, but do not bounce levels back and forth without a real task change.",
     );
   });
 
