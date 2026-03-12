@@ -34,6 +34,7 @@ import {
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client-helpers.js";
+import { buildServerArgs } from "./client.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
@@ -253,6 +254,19 @@ describe("buildAcpClientStripKeys", () => {
     expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
     expect(stripKeys.has("HF_TOKEN")).toBe(true);
     expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);
+  });
+});
+
+describe("buildServerArgs", () => {
+  it("prepends acp when callers pass only extra server args", () => {
+    expect(buildServerArgs({ serverArgs: ["--verbose"] })).toEqual(["acp", "--verbose"]);
+  });
+
+  it("dedupes a leading acp server arg from callers", () => {
+    expect(buildServerArgs({ serverArgs: ["acp", "--verbose"] })).toEqual([
+      "acp",
+      "--verbose",
+    ]);
   });
 });
 

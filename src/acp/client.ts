@@ -42,8 +42,10 @@ function toArgs(value: string[] | string | undefined): string[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
+export function buildServerArgs(opts: AcpClientOptions): string[] {
+  const extraArgs = toArgs(opts.serverArgs);
+  const normalizedExtraArgs = extraArgs[0] === "acp" ? extraArgs.slice(1) : extraArgs;
+  const args = ["acp", ...normalizedExtraArgs];
   if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
     args.push("--verbose");
   }
