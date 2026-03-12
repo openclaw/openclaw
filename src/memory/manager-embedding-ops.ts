@@ -475,8 +475,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       provider: "openai",
       enabled: Boolean(openAi),
       buildRequest: (chunk) => {
-        const body: Record<string, unknown> = {
-          model: openAi?.model ?? this.provider?.model ?? "text-embedding-3-small",
+        const model = openAi?.model ?? this.provider?.model ?? "text-embedding-3-small";
+        const body: { model: string; input: string; encoding_format?: string } = {
+          model,
           input: chunk.text,
         };
         if (openAi?.encodingFormat) {
