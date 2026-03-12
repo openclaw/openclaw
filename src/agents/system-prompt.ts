@@ -476,6 +476,8 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway start",
     "- openclaw gateway stop",
     "- openclaw gateway restart",
+    "Do not run `pkill`/`killall` against `openclaw-gateway` from exec; that can terminate your own runtime before restart logic runs.",
+    "Prefer the `gateway` tool restart action (or `openclaw gateway restart`) so restart survives safely.",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
     ...skillsSection,
