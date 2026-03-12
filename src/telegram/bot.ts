@@ -179,7 +179,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   if (finalFetch) {
     const baseFetch = finalFetch;
     finalFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      return Promise.resolve(baseFetch(input, init)).catch((err: unknown) => {
+      return Promise.resolve(
+        baseFetch(
+          input as Parameters<typeof baseFetch>[0],
+          init as Parameters<typeof baseFetch>[1],
+        ),
+      ).catch((err: unknown) => {
         try {
           tagTelegramNetworkError(err, {
             method: extractTelegramApiMethod(input),
