@@ -1651,8 +1651,6 @@ export function renderApp(state: AppViewState) {
                   state.appearanceActiveSubsection = null;
                 },
                 onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
-                },
-                onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
                 onReload: () => loadConfig(state),
                 onSave: () => saveConfig(state),
                 onApply: () => applyConfig(state),
