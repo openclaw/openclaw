@@ -2,7 +2,7 @@ export function resolveGlobalSingleton<T>(key: symbol, create: () => T): T {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const existing = globalStore[key] as T | undefined;
   if (Object.prototype.hasOwnProperty.call(globalStore, key)) {
-    return existing;
+    return existing as T;
   }
   const created = create();
   globalStore[key] = created;

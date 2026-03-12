@@ -149,7 +149,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     expect(result).toBe("live transcript text");
   });
 
-  it("joins replies from multiple descendants", async () => {
+  it("returns only the freshest descendant reply", async () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       {
         runId: "run-1",
@@ -160,7 +160,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         cleanup: "keep",
         createdAt: 1000,
         endedAt: 2000,
-        frozenResultText: "first child output",
+        frozenResultText: "stale child output",
       },
       {
         runId: "run-2",
@@ -171,7 +171,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         cleanup: "keep",
         createdAt: 1000,
         endedAt: 3000,
-        frozenResultText: "second child output",
+        frozenResultText: "fresh child output",
       },
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
@@ -179,7 +179,44 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("first child output\n\nsecond child output");
+    expect(result).toBe("fresh child output");
+  });
+
+  it("falls back to next freshest usable reply when newest is silent", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      {
+        runId: "run-1",
+        childSessionKey: "child-1",
+        requesterSessionKey: "test-session",
+        requesterDisplayKey: "test-session",
+        task: "task-1",
+        cleanup: "keep",
+        createdAt: 1000,
+        endedAt: 2000,
+        frozenResultText: "older usable output",
+      },
+      {
+        runId: "run-2",
+        childSessionKey: "child-2",
+        requesterSessionKey: "test-session",
+        requesterDisplayKey: "test-session",
+        task: "task-2",
+        cleanup: "keep",
+        createdAt: 1000,
+        endedAt: 3000,
+      },
+    ]);
+    vi.mocked(readLatestAssistantReply).mockImplementation(async (params) => {
+      if (params.sessionKey === "child-2") {
+        return "NO_REPLY";
+      }
+      return undefined;
+    });
+    const result = await readDescendantSubagentFallbackReply({
+      sessionKey: "test-session",
+      runStartedAt,
+    });
+    expect(result).toBe("older usable output");
   });
 
   it("skips SILENT_REPLY_TOKEN descendants", async () => {

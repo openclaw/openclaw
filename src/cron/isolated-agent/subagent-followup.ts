@@ -67,7 +67,7 @@ export async function readDescendantSubagentFallbackReply(params: {
         entry.endedAt >= params.runStartedAt &&
         entry.childSessionKey.trim().length > 0,
     )
-    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
+    .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
   if (descendants.length === 0) {
     return undefined;
   }
@@ -75,19 +75,15 @@ export async function readDescendantSubagentFallbackReply(params: {
   const latestByChild = new Map<string, (typeof descendants)[number]>();
   for (const entry of descendants) {
     const childKey = entry.childSessionKey.trim();
-    if (!childKey) {
+    if (!childKey || latestByChild.has(childKey)) {
       continue;
     }
-    const current = latestByChild.get(childKey);
-    if (!current || (entry.endedAt ?? 0) >= (current.endedAt ?? 0)) {
-      latestByChild.set(childKey, entry);
-    }
+    latestByChild.set(childKey, entry);
   }
 
-  const replies: string[] = [];
-  const latestRuns = [...latestByChild.values()]
-    .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
-    .slice(-4);
+  const latestRuns = [...latestByChild.values()].toSorted(
+    (a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0),
+  );
   for (const entry of latestRuns) {
     let reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
     // Fall back to the registry's frozen result text when the session transcript
@@ -98,15 +94,13 @@ export async function readDescendantSubagentFallbackReply(params: {
     if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       continue;
     }
-    replies.push(reply);
+    // Fallback mode should surface the freshest settled descendant result only.
+    // Older descendant summaries are easily stale/obsolete and can pollute
+    // current-status reminders when multiple subagents were used in one workflow.
+    return reply;
   }
-  if (replies.length === 0) {
-    return undefined;
-  }
-  if (replies.length === 1) {
-    return replies[0];
-  }
-  return replies.join("\n\n");
+
+  return undefined;
 }
 
 /**
