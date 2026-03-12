@@ -112,12 +112,17 @@ async function resolveOutputPath(params: {
     // Path doesn't exist — check if it looks like an explicit archive filename
     if (code === "ENOENT") {
       const ext = path.extname(resolved).toLowerCase();
-      const isArchiveExtension = ext === ".gz" || ext === ".zip" || ext === ".tgz";
-      if (!isArchiveExtension) {
-        // No archive extension — treat as a directory
+      // Valid compressed archive extensions (backup always creates gzip-compressed archives)
+      const isValidCompressedExtension = ext === ".gz" || ext === ".zip" || ext === ".tgz";
+      // .tar is not a compressed format - it's misleading since backup always uses gzip
+      // But treat it as an explicit archive filename if specified
+      const isExplicitArchive = isValidCompressedExtension || ext === ".tar";
+      // Any non-empty custom suffix (like .bak) should be treated as explicit file output
+      if (!isExplicitArchive && ext === "") {
+        // No extension — treat as a directory
         return path.join(resolved, basename);
       }
-      // Has archive extension — treat as explicit filename
+      // Has archive extension or custom suffix — treat as explicit filename
       return resolved;
     }
     throw err;
