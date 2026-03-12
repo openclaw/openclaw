@@ -46,4 +46,23 @@ describe("startMatrixClientWithGrace", () => {
     expect(onError).toHaveBeenCalledWith(lateError);
     vi.useRealTimers();
   });
+
+  it("keeps original startup error when onError throws", async () => {
+    vi.useFakeTimers();
+    const startError = new Error("invalid token");
+    const onError = vi.fn(() => {
+      throw new Error("logger unavailable");
+    });
+    const client = {
+      start: vi.fn().mockRejectedValue(startError),
+    };
+
+    const startPromise = startMatrixClientWithGrace({ client, onError });
+    const startupExpectation = expect(startPromise).rejects.toBe(startError);
+
+    await vi.advanceTimersByTimeAsync(MATRIX_CLIENT_STARTUP_GRACE_MS);
+    await startupExpectation;
+    expect(onError).toHaveBeenCalledWith(startError);
+    vi.useRealTimers();
+  });
 });

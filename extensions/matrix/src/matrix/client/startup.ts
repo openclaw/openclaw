@@ -14,13 +14,21 @@ export async function startMatrixClientWithGrace(params: {
   try {
     startPromise = params.client.start();
   } catch (err) {
-    params.onError?.(err);
+    try {
+      params.onError?.(err);
+    } catch {
+      // Never let logging/error handlers mask the original startup failure.
+    }
     throw err;
   }
   void startPromise.catch((err: unknown) => {
     startFailed = true;
     startError = err;
-    params.onError?.(err);
+    try {
+      params.onError?.(err);
+    } catch {
+      // Avoid unhandled rejections when onError throws (e.g. optional deps missing in logger).
+    }
   });
   await new Promise((resolve) => setTimeout(resolve, graceMs));
   if (startFailed) {
