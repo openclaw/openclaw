@@ -10,7 +10,7 @@
 
 - 源文档：`docs/**/*.md`
 - 目标文档：`docs/zh-CN/**/*.md`
-- 术语表：`docs/.i18n/glossary.zh-Hans.json`
+- 术语表：`docs/.i18n/glossary.zh-CN.json`
 - 翻译记忆库：`docs/.i18n/zh-CN.tm.jsonl`
 - 提示词规则：`scripts/docs-i18n/translator.go`
 
