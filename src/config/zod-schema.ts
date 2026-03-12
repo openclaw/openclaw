@@ -290,7 +290,12 @@ export const OpenClawSchema = z
         maxFileBytes: z.number().int().positive().optional(),
         consoleLevel: LoggingLevelSchema.optional(),
         consoleStyle: z
-          .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
+          .union([
+            z.literal("pretty"),
+            z.literal("compact"),
+            z.literal("json"),
+            z.literal("activity"),
+          ])
           .optional(),
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),

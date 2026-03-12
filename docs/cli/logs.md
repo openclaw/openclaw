@@ -20,9 +20,17 @@ Related:
 openclaw logs
 openclaw logs --follow
 openclaw logs --json
+openclaw logs --follow --human
+openclaw logs --follow --human-full
 openclaw logs --limit 500
 openclaw logs --local-time
 openclaw logs --follow --local-time
 ```
 
 Use `--local-time` to render timestamps in your local timezone.
+
+Use `--human` for activity timeline output and `--human-full` to include
+internal IDs/details (for deep debugging).
+
+`--human` and `--human-full` are text render modes and cannot be combined with
+`--json`.

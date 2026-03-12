@@ -4,6 +4,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { buildActivityMeta, buildToolActivityLabel } from "../logging/activity/build.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -23,12 +24,14 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
+import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  label?: string;
 };
 
 /** Track tool execution start data for after_tool_call hook. */
@@ -312,8 +315,6 @@ export async function handleToolExecutionStart(
   const runId = ctx.params.runId;
 
   // Track start time and args for after_tool_call hook
-  toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
-
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePathValue =
@@ -332,9 +333,34 @@ export async function handleToolExecutionStart(
   }
 
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+  const display = resolveToolDisplay({ name: toolName, args, meta });
+  const detail = formatToolDetail(display);
+  const toolLabel = buildToolActivityLabel({
+    tool: toolName,
+    label: display.title,
+    detail,
+  });
+  toolStartData.set(buildToolStartKey(runId, toolCallId), {
+    startTime: Date.now(),
+    args,
+    label: toolLabel,
+  });
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    {
+      activity: buildActivityMeta({
+        kind: "tool",
+        summary: `tool ${toolName} start`,
+        runId: ctx.params.runId,
+        toolCallId,
+        status: "start",
+        extra: {
+          tool: toolName,
+          label: toolLabel,
+        },
+      }),
+    },
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
@@ -543,6 +569,20 @@ export async function handleToolExecutionEnd(
 
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    {
+      activity: buildActivityMeta({
+        kind: "tool",
+        summary: `tool ${toolName} end`,
+        runId: ctx.params.runId,
+        toolCallId,
+        status: isToolError ? "error" : "ok",
+        durationMs: startData?.startTime != null ? Date.now() - startData.startTime : undefined,
+        extra: {
+          tool: toolName,
+          label: startData?.label ?? toolName,
+        },
+      }),
+    },
   );
 
   await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });

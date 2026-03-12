@@ -60,6 +60,26 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it("keeps unparsed lines visible in --human mode", async () => {
+    const partialLine = '{"time":"2026-03-02T19:35:00.000Z","message":"partial';
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 2,
+      size: 456,
+      lines: [partialLine],
+    });
+
+    const stdoutWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--human", "--plain"]);
+
+    expect(stdoutWrites.join("")).toContain(partialLine);
+  });
+
   it("wires --local-time through CLI parsing and emits local timestamps", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
@@ -107,6 +127,93 @@ describe("logs cli", () => {
     await runLogsCli(["logs"]);
 
     expect(stderrWrites.join("")).toContain("output stdout closed");
+  });
+
+  it("rejects combining --human with --json", async () => {
+    const stderrWrites: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    });
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`EXIT_${code ?? 0}`);
+    }) as never);
+
+    await expect(runLogsCli(["logs", "--human", "--json"])).rejects.toThrow("EXIT_1");
+    expect(stderrWrites.join("")).toContain("Cannot combine --human/--human-full with --json.");
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("renders structured activity in --human mode and hides IDs by default", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      lines: [
+        JSON.stringify({
+          time: "2025-01-01T12:00:00.000Z",
+          _meta: { logLevelName: "DEBUG", name: JSON.stringify({ subsystem: "agent/embedded" }) },
+          0: "agent/embedded",
+          1: {
+            activity: {
+              kind: "tool",
+              summary: "Write AGENTS.md",
+              runId: "run-123",
+              toolCallId: "call-456",
+              status: "ok",
+              durationMs: 88,
+              extra: { tool: "write" },
+            },
+          },
+          2: "embedded run tool end: runId=run-123 tool=write toolCallId=call-456",
+        }),
+      ],
+    });
+
+    const stdoutWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--human", "--plain"]);
+
+    const out = stdoutWrites.join("");
+    expect(out).toContain("tool");
+    expect(out).toContain("Write AGENTS.md");
+    expect(out).not.toContain("run-123");
+    expect(out).not.toContain("call-456");
+  });
+
+  it("shows IDs in --human-full mode", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      lines: [
+        JSON.stringify({
+          time: "2025-01-01T12:00:00.000Z",
+          _meta: { logLevelName: "DEBUG", name: JSON.stringify({ subsystem: "agent/embedded" }) },
+          0: "agent/embedded",
+          1: {
+            activity: {
+              kind: "tool",
+              summary: "Write AGENTS.md",
+              runId: "run-123",
+              toolCallId: "call-456",
+              status: "ok",
+            },
+          },
+          2: "embedded run tool end: runId=run-123 tool=write toolCallId=call-456",
+        }),
+      ],
+    });
+
+    const stdoutWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--human-full", "--plain"]);
+
+    const out = stdoutWrites.join("");
+    expect(out).toContain("runId=run-123");
+    expect(out).toContain("toolCallId=call-456");
   });
 
   describe("formatLogTimestamp", () => {

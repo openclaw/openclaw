@@ -46,7 +46,7 @@ export const FIELD_HELP: Record<string, string> = {
   "logging.consoleLevel":
     'Console-specific log threshold: "silent", "fatal", "error", "warn", "info", "debug", or "trace" for terminal output control. Use this to keep local console quieter while retaining richer file logging if needed.',
   "logging.consoleStyle":
-    'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
+    'Console output format style: "pretty", "compact", "json", or "activity" based on operator and ingestion needs. Use json for machine parsing pipelines, pretty/compact for standard terminal workflows, and activity for human-readable timeline logs.',
   "logging.redactSensitive":
     'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
   "logging.redactPatterns":

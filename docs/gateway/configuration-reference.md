@@ -2798,7 +2798,7 @@ Notes:
     level: "info",
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
-    consoleStyle: "pretty", // pretty | compact | json
+    consoleStyle: "pretty", // pretty | compact | json | activity
     redactSensitive: "tools", // off | tools
     redactPatterns: ["\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1"],
   },

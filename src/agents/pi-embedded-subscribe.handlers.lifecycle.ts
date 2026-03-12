@@ -1,4 +1,5 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildActivityMeta } from "../logging/activity/build.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildApiErrorObservationFields,
@@ -15,7 +16,14 @@ export {
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
-  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`, {
+    activity: buildActivityMeta({
+      kind: "run",
+      summary: "agent start",
+      runId: ctx.params.runId,
+      status: "start",
+    }),
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "lifecycle",
@@ -51,6 +59,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     ctx.log.warn("embedded run agent end", {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "agent end error",
+        runId: ctx.params.runId,
+        status: "error",
+        preview: safeErrorText,
+      }),
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
       runId: ctx.params.runId,
@@ -79,7 +94,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       },
     });
   } else {
-    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+    ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`, {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "agent end",
+        runId: ctx.params.runId,
+        status: isError ? "error" : "ok",
+      }),
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",

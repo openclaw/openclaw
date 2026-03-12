@@ -15,10 +15,12 @@ type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
+  debug: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
+  const debug = vi.fn();
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
@@ -30,7 +32,7 @@ function createTestContext(): {
     flushBlockReplyBuffer: vi.fn(),
     hookRunner: undefined,
     log: {
-      debug: vi.fn(),
+      debug,
       warn,
     },
     state: {
@@ -54,7 +56,7 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush };
+  return { ctx, debug, warn, onBlockReplyFlush };
 }
 
 describe("handleToolExecutionStart read path checks", () => {
@@ -119,6 +121,48 @@ describe("handleToolExecutionStart read path checks", () => {
     await pending;
 
     expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(true);
+  });
+
+  it("attaches activity metadata to tool lifecycle logs", async () => {
+    const { ctx, debug } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-activity",
+      args: { path: "AGENTS.md", content: "hi" },
+    } as never);
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "write",
+      toolCallId: "tool-activity",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(debug).toHaveBeenCalledWith(
+      "embedded run tool start: runId=run-test tool=write toolCallId=tool-activity",
+      expect.objectContaining({
+        activity: expect.objectContaining({
+          kind: "tool",
+          runId: "run-test",
+          toolCallId: "tool-activity",
+          status: "start",
+        }),
+      }),
+    );
+    expect(debug).toHaveBeenCalledWith(
+      "embedded run tool end: runId=run-test tool=write toolCallId=tool-activity",
+      expect.objectContaining({
+        activity: expect.objectContaining({
+          kind: "tool",
+          runId: "run-test",
+          toolCallId: "tool-activity",
+          status: "ok",
+        }),
+      }),
+    );
   });
 });
 

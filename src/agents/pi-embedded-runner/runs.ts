@@ -1,3 +1,4 @@
+import { buildActivityMeta } from "../../logging/activity/build.js";
 import {
   diagnosticLogger as diag,
   logMessageQueued,
@@ -58,7 +59,14 @@ export function abortEmbeddedPiRun(
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
       return false;
     }
-    diag.debug(`aborting run: sessionId=${sessionId}`);
+    diag.debug(`aborting run: sessionId=${sessionId}`, {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "aborting run",
+        sessionKey: sessionId,
+        status: "error",
+      }),
+    });
     try {
       handle.abort();
     } catch (err) {
@@ -75,7 +83,14 @@ export function abortEmbeddedPiRun(
       if (!handle.isCompacting()) {
         continue;
       }
-      diag.debug(`aborting compacting run: sessionId=${id}`);
+      diag.debug(`aborting compacting run: sessionId=${id}`, {
+        activity: buildActivityMeta({
+          kind: "run",
+          summary: "aborting compacting run",
+          sessionKey: id,
+          status: "error",
+        }),
+      });
       try {
         handle.abort();
         aborted = true;
@@ -89,7 +104,14 @@ export function abortEmbeddedPiRun(
   if (mode === "all") {
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      diag.debug(`aborting run: sessionId=${id}`);
+      diag.debug(`aborting run: sessionId=${id}`, {
+        activity: buildActivityMeta({
+          kind: "run",
+          summary: "aborting run",
+          sessionKey: id,
+          status: "error",
+        }),
+      });
       try {
         handle.abort();
         aborted = true;
@@ -214,7 +236,15 @@ export function setActiveEmbeddedRun(
     reason: wasActive ? "run_replaced" : "run_started",
   });
   if (!sessionId.startsWith("probe-")) {
-    diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+    diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`, {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "run registered",
+        sessionKey,
+        status: "start",
+        extra: { totalActive: ACTIVE_EMBEDDED_RUNS.size },
+      }),
+    });
   }
 }
 
@@ -227,7 +257,15 @@ export function clearActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
-      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+      diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`, {
+        activity: buildActivityMeta({
+          kind: "run",
+          summary: "run cleared",
+          sessionKey,
+          status: "done",
+          extra: { totalActive: ACTIVE_EMBEDDED_RUNS.size },
+        }),
+      });
     }
     notifyEmbeddedRunEnded(sessionId);
   } else {

@@ -8,6 +8,8 @@ const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
 }));
 const setGatewayWsLogStyle = vi.fn((_style: string) => undefined);
 const setVerbose = vi.fn((_enabled: boolean) => undefined);
+const setConsoleStyleOverride = vi.fn((_style?: string | null) => undefined);
+const setConsoleActivityDetailMode = vi.fn((_full: boolean) => undefined);
 const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   killed: [],
   waitedMs: 0,
@@ -81,6 +83,8 @@ vi.mock("../../infra/ports.js", () => ({
 }));
 
 vi.mock("../../logging/console.js", () => ({
+  setConsoleActivityDetailMode: (full: boolean) => setConsoleActivityDetailMode(full),
+  setConsoleStyleOverride: (style?: string | null) => setConsoleStyleOverride(style),
   setConsoleSubsystemFilter: () => undefined,
   setConsoleTimestampPrefix: () => undefined,
 }));
@@ -137,6 +141,8 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    setConsoleStyleOverride.mockClear();
+    setConsoleActivityDetailMode.mockClear();
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -302,5 +308,12 @@ describe("gateway run option collisions", () => {
     );
 
     expect(runtimeErrors).toContain("Use either --password or --password-file.");
+  });
+
+  it("enables activity console style when --human-full is passed", async () => {
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured", "--human-full"]);
+
+    expect(setConsoleStyleOverride).toHaveBeenCalledWith("activity");
+    expect(setConsoleActivityDetailMode).toHaveBeenCalledWith(true);
   });
 });
