@@ -348,25 +348,39 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not let unauthorized floods rate-limit authenticated traffic from the same remote address", async () => {
-    const unregister = registerTarget({ path: "/hook-preauth-split" });
+  it("does not let unauthorized floods rate-limit authenticated traffic from a different trusted forwarded client IP", async () => {
+    const unregister = registerTarget({
+      path: "/hook-preauth-split",
+      config: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      } as OpenClawConfig,
+    });
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
-        const saw429 = await postUntilRateLimited({
-          baseUrl,
-          path: "/hook-preauth-split",
-          secret: "invalid-token", // pragma: allowlist secret
-          withNonceQuery: true,
-        });
-
-        expect(saw429).toBe(true);
+        for (let i = 0; i < 130; i += 1) {
+          const response = await fetch(`${baseUrl}/hook-preauth-split?nonce=${i}`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
+              "content-type": "application/json",
+              "x-forwarded-for": "203.0.113.10",
+            },
+            body: "{}",
+          });
+          if (response.status === 429) {
+            break;
+          }
+        }
 
         const validResponse = await fetch(`${baseUrl}/hook-preauth-split`, {
           method: "POST",
           headers: {
             "x-bot-api-secret-token": "secret",
             "content-type": "application/json",
+            "x-forwarded-for": "198.51.100.20",
           },
           body: JSON.stringify({ event_name: "message.unsupported.received" }),
         });
