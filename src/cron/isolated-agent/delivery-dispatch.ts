@@ -399,9 +399,6 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-        ...params.telemetry,
-      });
-    }
     if (params.isAborted()) {
       return params.withRunSession({
         status: "error",
