@@ -87,6 +87,17 @@ export async function persistInlineDirectives(params: {
       })
     : {};
   const resolvedModelSelection = modelResolution.modelSelection;
+  if (modelDirective && modelResolution.errorText) {
+    // Mixed-message flows already surfaced the model-selection error to the
+    // user in the fast lane. Keep persistence aligned by skipping any inline
+    // state writes after the same failed `/model` directive.
+    return {
+      provider,
+      model,
+      contextTokens:
+        agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+    };
+  }
   if (
     resolvedModelSelection &&
     sessionEntry &&
