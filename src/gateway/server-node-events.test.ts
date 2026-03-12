@@ -290,6 +290,7 @@ describe("node exec events", () => {
       payloadJSON: JSON.stringify({
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -302,6 +303,7 @@ describe("node exec events", () => {
       nodeId: "node-relay",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
       environment: "production",

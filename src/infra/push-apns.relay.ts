@@ -4,7 +4,6 @@ export type ApnsRelayPushType = "alert" | "background";
 
 export type ApnsRelayConfig = {
   baseUrl: string;
-  authToken: string;
   timeoutMs: number;
 };
 
@@ -23,6 +22,7 @@ export type ApnsRelayPushResponse = {
 
 export type ApnsRelayRequestSender = (params: {
   relayConfig: ApnsRelayConfig;
+  sendGrant: string;
   relayHandle: string;
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
@@ -71,12 +71,10 @@ export function resolveApnsRelayConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ApnsRelayConfigResolution {
   const baseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
-  const authToken = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_AUTH_TOKEN);
-  if (!baseUrl || !authToken) {
+  if (!baseUrl) {
     return {
       ok: false,
-      error:
-        "APNs relay config missing: set OPENCLAW_APNS_RELAY_BASE_URL and OPENCLAW_APNS_RELAY_AUTH_TOKEN",
+      error: "APNs relay config missing: set OPENCLAW_APNS_RELAY_BASE_URL",
     };
   }
 
@@ -106,7 +104,6 @@ export function resolveApnsRelayConfigFromEnv(
       ok: true,
       value: {
         baseUrl: parsed.toString().replace(/\/+$/, ""),
-        authToken,
         timeoutMs: normalizeTimeoutMs(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS),
       },
     };
@@ -121,6 +118,7 @@ export function resolveApnsRelayConfigFromEnv(
 
 async function sendApnsRelayRequest(params: {
   relayConfig: ApnsRelayConfig;
+  sendGrant: string;
   relayHandle: string;
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
@@ -130,7 +128,7 @@ async function sendApnsRelayRequest(params: {
     method: "POST",
     redirect: "manual",
     headers: {
-      authorization: `Bearer ${params.relayConfig.authToken}`,
+      authorization: `Bearer ${params.sendGrant}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -177,6 +175,7 @@ async function sendApnsRelayRequest(params: {
 
 export async function sendApnsRelayPush(params: {
   relayConfig: ApnsRelayConfig;
+  sendGrant: string;
   relayHandle: string;
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
@@ -186,6 +185,7 @@ export async function sendApnsRelayPush(params: {
   const sender = params.requestSender ?? sendApnsRelayRequest;
   return await sender({
     relayConfig: params.relayConfig,
+    sendGrant: params.sendGrant,
     relayHandle: params.relayHandle,
     pushType: params.pushType,
     priority: params.priority,

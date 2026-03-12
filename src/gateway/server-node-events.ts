@@ -598,6 +598,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             nodeId,
             transport: "relay",
             relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
+            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
             installationId: typeof obj.installationId === "string" ? obj.installationId : "",
             topic,
             environment,

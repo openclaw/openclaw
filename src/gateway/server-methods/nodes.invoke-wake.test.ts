@@ -329,6 +329,7 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "ios-node-relay",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
       environment: "production",
@@ -340,7 +341,6 @@ describe("node.invoke APNs wake path", () => {
       ok: true,
       value: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 1000,
       },
     });
@@ -373,6 +373,7 @@ describe("node.invoke APNs wake path", () => {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",

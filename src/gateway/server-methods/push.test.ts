@@ -119,6 +119,7 @@ describe("push.test handler", () => {
       nodeId: "ios-node-1",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-1",
       topic: "ai.openclaw.ios",
       environment: "production",
@@ -130,7 +131,6 @@ describe("push.test handler", () => {
       ok: true,
       value: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 1000,
       },
     });
@@ -213,6 +213,7 @@ describe("push.test handler", () => {
       nodeId: "ios-node-1",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
       environment: "production",
@@ -224,7 +225,6 @@ describe("push.test handler", () => {
       ok: true,
       value: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 1000,
       },
     });
@@ -252,6 +252,7 @@ describe("push.test handler", () => {
         nodeId: "ios-node-1",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",

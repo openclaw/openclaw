@@ -29,6 +29,7 @@ export type RelayApnsRegistration = {
   nodeId: string;
   transport: "relay";
   relayHandle: string;
+  sendGrant: string;
   installationId: string;
   topic: string;
   environment: "production";
@@ -97,6 +98,7 @@ type RegisterRelayApnsParams = {
   nodeId: string;
   transport: "relay";
   relayHandle: string;
+  sendGrant: string;
   installationId: string;
   topic: string;
   environment?: unknown;
@@ -271,17 +273,23 @@ function normalizeDirectRegistration(
 }
 
 function normalizeRelayRegistration(
-  record: Partial<RelayApnsRegistration> & { nodeId?: unknown; relayHandle?: unknown },
+  record: Partial<RelayApnsRegistration> & {
+    nodeId?: unknown;
+    relayHandle?: unknown;
+    sendGrant?: unknown;
+  },
 ): RelayApnsRegistration | null {
   if (
     typeof record.nodeId !== "string" ||
     typeof record.relayHandle !== "string" ||
+    typeof record.sendGrant !== "string" ||
     typeof record.installationId !== "string"
   ) {
     return null;
   }
   const nodeId = normalizeNodeId(record.nodeId);
   const relayHandle = normalizeRelayHandle(record.relayHandle);
+  const sendGrant = record.sendGrant.trim();
   const installationId = normalizeInstallationId(record.installationId);
   const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
   const environment = normalizeApnsEnvironment(record.environment);
@@ -293,6 +301,7 @@ function normalizeRelayRegistration(
   if (
     !nodeId ||
     !relayHandle ||
+    !sendGrant ||
     !installationId ||
     !topic ||
     environment !== "production" ||
@@ -304,6 +313,7 @@ function normalizeRelayRegistration(
     nodeId,
     transport: "relay",
     relayHandle,
+    sendGrant,
     installationId,
     topic,
     environment,
@@ -393,6 +403,7 @@ export async function registerApnsRegistration(
         normalizeRelayHandle(params.relayHandle),
         "relayHandle",
       );
+      const sendGrant = validateRelayIdentifier(params.sendGrant.trim(), "sendGrant");
       const installationId = validateRelayIdentifier(
         normalizeInstallationId(params.installationId),
         "installationId",
@@ -409,6 +420,7 @@ export async function registerApnsRegistration(
         nodeId,
         transport: "relay",
         relayHandle,
+        sendGrant,
         installationId,
         topic,
         environment,
@@ -495,6 +507,7 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
   if (a.transport === "relay" && b.transport === "relay") {
     return (
       a.relayHandle === b.relayHandle &&
+      a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
@@ -817,6 +830,7 @@ async function sendRelayApnsPush(params: {
 }): Promise<ApnsPushResult> {
   const response = await sendApnsRelayPush({
     relayConfig: params.relayConfig,
+    sendGrant: params.registration.sendGrant,
     relayHandle: params.registration.relayHandle,
     payload: params.payload,
     pushType: params.pushType,

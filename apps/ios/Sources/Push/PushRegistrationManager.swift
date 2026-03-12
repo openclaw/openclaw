@@ -11,6 +11,7 @@ private struct DirectGatewayPushRegistrationPayload: Encodable {
 private struct RelayGatewayPushRegistrationPayload: Encodable {
     var transport: String = PushTransportMode.relay.rawValue
     var relayHandle: String
+    var sendGrant: String
     var installationId: String
     var topic: String
     var environment: String
@@ -76,6 +77,7 @@ actor PushRegistrationManager {
             return try Self.encodePayload(
                 RelayGatewayPushRegistrationPayload(
                     relayHandle: stored.relayHandle,
+                    sendGrant: stored.sendGrant,
                     installationId: installationId,
                     topic: topic,
                     environment: self.buildConfig.apnsEnvironment.rawValue,
@@ -92,6 +94,7 @@ actor PushRegistrationManager {
             apnsTokenHex: apnsTokenHex)
         let registrationState = PushRelayRegistrationStore.RegistrationState(
             relayHandle: response.relayHandle,
+            sendGrant: response.sendGrant,
             relayHandleExpiresAtMs: response.expiresAtMs,
             tokenDebugSuffix: Self.normalizeTokenSuffix(response.tokenSuffix),
             lastAPNsTokenHashHex: tokenHashHex,
@@ -101,6 +104,7 @@ actor PushRegistrationManager {
         return try Self.encodePayload(
             RelayGatewayPushRegistrationPayload(
                 relayHandle: response.relayHandle,
+                sendGrant: response.sendGrant,
                 installationId: installationId,
                 topic: topic,
                 environment: self.buildConfig.apnsEnvironment.rawValue,

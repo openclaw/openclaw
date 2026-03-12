@@ -105,7 +105,7 @@ pnpm ios:beta -- --build-number 7
 ## APNs Expectations For Official Builds
 
 - Official/TestFlight builds register with the external push relay before they publish `push.apns.register` to the gateway.
-- The gateway registration for relay mode contains an opaque relay handle and installation metadata instead of the raw APNs token.
+- The gateway registration for relay mode contains an opaque relay handle, a registration-scoped send grant, and installation metadata instead of the raw APNs token.
 - The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
 - Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
 

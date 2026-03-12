@@ -69,6 +69,7 @@ describe("push APNs registration store", () => {
       nodeId: "ios-node-relay",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
       environment: "production",
@@ -83,6 +84,7 @@ describe("push APNs registration store", () => {
       nodeId: "ios-node-relay",
       transport: "relay",
       relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
       environment: "production",
@@ -111,6 +113,7 @@ describe("push APNs registration store", () => {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "staging",
@@ -123,6 +126,7 @@ describe("push APNs registration store", () => {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -140,6 +144,7 @@ describe("push APNs registration store", () => {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: oversized,
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -152,6 +157,7 @@ describe("push APNs registration store", () => {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: oversized,
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -246,14 +252,12 @@ describe("push APNs env config", () => {
   it("resolves APNs relay config from env", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
       OPENCLAW_APNS_RELAY_TIMEOUT_MS: "2500",
     } as NodeJS.ProcessEnv);
     expect(resolved).toMatchObject({
       ok: true,
       value: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 2500,
       },
     });
@@ -262,7 +266,6 @@ describe("push APNs env config", () => {
   it("rejects insecure APNs relay http URLs by default", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
     } as NodeJS.ProcessEnv);
     expect(resolved).toMatchObject({
       ok: false,
@@ -276,14 +279,12 @@ describe("push APNs env config", () => {
   it("allows APNs relay http URLs only when explicitly enabled", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "http://127.0.0.1:8787",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
       OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
     } as NodeJS.ProcessEnv);
     expect(resolved).toMatchObject({
       ok: true,
       value: {
         baseUrl: "http://127.0.0.1:8787",
-        authToken: "relay-secret",
         timeoutMs: 10_000,
       },
     });
@@ -292,7 +293,6 @@ describe("push APNs env config", () => {
   it("rejects http relay URLs for non-loopback hosts even when explicitly enabled", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
       OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
     } as NodeJS.ProcessEnv);
     expect(resolved).toMatchObject({
@@ -307,7 +307,6 @@ describe("push APNs env config", () => {
   it("rejects APNs relay URLs with query, fragment, or userinfo components", () => {
     const withQuery = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com/path?debug=1",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
     } as NodeJS.ProcessEnv);
     expect(withQuery.ok).toBe(false);
     if (!withQuery.ok) {
@@ -316,7 +315,6 @@ describe("push APNs env config", () => {
 
     const withUserinfo = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "https://user:pass@relay.example.com/path",
-      OPENCLAW_APNS_RELAY_AUTH_TOKEN: "relay-secret",
     } as NodeJS.ProcessEnv);
     expect(withUserinfo.ok).toBe(false);
     if (!withUserinfo.ok) {
@@ -468,13 +466,13 @@ describe("push APNs send semantics", () => {
     const result = await sendApnsAlert({
       relayConfig: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 1000,
       },
       registration: {
         nodeId: "ios-node-relay",
         transport: "relay",
         relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -520,9 +518,9 @@ describe("push APNs send semantics", () => {
     const result = await sendApnsRelayPush({
       relayConfig: {
         baseUrl: "https://relay.example.com",
-        authToken: "relay-secret",
         timeoutMs: 1000,
       },
+      sendGrant: "send-grant-123",
       relayHandle: "relay-handle-123",
       payload: { aps: { "content-available": 1 } },
       pushType: "background",
@@ -568,6 +566,7 @@ describe("push APNs send semantics", () => {
           nodeId: "ios-node-relay",
           transport: "relay",
           relayHandle: "relay-handle-123",
+          sendGrant: "send-grant-123",
           installationId: "install-123",
           topic: "ai.openclaw.ios",
           environment: "production",

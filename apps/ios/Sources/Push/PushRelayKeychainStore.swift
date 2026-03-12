@@ -2,6 +2,7 @@ import Foundation
 
 private struct StoredPushRelayRegistrationState: Codable {
     var relayHandle: String
+    var sendGrant: String
     var relayHandleExpiresAtMs: Int64?
     var tokenDebugSuffix: String?
     var lastAPNsTokenHashHex: String
@@ -17,6 +18,7 @@ enum PushRelayRegistrationStore {
 
     struct RegistrationState: Codable {
         var relayHandle: String
+        var sendGrant: String
         var relayHandleExpiresAtMs: Int64?
         var tokenDebugSuffix: String?
         var lastAPNsTokenHashHex: String
@@ -35,6 +37,7 @@ enum PushRelayRegistrationStore {
         }
         return RegistrationState(
             relayHandle: decoded.relayHandle,
+            sendGrant: decoded.sendGrant,
             relayHandleExpiresAtMs: decoded.relayHandleExpiresAtMs,
             tokenDebugSuffix: decoded.tokenDebugSuffix,
             lastAPNsTokenHashHex: decoded.lastAPNsTokenHashHex,
@@ -46,6 +49,7 @@ enum PushRelayRegistrationStore {
     static func saveRegistrationState(_ state: RegistrationState) -> Bool {
         let stored = StoredPushRelayRegistrationState(
             relayHandle: state.relayHandle,
+            sendGrant: state.sendGrant,
             relayHandleExpiresAtMs: state.relayHandleExpiresAtMs,
             tokenDebugSuffix: state.tokenDebugSuffix,
             lastAPNsTokenHashHex: state.lastAPNsTokenHashHex,

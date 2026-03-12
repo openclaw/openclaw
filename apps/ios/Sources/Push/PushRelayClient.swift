@@ -71,6 +71,7 @@ private struct PushRelayRegisterRequest: Encodable {
 
 struct PushRelayRegisterResponse: Decodable {
     var relayHandle: String
+    var sendGrant: String
     var expiresAtMs: Int64?
     var tokenSuffix: String?
     var status: String
