@@ -146,6 +146,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // Only messages that passed DM policy, guild allowlist, channel config, and
   // member access checks are persisted here.
   if (isGatewayDraining()) {
+    if (!messageText) {
+      logVerbose("discord: skip drain capture for message " + message.id + " (no routable text)");
+      return;
+    }
     const stateDir = resolveStateDir(process.env);
     await writePendingInbound(stateDir, {
       channel: "discord",
