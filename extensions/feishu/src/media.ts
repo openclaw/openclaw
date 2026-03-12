@@ -247,11 +247,12 @@ export function decodeFileNameFromFeishu(
   if (!fileName) {
     return fileName;
   }
-  // Only decode if it looks like UTF-8 percent-encoded sequences
-  // (e.g., %E6%96%87%E6%A1%A3 for Chinese characters)
-  // Avoids false positives for literal % in filenames like "report%20draft.txt"
-  const hasUtf8EncodedChars = /%(?:E[0-9A-F]|C[2-9A-F]|D[0-9A-F])[0-9A-F]{2}/i.test(fileName);
-  if (!hasUtf8EncodedChars) {
+  // Check if the filename looks like it was encoded by sanitizeFileNameForUpload
+  // which uses encodeURIComponent. We look for multiple consecutive %XX sequences
+  // that indicate UTF-8 encoded non-ASCII characters.
+  // This avoids decoding literal % in filenames like "report%20draft.txt"
+  const hasEncodedUtf8 = /%[0-9A-Fa-f]{2}%[0-9A-Fa-f]{2}/.test(fileName);
+  if (!hasEncodedUtf8) {
     return fileName;
   }
   try {
