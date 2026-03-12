@@ -1106,7 +1106,6 @@ public struct PushTestResult: Codable, Sendable {
     public let tokensuffix: String
     public let topic: String
     public let environment: String
-    public let transport: String
 
     public init(
         ok: Bool,
@@ -1115,8 +1114,7 @@ public struct PushTestResult: Codable, Sendable {
         reason: String?,
         tokensuffix: String,
         topic: String,
-        environment: String,
-        transport: String)
+        environment: String)
     {
         self.ok = ok
         self.status = status
@@ -1125,7 +1123,6 @@ public struct PushTestResult: Codable, Sendable {
         self.tokensuffix = tokensuffix
         self.topic = topic
         self.environment = environment
-        self.transport = transport
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1136,7 +1133,6 @@ public struct PushTestResult: Codable, Sendable {
         case tokensuffix = "tokenSuffix"
         case topic
         case environment
-        case transport
     }
 }
 
