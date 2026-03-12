@@ -474,9 +474,10 @@ File contents here`,
     }
   });
 
-  it("unwraps nested serialized text blocks from openai-compatible responses", () => {
+  it("unwraps nested JSON5-serialized text blocks for openai-completions", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
+      api: "openai-completions",
       content: [
         {
           type: "text",
@@ -488,6 +489,57 @@ File contents here`,
 
     const result = extractAssistantText(msg);
     expect(result).toBe("The current time is 11:06 AM (UTC+8).");
+  });
+
+  it("unwraps standard JSON serialized text blocks for openai-completions", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: '[{"type":"text","text":"Hello."}]' }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Hello.");
+  });
+
+  it("does not unwrap serialized text blocks for non-openai-completions APIs", () => {
+    const serialized = '[{"type":"text","text":"Literal payload."}]';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      api: "openai-responses",
+      content: [{ type: "text", text: serialized }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(serialized);
+  });
+
+  it("preserves JSON object payloads for openai-completions", () => {
+    const payload = '{"type":"text","text":"Literal object payload."}';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: payload }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(payload);
+  });
+
+  it("does not unwrap typed-block arrays with no text blocks", () => {
+    const raw = '[{"type":"image","url":"https://example.com/img.png"}]';
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: raw }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(raw);
   });
 });
 

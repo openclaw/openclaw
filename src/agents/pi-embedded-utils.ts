@@ -239,7 +239,8 @@ function unwrapSerializedAssistantText(text: string): string {
   let current = text;
   for (let i = 0; i < 3; i += 1) {
     const trimmed = current.trim();
-    if (!trimmed || (trimmed[0] !== "[" && trimmed[0] !== "{")) {
+    // Serialized typed chat blocks are always wrapped as arrays.
+    if (!trimmed || trimmed[0] !== "[") {
       break;
     }
 
@@ -260,11 +261,16 @@ function unwrapSerializedAssistantText(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
+  const shouldUnwrapSerializedText = msg.api === "openai-completions";
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(unwrapSerializedAssistantText(text))),
+          stripDowngradedToolCallText(
+            stripMinimaxToolCallXml(
+              shouldUnwrapSerializedText ? unwrapSerializedAssistantText(text) : text,
+            ),
+          ),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
