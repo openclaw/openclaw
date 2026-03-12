@@ -17,6 +17,23 @@ const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 
+const waitForGracefulStop = async (stop: () => Promise<void>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      stop(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, POLL_STOP_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 type TelegramPollingSessionOpts = {
@@ -271,14 +288,8 @@ export class TelegramPollingSession {
         clearTimeout(forceCycleTimer);
       }
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await Promise.race([
-        stopRunner(),
-        new Promise<void>((resolve) => setTimeout(resolve, POLL_STOP_GRACE_MS)),
-      ]);
-      await Promise.race([
-        stopBot(),
-        new Promise<void>((resolve) => setTimeout(resolve, POLL_STOP_GRACE_MS)),
-      ]);
+      await waitForGracefulStop(stopRunner);
+      await waitForGracefulStop(stopBot);
       this.#activeRunner = undefined;
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;
