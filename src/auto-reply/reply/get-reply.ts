@@ -119,7 +119,13 @@ export async function getReplyFromConfig(
     onCleanup: opts?.onTypingCleanup,
     onTtlExpired: opts?.onTypingTtlExpired
       ? () => {
-          void opts.onTypingTtlExpired();
+          // Resolve the return value so async handlers' rejections are caught
+          // and logged rather than becoming unhandled rejections at runtime.
+          Promise.resolve(opts.onTypingTtlExpired()).catch((err: unknown) => {
+            defaultRuntime.log?.(
+              `typing TTL handler failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
         }
       : undefined,
     typingIntervalSeconds,

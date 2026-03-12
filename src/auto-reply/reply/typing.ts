@@ -103,8 +103,12 @@ export function createTypingController(params: {
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
       // Notify caller so it can send a "still processing" message to the user
       // before the typing indicator disappears. The agent run continues.
-      onTtlExpired?.();
-      cleanup();
+      // Use try/finally so cleanup() always runs even if the callback throws.
+      try {
+        onTtlExpired?.();
+      } finally {
+        cleanup();
+      }
     }, typingTtlMs);
   };
 
