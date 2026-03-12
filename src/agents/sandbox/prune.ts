@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -10,13 +11,14 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
+import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
-  "containerName" | "createdAtMs" | "lastUsedAtMs"
+  "containerName" | "sessionKey" | "createdAtMs" | "lastUsedAtMs"
 >;
 
 function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
@@ -57,6 +59,17 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
     } finally {
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
+    }
+
+    // Clean up workspace directory (only for non-shared scopes)
+    if (params.cfg.scope !== "shared") {
+      try {
+        const scopeKey = resolveSandboxScopeKey(params.cfg.scope, entry.sessionKey);
+        const workspaceDir = resolveSandboxWorkspaceDir(params.cfg.workspaceRoot, scopeKey);
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      } catch {
+        // ignore workspace cleanup failures
+      }
     }
   }
 }
