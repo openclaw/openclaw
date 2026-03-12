@@ -75,4 +75,37 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not report legacyPayloadKind issue for already normalized values", () => {
+    // Regression test: already-normalized payload.kind values should not trigger
+    // false positive "legacyPayloadKind" issues when doctor runs again after --fix
+    const jobs = [
+      {
+        id: "already-normalized-agentTurn",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: {
+          kind: "agentTurn", // Already in canonical form
+          message: "morning greeting",
+        },
+      },
+      {
+        id: "already-normalized-systemEvent",
+        schedule: { kind: "cron", expr: "0 18 * * *" },
+        payload: {
+          kind: "systemEvent", // Already in canonical form
+          text: "evening status",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // Should NOT report any legacyPayloadKind issues
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    // Should NOT mutate anything for these jobs
+    expect(result.mutated).toBe(false);
+    // payload.kind should remain unchanged
+    expect(jobs[0]?.payload?.kind).toBe("agentTurn");
+    expect(jobs[1]?.payload?.kind).toBe("systemEvent");
+  });
 });
