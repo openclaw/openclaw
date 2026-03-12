@@ -222,6 +222,43 @@ describe("memory manager fts-only indexing", () => {
     await expect(activeManager.search("zebra")).resolves.toEqual([]);
   });
 
+  it("removes old provider-model FTS rows when reindexing into fts-only mode", async () => {
+    mockState.mode = "mock";
+    const providerManager = await createManager(createCfg({ provider: "openai" }));
+    await providerManager.sync({ reason: "test" });
+
+    expect(
+      countRows(
+        providerManager,
+        "SELECT COUNT(*) as c FROM chunks_fts WHERE model = ?",
+        "mock-embed",
+      ),
+    ).toBeGreaterThan(0);
+
+    await providerManager.close();
+    manager = null;
+
+    mockState.mode = "none";
+    const ftsOnlyManager = await createManager(createCfg());
+    await ftsOnlyManager.sync({ reason: "test" });
+
+    expect(
+      countRows(
+        ftsOnlyManager,
+        "SELECT COUNT(*) as c FROM chunks_fts WHERE model = ?",
+        "mock-embed",
+      ),
+    ).toBe(0);
+    expect(
+      countRows(ftsOnlyManager, "SELECT COUNT(*) as c FROM chunks_fts WHERE model = ?", "fts-only"),
+    ).toBeGreaterThan(0);
+
+    const zebraResults = (await ftsOnlyManager.search("zebra")).filter(
+      (entry) => entry.path === "memory/2026-01-12.md",
+    );
+    expect(zebraResults).toHaveLength(1);
+  });
+
   it("keeps provider-backed indexing behavior unchanged", async () => {
     mockState.mode = "mock";
     const activeManager = await createManager(createCfg({ provider: "openai" }));

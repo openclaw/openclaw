@@ -768,12 +768,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(pathname, source);
       } catch {}
     }
-    const currentModel = this.provider?.model ?? "fts-only";
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(pathname, source, currentModel);
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+          .run(pathname, source);
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);

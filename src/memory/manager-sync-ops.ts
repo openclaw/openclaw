@@ -663,6 +663,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
+    if (!this.provider && !this.fts.enabled) {
+      return;
+    }
     const files = await listMemoryFiles(
       this.workspaceDir,
       this.settings.extraPaths,
@@ -721,7 +724,6 @@ export abstract class MemoryManagerSyncOps {
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("memory") as Array<{ path: string }>;
-    const currentModel = this.provider?.model ?? "fts-only";
     for (const stale of staleRows) {
       if (activePaths.has(stale.path)) {
         continue;
@@ -738,8 +740,8 @@ export abstract class MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", currentModel);
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+            .run(stale.path, "memory");
         } catch {}
       }
     }
@@ -749,6 +751,9 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
+    if (!this.provider && !this.fts.enabled) {
+      return;
+    }
     const files = await listSessionFilesForAgent(this.agentId);
     const activePaths = new Set(files.map((file) => sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
@@ -819,7 +824,6 @@ export abstract class MemoryManagerSyncOps {
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("sessions") as Array<{ path: string }>;
-    const currentModel = this.provider?.model ?? "fts-only";
     for (const stale of staleRows) {
       if (activePaths.has(stale.path)) {
         continue;
@@ -840,8 +844,8 @@ export abstract class MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         try {
           this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", currentModel);
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+            .run(stale.path, "sessions");
         } catch {}
       }
     }
