@@ -5,11 +5,7 @@ import {
   buildTextObservationFields,
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
-import {
-  classifyFailoverReason,
-  formatAssistantErrorText,
-  sanitizeUserFacingText,
-} from "./pi-embedded-helpers.js";
+import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
@@ -47,10 +43,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "");
-    const sanitizedFallback = sanitizeUserFacingText(rawError ?? "", {
-      errorContext: true,
-    }).trim();
-    const errorText = (friendlyError || sanitizedFallback || "LLM request failed.").trim();
+    const errorText = (friendlyError || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError);
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
