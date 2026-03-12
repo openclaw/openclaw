@@ -1634,6 +1634,11 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      deepgram: {
+        apiKey: "deepgram_api_key",
+        baseUrl: "https://api.deepgram.com",
+        model: "aura-2-thalia-en",
+      },
     },
   },
 }
@@ -1642,7 +1647,9 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`/`XI_API_KEY`, and `OPENAI_API_KEY`.
+- `deepgram.apiKey` falls back to `DEEPGRAM_API_KEY`. Auth uses Deepgram's native `Token` header scheme.
+- Auto-selection order when `provider` is unset: `openai` → `elevenlabs` → `deepgram` → `edge`.
 - `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
 - When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 

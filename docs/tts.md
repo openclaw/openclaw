@@ -9,11 +9,12 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+OpenClaw can convert outbound replies into audio using Deepgram, ElevenLabs, OpenAI, or Edge TTS.
 It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
 
+- **Deepgram** (primary or fallback provider; Aura-2 voices)
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
@@ -26,14 +27,15 @@ not require an API key. `node-edge-tts` exposes speech configuration options and
 output formats, but not all options are supported by the Edge service. citeturn2search0
 
 Because Edge TTS is a public web service without a published SLA or quota, treat it
-as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
+as best-effort. If you need guaranteed limits and support, use Deepgram, ElevenLabs, or OpenAI.
 Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
 does not publish limits, so assume similar or lower limits. citeturn0search3
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want Deepgram, ElevenLabs, or OpenAI:
 
+- `DEEPGRAM_API_KEY`
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
@@ -50,6 +52,8 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Deepgram TTS API](https://developers.deepgram.com/reference/text-to-speech/speak-request)
+- [Deepgram Aura-2 voices](https://developers.deepgram.com/docs/tts-models)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -59,7 +63,7 @@ No. Auto‑TTS is **off** by default. Enable it in config with
 `messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
 
 Edge TTS **is** enabled by default once TTS is on, and is used automatically
-when no OpenAI or ElevenLabs API keys are available.
+when no Deepgram, ElevenLabs, or OpenAI API keys are available.
 
 ## Config
 
@@ -139,6 +143,23 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Deepgram Aura primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "deepgram",
+      deepgram: {
+        apiKey: "deepgram_api_key",
+        model: "aura-2-thalia-en",
+      },
+    },
+  },
+}
+```
+
 ### Disable Edge TTS
 
 ```json5
@@ -205,9 +226,9 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
+- `provider`: `"deepgram"`, `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+  then `deepgram` (if key), otherwise `edge`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
@@ -215,7 +236,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -236,6 +257,9 @@ Then run:
 - `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
 - `edge.proxy`: proxy URL for Edge TTS requests.
 - `edge.timeoutMs`: request timeout override (ms).
+- `deepgram.apiKey`: falls back to `DEEPGRAM_API_KEY`. Auth uses Deepgram's native `Token` header scheme.
+- `deepgram.baseUrl`: override the Deepgram API endpoint (default `https://api.deepgram.com`).
+- `deepgram.model`: Aura-2 voice model (default `aura-2-thalia-en`). See [Deepgram TTS models](https://developers.deepgram.com/docs/tts-models).
 
 ## Model-driven overrides (default on)
 
@@ -260,9 +284,10 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`, requires `allowProvider: true`)
+- `provider` (`deepgram` | `elevenlabs` | `openai` | `edge`, requires `allowProvider: true`)
 - `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
 - `model` (OpenAI TTS model or ElevenLabs model id)
+- `deepgram_model` / `deepgrammodel` (Deepgram Aura model override)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
@@ -315,9 +340,9 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from Deepgram/OpenAI).
   - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
-- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
+- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from Deepgram/OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
@@ -327,7 +352,8 @@ These override `messages.tts.*` for that host.
     guaranteed Opus voice notes. citeturn1search1
   - If the configured Edge output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
+Deepgram/ElevenLabs/OpenAI formats are fixed; Telegram expects Opus for voice-note UX.
+Deepgram also supports telephony output (linear16 PCM at 24kHz).
 
 ## Auto-TTS behavior
 
