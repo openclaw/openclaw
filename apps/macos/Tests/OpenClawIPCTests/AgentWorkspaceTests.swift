@@ -2,10 +2,9 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite
 struct AgentWorkspaceTests {
     @Test
-    func displayPathUsesTildeForHome() {
+    func `display path uses tilde for home`() {
         let home = FileManager().homeDirectoryForCurrentUser
         #expect(AgentWorkspace.displayPath(for: home) == "~")
 
@@ -14,20 +13,20 @@ struct AgentWorkspaceTests {
     }
 
     @Test
-    func resolveWorkspaceURLExpandsTilde() {
+    func `resolve workspace URL expands tilde`() {
         let url = AgentWorkspace.resolveWorkspaceURL(from: "~/tmp")
         #expect(url.path.hasSuffix("/tmp"))
     }
 
     @Test
-    func agentsURLAppendsFilename() {
+    func `agents URL appends filename`() {
         let root = URL(fileURLWithPath: "/tmp/ws", isDirectory: true)
         let url = AgentWorkspace.agentsURL(workspaceURL: root)
         #expect(url.lastPathComponent == AgentWorkspace.agentsFilename)
     }
 
     @Test
-    func bootstrapCreatesAgentsFileWhenMissing() throws {
+    func `bootstrap creates agents file when missing`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
@@ -50,7 +49,7 @@ struct AgentWorkspaceTests {
     }
 
     @Test
-    func bootstrapSafetyRejectsNonEmptyFolderWithoutAgents() throws {
+    func `bootstrap safety rejects non empty folder without agents`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
@@ -59,16 +58,11 @@ struct AgentWorkspaceTests {
         try "hello".write(to: marker, atomically: true, encoding: .utf8)
 
         let result = AgentWorkspace.bootstrapSafety(for: tmp)
-        switch result {
-        case .unsafe:
-            break
-        case .safe:
-            #expect(Bool(false), "Expected unsafe bootstrap safety result.")
-        }
+        #expect(result.unsafeReason != nil)
     }
 
     @Test
-    func bootstrapSafetyAllowsExistingAgentsFile() throws {
+    func `bootstrap safety allows existing agents file`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
@@ -77,16 +71,11 @@ struct AgentWorkspaceTests {
         try "# AGENTS.md".write(to: agents, atomically: true, encoding: .utf8)
 
         let result = AgentWorkspace.bootstrapSafety(for: tmp)
-        switch result {
-        case .safe:
-            break
-        case .unsafe:
-            #expect(Bool(false), "Expected safe bootstrap safety result.")
-        }
+        #expect(result.unsafeReason == nil)
     }
 
     @Test
-    func bootstrapSkipsBootstrapFileWhenWorkspaceHasContent() throws {
+    func `bootstrap skips bootstrap file when workspace has content`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }
@@ -101,7 +90,7 @@ struct AgentWorkspaceTests {
     }
 
     @Test
-    func needsBootstrapFalseWhenIdentityAlreadySet() throws {
+    func `needs bootstrap false when identity already set`() throws {
         let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-ws-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: tmp) }

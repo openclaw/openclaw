@@ -1,6 +1,11 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createTelegramActionGate } from "../../telegram/accounts.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+import { resolvePollMaxSelections } from "../../polls.js";
+import {
+  createTelegramActionGate,
+  resolveTelegramPollActionGateState,
+} from "../../telegram/accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -13,6 +18,7 @@ import {
   editMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
+  sendPollTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
@@ -21,6 +27,7 @@ import {
   jsonResult,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
 } from "./common.js";
@@ -89,9 +96,14 @@ export async function handleTelegramAction(
     mediaLocalRoots?: readonly string[];
   },
 ): Promise<AgentToolResult<unknown>> {
-  const action = readStringParam(params, "action", { required: true });
-  const accountId = readStringParam(params, "accountId");
-  const isActionEnabled = createTelegramActionGate({ cfg, accountId });
+  const { action, accountId } = {
+    action: readStringParam(params, "action", { required: true }),
+    accountId: readStringParam(params, "accountId"),
+  };
+  const isActionEnabled = createTelegramActionGate({
+    cfg,
+    accountId,
+  });
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead
@@ -142,6 +154,7 @@ export async function handleTelegramAction(
     let reactionResult: Awaited<ReturnType<typeof reactMessageTelegram>>;
     try {
       reactionResult = await reactMessageTelegram(chatId ?? "", messageId ?? 0, emoji ?? "", {
+        cfg,
         token,
         remove,
         accountId: accountId ?? undefined,
@@ -225,6 +238,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendMessageTelegram(to, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
@@ -233,13 +247,68 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
-      asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
-      silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      asVoice: readBooleanParam(params, "asVoice"),
+      silent: readBooleanParam(params, "silent"),
     });
     return jsonResult({
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+    });
+  }
+
+  if (action === "poll") {
+    const pollActionState = resolveTelegramPollActionGateState(isActionEnabled);
+    if (!pollActionState.sendMessageEnabled) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    if (!pollActionState.pollEnabled) {
+      throw new Error("Telegram polls are disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const question = readStringParam(params, "question", { required: true });
+    const answers = readStringArrayParam(params, "answers", { required: true });
+    const allowMultiselect = readBooleanParam(params, "allowMultiselect") ?? false;
+    const durationSeconds = readNumberParam(params, "durationSeconds", { integer: true });
+    const durationHours = readNumberParam(params, "durationHours", { integer: true });
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
+      integer: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const isAnonymous = readBooleanParam(params, "isAnonymous");
+    const silent = readBooleanParam(params, "silent");
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendPollTelegram(
+      to,
+      {
+        question,
+        options: answers,
+        maxSelections: resolvePollMaxSelections(answers.length, allowMultiselect),
+        durationSeconds: durationSeconds ?? undefined,
+        durationHours: durationHours ?? undefined,
+      },
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+        replyToMessageId: replyToMessageId ?? undefined,
+        messageThreadId: messageThreadId ?? undefined,
+        isAnonymous: isAnonymous ?? undefined,
+        silent: silent ?? undefined,
+      },
+    );
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+      pollId: result.pollId,
     });
   }
 
@@ -261,6 +330,7 @@ export async function handleTelegramAction(
       );
     }
     await deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
     });
@@ -301,6 +371,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await editMessageTelegram(chatId ?? "", messageId ?? 0, content, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       buttons,
@@ -333,6 +404,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await sendStickerTelegram(to, fileId, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       replyToMessageId: replyToMessageId ?? undefined,
@@ -388,6 +460,7 @@ export async function handleTelegramAction(
       );
     }
     const result = await createForumTopicTelegram(chatId ?? "", name, {
+      cfg,
       token,
       accountId: accountId ?? undefined,
       iconColor: iconColor ?? undefined,

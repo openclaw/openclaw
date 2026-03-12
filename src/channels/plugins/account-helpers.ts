@@ -1,14 +1,41 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../../routing/session-key.js";
 
-export function createAccountListHelpers(channelKey: string) {
+export function createAccountListHelpers(
+  channelKey: string,
+  options?: { normalizeAccountId?: (id: string) => string },
+) {
+  function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
+    const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
+    const preferred = normalizeOptionalAccountId(
+      typeof channel?.defaultAccount === "string" ? channel.defaultAccount : undefined,
+    );
+    if (!preferred) {
+      return undefined;
+    }
+    const ids = listAccountIds(cfg);
+    if (ids.some((id) => normalizeAccountId(id) === preferred)) {
+      return preferred;
+    }
+    return undefined;
+  }
+
   function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
     const channel = cfg.channels?.[channelKey];
     const accounts = (channel as Record<string, unknown> | undefined)?.accounts;
     if (!accounts || typeof accounts !== "object") {
       return [];
     }
-    return Object.keys(accounts as Record<string, unknown>).filter(Boolean);
+    const ids = Object.keys(accounts as Record<string, unknown>).filter(Boolean);
+    const normalizeConfiguredAccountId = options?.normalizeAccountId;
+    if (!normalizeConfiguredAccountId) {
+      return ids;
+    }
+    return [...new Set(ids.map((id) => normalizeConfiguredAccountId(id)).filter(Boolean))];
   }
 
   function listAccountIds(cfg: OpenClawConfig): string[] {
@@ -20,6 +47,10 @@ export function createAccountListHelpers(channelKey: string) {
   }
 
   function resolveDefaultAccountId(cfg: OpenClawConfig): string {
+    const preferred = resolveConfiguredDefaultAccountId(cfg);
+    if (preferred) {
+      return preferred;
+    }
     const ids = listAccountIds(cfg);
     if (ids.includes(DEFAULT_ACCOUNT_ID)) {
       return DEFAULT_ACCOUNT_ID;

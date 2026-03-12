@@ -1,4 +1,20 @@
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
+
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    getOAuthApiKey: () => undefined,
+    getOAuthProviders: () => [],
+    loginOpenAICodex: vi.fn(),
+  };
+});
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+  loginOpenAICodex: vi.fn(),
+}));
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
@@ -25,12 +41,15 @@ import { withIsolatedTestHome } from "./test-env.js";
 const testEnv = withIsolatedTestHome();
 afterAll(() => testEnv.cleanup());
 
-const [{ installProcessWarningFilter }, { setActivePluginRegistry }, { createTestRegistry }] =
-  await Promise.all([
-    import("../src/infra/warning-filter.js"),
-    import("../src/plugins/runtime.js"),
-    import("../src/test-utils/channel-plugins.js"),
-  ]);
+const [
+  { installProcessWarningFilter },
+  { getActivePluginRegistry, setActivePluginRegistry },
+  { createTestRegistry },
+] = await Promise.all([
+  import("../src/infra/warning-filter.js"),
+  import("../src/plugins/runtime.js"),
+  import("../src/test-utils/channel-plugins.js"),
+]);
 
 installProcessWarningFilter();
 
@@ -172,16 +191,18 @@ const createDefaultRegistry = () =>
     },
   ]);
 
-// Creating a fresh registry before every single test was measurable overhead.
-// The registry is treated as immutable by production code; tests that need a
-// custom registry set it explicitly.
+// Creating a fresh registry before every test is measurable overhead.
+// The registry is immutable by default; tests that override it are restored in afterEach.
 const DEFAULT_PLUGIN_REGISTRY = createDefaultRegistry();
 
-beforeEach(() => {
+beforeAll(() => {
   setActivePluginRegistry(DEFAULT_PLUGIN_REGISTRY);
 });
 
 afterEach(() => {
+  if (getActivePluginRegistry() !== DEFAULT_PLUGIN_REGISTRY) {
+    setActivePluginRegistry(DEFAULT_PLUGIN_REGISTRY);
+  }
   // Guard against leaked fake timers across test files/workers.
   if (vi.isFakeTimers()) {
     vi.useRealTimers();

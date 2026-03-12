@@ -24,7 +24,7 @@ import {
   parseFallbackList,
   resolveAgentConfig,
   resolveAgentEmoji,
-  resolveModelFallbacks,
+  resolveEffectiveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
@@ -390,7 +390,10 @@ function renderAgentOverview(params: {
     resolveModelPrimary(config.defaults?.model) ||
     (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
   const effectivePrimary = modelPrimary ?? defaultPrimary ?? null;
-  const modelFallbacks = resolveModelFallbacks(config.entry?.model);
+  const modelFallbacks = resolveEffectiveModelFallbacks(
+    config.entry?.model,
+    config.defaults?.model,
+  );
   const fallbackText = modelFallbacks ? modelFallbacks.join(", ") : "";
   const identityName =
     agentIdentity?.name?.trim() ||

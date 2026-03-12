@@ -6,7 +6,7 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
 describe("memory search config", () => {
   function configWithDefaultProvider(
-    provider: "openai" | "local" | "gemini" | "mistral",
+    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
   ): OpenClawConfig {
     return asConfig({
       agents: {
@@ -131,6 +131,113 @@ describe("memory search config", () => {
     expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
   });
 
+  it("normalizes multimodal settings", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            multimodal: {
+              enabled: true,
+              modalities: ["all"],
+              maxFileBytes: 8192,
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: ["image", "audio"],
+      maxFileBytes: 8192,
+    });
+  });
+
+  it("keeps an explicit empty multimodal modalities list empty", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            multimodal: {
+              enabled: true,
+              modalities: [],
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
+    expect(resolved?.provider).toBe("gemini");
+  });
+
+  it("does not enforce multimodal provider validation when no modalities are active", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            fallback: "openai",
+            multimodal: {
+              enabled: true,
+              modalities: [],
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
+  });
+
+  it("rejects multimodal memory on unsupported providers", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires memorySearch\.provider = "gemini"/,
+    );
+  });
+
+  it("rejects multimodal memory when fallback is configured", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            fallback: "openai",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal does not support memorySearch\.fallback/,
+    );
+  });
+
   it("includes batch defaults for openai without remote overrides", () => {
     const cfg = configWithDefaultProvider("openai");
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -154,6 +261,13 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectDefaultRemoteBatch(resolved);
     expect(resolved?.model).toBe("mistral-embed");
+  });
+
+  it("includes remote defaults and model default for ollama without overrides", () => {
+    const cfg = configWithDefaultProvider("ollama");
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectDefaultRemoteBatch(resolved);
+    expect(resolved?.model).toBe("nomic-embed-text");
   });
 
   it("defaults session delta thresholds", () => {
@@ -181,7 +295,7 @@ describe("memory search config", () => {
             provider: "openai",
             remote: {
               baseUrl: "https://default.example/v1",
-              apiKey: "default-key",
+              apiKey: "default-key", // pragma: allowlist secret
               headers: { "X-Default": "on" },
             },
           },
@@ -202,7 +316,49 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
-      apiKey: "default-key",
+      apiKey: "default-key", // pragma: allowlist secret
+      headers: { "X-Default": "on" },
+      batch: {
+        enabled: false,
+        wait: true,
+        concurrency: 2,
+        pollIntervalMs: 2000,
+        timeoutMinutes: 60,
+      },
+    });
+  });
+
+  it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+              headers: { "X-Default": "on" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: {
+                baseUrl: "https://agent.example/v1",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.remote).toEqual({
+      baseUrl: "https://agent.example/v1",
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       headers: { "X-Default": "on" },
       batch: {
         enabled: false,

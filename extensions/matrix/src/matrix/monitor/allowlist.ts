@@ -1,7 +1,12 @@
-import type { AllowlistMatch } from "openclaw/plugin-sdk";
+import {
+  compileAllowlist,
+  normalizeStringEntries,
+  resolveAllowlistCandidates,
+  type AllowlistMatch,
+} from "openclaw/plugin-sdk/matrix";
 
 function normalizeAllowList(list?: Array<string | number>) {
-  return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 function normalizeMatrixUser(raw?: string | null): string {
@@ -65,37 +70,29 @@ export function normalizeMatrixAllowList(list?: Array<string | number>) {
 export type MatrixAllowListMatch = AllowlistMatch<
   "wildcard" | "id" | "prefixed-id" | "prefixed-user"
 >;
+type MatrixAllowListSource = Exclude<MatrixAllowListMatch["matchSource"], undefined>;
 
 export function resolveMatrixAllowListMatch(params: {
   allowList: string[];
   userId?: string;
 }): MatrixAllowListMatch {
-  const allowList = params.allowList;
-  if (allowList.length === 0) {
+  const compiledAllowList = compileAllowlist(params.allowList);
+  if (compiledAllowList.set.size === 0) {
     return { allowed: false };
   }
-  if (allowList.includes("*")) {
+  if (compiledAllowList.wildcard) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
   const userId = normalizeMatrixUser(params.userId);
-  const candidates: Array<{ value?: string; source: MatrixAllowListMatch["matchSource"] }> = [
+  const candidates: Array<{ value?: string; source: MatrixAllowListSource }> = [
     { value: userId, source: "id" },
     { value: userId ? `matrix:${userId}` : "", source: "prefixed-id" },
     { value: userId ? `user:${userId}` : "", source: "prefixed-user" },
   ];
-  for (const candidate of candidates) {
-    if (!candidate.value) {
-      continue;
-    }
-    if (allowList.includes(candidate.value)) {
-      return {
-        allowed: true,
-        matchKey: candidate.value,
-        matchSource: candidate.source,
-      };
-    }
-  }
-  return { allowed: false };
+  return resolveAllowlistCandidates({
+    compiledAllowlist: compiledAllowList,
+    candidates,
+  });
 }
 
 export function resolveMatrixAllowListMatches(params: { allowList: string[]; userId?: string }) {
