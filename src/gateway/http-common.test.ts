@@ -9,6 +9,12 @@ describe("setDefaultSecurityHeaders", () => {
     expect(setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
   });
 
+  it("sets X-Frame-Options to DENY", () => {
+    const { res, setHeader } = makeMockHttpResponse();
+    setDefaultSecurityHeaders(res);
+    expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
+  });
+
   it("sets Referrer-Policy", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);

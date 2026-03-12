@@ -42,7 +42,7 @@ async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
     allowKeychainPrompt,
     ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
     platform: "darwin",
-    execSync: execSyncMock,
+    execFileSync: execSyncMock,
   });
 }
 
@@ -232,10 +232,11 @@ describe("cli credentials", () => {
 
     const accountHash = "cli|";
 
-    execSyncMock.mockImplementation((command: unknown) => {
-      const cmd = String(command);
-      expect(cmd).toContain("Codex Auth");
-      expect(cmd).toContain(accountHash);
+    execSyncMock.mockImplementation((binary: unknown, args: unknown) => {
+      expect(String(binary)).toBe("security");
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      expect(argv).toContain("Codex Auth");
+      expect(argv.some((a: string) => a.startsWith(accountHash))).toBe(true);
       return JSON.stringify({
         tokens: {
           access_token: "keychain-access",
@@ -245,7 +246,7 @@ describe("cli credentials", () => {
       });
     });
 
-    const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
+    const creds = readCodexCliCredentials({ platform: "darwin", execFileSync: execSyncMock });
 
     expect(creds).toMatchObject({
       access: "keychain-access",
@@ -274,7 +275,7 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    const creds = readCodexCliCredentials({ execSync: execSyncMock });
+    const creds = readCodexCliCredentials({ execFileSync: execSyncMock });
 
     expect(creds).toMatchObject({
       access: "file-access",

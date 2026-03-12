@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
@@ -16,8 +16,10 @@ const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) => login.toLower
 
 const readmePath = resolve("README.md");
 const seedCommit = mapConfig.seedCommit ?? null;
-const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
-const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
+const seedEntries = seedCommit
+  ? parseReadmeEntries(run("git", ["show", `${seedCommit}:README.md`]))
+  : [];
+const raw = run("gh", ["api", `repos/${REPO}/contributors?per_page=100&anon=1`, "--paginate"]);
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
@@ -46,7 +48,7 @@ for (const login of ensureLogins) {
 }
 
 // %x1f = unit separator to avoid collisions with author names containing "|"
-const log = run("git log --reverse --format=%aN%x1f%aE%x1f%aI --numstat");
+const log = run("git", ["log", "--reverse", "--format=%aN%x1f%aE%x1f%aI", "--numstat"]);
 const linesByLogin = new Map<string, number>();
 const firstCommitByLogin = new Map<string, string>();
 
@@ -115,9 +117,20 @@ for (const login of ensureLogins) {
 
 // Fetch merged PRs and count per author
 const prsByLogin = new Map<string, number>();
-const prRaw = run(
-  `gh pr list -R ${REPO} --state merged --limit 5000 --json author --jq '.[].author.login'`,
-);
+const prRaw = run("gh", [
+  "pr",
+  "list",
+  "-R",
+  REPO,
+  "--state",
+  "merged",
+  "--limit",
+  "5000",
+  "--json",
+  "author",
+  "--jq",
+  ".[].author.login",
+]);
 for (const login of prRaw.split("\n")) {
   const trimmed = login.trim().toLowerCase();
   if (!trimmed) {
@@ -127,8 +140,8 @@ for (const login of prRaw.split("\n")) {
 }
 
 // Repo epoch for tenure calculation (root commit date)
-const rootCommit = run("git rev-list --max-parents=0 HEAD").split("\n")[0];
-const repoEpochStr = run(`git log --format=%aI -1 ${rootCommit}`);
+const rootCommit = run("git", ["rev-list", "--max-parents=0", "HEAD"]).split("\n")[0];
+const repoEpochStr = run("git", ["log", "--format=%aI", "-1", rootCommit]);
 const repoEpoch = new Date(repoEpochStr.slice(0, 10)).getTime();
 const nowDate = new Date().toISOString().slice(0, 10);
 const now = new Date(nowDate).getTime();
@@ -321,8 +334,10 @@ for (const entry of entries.slice(0, 25)) {
   );
 }
 
-function run(cmd: string): string {
-  return execSync(cmd, {
+// SECURITY: use execFileSync to avoid shell interpretation of interpolated values
+// (seedCommit, rootCommit, REPO) which could contain shell metacharacters.
+function run(cmd: string, args: string[]): string {
+  return execFileSync(cmd, args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 200,
