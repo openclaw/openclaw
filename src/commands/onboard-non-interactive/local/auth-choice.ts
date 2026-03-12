@@ -21,7 +21,6 @@ import {
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
-  applyMinimaxConfig,
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyOpencodeGoConfig,
@@ -863,22 +862,37 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyVeniceConfig(nextConfig);
   }
 
-  if (
-    authChoice === "minimax-cloud" ||
-    authChoice === "minimax-api" ||
-    authChoice === "minimax-api-key-cn" ||
-    authChoice === "minimax-api-lightning"
-  ) {
-    const isCn = authChoice === "minimax-api-key-cn";
-    const providerId = isCn ? "minimax-cn" : "minimax";
-    const profileId = `${providerId}:default`;
+  // Legacy aliases: these choice values were removed; fail with an actionable message so
+  // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
+  const REMOVED_MINIMAX_CHOICES: Record<string, string> = {
+    minimax: "minimax-global-api",
+    "minimax-api": "minimax-global-api",
+    "minimax-cloud": "minimax-global-api",
+    "minimax-api-lightning": "minimax-global-api",
+    "minimax-api-key-cn": "minimax-cn-api",
+  };
+  if (Object.prototype.hasOwnProperty.call(REMOVED_MINIMAX_CHOICES, authChoice as string)) {
+    const replacement = REMOVED_MINIMAX_CHOICES[authChoice as string];
+    runtime.error(
+      `"${authChoice as string}" is no longer supported. Use --auth-choice ${replacement} instead.`,
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  if (authChoice === "minimax-global-api" || authChoice === "minimax-cn-api") {
+    const isCn = authChoice === "minimax-cn-api";
+    const profileId = isCn ? "minimax:cn" : "minimax:global";
     const resolved = await resolveApiKey({
-      provider: providerId,
+      provider: "minimax",
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
       flagName: "--minimax-api-key",
       envVar: "MINIMAX_API_KEY",
       runtime,
+      // Disable profile fallback: both regions share provider "minimax", so an existing
+      // Global profile key must not be silently reused when configuring CN (and vice versa).
+      allowProfile: false,
     });
     if (!resolved) {
       return null;
@@ -892,18 +906,10 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId,
-      provider: providerId,
+      provider: "minimax",
       mode: "api_key",
     });
-    const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-highspeed" : "MiniMax-M2.5";
-    return isCn
-      ? applyMinimaxApiConfigCn(nextConfig, modelId)
-      : applyMinimaxApiConfig(nextConfig, modelId);
-  }
-
-  if (authChoice === "minimax") {
-    return applyMinimaxConfig(nextConfig);
+    return isCn ? applyMinimaxApiConfigCn(nextConfig) : applyMinimaxApiConfig(nextConfig);
   }
 
   if (authChoice === "opencode-zen") {
@@ -1091,7 +1097,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
-    authChoice === "minimax-portal"
+    authChoice === "minimax-global-oauth" ||
+    authChoice === "minimax-cn-oauth"
   ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
