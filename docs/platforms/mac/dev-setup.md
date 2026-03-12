@@ -14,7 +14,7 @@ This guide covers the necessary steps to build and run the OpenClaw macOS applic
 Before building the app, ensure you have the following installed:
 
 1. **Xcode 26.2+**: Required for Swift development.
-2. **Node.js 22+ & pnpm**: Required for the gateway, CLI, and packaging scripts.
+2. **Node.js 24 & pnpm**: Recommended for the gateway, CLI, and packaging scripts. Node 22 LTS, currently `22.16+`, remains supported for compatibility.
 
 ## 1. Install Dependencies
 
