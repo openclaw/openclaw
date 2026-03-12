@@ -2275,11 +2275,10 @@ describe("QmdMemoryManager", () => {
       const thirdExport = await fs.readFile(exportFile, "utf-8");
       const thirdResetExport = await fs.readFile(resetExportFile, "utf-8");
       expect(thirdExport).toBe(secondExport);
+      expect(thirdResetExport).not.toBe(secondResetExport);
       expect(thirdResetExport).toContain("follow-up update");
       const thirdSessionMtimeMs = (await fs.stat(exportFile)).mtimeMs;
-      const thirdResetMtimeMs = (await fs.stat(resetExportFile)).mtimeMs;
       expect(thirdSessionMtimeMs).toBe(secondSessionMtimeMs);
-      expect(thirdResetMtimeMs).toBeGreaterThan(secondResetMtimeMs);
     } finally {
       await manager.close();
     }
