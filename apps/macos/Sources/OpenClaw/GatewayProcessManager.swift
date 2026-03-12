@@ -387,6 +387,7 @@ final class GatewayProcessManager {
                 self.clearLastFailure()
                 return true
             } catch {
+                if case .failed = self.status { return false }
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
