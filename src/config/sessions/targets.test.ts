@@ -346,10 +346,15 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: envStateDir,
       };
+      const mainStorePath = resolveRealStorePathSync(mainSessionsDir);
       const retiredStorePath = resolveRealStorePathSync(retiredSessionsDir);
 
       expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toEqual(
         expect.arrayContaining([
+          {
+            agentId: "main",
+            storePath: mainStorePath,
+          },
           {
             agentId: "retired",
             storePath: retiredStorePath,
