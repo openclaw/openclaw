@@ -2,6 +2,7 @@ import os from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/device-pair";
 import {
   approveDevicePairing,
+  issueDeviceBootstrapToken,
   listDevicePairing,
   resolveGatewayBindUrl,
   runPluginCommandWithTimeout,
@@ -31,8 +32,7 @@ type DevicePairPluginConfig = {
 
 type SetupPayload = {
   url: string;
-  token?: string;
-  password?: string;
+  bootstrapToken: string;
 };
 
 type ResolveUrlResult = {
@@ -405,8 +405,14 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        token: auth.token,
-        password: auth.password,
+        bootstrapToken: (
+          await issueDeviceBootstrapToken({
+            channel: ctx.channel,
+            senderId: ctx.senderId ?? ctx.from ?? ctx.to,
+            accountId: ctx.accountId,
+            threadId: ctx.messageThreadId != null ? String(ctx.messageThreadId) : undefined,
+          })
+        ).token,
       };
 
       if (action === "qr") {
