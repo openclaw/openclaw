@@ -36,6 +36,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
+  if (typeof entry?.fastMode === "boolean") {
+    flags.push(entry.fastMode ? "fast" : "fast:off");
+  }
   const reasoning = entry?.reasoningLevel;
   if (typeof reasoning === "string" && reasoning.length > 0) {
     flags.push(`reasoning:${reasoning}`);
@@ -170,6 +173,7 @@ export async function getStatusSummary(
           updatedAt,
           age,
           thinkingLevel: entry?.thinkingLevel,
+          fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,

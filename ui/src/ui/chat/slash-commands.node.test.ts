@@ -23,4 +23,11 @@ describe("parseSlashCommand", () => {
       args: "full",
     });
   });
+
+  it("parses fast commands", () => {
+    expect(parseSlashCommand("/fast:on")).toMatchObject({
+      command: { name: "fast" },
+      args: "on",
+    });
+  });
 });
