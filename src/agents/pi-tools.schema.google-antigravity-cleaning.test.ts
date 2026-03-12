@@ -5,7 +5,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 const noop = () => Promise.resolve({ content: [], details: {} });
 
 /**
- * Tests for google-antigravity schema cleaning behavior.
+ * Locks down schema-cleaning behavior for Google-routed providers.
  *
  * google-antigravity proxies Anthropic models (e.g. Claude) through Google's
  * Cloud Code Assist API.  The API validates tool schemas against Gemini's
@@ -14,10 +14,10 @@ const noop = () => Promise.resolve({ content: [], details: {} });
  *
  * The `isAnthropicProvider` guard was removed as dead code: no current
  * Google-routed provider name contains "anthropic", so the guard never
- * triggered. Removing it simplifies the logic and future-proofs against
- * hypothetical provider names that might match both "google" and "anthropic".
+ * triggered. These tests document the current routing semantics; they are not
+ * intended to demonstrate a fail-before/pass-after regression for that guard.
  */
-describe("normalizeToolParameters – google-antigravity schema cleaning", () => {
+describe("normalizeToolParameters – Google-routed provider cleaning", () => {
   const toolWithPatternProperties = {
     name: "test_tool",
     label: "Test Tool",
@@ -53,7 +53,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     },
   } as AnyAgentTool;
 
-  it("should clean schemas for google-antigravity provider", () => {
+  it("cleans schemas for google-antigravity provider", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "google-antigravity",
       modelId: "claude-opus-4-6",
@@ -62,7 +62,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeUndefined();
   });
 
-  it("should clean schemas for google-antigravity even with Anthropic model IDs", () => {
+  it("cleans schemas for google-antigravity even when the target model is Anthropic", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "google-antigravity",
       modelId: "claude-sonnet-4-5",
@@ -71,7 +71,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeUndefined();
   });
 
-  it("should clean schemas for regular google/gemini providers", () => {
+  it("cleans schemas for regular google/gemini providers", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "google",
       modelId: "gemini-3-pro",
@@ -80,7 +80,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeUndefined();
   });
 
-  it("should clean schemas for google-gemini-cli provider", () => {
+  it("cleans schemas for google-gemini-cli provider", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "google-gemini-cli",
       modelId: "gemini-3-pro",
@@ -89,7 +89,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeUndefined();
   });
 
-  it("should NOT clean schemas for pure anthropic provider", () => {
+  it("does not clean schemas for pure anthropic provider", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "anthropic",
       modelId: "claude-opus-4-6",
@@ -98,7 +98,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeDefined();
   });
 
-  it("should NOT clean schemas for openai provider", () => {
+  it("does not clean schemas for openai provider", () => {
     const result = normalizeToolParameters(toolWithPatternProperties, {
       modelProvider: "openai",
       modelId: "gpt-5.4",
@@ -107,7 +107,7 @@ describe("normalizeToolParameters – google-antigravity schema cleaning", () =>
     expect(params.patternProperties).toBeDefined();
   });
 
-  it("should preserve exclusiveMinimum/exclusiveMaximum for google-antigravity", () => {
+  it("preserves exclusiveMinimum/exclusiveMaximum for google-antigravity", () => {
     const result = normalizeToolParameters(toolWithAdditionalKeywords, {
       modelProvider: "google-antigravity",
       modelId: "claude-opus-4-6",
