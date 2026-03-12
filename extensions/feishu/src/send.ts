@@ -228,6 +228,10 @@ export async function getMessageFeishu(params: {
     return {
       messageId: item.message_id ?? messageId,
       chatId: item.chat_id ?? "",
+      chatType:
+        item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+          ? item.chat_type
+          : undefined,
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
       senderType: item.sender?.sender_type,
