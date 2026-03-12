@@ -155,6 +155,27 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`[state-db] Phase 4A cron JSON→SQLite migration failed: ${String(err)}`);
   }
 
+  // One-shot migration: Phase 4B core settings JSON files → SQLite.
+  try {
+    const { migrateCoreSettingsToSqlite } =
+      await import("../infra/state-db/migrate-core-settings.js");
+    const results = migrateCoreSettingsToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.count > 0);
+    if (migrated.length > 0) {
+      params.log.info(
+        `[state-db] Migrated core settings: ${migrated.map((r) => r.store).join(", ")}`,
+      );
+    }
+    const failed = results.filter((r) => r.error);
+    for (const r of failed) {
+      params.log.warn(`[state-db] ${r.store} migration failed: ${r.error}`);
+    }
+  } catch (err) {
+    params.log.warn(
+      `[state-db] Phase 4B core settings JSON→SQLite migration failed: ${String(err)}`,
+    );
+  }
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);

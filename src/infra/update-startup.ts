@@ -3,11 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
-import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { getCoreSettingFromDb, setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
 
@@ -58,7 +57,6 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -114,18 +112,12 @@ function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+function readState(): UpdateCheckState {
+  return getCoreSettingFromDb<UpdateCheckState>("gateway", "update-check") ?? {};
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await writeJsonAtomic(statePath, state);
+function writeState(state: UpdateCheckState): void {
+  setCoreSettingInDb("gateway", "update-check", state);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -321,8 +313,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
+  const state = readState();
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   if (shouldRunUpdateHints) {
@@ -369,7 +360,7 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    writeState(nextState);
     return;
   }
 
@@ -377,7 +368,7 @@ export async function runGatewayUpdateCheck(params: {
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    writeState(nextState);
     return;
   }
 
@@ -481,7 +472,7 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
-  await writeState(statePath, nextState);
+  writeState(nextState);
 }
 
 export function scheduleGatewayUpdateCheck(params: {

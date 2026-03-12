@@ -320,6 +320,156 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 4,
+    description:
+      "P4: core settings KV, cron, channel state, credentials, exec approvals, workspace, clawhub",
+    up(db) {
+      // -- Core settings KV (replaces voicewake.json, tts.json, device.json, device-auth.json,
+      //    restart-sentinel.json, update-check.json, apns-registrations.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS core_settings (
+          scope TEXT NOT NULL,
+          key TEXT NOT NULL DEFAULT '',
+          value_json TEXT,
+          updated_at INTEGER,
+          PRIMARY KEY (scope, key)
+        )
+      `);
+
+      // -- Cron jobs (replaces cron/jobs.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cron_jobs (
+          job_id TEXT PRIMARY KEY,
+          job_json TEXT NOT NULL,
+          enabled INTEGER DEFAULT 1,
+          created_at INTEGER,
+          updated_at INTEGER
+        )
+      `);
+
+      // -- Cron runs (replaces cron/runs/*.jsonl)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cron_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          job_id TEXT NOT NULL,
+          status TEXT,
+          summary TEXT,
+          error TEXT,
+          delivered INTEGER DEFAULT 0,
+          delivery_status TEXT,
+          delivery_error TEXT,
+          session_id TEXT,
+          session_key TEXT,
+          run_at_ms INTEGER,
+          duration_ms INTEGER,
+          next_run_at_ms INTEGER,
+          model TEXT,
+          provider TEXT,
+          usage_json TEXT,
+          started_at INTEGER,
+          finished_at INTEGER
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job_id, started_at)");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_cron_runs_status ON cron_runs(job_id, status)");
+
+      // -- Telegram channel state (replaces update-offset-*.json, sticker-cache.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS channel_tg_state (
+          account_id TEXT NOT NULL,
+          key TEXT NOT NULL,
+          value_json TEXT,
+          updated_at INTEGER,
+          PRIMARY KEY (account_id, key)
+        )
+      `);
+
+      // -- Discord channel state (replaces model-picker-preferences.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS channel_dc_state (
+          key TEXT NOT NULL,
+          scope TEXT NOT NULL DEFAULT '',
+          value_json TEXT,
+          updated_at INTEGER,
+          PRIMARY KEY (key, scope)
+        )
+      `);
+
+      // -- Auth credentials (replaces oauth.json, github-copilot.token.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS auth_credentials (
+          provider TEXT NOT NULL,
+          account_id TEXT NOT NULL DEFAULT '',
+          credentials_json TEXT,
+          expires_at INTEGER,
+          updated_at INTEGER,
+          PRIMARY KEY (provider, account_id)
+        )
+      `);
+
+      // -- Exec approvals (replaces exec-approvals.json) — security-sensitive
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS security_exec_approvals (
+          approval_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL DEFAULT 'allowlist',
+          pattern TEXT,
+          scope TEXT,
+          session_key TEXT,
+          approved_by TEXT,
+          last_used_at INTEGER,
+          last_used_command TEXT,
+          last_resolved_path TEXT,
+          created_at INTEGER DEFAULT (unixepoch()),
+          expires_at INTEGER
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_security_exec_approvals_agent ON security_exec_approvals(agent_id)",
+      );
+
+      // -- Workspace state (replaces {workspace}/.openclaw/workspace-state.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_state (
+          workspace_id TEXT PRIMARY KEY,
+          workspace_path TEXT NOT NULL,
+          agent_id TEXT NOT NULL DEFAULT '',
+          state_json TEXT,
+          updated_at INTEGER
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_state_path ON workspace_state(workspace_path)",
+      );
+
+      // -- ClawHub catalog (replaces {workspace}/.openclaw/clawhub/catalog.json + previews)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_clawhub_catalog (
+          workspace_id TEXT NOT NULL,
+          skill_slug TEXT NOT NULL,
+          version TEXT,
+          metadata_json TEXT,
+          preview_json TEXT,
+          installed_at INTEGER,
+          updated_at INTEGER,
+          PRIMARY KEY (workspace_id, skill_slug)
+        )
+      `);
+
+      // -- ClawHub locks (replaces {workspace}/.openclaw/clawhub/clawhub.lock.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_clawhub_locks (
+          workspace_id TEXT NOT NULL,
+          skill_slug TEXT NOT NULL,
+          lock_version TEXT,
+          lock_data_json TEXT,
+          locked_at INTEGER,
+          PRIMARY KEY (workspace_id, skill_slug)
+        )
+      `);
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

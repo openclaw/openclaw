@@ -1,31 +1,16 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { describe, expect, it } from "vitest";
 import {
   consumeRestartSentinel,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  resolveRestartSentinelPath,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
+import { setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
+import { useCoreSettingsTestDb } from "./state-db/test-helpers.core-settings.js";
 
 describe("restart sentinel", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-  let tempDir: string;
-
-  beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-  });
-
-  afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  useCoreSettingsTestDb();
 
   it("writes and consumes a sentinel", async () => {
     const payload = {
@@ -35,8 +20,7 @@ describe("restart sentinel", () => {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
       stats: { mode: "git" },
     };
-    const filePath = await writeRestartSentinel(payload);
-    expect(filePath).toBe(resolveRestartSentinelPath());
+    await writeRestartSentinel(payload);
 
     const read = await readRestartSentinel();
     expect(read?.payload.kind).toBe("update");
@@ -49,14 +33,11 @@ describe("restart sentinel", () => {
   });
 
   it("drops invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "not-json", "utf-8");
+    // Seed DB with malformed data
+    setCoreSettingInDb("gateway", "restart-sentinel", { broken: true });
 
     const read = await readRestartSentinel();
     expect(read).toBeNull();
-
-    await expect(fs.stat(filePath)).rejects.toThrow();
   });
 
   it("formatRestartSentinelMessage uses custom message when present", () => {
@@ -127,7 +108,6 @@ describe("restart sentinel message dedup", () => {
       stats: { mode: "gateway.restart", reason: "Applying config changes" },
     };
     const result = formatRestartSentinelMessage(payload);
-    // The message text should appear exactly once, not duplicated as "Reason: ..."
     const occurrences = result.split("Applying config changes").length - 1;
     expect(occurrences).toBe(1);
     expect(result).not.toContain("Reason:");

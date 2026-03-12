@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getCoreSettingFromDb, setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
+import { useCoreSettingsTestDb } from "./state-db/test-helpers.core-settings.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
 vi.mock("./openclaw-root.js", () => ({
@@ -40,10 +38,7 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 describe("update-startup", () => {
-  let suiteRoot = "";
-  let suiteCase = 0;
-  let tempDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  useCoreSettingsTestDb();
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -55,19 +50,9 @@ describe("update-startup", () => {
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
 
-  beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-suite-"));
-  });
-
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
-    tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
-    await fs.mkdir(tempDir);
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "NODE_ENV", "VITEST"]);
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-
-    process.env.NODE_ENV = "test";
 
     // Ensure update checks don't short-circuit in test mode.
     delete process.env.VITEST;
@@ -92,18 +77,9 @@ describe("update-startup", () => {
     resetUpdateAvailableStateForTest();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
-    envSnapshot.restore();
     resetUpdateAvailableStateForTest();
-  });
-
-  afterAll(async () => {
-    if (suiteRoot) {
-      await fs.rm(suiteRoot, { recursive: true, force: true });
-    }
-    suiteRoot = "";
-    suiteCase = 0;
   });
 
   function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {
@@ -138,13 +114,13 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    const statePath = path.join(tempDir, "update-check.json");
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-      lastNotifiedVersion?: string;
-      lastNotifiedTag?: string;
-      lastAvailableVersion?: string;
-      lastAvailableTag?: string;
-    };
+    const parsed =
+      getCoreSettingFromDb<{
+        lastNotifiedVersion?: string;
+        lastNotifiedTag?: string;
+        lastAvailableVersion?: string;
+        lastAvailableTag?: string;
+      }>("gateway", "update-check") ?? {};
     return { log, parsed };
   }
 
@@ -218,20 +194,11 @@ describe("update-startup", () => {
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
-    const statePath = path.join(tempDir, "update-check.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          lastCheckedAt: new Date(Date.now()).toISOString(),
-          lastAvailableVersion: "2.0.0",
-          lastAvailableTag: "latest",
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    setCoreSettingInDb("gateway", "update-check", {
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+    });
 
     const onUpdateAvailableChange = vi.fn();
     await runGatewayUpdateCheck({
@@ -292,7 +259,7 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    await expect(fs.stat(path.join(tempDir, "update-check.json"))).rejects.toThrow();
+    expect(getCoreSettingFromDb("gateway", "update-check")).toBeNull();
   });
 
   it("defers stable auto-update until rollout window is due", async () => {

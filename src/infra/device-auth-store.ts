@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
@@ -8,50 +5,23 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
+import { getCoreSettingFromDb, setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
 
-const DEVICE_AUTH_FILE = "device-auth.json";
+const SCOPE = "device-auth";
 
-function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
-}
-
-function readStore(filePath: string): DeviceAuthStore | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
-      return null;
-    }
-    if (!parsed.tokens || typeof parsed.tokens !== "object") {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeStore(filePath: string, store: DeviceAuthStore): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+function makeAdapter() {
+  return {
+    readStore: () => getCoreSettingFromDb<DeviceAuthStore>(SCOPE),
+    writeStore: (store: DeviceAuthStore) => setCoreSettingInDb(SCOPE, "", store),
+  };
 }
 
 export function loadDeviceAuthToken(params: {
   deviceId: string;
   role: string;
-  env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry | null {
-  const filePath = resolveDeviceAuthPath(params.env);
   return loadDeviceAuthTokenFromStore({
-    adapter: { readStore: () => readStore(filePath), writeStore: (_store) => {} },
+    adapter: makeAdapter(),
     deviceId: params.deviceId,
     role: params.role,
   });
@@ -62,14 +32,9 @@ export function storeDeviceAuthToken(params: {
   role: string;
   token: string;
   scopes?: string[];
-  env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry {
-  const filePath = resolveDeviceAuthPath(params.env);
   return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readStore(filePath),
-      writeStore: (store) => writeStore(filePath, store),
-    },
+    adapter: makeAdapter(),
     deviceId: params.deviceId,
     role: params.role,
     token: params.token,
@@ -77,17 +42,9 @@ export function storeDeviceAuthToken(params: {
   });
 }
 
-export function clearDeviceAuthToken(params: {
-  deviceId: string;
-  role: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  const filePath = resolveDeviceAuthPath(params.env);
+export function clearDeviceAuthToken(params: { deviceId: string; role: string }): void {
   clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readStore(filePath),
-      writeStore: (store) => writeStore(filePath, store),
-    },
+    adapter: makeAdapter(),
     deviceId: params.deviceId,
     role: params.role,
   });

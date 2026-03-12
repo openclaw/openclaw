@@ -1,9 +1,7 @@
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
 import http2 from "node:http2";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { getCoreSettingFromDb, setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
 
 export type ApnsEnvironment = "sandbox" | "production";
 
@@ -66,17 +64,12 @@ type ApnsRegistrationState = {
   registrationsByNodeId: Record<string, ApnsRegistration>;
 };
 
-const APNS_STATE_FILENAME = "push/apns-registrations.json";
+const SCOPE = "push";
+const KEY = "apns-registrations";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
-const withLock = createAsyncLock();
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
-
-function resolveApnsRegistrationPath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, APNS_STATE_FILENAME);
-}
 
 function normalizeNodeId(value: string): string {
   return value.trim();
@@ -161,9 +154,8 @@ function normalizeNonEmptyString(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
-  const filePath = resolveApnsRegistrationPath(baseDir);
-  const existing = await readJsonFile<ApnsRegistrationState>(filePath);
+function loadRegistrationsState(): ApnsRegistrationState {
+  const existing = getCoreSettingFromDb<ApnsRegistrationState>(SCOPE, KEY);
   if (!existing || typeof existing !== "object") {
     return { registrationsByNodeId: {} };
   }
@@ -176,12 +168,8 @@ async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistratio
   return { registrationsByNodeId: registrations };
 }
 
-async function persistRegistrationsState(
-  state: ApnsRegistrationState,
-  baseDir?: string,
-): Promise<void> {
-  const filePath = resolveApnsRegistrationPath(baseDir);
-  await writeJsonAtomic(filePath, state);
+function persistRegistrationsState(state: ApnsRegistrationState): void {
+  setCoreSettingInDb(SCOPE, KEY, state);
 }
 
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
@@ -217,30 +205,28 @@ export async function registerApnsToken(params: {
     throw new Error("invalid APNs token");
   }
 
-  return await withLock(async () => {
-    const state = await loadRegistrationsState(params.baseDir);
-    const next: ApnsRegistration = {
-      nodeId,
-      token,
-      topic,
-      environment,
-      updatedAtMs: Date.now(),
-    };
-    state.registrationsByNodeId[nodeId] = next;
-    await persistRegistrationsState(state, params.baseDir);
-    return next;
-  });
+  const state = loadRegistrationsState();
+  const next: ApnsRegistration = {
+    nodeId,
+    token,
+    topic,
+    environment,
+    updatedAtMs: Date.now(),
+  };
+  state.registrationsByNodeId[nodeId] = next;
+  persistRegistrationsState(state);
+  return next;
 }
 
 export async function loadApnsRegistration(
   nodeId: string,
-  baseDir?: string,
+  _baseDir?: string,
 ): Promise<ApnsRegistration | null> {
   const normalizedNodeId = normalizeNodeId(nodeId);
   if (!normalizedNodeId) {
     return null;
   }
-  const state = await loadRegistrationsState(baseDir);
+  const state = loadRegistrationsState();
   return state.registrationsByNodeId[normalizedNodeId] ?? null;
 }
 

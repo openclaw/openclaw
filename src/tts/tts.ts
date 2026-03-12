@@ -1,14 +1,4 @@
-import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  mkdtempSync,
-  rmSync,
-  renameSync,
-  unlinkSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
@@ -23,6 +13,10 @@ import type {
   TtsModelOverrideConfig,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
+import {
+  getCoreSettingFromDb,
+  setCoreSettingInDb,
+} from "../infra/state-db/core-settings-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
@@ -387,37 +381,16 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
     .join("\n");
 }
 
-function readPrefs(prefsPath: string): TtsUserPrefs {
-  try {
-    if (!existsSync(prefsPath)) {
-      return {};
-    }
-    return JSON.parse(readFileSync(prefsPath, "utf8")) as TtsUserPrefs;
-  } catch {
-    return {};
-  }
+const TTS_SCOPE = "tts";
+
+function readPrefs(_prefsPath?: string): TtsUserPrefs {
+  return getCoreSettingFromDb<TtsUserPrefs>(TTS_SCOPE) ?? {};
 }
 
-function atomicWriteFileSync(filePath: string, content: string): void {
-  const tmpPath = `${filePath}.tmp.${Date.now()}.${randomBytes(8).toString("hex")}`;
-  writeFileSync(tmpPath, content, { mode: 0o600 });
-  try {
-    renameSync(tmpPath, filePath);
-  } catch (err) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
-}
-
-function updatePrefs(prefsPath: string, update: (prefs: TtsUserPrefs) => void): void {
-  const prefs = readPrefs(prefsPath);
+function updatePrefs(_prefsPath: string, update: (prefs: TtsUserPrefs) => void): void {
+  const prefs = readPrefs();
   update(prefs);
-  mkdirSync(path.dirname(prefsPath), { recursive: true });
-  atomicWriteFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  setCoreSettingInDb(TTS_SCOPE, "", prefs);
 }
 
 export function isTtsEnabled(

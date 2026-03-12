@@ -1,7 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
+import {
+  deleteCoreSettingFromDb,
+  getCoreSettingFromDb,
+  setCoreSettingInDb,
+} from "./state-db/core-settings-sqlite.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -50,7 +52,8 @@ export type RestartSentinel = {
   payload: RestartSentinelPayload;
 };
 
-const SENTINEL_FILENAME = "restart-sentinel.json";
+const SCOPE = "gateway";
+const KEY = "restart-sentinel";
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -58,53 +61,36 @@ export function formatDoctorNonInteractiveHint(
   return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
 }
 
-export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), SENTINEL_FILENAME);
-}
-
 export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
-  env: NodeJS.ProcessEnv = process.env,
-) {
-  const filePath = resolveRestartSentinelPath(env);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  _env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   const data: RestartSentinel = { version: 1, payload };
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
-  return filePath;
+  setCoreSettingInDb(SCOPE, KEY, data);
 }
 
 export async function readRestartSentinel(
-  env: NodeJS.ProcessEnv = process.env,
+  _env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    let parsed: RestartSentinel | undefined;
-    try {
-      parsed = JSON.parse(raw) as RestartSentinel | undefined;
-    } catch {
-      await fs.unlink(filePath).catch(() => {});
-      return null;
+  const parsed = getCoreSettingFromDb<RestartSentinel>(SCOPE, KEY);
+  if (!parsed || parsed.version !== 1 || !parsed.payload) {
+    if (parsed) {
+      // Malformed entry — clean up
+      deleteCoreSettingFromDb(SCOPE, KEY);
     }
-    if (!parsed || parsed.version !== 1 || !parsed.payload) {
-      await fs.unlink(filePath).catch(() => {});
-      return null;
-    }
-    return parsed;
-  } catch {
     return null;
   }
+  return parsed;
 }
 
 export async function consumeRestartSentinel(
-  env: NodeJS.ProcessEnv = process.env,
+  _env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
-  const parsed = await readRestartSentinel(env);
+  const parsed = await readRestartSentinel();
   if (!parsed) {
     return null;
   }
-  await fs.unlink(filePath).catch(() => {});
+  deleteCoreSettingFromDb(SCOPE, KEY);
   return parsed;
 }
 

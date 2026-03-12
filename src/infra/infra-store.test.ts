@@ -13,6 +13,8 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
+import { setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
+import { useCoreSettingsTestDb } from "./state-db/test-helpers.core-settings.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   defaultVoiceWakeTriggers,
@@ -51,49 +53,39 @@ describe("infra store", () => {
   });
 
   describe("voicewake store", () => {
+    useCoreSettingsTestDb();
+
     it("returns defaults when missing", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const cfg = await loadVoiceWakeConfig(baseDir);
-        expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
-        expect(cfg.updatedAtMs).toBe(0);
-      });
+      const cfg = await loadVoiceWakeConfig();
+      expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
+      expect(cfg.updatedAtMs).toBe(0);
     });
 
     it("sanitizes and persists triggers", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
-        expect(saved.triggers).toEqual(["hi", "there"]);
-        expect(saved.updatedAtMs).toBeGreaterThan(0);
+      const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "]);
+      expect(saved.triggers).toEqual(["hi", "there"]);
+      expect(saved.updatedAtMs).toBeGreaterThan(0);
 
-        const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["hi", "there"]);
-        expect(loaded.updatedAtMs).toBeGreaterThan(0);
-      });
+      const loaded = await loadVoiceWakeConfig();
+      expect(loaded.triggers).toEqual(["hi", "there"]);
+      expect(loaded.updatedAtMs).toBeGreaterThan(0);
     });
 
     it("falls back to defaults when triggers empty", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
-        expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
-      });
+      const saved = await setVoiceWakeTriggers(["", "   "]);
+      expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
     });
 
     it("sanitizes malformed persisted config values", async () => {
-      await withTempDir("openclaw-voicewake-", async (baseDir) => {
-        await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
-        await fs.writeFile(
-          path.join(baseDir, "settings", "voicewake.json"),
-          JSON.stringify({
-            triggers: ["  wake ", "", 42, null],
-            updatedAtMs: -1,
-          }),
-          "utf-8",
-        );
-
-        const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["wake"]);
-        expect(loaded.updatedAtMs).toBe(0);
+      // Seed DB with malformed data
+      setCoreSettingInDb("voicewake", "", {
+        triggers: ["  wake ", "", 42, null],
+        updatedAtMs: -1,
       });
+
+      const loaded = await loadVoiceWakeConfig();
+      expect(loaded.triggers).toEqual(["wake"]);
+      expect(loaded.updatedAtMs).toBe(0);
     });
   });
 

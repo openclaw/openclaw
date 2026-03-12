@@ -4,6 +4,7 @@ import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { useCoreSettingsTestDb } from "../infra/state-db/test-helpers.core-settings.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -456,6 +457,8 @@ describe("tts", () => {
   });
 
   describe("getTtsProvider", () => {
+    useCoreSettingsTestDb();
+
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
@@ -555,6 +558,8 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
+    useCoreSettingsTestDb();
+
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {

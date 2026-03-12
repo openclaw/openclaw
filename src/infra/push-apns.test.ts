@@ -1,8 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   loadApnsRegistration,
   normalizeApnsEnvironment,
@@ -11,39 +8,24 @@ import {
   sendApnsAlert,
   sendApnsBackgroundWake,
 } from "./push-apns.js";
+import { useCoreSettingsTestDb } from "./state-db/test-helpers.core-settings.js";
 
-const tempDirs: string[] = [];
 const testAuthPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
   .privateKey.export({ format: "pem", type: "pkcs8" })
   .toString();
 
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  }
-});
-
 describe("push APNs registration store", () => {
+  useCoreSettingsTestDb();
+
   it("stores and reloads node APNs registration", async () => {
-    const baseDir = await makeTempDir();
     const saved = await registerApnsToken({
       nodeId: "ios-node-1",
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
-      baseDir,
     });
 
-    const loaded = await loadApnsRegistration("ios-node-1", baseDir);
+    const loaded = await loadApnsRegistration("ios-node-1");
     expect(loaded).not.toBeNull();
     expect(loaded?.nodeId).toBe("ios-node-1");
     expect(loaded?.token).toBe("abcd1234abcd1234abcd1234abcd1234");
@@ -53,13 +35,11 @@ describe("push APNs registration store", () => {
   });
 
   it("rejects invalid APNs tokens", async () => {
-    const baseDir = await makeTempDir();
     await expect(
       registerApnsToken({
         nodeId: "ios-node-1",
         token: "not-a-token",
         topic: "ai.openclaw.ios",
-        baseDir,
       }),
     ).rejects.toThrow("invalid APNs token");
   });

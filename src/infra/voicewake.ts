@@ -1,18 +1,12 @@
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { getCoreSettingFromDb, setCoreSettingInDb } from "./state-db/core-settings-sqlite.js";
 
 export type VoiceWakeConfig = {
   triggers: string[];
   updatedAtMs: number;
 };
 
+const SCOPE = "voicewake";
 const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
-
-function resolvePath(baseDir?: string) {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, "settings", "voicewake.json");
-}
 
 function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
   const cleaned = (triggers ?? [])
@@ -21,15 +15,12 @@ function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
 }
 
-const withLock = createAsyncLock();
-
 export function defaultVoiceWakeTriggers() {
   return [...DEFAULT_TRIGGERS];
 }
 
-export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
-  const filePath = resolvePath(baseDir);
-  const existing = await readJsonFile<VoiceWakeConfig>(filePath);
+export async function loadVoiceWakeConfig(_baseDir?: string): Promise<VoiceWakeConfig> {
+  const existing = getCoreSettingFromDb<VoiceWakeConfig>(SCOPE);
   if (!existing) {
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
@@ -44,16 +35,13 @@ export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeCo
 
 export async function setVoiceWakeTriggers(
   triggers: string[],
-  baseDir?: string,
+  _baseDir?: string,
 ): Promise<VoiceWakeConfig> {
   const sanitized = sanitizeTriggers(triggers);
-  const filePath = resolvePath(baseDir);
-  return await withLock(async () => {
-    const next: VoiceWakeConfig = {
-      triggers: sanitized,
-      updatedAtMs: Date.now(),
-    };
-    await writeJsonAtomic(filePath, next);
-    return next;
-  });
+  const next: VoiceWakeConfig = {
+    triggers: sanitized,
+    updatedAtMs: Date.now(),
+  };
+  setCoreSettingInDb(SCOPE, "", next);
+  return next;
 }

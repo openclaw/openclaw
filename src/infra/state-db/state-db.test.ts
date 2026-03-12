@@ -105,6 +105,17 @@ describe("schema", () => {
     expect(tables).toContain("op1_team_members");
     expect(tables).toContain("op1_team_tasks");
     expect(tables).toContain("op1_team_messages");
+    // P4 tables
+    expect(tables).toContain("core_settings");
+    expect(tables).toContain("cron_jobs");
+    expect(tables).toContain("cron_runs");
+    expect(tables).toContain("channel_tg_state");
+    expect(tables).toContain("channel_dc_state");
+    expect(tables).toContain("auth_credentials");
+    expect(tables).toContain("security_exec_approvals");
+    expect(tables).toContain("workspace_state");
+    expect(tables).toContain("op1_clawhub_catalog");
+    expect(tables).toContain("op1_clawhub_locks");
   });
 
   it("records schema version", async () => {
@@ -114,7 +125,7 @@ describe("schema", () => {
     const db = getStateDb(testEnv());
     runMigrations(db);
 
-    expect(getSchemaVersion(db)).toBe(3);
+    expect(getSchemaVersion(db)).toBe(4);
   });
 
   it("is idempotent — running twice does not error", async () => {
@@ -125,7 +136,7 @@ describe("schema", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(getSchemaVersion(db)).toBe(3);
+    expect(getSchemaVersion(db)).toBe(4);
   });
 
   it("enforces foreign key constraints", async () => {
@@ -313,7 +324,7 @@ describe("initStateDb", () => {
     const env = testEnv();
     const db = initStateDb(env);
 
-    expect(getSchemaVersion(db)).toBe(3);
+    expect(getSchemaVersion(db)).toBe(4);
     expect(listTables(db).length).toBeGreaterThan(0);
   });
 });
