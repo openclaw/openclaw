@@ -185,6 +185,32 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   return lower.includes("context overflow");
 }
 
+const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
+  /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /requested\s+([\d,]+)\s+tokens/i,
+  /resulted in\s+([\d,]+)\s+tokens/i,
+];
+
+export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
+  if (!errorMessage) {
+    return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const rawCount = match?.[1]?.replaceAll(",", "");
+    if (!rawCount) {
+      continue;
+    }
+    const parsed = Number(rawCount);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+
+  return undefined;
+}
+
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;

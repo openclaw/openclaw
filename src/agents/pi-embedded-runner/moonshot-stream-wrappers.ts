@@ -60,7 +60,7 @@ export function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefi
             payloadObj.thinking = null;
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
@@ -106,7 +106,7 @@ export function createMoonshotThinkingWrapper(
             payloadObj.tool_choice = "auto";
           }
         }
-        return originalOnPayload?.(payload, model);
+        return originalOnPayload?.(payload);
       },
     });
   };
