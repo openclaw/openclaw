@@ -29,7 +29,14 @@ private func bridgeToLocal(_ value: ProtocolAnyCodable?) -> AnyCodable? {
 
 func onboardingGatewayReadyFailureDescription(status: GatewayProcessManager.Status) -> String {
     if case let .failed(message) = status {
-        return message
+        let singleLine = message
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let redactedHome = singleLine.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        if !redactedHome.isEmpty {
+            return String(redactedHome.prefix(220))
+        }
     }
     return "Gateway did not become ready. Check that it is running."
 }
@@ -104,7 +111,7 @@ final class OnboardingWizardModel {
         } catch {
             self.status = "error"
             self.errorMessage = error.localizedDescription
-            onboardingWizardLogger.error("start failed: \(error.localizedDescription, privacy: .public)")
+            onboardingWizardLogger.error("start failed: \(error.localizedDescription, privacy: .private)")
         }
     }
 
