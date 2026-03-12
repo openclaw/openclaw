@@ -158,6 +158,8 @@ function collectText(value: unknown): string {
   return "";
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function pickSessionId(
   parsed: Record<string, unknown>,
   backend: CliBackendConfig,
@@ -170,7 +172,7 @@ function pickSessionId(
   ];
   for (const field of fields) {
     const value = parsed[field];
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === "string" && value.trim() && UUID_RE.test(value.trim())) {
       return value.trim();
     }
   }
@@ -225,7 +227,11 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     if (!sessionId) {
       sessionId = pickSessionId(parsed, backend);
     }
-    if (!sessionId && typeof parsed.thread_id === "string") {
+    if (
+      !sessionId &&
+      typeof parsed.thread_id === "string" &&
+      UUID_RE.test(parsed.thread_id.trim())
+    ) {
       sessionId = parsed.thread_id.trim();
     }
     if (isRecord(parsed.usage)) {
