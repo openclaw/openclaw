@@ -1,3 +1,4 @@
+import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
@@ -66,6 +67,9 @@ export async function sendTelegramPayloadMessages(params: {
   };
 
   if (mediaUrls.length === 0) {
+    if (isSilentReplyText(text)) {
+      return { messageId: "suppressed", chatId: params.to };
+    }
     return await params.send(params.to, text, {
       ...payloadOpts,
       buttons: telegramData?.buttons,
@@ -92,6 +96,9 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
+    if (isSilentReplyText(text)) {
+      return { channel: "telegram", messageId: "suppressed", chatId: to };
+    }
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
       deps,

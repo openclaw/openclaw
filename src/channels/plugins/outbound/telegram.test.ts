@@ -58,6 +58,22 @@ describe("telegramOutbound", () => {
     );
   });
 
+  it("suppresses exact NO_REPLY token for sendText", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-text-3", chatId: "123" });
+    const sendText = telegramOutbound.sendText;
+    expect(sendText).toBeDefined();
+
+    const result = await sendText!({
+      cfg: {},
+      to: "123",
+      text: "NO_REPLY",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "suppressed", chatId: "123" });
+  });
+
   it("passes media options for sendMedia", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-media-1", chatId: "123" });
     const sendMedia = telegramOutbound.sendMedia;
@@ -84,6 +100,23 @@ describe("telegramOutbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media-1", chatId: "123" });
+  });
+
+  it("suppresses exact NO_REPLY token payloads without media", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-silent", chatId: "123" });
+    const sendPayload = telegramOutbound.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    const result = await sendPayload!({
+      cfg: {},
+      to: "123",
+      text: "",
+      payload: { text: " NO_REPLY " },
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "suppressed", chatId: "123" });
   });
 
   it("sends payload media list and applies buttons only to first message", async () => {
