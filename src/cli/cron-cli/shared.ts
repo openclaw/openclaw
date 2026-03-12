@@ -224,7 +224,11 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload.kind === "agentTurn"
+          ? typeof job.payload.model === "string"
+            ? job.payload.model
+            : (job.payload.model as { primary?: string } | undefined)?.primary ?? "-"
+          : "-"),
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,
