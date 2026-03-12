@@ -534,6 +534,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
   }
+  if (connectionMode === "webhook" && !account.encryptKey?.trim()) {
+    throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
+  }
 
   const warmupCount = await warmupDedupFromDisk(accountId, log);
   if (warmupCount > 0) {
