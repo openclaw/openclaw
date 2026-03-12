@@ -329,6 +329,57 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   };
 }
 
+function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    modelOverrides: {
+      ...base.modelOverrides,
+      ...override.modelOverrides,
+    },
+    elevenlabs: {
+      ...base.elevenlabs,
+      ...override.elevenlabs,
+      voiceSettings: {
+        ...base.elevenlabs?.voiceSettings,
+        ...override.elevenlabs?.voiceSettings,
+      },
+    },
+    openai: {
+      ...base.openai,
+      ...override.openai,
+    },
+    edge: {
+      ...base.edge,
+      ...override.edge,
+    },
+  };
+}
+
+export function resolveTtsConfigForAccount(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+): ResolvedTtsConfig {
+  const base = cfg.messages?.tts ?? {};
+  const channelConfig = cfg.channels?.[channel] as
+    | { accounts?: Record<string, { tts?: TtsConfig }> }
+    | undefined;
+  const accountTts = channelConfig?.accounts?.[accountId]?.tts;
+  const merged = mergeTtsConfig(base, accountTts);
+  const cfgWithMerged = {
+    ...cfg,
+    messages: {
+      ...cfg.messages,
+      tts: merged,
+    },
+  };
+  return resolveTtsConfig(cfgWithMerged);
+}
+
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) {
     return resolveUserPath(config.prefsPath.trim());
