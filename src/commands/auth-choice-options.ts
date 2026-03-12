@@ -120,6 +120,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["zai-coding-global", "zai-coding-cn", "zai-global", "zai-cn"],
   },
   {
+    value: "model-hub",
+    label: "Model Hub(中国大陆代理聚合)",
+    hint: "API key(Aggregated)",
+    choices: ["model-hub-api-key"],
+  },
+  {
     value: "qianfan",
     label: "Qianfan",
     hint: "API key",

@@ -6,6 +6,7 @@ import { googleProvider } from "./google/index.js";
 import { groqProvider } from "./groq/index.js";
 import { minimaxPortalProvider, minimaxProvider } from "./minimax/index.js";
 import { mistralProvider } from "./mistral/index.js";
+import { modelHubProvider } from "./model-hub/index.js";
 import { moonshotProvider } from "./moonshot/index.js";
 import { openaiProvider } from "./openai/index.js";
 import { zaiProvider } from "./zai/index.js";
@@ -19,6 +20,7 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   minimaxPortalProvider,
   moonshotProvider,
   mistralProvider,
+  modelHubProvider,
   zaiProvider,
   deepgramProvider,
 ];

@@ -31,10 +31,12 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { MODEL_HUB_BASE_URL } from "../providers/model-hub-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  MODEL_HUB_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
@@ -468,6 +470,41 @@ export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKilocodeProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Model Hub provider configuration without changing the default model.
+ */
+export function applyModelHubProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MODEL_HUB_DEFAULT_MODEL_REF] = {
+    ...models[MODEL_HUB_DEFAULT_MODEL_REF],
+    alias: models[MODEL_HUB_DEFAULT_MODEL_REF]?.alias ?? "Model Hub",
+  };
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "model-hub",
+    api: "openai-completions",
+    baseUrl: MODEL_HUB_BASE_URL,
+    defaultModel: {
+      id: "gemini-3-flash-preview",
+      name: "Model Hub Auto(Gemini 3 Flash Preview)",
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+  });
+}
+
+/**
+ * Apply Model Hub provider configuration AND set Model Hub as the default model.
+ */
+export function applyModelHubConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyModelHubProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MODEL_HUB_DEFAULT_MODEL_REF);
 }
 
 export function applyAuthProfileConfig(

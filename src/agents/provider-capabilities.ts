@@ -75,6 +75,11 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
+  "model-hub": {
+    openAiCompatTurnValidation: false,
+    geminiThoughtSignatureSanitization: true,
+    geminiThoughtSignatureModelHints: ["gemini"],
+  },
   "github-copilot": {
     dropThinkingBlockModelHints: ["claude"],
   },

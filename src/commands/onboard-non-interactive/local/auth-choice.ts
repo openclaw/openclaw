@@ -33,6 +33,7 @@ import {
   applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
   applyLitellmConfig,
+  applyModelHubConfig,
   applyMistralConfig,
   applyXaiConfig,
   applyXiaomiConfig,
@@ -46,6 +47,7 @@ import {
   setKilocodeApiKey,
   setKimiCodingApiKey,
   setLitellmApiKey,
+  setModelHubApiKey,
   setMistralApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
@@ -668,6 +670,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyLitellmConfig(nextConfig);
+  }
+
+  if (authChoice === "model-hub-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "model-hub",
+      cfg: baseConfig,
+      flagValue: opts.modelHubApiKey,
+      flagName: "--model-hub-api-key",
+      envVar: "MODEL_HUB_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelHubApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "model-hub:default",
+      provider: "model-hub",
+      mode: "api_key",
+    });
+    return applyModelHubConfig(nextConfig);
   }
 
   if (authChoice === "ai-gateway-api-key") {
