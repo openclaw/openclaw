@@ -366,20 +366,13 @@ export function createFollowupRunner(params: {
         filterMessagingToolMediaDuplicates,
         shouldSuppressMessagingToolReplies,
       } = await loadReplyPayloadsRuntime();
-      const dedupedPayloads = filterMessagingToolDuplicates({
-        payloads: replyTaggedPayloads,
-        sentTexts: runResult.messagingToolSentTexts ?? [],
-      });
-      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
-      });
+      const messagingToolSentTargets = runResult.messagingToolSentTargets ?? [];
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
           provider: queued.run.messageProvider,
         }),
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTargets,
         originatingTo: resolveOriginMessageTo({
           originatingTo: queued.originatingTo,
         }),
@@ -388,7 +381,29 @@ export function createFollowupRunner(params: {
           accountId: queued.run.agentAccountId,
         }),
       });
+      // Only dedupe against messaging tool sends for the same origin target.
+      // Cross-target sends (e.g. posting to another channel) must not
+      // suppress the current conversation's final reply.
+      // If target metadata is unavailable, keep legacy dedupe behavior.
+      const dedupeMessagingToolPayloads =
+        suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+      const dedupedPayloads = dedupeMessagingToolPayloads
+        ? filterMessagingToolDuplicates({
+            payloads: replyTaggedPayloads,
+            sentTexts: runResult.messagingToolSentTexts ?? [],
+          })
+        : replyTaggedPayloads;
+      const mediaFilteredPayloads = dedupeMessagingToolPayloads
+        ? filterMessagingToolMediaDuplicates({
+            payloads: dedupedPayloads,
+            sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+          })
+        : dedupedPayloads;
       let finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+
+      if (finalPayloads.length === 0) {
+        return;
+      }
 
       if (autoCompactionCount > 0) {
         const count = await incrementRunCompactionCount({

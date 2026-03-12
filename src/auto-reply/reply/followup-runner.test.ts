@@ -500,6 +500,55 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("does not dedupe text for cross-target messaging sends", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+        messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:D1" }],
+      },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    // Reply is routed to originating channel, not suppressed by cross-target text dedup.
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+      }),
+    );
+  });
+
+  it("does not dedupe media for cross-target messaging sends", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "photo", mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/img.png"],
+        messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:D1" }],
+      },
+      queued: {
+        ...baseQueuedRun("telegram"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "photo",
+          mediaUrl: "/tmp/img.png",
+        }),
+      }),
+    );
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
