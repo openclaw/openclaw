@@ -277,7 +277,8 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     normalized.includes("auth") ||
     normalized.includes("token") ||
     normalized.includes("password") ||
-    normalized.includes("scope")
+    normalized.includes("scope") ||
+    normalized.includes("role")
   );
 }
 
@@ -451,7 +452,7 @@ export function buildRescueWatchdogConfig(params: {
     env: mergeRescueEnvConfig(existing.env, sourceConfig.env),
     // Preserve rescue scheduler settings, but always re-enable cron on managed
     // rescue profiles so watchdog jobs run after onboarding re-provisioning.
-    cron: existing.cron ? { ...existing.cron, enabled: true } : undefined,
+    cron: existing.cron ? { ...existing.cron, enabled: true } : { enabled: true },
     models: sourceConfig.models ?? existing.models,
     secrets: sourceConfig.secrets ?? existing.secrets,
     skills: sourceConfig.skills ?? existing.skills,

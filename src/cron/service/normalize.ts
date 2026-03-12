@@ -89,5 +89,10 @@ export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "agentTurn") {
     return payload.message.trim();
   }
-  return `Rescue watchdog: ${payload.monitoredProfile}`.trim();
+  if (payload.kind === "rescueWatchdog") {
+    return `Rescue watchdog: ${payload.monitoredProfile}`.trim();
+  }
+  // Exhaustiveness check: compile error if a new CronPayload kind is added.
+  const _exhaustive: never = payload;
+  return String(_exhaustive);
 }
