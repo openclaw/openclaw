@@ -210,7 +210,7 @@ describe("web_fetch with scrapingbee provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes through ScrapingBee API and extracts via Readability", async () => {
+  it("routes through ScrapingBee API and returns markdown directly", async () => {
     const apiKeyField = ["api", "Key"].join("");
     const mockFetch = installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
@@ -220,11 +220,9 @@ describe("web_fetch with scrapingbee provider", () => {
           status: 200,
           url,
           headers: makeHeaders({
-            "content-type": "text/html",
             "spb-resolved-url": "https://example.com/resolved",
           }),
-          text: async () =>
-            "<html><head><title>SB Page</title></head><body><article><p>ScrapingBee content here</p></article></body></html>",
+          text: async () => "# ScrapingBee Page\n\nScrapingBee content here",
         } as Response);
       }
       return Promise.reject(new Error("unexpected fetch"));
@@ -237,7 +235,7 @@ describe("web_fetch with scrapingbee provider", () => {
 
     const result = await tool?.execute?.("call", { url: "https://example.com/page" });
     const details = result?.details as { extractor?: string; text?: string };
-    expect(details.extractor).toBe("scrapingbee+readability");
+    expect(details.extractor).toBe("scrapingbee");
     expect(details.text).toContain("ScrapingBee content here");
 
     // Verify the ScrapingBee API was called with correct params
@@ -248,6 +246,7 @@ describe("web_fetch with scrapingbee provider", () => {
     const sbUrl = new URL(requestUrl(sbCall![0]));
     expect(sbUrl.searchParams.get("api_key")).toBe("sb-test-key");
     expect(sbUrl.searchParams.get("url")).toBe("https://example.com/page");
+    expect(sbUrl.searchParams.get("return_page_markdown")).toBe("true");
   });
 
   it("falls back to direct fetch when ScrapingBee fails", async () => {
@@ -291,7 +290,7 @@ describe("web_fetch with scrapingbee provider", () => {
           status: 200,
           url,
           headers: makeHeaders({ "content-type": "text/html" }),
-          text: async () => "<html><body><article><p>JS rendered</p></article></body></html>",
+          text: async () => "# JS Rendered\n\nJS rendered content",
         } as Response);
       }
       return Promise.reject(new Error("unexpected fetch"));

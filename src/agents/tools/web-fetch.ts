@@ -274,17 +274,17 @@ async function fetchViaScrapingBee(params: {
   apiKey: string;
   renderJs: boolean;
   timeoutSeconds: number;
-}): Promise<{ html: string; status: number; resolvedUrl: string }> {
+}): Promise<{ markdown: string; status: number; resolvedUrl: string }> {
   const endpoint = new URL(DEFAULT_SCRAPINGBEE_BASE_URL);
   endpoint.searchParams.set("api_key", params.apiKey);
   endpoint.searchParams.set("url", params.url);
+  endpoint.searchParams.set("return_page_markdown", "true");
   if (params.renderJs) {
     endpoint.searchParams.set("render_js", "true");
   }
 
   const res = await fetch(endpoint.toString(), {
     method: "GET",
-    headers: { Accept: "text/html" },
     signal: AbortSignal.timeout(params.timeoutSeconds * 1000),
   });
 
@@ -293,9 +293,9 @@ async function fetchViaScrapingBee(params: {
     throw new Error(`ScrapingBee API error (${res.status}): ${detail || res.statusText}`);
   }
 
-  const html = await res.text();
+  const markdown = await res.text();
   const resolvedUrl = res.headers.get("Spb-resolved-url") || params.url;
-  return { html, status: res.status, resolvedUrl };
+  return { markdown, status: res.status, resolvedUrl };
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -657,7 +657,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     }
   }
 
-  // Provider "scrapingbee": fetch HTML via ScrapingBee proxy, then extract with Readability.
+  // Provider "scrapingbee": fetch markdown directly via ScrapingBee API.
   if (params.provider === "scrapingbee" && params.scrapingBeeApiKey) {
     const start = Date.now();
     try {
@@ -668,35 +668,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         timeoutSeconds: params.scrapingBeeTimeoutSeconds,
       });
 
-      let text = sbResult.html;
-      let title: string | undefined;
-      let extractor = "scrapingbee";
-
-      if (looksLikeHtml(text) && params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: text,
-          url: sbResult.resolvedUrl,
-          extractMode: params.extractMode,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = "scrapingbee+readability";
-        }
-      } else if (params.extractMode === "text") {
+      let text = sbResult.markdown;
+      if (params.extractMode === "text") {
         text = markdownToText(text);
       }
 
       const wrapped = wrapWebFetchContent(text, params.maxChars);
-      const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
       const payload: Record<string, unknown> = {
         url: params.url,
         finalUrl: sbResult.resolvedUrl,
         status: sbResult.status,
-        contentType: "text/html",
-        title: wrappedTitle,
         extractMode: params.extractMode,
-        extractor,
+        extractor: "scrapingbee",
         provider: "scrapingbee",
         externalContent: {
           untrusted: true,
