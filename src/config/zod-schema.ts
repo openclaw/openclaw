@@ -805,6 +805,17 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        peers: z
+          .record(
+            z.string().min(1),
+            z
+              .object({
+                url: z.string(),
+                token: SecretInputSchema.optional().register(sensitive),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),

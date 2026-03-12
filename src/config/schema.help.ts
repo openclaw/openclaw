@@ -411,6 +411,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
+  "gateway.peers":
+    'Named peer gateways for cross-gateway agent messaging. Map peer names to {url, token} objects so agents can target remote gateways by name (e.g. gateway: "imac") instead of raw WebSocket URLs.',
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
