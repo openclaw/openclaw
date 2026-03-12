@@ -39,6 +39,51 @@ flowchart TD
 
 **Tier 3** — Workers execute tasks directly, spawning Claude Code sessions via ACP when code-level work is needed.
 
+### Visual Overview
+
+![Matrix Multi-Agent Hierarchy](/images/matrix-hierarchy-infographic.png)
+_The 34-agent Matrix hierarchy: CEO → COO → Department Heads → Workers_
+
+### Gateway Architecture
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        WEB["Web UI"]
+        CLI["CLI"]
+        API["API"]
+    end
+    subgraph Gateway
+        WS["WebSocket Server"]
+        RPC["RPC Methods"]
+        PI["Pi (AI Engine)"]
+    end
+    subgraph Channels
+        TG["Telegram"]
+        DC["Discord"]
+        SL["Slack"]
+        WA["WhatsApp"]
+    end
+    subgraph Providers
+        CL["Claude"]
+        GP["GPT"]
+        GM["Gemini"]
+    end
+
+    WEB --> WS
+    CLI --> WS
+    API --> WS
+    WS --> RPC
+    RPC --> PI
+    PI --> Providers
+    PI --> Channels
+```
+
+_Gateway architecture: WebSocket API, channels, nodes, and AI providers_
+
+![Gateway System Architecture](/images/gateway-architecture-infographic.png)
+_Gateway system architecture: WebSocket API, channels, nodes, and AI providers_
+
 ## Documentation
 
 ### Architecture

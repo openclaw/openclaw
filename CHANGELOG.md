@@ -19,6 +19,10 @@ Docs: https://docs.openclaw.ai
 - MCP/gateway: scope-aware RPC handlers (`mcp.servers.*`, `mcp.health.*`, `mcp.registry.*`, `mcp.browse.*`) persisting to scope YAML files
 - Docs: add MCP Integration page to in-app docs
 
+- UI/docs: add image rendering support to Markdown component; add infographic images to Operator1 overview (hierarchy + gateway architecture diagrams)
+- UI/docs: rewrite `/images/` paths to `/openclaw-docs/images/` in operator1 docs processor so shared doc images render in-app; symlink `public/openclaw-docs/images` to `docs/images/`
+- Project: add slash commands implementation spec and project task template
+
 ### Fixes
 
 - Gateway/dispatch: webchat-originated sessions with a bound `deliveryContext` now deliver final replies, tool results, and block replies to both the webchat dispatcher and the external channel (dual delivery)

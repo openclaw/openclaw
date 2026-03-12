@@ -191,6 +191,22 @@ const INITIAL_COMPONENTS: Partial<Components> = {
     );
   },
 
+  // ── Images ──
+  img: function Img({ src, alt }) {
+    if (!src) {
+      return null;
+    }
+    return (
+      <span className="block my-4">
+        <img
+          src={src}
+          alt={alt ?? ""}
+          style={{ maxWidth: "100%", height: "auto", display: "block" }}
+        />
+      </span>
+    );
+  },
+
   // ── Horizontal rule ──
   hr: function Hr() {
     return <hr className="my-5 border-t border-primary/20" />;

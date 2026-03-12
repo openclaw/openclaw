@@ -142,6 +142,9 @@ function rewriteOperator1Links(content: string): string {
     return match.replace("](/", "](/openclaw-docs/");
   });
 
+  // Rewrite /images/ → /openclaw-docs/images/ (shared image assets in docs/images/)
+  out = out.replace(/\]\(\/images\//g, "](/openclaw-docs/images/");
+
   return out;
 }
 
