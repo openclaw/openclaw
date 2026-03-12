@@ -100,14 +100,21 @@ Example watchdog script:
 #!/bin/zsh
 set -euo pipefail
 
-if openclaw health --json >/dev/null 2>&1; then
+# launchd uses a minimal PATH. Replace this if your install lives elsewhere
+# (for example nvm, pnpm, Homebrew on Apple Silicon, or a custom prefix).
+OPENCLAW_BIN="${OPENCLAW_BIN:-/opt/homebrew/bin/openclaw}"
+
+if "$OPENCLAW_BIN" health --json >/dev/null 2>&1; then
   exit 0
 fi
 
-openclaw doctor >/dev/null 2>&1 || true
-openclaw doctor --fix >/dev/null 2>&1 || true
-openclaw gateway restart >/dev/null 2>&1 || true
+"$OPENCLAW_BIN" doctor >/dev/null 2>&1 || true
+"$OPENCLAW_BIN" doctor --fix >/dev/null 2>&1 || true
+"$OPENCLAW_BIN" gateway restart >/dev/null 2>&1 || true
 ```
+
+Before loading the watchdog, verify the binary path with `which openclaw` and
+update `OPENCLAW_BIN` if needed.
 
 Example LaunchAgent (`~/Library/LaunchAgents/ai.openclaw.gateway-watchdog.plist`):
 
@@ -123,6 +130,11 @@ Example LaunchAgent (`~/Library/LaunchAgents/ai.openclaw.gateway-watchdog.plist`
       <string>/bin/zsh</string>
       <string>/Users/YOU/.openclaw/bin/gateway-watchdog.sh</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>StartInterval</key>
     <integer>60</integer>
     <key>RunAtLoad</key>
