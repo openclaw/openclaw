@@ -25,7 +25,12 @@ export function formatTokenCount(value?: number): string {
     return `${(safe / 1_000_000).toFixed(1)}m`;
   }
   if (safe >= 1_000) {
-    return `${(safe / 1_000).toFixed(safe >= 10_000 ? 0 : 1)}k`;
+    const precision = safe >= 10_000 ? 0 : 1;
+    const formattedThousands = (safe / 1_000).toFixed(precision);
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(safe / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(safe));
 }

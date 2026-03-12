@@ -15,8 +15,14 @@ export async function writeViaSiblingTempPath(params: {
   targetPath: string;
   writeTemp: (tempPath: string) => Promise<void>;
 }): Promise<void> {
-  const rootDir = path.resolve(params.rootDir);
-  const targetPath = path.resolve(params.targetPath);
+  const rootDir = await fs
+    .realpath(path.resolve(params.rootDir))
+    .catch(() => path.resolve(params.rootDir));
+  const requestedTargetPath = path.resolve(params.targetPath);
+  const targetPath = await fs
+    .realpath(path.dirname(requestedTargetPath))
+    .then((realDir) => path.join(realDir, path.basename(requestedTargetPath)))
+    .catch(() => requestedTargetPath);
   const relativeTargetPath = path.relative(rootDir, targetPath);
   if (
     !relativeTargetPath ||

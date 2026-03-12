@@ -9,7 +9,7 @@ read_when:
 
 # Node.js
 
-OpenClaw requires **Node 22 or newer**. The [installer script](/install#install-methods) will detect and install Node automatically — this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22.16 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#install-methods) will detect and install Node automatically — this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
 
 ## Check your version
 
@@ -17,7 +17,7 @@ OpenClaw requires **Node 22 or newer**. The [installer script](/install#install-
 node -v
 ```
 
-If this prints `v22.x.x` or higher, you're good. If Node isn't installed or the version is too old, pick an install method below.
+If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.16.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
 
 ## Install Node
 
@@ -36,7 +36,7 @@ If this prints `v22.x.x` or higher, you're good. If Node isn't installed or the 
     **Ubuntu / Debian:**
 
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
 
@@ -77,8 +77,8 @@ If this prints `v22.x.x` or higher, you're good. If Node isn't installed or the 
 Example with fnm:
 
 ```bash
-fnm install 22
-fnm use 22
+fnm install 24
+fnm use 24
 ```
 
   <Warning>
