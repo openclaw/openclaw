@@ -30,6 +30,12 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  references?: {
+    /** Files to always load from references/ when the skill is activated. */
+    autoLoad?: string[];
+    /** Files to load on demand (reserved for future use). */
+    onDemand?: string[];
+  };
 };
 
 export type SkillInvocationPolicy = {
@@ -68,6 +74,8 @@ export type SkillEntry = {
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  /** Content loaded from references/ directory, to be appended to SKILL.md when synced. */
+  referencesContent?: string;
 };
 
 export type SkillEligibilityContext = {

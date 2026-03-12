@@ -22,6 +22,7 @@ import {
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import type {
+  OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillCommandSpec,
@@ -289,6 +290,123 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
+/**
+ * Load autoLoad references from a skill's references/ directory.
+ * Returns content to append to SKILL.md when synced, or empty string if none.
+ *
+ * autoLoad list comes from frontmatter:
+ *   metadata:
+ *     openclaw:
+ *       references:
+ *         autoLoad: ["agents-catalog.md"]
+ *
+ * If no autoLoad list is specified but a references/ directory exists,
+ * all .md files are loaded in alphabetical order (default behavior).
+ */
+function loadSkillReferencesContent(
+  skill: Skill,
+  metadata: OpenClawSkillMetadata | undefined,
+  limits: ResolvedSkillsLimits,
+): string {
+  const refsDir = path.join(skill.baseDir, "references");
+  if (!fs.existsSync(refsDir)) {
+    return "";
+  }
+
+  let filesToLoad: string[];
+  const autoLoad = metadata?.references?.autoLoad;
+
+  if (autoLoad && autoLoad.length > 0) {
+    // Only load explicitly listed files
+    filesToLoad = autoLoad;
+  } else {
+    // Default: load all .md files in references/ alphabetically
+    try {
+      const entries = fs.readdirSync(refsDir, { withFileTypes: true });
+      filesToLoad = entries
+        .filter((e) => e.isFile() && e.name.endsWith(".md"))
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return "";
+    }
+  }
+
+  if (filesToLoad.length === 0) {
+    return "";
+  }
+
+  // Resolve base directory once before the loop.
+  // If it cannot be resolved, bail out early with a clear warning rather than
+  // emitting a misleading "outside skill directory" message for every file.
+  const baseDirRealPath = tryRealpath(skill.baseDir);
+  if (!baseDirRealPath) {
+    skillsLogger.warn("Cannot resolve skill base directory, skipping all references.", {
+      skill: skill.name,
+    });
+    return "";
+  }
+
+  const parts: string[] = [];
+  let totalBytes = 0;
+  for (const filename of filesToLoad) {
+    // Security: only allow .md files, no path traversal
+    if (
+      !filename.endsWith(".md") ||
+      filename.includes("/") ||
+      filename.includes("\\") ||
+      filename.includes("..")
+    ) {
+      skillsLogger.warn("Skipping invalid reference filename.", {
+        skill: skill.name,
+        filename,
+      });
+      continue;
+    }
+    const refPath = path.join(refsDir, filename);
+    const refRealPath = tryRealpath(refPath);
+    if (!refRealPath) continue;
+
+    // Security: ensure the reference file is inside the skill's baseDir
+    if (!isPathInside(baseDirRealPath, refRealPath)) {
+      skillsLogger.warn("Skipping reference file outside skill directory.", {
+        skill: skill.name,
+        filename,
+        refPath: refRealPath,
+      });
+      continue;
+    }
+
+    try {
+      const stat = fs.statSync(refRealPath);
+      if (stat.size > limits.maxSkillFileBytes) {
+        skillsLogger.warn("Skipping oversized reference file.", {
+          skill: skill.name,
+          filename,
+          size: stat.size,
+        });
+        continue;
+      }
+      // Guard against unbounded combined references content.
+      if (totalBytes + stat.size > limits.maxSkillFileBytes) {
+        skillsLogger.warn("Skipping remaining references: combined size limit reached.", {
+          skill: skill.name,
+          filename,
+          totalBytes,
+        });
+        break;
+      }
+      const content = fs.readFileSync(refRealPath, "utf-8");
+      totalBytes += stat.size;
+      parts.push(`\n\n<!-- references/${filename} -->\n${content}`);
+    } catch {
+      skillsLogger.warn("Failed to load reference file.", { skill: skill.name, filename });
+    }
+  }
+
+  return parts.join("");
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -516,11 +634,14 @@ function loadSkillEntries(
     } catch {
       // ignore malformed skills
     }
+    const metadata = resolveOpenClawMetadata(frontmatter);
+    const referencesContent = loadSkillReferencesContent(skill, metadata, limits);
     return {
       skill,
       frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
+      metadata,
       invocation: resolveSkillInvocationPolicy(frontmatter),
+      ...(referencesContent ? { referencesContent } : {}),
     };
   });
   return skillEntries;
@@ -757,6 +878,18 @@ export async function syncSkillsToWorkspace(params: {
           recursive: true,
           force: true,
         });
+        // Append references content to the synced SKILL.md so sandbox agents
+        // see the merged content when reading the skill file.
+        if (entry.referencesContent) {
+          const destSkillMd = path.join(dest, "SKILL.md");
+          try {
+            await fsp.appendFile(destSkillMd, entry.referencesContent, "utf-8");
+          } catch {
+            skillsLogger.warn(
+              `Failed to append references to synced SKILL.md for ${entry.skill.name}.`,
+            );
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);

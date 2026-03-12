@@ -295,6 +295,35 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 
 See [Skills config](/tools/skills-config) for the full configuration schema.
 
+## References directory
+
+Each skill can include a `references/` subdirectory with supplemental `.md` files. OpenClaw automatically appends these files to the skill content so the agent has full context without a bloated `SKILL.md`.
+
+**Default behavior** — all `.md` files in `references/` are loaded in alphabetical order:
+
+```
+skills/
+  my-skill/
+    SKILL.md          ← loaded first
+    references/
+      commands.md     ← appended second
+      examples.md     ← appended third
+```
+
+**Selective loading** — list specific files in frontmatter to control which are included:
+
+```yaml
+metadata:
+  openclaw:
+    references:
+      autoLoad:
+        - commands.md # always loaded
+      onDemand:
+        - examples.md # reserved for future on-demand loading
+```
+
+> Security: only `.md` files inside the skill's own directory are loaded; path traversal attempts are silently rejected.
+
 ## Looking for more skills?
 
 Browse [https://clawhub.com](https://clawhub.com).
