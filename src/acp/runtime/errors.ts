@@ -65,13 +65,16 @@ export function describeAcpErrorForLog(error: unknown): string {
     seen.add(current);
     const prefix = depth === 0 ? "error" : `cause${depth}`;
     if (current instanceof Error) {
+      const currentRecord = current as unknown as {
+        code?: unknown;
+        stderr?: unknown;
+        stdout?: unknown;
+        details?: unknown;
+      };
       if (typeof current.name === "string" && current.name !== "Error") {
         parts.push(`${prefix}.name=${current.name}`);
       }
-      const code =
-        typeof (current as { code?: unknown }).code === "string"
-          ? (current as { code: string }).code.trim()
-          : "";
+      const code = typeof currentRecord.code === "string" ? currentRecord.code.trim() : "";
       if (code) {
         parts.push(`${prefix}.code=${code}`);
       }
@@ -79,18 +82,17 @@ export function describeAcpErrorForLog(error: unknown): string {
       if (message) {
         parts.push(`${prefix}.message=${JSON.stringify(message)}`);
       }
-      const stderr = normalizeAcpDiagnosticText((current as { stderr?: unknown }).stderr, 500);
+      const stderr = normalizeAcpDiagnosticText(currentRecord.stderr, 500);
       if (stderr) {
         parts.push(`${prefix}.stderr=${JSON.stringify(stderr)}`);
       }
-      const stdout = normalizeAcpDiagnosticText((current as { stdout?: unknown }).stdout, 500);
+      const stdout = normalizeAcpDiagnosticText(currentRecord.stdout, 500);
       if (stdout) {
         parts.push(`${prefix}.stdout=${JSON.stringify(stdout)}`);
       }
       const details =
-        typeof (current as { details?: unknown }).details === "object" &&
-        (current as { details?: unknown }).details !== null
-          ? (current as { details: Record<string, unknown> }).details
+        typeof currentRecord.details === "object" && currentRecord.details !== null
+          ? (currentRecord.details as Record<string, unknown>)
           : undefined;
       const detailsStderr = normalizeAcpDiagnosticText(details?.stderr, 500);
       if (detailsStderr) {
@@ -120,12 +122,11 @@ export function describeAcpErrorForLog(error: unknown): string {
       current = (current as { cause?: unknown }).cause;
     } else {
       const text = normalizeAcpDiagnosticText(
-        typeof current === "number" ||
-          typeof current === "boolean" ||
-          typeof current === "bigint" ||
-          typeof current === "symbol"
+        typeof current === "number" || typeof current === "boolean"
           ? JSON.stringify(current)
-          : typeof current,
+          : typeof current === "bigint" || typeof current === "symbol"
+            ? String(current)
+            : typeof current,
         500,
       );
       if (text) {

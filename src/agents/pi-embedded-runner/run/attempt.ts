@@ -1858,9 +1858,13 @@ export async function runEmbeddedAttempt(
             const timeoutDetails: string[] = [];
             const lastToolError = getLastToolError();
             if (lastToolError) {
-              timeoutDetails.push(
-                `lastToolError=${JSON.stringify(normalizeAcpDiagnosticText(describeUnknownError(lastToolError), 400))}`,
+              const normalizedLastToolError = normalizeAcpDiagnosticText(
+                describeUnknownError(lastToolError),
+                400,
               );
+              if (normalizedLastToolError) {
+                timeoutDetails.push(`lastToolError=${JSON.stringify(normalizedLastToolError)}`);
+              }
             }
             const messageTargets = getMessagingToolSentTargets()
               .map((target) =>

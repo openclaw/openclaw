@@ -35,13 +35,17 @@ describe("withAcpRuntimeErrorBoundary", () => {
       }),
     ).rejects.toBe(existing);
   });
+});
 
+describe("normalizeAcpDiagnosticText", () => {
   it("normalizes diagnostic text and truncates long values", () => {
     expect(normalizeAcpDiagnosticText("  hello  ")).toBe("hello");
     expect(normalizeAcpDiagnosticText("")).toBeUndefined();
     expect(normalizeAcpDiagnosticText("abcdef", 4)).toBe("abcd...");
   });
+});
 
+describe("describeAcpErrorForLog", () => {
   it("extracts nested stderr/stdout diagnostics for logs", () => {
     const cause = new Error("child failure") as Error & {
       code?: string;
