@@ -178,6 +178,8 @@ Then open the printed Dashboard URL in your local browser.
 If the UI asks for auth, paste the token from `gateway.auth.token`
 (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
 
+For always-on remote access, see [Tailscale](/gateway/tailscale).
+
 ---
 
 ## Performance Optimizations
