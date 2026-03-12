@@ -569,11 +569,12 @@ export function buildInlineKeyboard(
   const rows = buttons
     .map((row) =>
       row
-        .filter((button) => button?.text && button?.callback_data)
+        .filter((button) => button?.text && (button?.callback_data || button?.url))
         .map(
           (button): InlineKeyboardButton => ({
             text: button.text,
-            callback_data: button.callback_data,
+            ...(button.callback_data ? { callback_data: button.callback_data } : {}),
+            ...(button.url ? { url: button.url } : {}),
             ...(button.style ? { style: button.style } : {}),
           }),
         ),

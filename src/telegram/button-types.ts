@@ -2,7 +2,8 @@ export type TelegramButtonStyle = "danger" | "success" | "primary";
 
 export type TelegramInlineButton = {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  url?: string;
   style?: TelegramButtonStyle;
 };
 

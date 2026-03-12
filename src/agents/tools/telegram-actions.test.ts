@@ -736,11 +736,18 @@ describe("handleTelegramAction", () => {
 });
 
 describe("readTelegramButtons", () => {
-  it("returns trimmed button rows for valid input", () => {
+  it("returns trimmed button rows for callback buttons", () => {
     const result = readTelegramButtons({
       buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
     });
     expect(result).toEqual([[{ text: "Option A", callback_data: "cmd:a" }]]);
+  });
+
+  it("returns trimmed button rows for url buttons", () => {
+    const result = readTelegramButtons({
+      buttons: [[{ text: "  Docs ", url: " https://docs.openclaw.ai " }]],
+    });
+    expect(result).toEqual([[{ text: "Docs", url: "https://docs.openclaw.ai" }]]);
   });
 
   it("normalizes optional style", () => {
@@ -764,6 +771,22 @@ describe("readTelegramButtons", () => {
         },
       ],
     ]);
+  });
+
+  it("rejects buttons without callback_data or url", () => {
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A" }]],
+      }),
+    ).toThrow(/requires text and either callback_data or url/i);
+  });
+
+  it("rejects buttons that set both callback_data and url", () => {
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "cmd:a", url: "https://docs.openclaw.ai" }]],
+      }),
+    ).toThrow(/cannot set both callback_data and url/i);
   });
 
   it("rejects unsupported button style", () => {
