@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
@@ -8,6 +9,8 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
+const log = createSubsystemLogger("agent/embedded");
+
 /**
  * Normalize malformed assistant message content into a provider-safe array.
  *
@@ -16,7 +19,10 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
  * into the expected `AssistantMessage["content"]` array so that downstream
  * iteration never encounters a non-iterable value.
  */
-function normalizeAssistantContent(content: unknown): AssistantMessage["content"] {
+function normalizeAssistantContent(
+  content: unknown,
+  context?: { label?: string },
+): AssistantMessage["content"] {
   if (Array.isArray(content)) {
     return content as AssistantMessage["content"];
   }
@@ -34,6 +40,12 @@ function normalizeAssistantContent(content: unknown): AssistantMessage["content"
     if (typeof record.text === "string") {
       return [{ type: "text", text: record.text }] as AssistantMessage["content"];
     }
+    log.warn("dropping unrecognized assistant replay content object during session sanitization", {
+      label: context?.label,
+      contentKeys: Object.keys(record).slice(0, 8),
+      typeType: typeof record.type,
+      textType: typeof record.text,
+    });
   }
   return [] as AssistantMessage["content"];
 }
@@ -127,7 +139,7 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const normalizedContent = normalizeAssistantContent(assistantMsg.content);
+      const normalizedContent = normalizeAssistantContent(assistantMsg.content, { label });
       const normalizedAssistantMsg =
         normalizedContent === assistantMsg.content
           ? assistantMsg
@@ -143,41 +155,39 @@ export async function sanitizeSessionMessagesImages(
         continue;
       }
       const content = normalizedContent;
-      if (Array.isArray(content)) {
-        if (!allowNonImageSanitization) {
-          const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
-            label,
-            imageSanitization,
-          )) as unknown as typeof assistantMsg.content;
-          out.push({ ...normalizedAssistantMsg, content: nextContent });
-          continue;
-        }
-        const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
-
-        const filteredContent = strippedContent.filter((block) => {
-          if (!block || typeof block !== "object") {
-            return true;
-          }
-          const rec = block as { type?: unknown; text?: unknown };
-          if (rec.type !== "text" || typeof rec.text !== "string") {
-            return true;
-          }
-          return rec.text.trim().length > 0;
-        });
-        const finalContent = (await sanitizeContentBlocksImages(
-          filteredContent as unknown as ContentBlock[],
+      if (!allowNonImageSanitization) {
+        const nextContent = (await sanitizeContentBlocksImages(
+          content as unknown as ContentBlock[],
           label,
           imageSanitization,
         )) as unknown as typeof assistantMsg.content;
-        if (finalContent.length === 0) {
-          continue;
-        }
-        out.push({ ...normalizedAssistantMsg, content: finalContent });
+        out.push({ ...normalizedAssistantMsg, content: nextContent });
         continue;
       }
+      const strippedContent = options?.preserveSignatures
+        ? content // Keep signatures for Antigravity Claude
+        : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
+
+      const filteredContent = strippedContent.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return true;
+        }
+        const rec = block as { type?: unknown; text?: unknown };
+        if (rec.type !== "text" || typeof rec.text !== "string") {
+          return true;
+        }
+        return rec.text.trim().length > 0;
+      });
+      const finalContent = (await sanitizeContentBlocksImages(
+        filteredContent as unknown as ContentBlock[],
+        label,
+        imageSanitization,
+      )) as unknown as typeof assistantMsg.content;
+      if (finalContent.length === 0) {
+        continue;
+      }
+      out.push({ ...normalizedAssistantMsg, content: finalContent });
+      continue;
     }
 
     out.push(msg);
