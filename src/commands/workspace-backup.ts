@@ -384,6 +384,13 @@ export async function workspaceBackupRunCommand(
   for (const previous of previousStatus?.workspaces ?? []) {
     if (!configuredSourcePaths.has(previous.sourcePath)) {
       const staleMirrorPath = expectedMirrorPath(mirrorRoot, previous.sourcePath);
+      // Guard: if the encoded sourcePath collapses to "." (e.g. sourcePath="/.."),
+      // staleMirrorPath would equal mirrorRoot itself – never delete that.
+      if (path.resolve(staleMirrorPath) === path.resolve(mirrorRoot)) {
+        throw new Error(
+          `Refusing to remove stale mirror: encoded path resolves to mirrorRoot for sourcePath=${previous.sourcePath}`,
+        );
+      }
       await assertPathContainedWithinRoot(staleMirrorPath, mirrorRoot, "remove stale mirror");
       await fs.rm(staleMirrorPath, { recursive: true, force: true });
     }

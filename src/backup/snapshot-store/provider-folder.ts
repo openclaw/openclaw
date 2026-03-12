@@ -14,6 +14,30 @@ import {
 
 const SNAPSHOT_ID_PATTERN = /^snap_[0-9TZ-]+_[0-9a-f]{8}$/;
 
+/** Max envelope JSON size (1 MiB) – envelopes are tiny metadata; anything larger is suspect. */
+const MAX_ENVELOPE_BYTES = 1 * 1024 * 1024;
+/** Max payload size (10 GiB) – upper bound for a single encrypted snapshot payload. */
+const MAX_PAYLOAD_BYTES = 10 * 1024 * 1024 * 1024;
+
+/**
+ * Assert that `filePath` is a regular file (not a symlink/device/etc.) and
+ * does not exceed `maxBytes`.  Prevents symlink-following and unbounded reads
+ * from untrusted snapshot directories.
+ */
+async function assertRegularFileWithinLimit(
+  filePath: string,
+  maxBytes: number,
+  label: string,
+): Promise<void> {
+  const stat = await fs.lstat(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a regular file: ${filePath}`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(`${label} exceeds maximum allowed size (${maxBytes} bytes): ${filePath}`);
+  }
+}
+
 function assertValidStorageId(kind: "installationId" | "snapshotId", value: string): void {
   const isValid =
     kind === "installationId" ? isValidInstallationId(value) : SNAPSHOT_ID_PATTERN.test(value);
@@ -74,6 +98,7 @@ async function copyFileAtomic(sourcePath: string, destinationPath: string): Prom
 }
 
 async function readEnvelopeFile(filePath: string): Promise<BackupSnapshotEnvelope> {
+  await assertRegularFileWithinLimit(filePath, MAX_ENVELOPE_BYTES, "Envelope file");
   const raw = await fs.readFile(filePath, "utf8");
   return parseBackupSnapshotEnvelope(raw);
 }
@@ -99,6 +124,7 @@ async function listSnapshotsFromDir(
       const filePath = path.join(root, entry);
       let raw: string;
       try {
+        await assertRegularFileWithinLimit(filePath, MAX_ENVELOPE_BYTES, "Envelope file");
         raw = await fs.readFile(filePath, "utf8");
       } catch (error) {
         const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -148,6 +174,7 @@ export function createFolderSnapshotStore(
         params.snapshotId,
       );
       const envelope = await readEnvelopeFile(storedEnvelopePath);
+      await assertRegularFileWithinLimit(storedPayloadPath, MAX_PAYLOAD_BYTES, "Payload file");
       await fs.mkdir(path.dirname(params.envelopeOutputPath), { recursive: true });
       await fs.copyFile(storedEnvelopePath, params.envelopeOutputPath);
       await fs.copyFile(storedPayloadPath, params.payloadOutputPath);

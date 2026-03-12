@@ -19,6 +19,21 @@ export type ResolvedSnapshotStoreTargetConfig = {
 
 async function canonicalizePathForContainment(inputPath: string): Promise<string> {
   const resolved = path.resolve(inputPath);
+
+  // Reject top-level symlinks early to prevent TOCTOU bypass: an attacker
+  // could swap a symlink between this check and a later fs operation.
+  try {
+    const stat = await fs.lstat(resolved);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing path that is a symbolic link: ${resolved}`);
+    }
+  } catch (error) {
+    // Re-throw symlink rejection; swallow ENOENT (path may not exist yet).
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
   const suffix: string[] = [];
   let probe = resolved;
   while (true) {

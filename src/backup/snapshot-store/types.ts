@@ -1,13 +1,19 @@
 export type BackupArchiveMode = "full-host" | "config-only";
 
 const MIN_SCRYPT_COST = 1 << 10;
-const MAX_SCRYPT_COST = 1 << 20;
+const MAX_SCRYPT_COST = 1 << 17; // lowered from 2^20 to limit attacker-controlled DoS
 const MIN_SCRYPT_BLOCK_SIZE = 1;
-const MAX_SCRYPT_BLOCK_SIZE = 32;
+const MAX_SCRYPT_BLOCK_SIZE = 16; // lowered from 32
 const MIN_SCRYPT_PARALLELIZATION = 1;
 const MAX_SCRYPT_PARALLELIZATION = 4;
 const MIN_SCRYPT_MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_SCRYPT_MAX_MEMORY_BYTES = 128 * 1024 * 1024;
+/**
+ * Upper bound on the combined scrypt work factor (cost * blockSize * parallelization).
+ * Prevents an attacker from choosing individually-valid parameters that combine
+ * to produce an excessively expensive derivation (DoS).
+ */
+const MAX_SCRYPT_WORK_FACTOR = (1 << 17) * 8 * 1; // ~= our own default derivation cost
 const SCRYPT_SALT_BYTES = 16;
 const GCM_NONCE_BYTES = 12;
 const GCM_AUTH_TAG_BYTES = 16;
@@ -101,6 +107,12 @@ function assertValidScryptParams(
   ) {
     throw new Error(
       `Invalid snapshot envelope: unsupported encryption.keyDerivation.parallelization.`,
+    );
+  }
+  // Combined work-factor cap to prevent DoS via individually-valid but expensive params.
+  if (cost * blockSize * parallelization > MAX_SCRYPT_WORK_FACTOR) {
+    throw new Error(
+      `Invalid snapshot envelope: combined scrypt work factor (cost*blockSize*parallelization) exceeds allowed limit.`,
     );
   }
   if (
