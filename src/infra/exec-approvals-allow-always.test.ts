@@ -75,6 +75,41 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).toEqual([exe]);
   });
 
+  it("re-resolves unresolved bare basenames against the host PATH", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const jq = makeExecutable(dir, "jq");
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${oldPath ?? ""}`;
+    try {
+      const patterns = resolveAllowAlwaysPatterns({
+        segments: [
+          {
+            raw: "jq -r .",
+            argv: ["jq", "-r", "."],
+            resolution: {
+              rawExecutable: "jq",
+              resolvedPath: undefined,
+              executableName: "jq",
+            },
+          },
+        ],
+        cwd: dir,
+        env: { PATH: "" },
+        platform: process.platform,
+      });
+      expect(patterns).toEqual([jq]);
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
+    }
+  });
+
   it("unwraps shell wrappers and persists the inner executable instead", () => {
     if (process.platform === "win32") {
       return;

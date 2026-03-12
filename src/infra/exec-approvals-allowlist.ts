@@ -195,6 +195,37 @@ function isSkillAutoAllowedSegment(params: {
   return Boolean(params.skillBinTrust.get(executableName)?.has(resolvedPath));
 }
 
+function resolveAllowAlwaysCandidatePath(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+  if (candidatePath) {
+    return candidatePath;
+  }
+
+  const effectiveArgv =
+    params.segment.resolution?.effectiveArgv && params.segment.resolution.effectiveArgv.length > 0
+      ? params.segment.resolution.effectiveArgv
+      : params.segment.argv;
+  const rawExecutable = effectiveArgv[0]?.trim();
+  if (!rawExecutable || isPathScopedExecutableToken(rawExecutable)) {
+    return undefined;
+  }
+
+  // Re-resolve bare basenames against the exec host's ambient PATH so
+  // "Always Allow" persists the same canonical binary users expect from `which`.
+  const hostResolution = resolveCommandResolutionFromArgv(effectiveArgv, params.cwd, {
+    ...params.env,
+    ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+    ...(process.env.Path ? { Path: process.env.Path } : {}),
+    ...(process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {}),
+    ...(process.env.Pathext ? { Pathext: process.env.Pathext } : {}),
+  });
+  return resolveAllowlistCandidatePath(hostResolution, params.cwd);
+}
+
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
@@ -459,7 +490,11 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const candidatePath = resolveAllowlistCandidatePath(params.segment.resolution, params.cwd);
+  const candidatePath = resolveAllowAlwaysCandidatePath({
+    segment: params.segment,
+    cwd: params.cwd,
+    env: params.env,
+  });
   if (!candidatePath) {
     return;
   }
