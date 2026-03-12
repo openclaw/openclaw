@@ -565,6 +565,10 @@ export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /** Session key for this agent run (e.g., "agent:qian-duoduo:main") */
+  sessionKey?: string;
+  /** Agent ID for this run (e.g., "qian-duoduo") */
+  agentId?: string;
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
@@ -625,6 +629,10 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /** Session key for this agent run (e.g., "agent:qian-duoduo:main") */
+  sessionKey?: string;
+  /** Agent ID for this run (e.g., "qian-duoduo") */
+  agentId?: string;
 };
 
 // Compaction hooks
