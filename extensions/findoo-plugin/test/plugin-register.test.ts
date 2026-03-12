@@ -36,7 +36,7 @@ describe("findoo-plugin registration", () => {
     expect(findooPlugin.kind).toBe("financial");
   });
 
-  it("registers 3 tools", () => {
+  it("registers 1 tool (async submit + heartbeat push mode)", () => {
     // Mock fetch for startup health check
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
@@ -45,10 +45,10 @@ describe("findoo-plugin registration", () => {
     const api = createMockApi();
     findooPlugin.register(api);
 
-    expect(api.tools.size).toBe(3);
+    expect(api.tools.size).toBe(1);
     expect(api.tools.has("fin_analyze")).toBe(true);
-    expect(api.tools.has("fin_analyze_task")).toBe(true);
-    expect(api.tools.has("fin_analyze_skills")).toBe(true);
+    // fin_analyze_skills removed — no longer needed
+    expect(api.tools.has("fin_analyze_skills")).toBe(false);
 
     vi.restoreAllMocks();
   });

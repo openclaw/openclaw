@@ -4,6 +4,8 @@ export type PluginConfig = {
   strategyAgentUrl: string;
   strategyAssistantId: string;
   requestTimeoutMs: number;
+  pollIntervalMs: number;
+  taskTimeoutMs: number;
 };
 
 function readEnv(keys: string[]): string | undefined {
@@ -33,9 +35,19 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   const timeoutRaw = raw?.requestTimeoutMs ?? readEnv(["OPENFINCLAW_STRATEGY_TIMEOUT_MS"]);
   const timeout = Number(timeoutRaw);
 
+  const pollRaw = raw?.pollIntervalMs ?? readEnv(["OPENFINCLAW_FINDOO_POLL_INTERVAL_MS"]);
+  const pollInterval = Number(pollRaw);
+
+  const taskTimeoutRaw = raw?.taskTimeoutMs ?? readEnv(["OPENFINCLAW_FINDOO_TASK_TIMEOUT_MS"]);
+  const taskTimeout = Number(taskTimeoutRaw);
+
   return {
     strategyAgentUrl: strategyAgentUrl.replace(/\/+$/, ""),
     strategyAssistantId,
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 5000 ? Math.floor(timeout) : 120_000,
+    pollIntervalMs:
+      Number.isFinite(pollInterval) && pollInterval >= 5000 ? Math.floor(pollInterval) : 15_000,
+    taskTimeoutMs:
+      Number.isFinite(taskTimeout) && taskTimeout >= 60_000 ? Math.floor(taskTimeout) : 600_000,
   };
 }
