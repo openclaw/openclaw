@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvOverride } from "../../config/test-helpers.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -191,6 +192,25 @@ describe("gateway run option collisions", () => {
       18789,
       expect.objectContaining({
         bind: "loopback",
+      }),
+    );
+  });
+
+  it("uses OPENCLAW_GATEWAY_BIND when --bind is omitted", async () => {
+    configState.cfg = {
+      gateway: {
+        bind: "loopback",
+      },
+    };
+
+    await withEnvOverride({ OPENCLAW_GATEWAY_BIND: "lan" }, async () => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    });
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "lan",
       }),
     );
   });
