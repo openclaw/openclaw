@@ -487,6 +487,15 @@ export async function processMessage(
   };
 
   const cacheMessageId = message.messageId?.trim();
+  const confirmedOutboundCacheEntry = cacheMessageId
+    ? resolveReplyContextFromCache({
+        accountId: account.accountId,
+        replyToId: cacheMessageId,
+        chatGuid: message.chatGuid,
+        chatIdentifier: message.chatIdentifier,
+        chatId: message.chatId,
+      })
+    : null;
   let messageShortId: string | undefined;
   const cacheInboundMessage = () => {
     if (!cacheMessageId) {
@@ -508,6 +517,12 @@ export async function processMessage(
   if (message.fromMe) {
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
+    const confirmedAssistantOutbound =
+      confirmedOutboundCacheEntry?.senderLabel === "me" &&
+      normalizeSnippet(confirmedOutboundCacheEntry.body ?? "") === normalizeSnippet(rawBody);
+    if (isSelfChatMessage && confirmedAssistantOutbound) {
+      rememberBlueBubblesSelfChatCopy(selfChatLookup);
+    }
     if (cacheMessageId) {
       const pending = consumePendingOutboundMessageId({
         accountId: account.accountId,
@@ -517,9 +532,6 @@ export async function processMessage(
         body: rawBody,
       });
       if (pending) {
-        if (isSelfChatMessage) {
-          rememberBlueBubblesSelfChatCopy(selfChatLookup);
-        }
         const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
         const previewSource = pending.snippetRaw || rawBody;
         const preview = previewSource
