@@ -83,6 +83,7 @@ private func makeViewModel(
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
     initialThinkingLevel: String? = nil,
@@ -93,6 +94,7 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        resetSessionHook: resetSessionHook,
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook)
     let vm = await MainActor.run {
@@ -199,6 +201,7 @@ private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
+    var resetSessionKeys: [String] = []
     var sentRunIds: [String] = []
     var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
@@ -211,6 +214,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let resetSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
 
@@ -221,12 +225,14 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil)
     {
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.resetSessionHook = resetSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -301,6 +307,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
+    func resetSession(sessionKey: String) async throws {
+        await self.state.resetSessionKeysAppend(sessionKey)
+        if let resetSessionHook = self.resetSessionHook {
+            try await resetSessionHook(sessionKey)
+        }
+    }
+
     func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
         await self.state.patchedThinkingLevelsAppend(thinkingLevel)
         if let setSessionThinkingHook = self.setSessionThinkingHook {
@@ -336,6 +349,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     func patchedThinkingLevels() async -> [String] {
         await self.state.patchedThinkingLevels
     }
+
+    func resetSessionKeys() async -> [String] {
+        await self.state.resetSessionKeys
+    }
 }
 
 extension TestChatTransportState {
@@ -369,6 +386,10 @@ extension TestChatTransportState {
 
     fileprivate func patchedThinkingLevelsAppend(_ v: String) {
         self.patchedThinkingLevels.append(v)
+    }
+
+    fileprivate func resetSessionKeysAppend(_ v: String) {
+        self.resetSessionKeys.append(v)
     }
 }
 
@@ -590,6 +611,36 @@ extension TestChatTransportState {
 
         let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
         #expect(keys == ["main", "custom"])
+    }
+
+    @Test func resetTriggerResetsSessionAndReloadsHistory() async throws {
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "before reset", timestamp: 1),
+            ])
+        let after = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "after reset", timestamp: 2),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [before, after])
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial history loaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "before reset" }
+        }
+
+        await MainActor.run {
+            vm.input = "/new"
+            vm.send()
+        }
+
+        try await waitUntil("reset called") {
+            await transport.resetSessionKeys() == ["main"]
+        }
+        try await waitUntil("history reloaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "after reset" }
+        }
+        #expect(await transport.lastSentRunId() == nil)
     }
 
     @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {

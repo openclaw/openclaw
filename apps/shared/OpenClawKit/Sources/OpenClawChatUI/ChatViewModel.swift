@@ -365,10 +365,19 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        if Self.resetTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performReset()
+            return
+        }
+
         let sessionKey = self.sessionKey
 
         guard self.healthOK else {
@@ -496,6 +505,22 @@ public final class OpenClawChatViewModel {
         guard next != self.sessionKey else { return }
         self.sessionKey = next
         self.modelSelectionID = Self.defaultModelSelectionID
+        await self.bootstrap()
+    }
+
+    private func performReset() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+
+        do {
+            try await self.transport.resetSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = error.localizedDescription
+            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
         await self.bootstrap()
     }
 
