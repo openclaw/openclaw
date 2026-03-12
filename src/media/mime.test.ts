@@ -88,7 +88,10 @@ describe("mime detection", () => {
     // file-type misclassifies lowercase m4a as video/mp4; our fix corrects to audio/mp4
     { brand: "m4a ", expected: "audio/mp4", description: "M4A audio (lowercase)" },
     { brand: "M4B ", expected: "audio/mp4", description: "M4B audiobook" },
+    { brand: "M4P ", expected: "audio/mp4", description: "M4P protected audio" },
+    { brand: "M4R ", expected: "audio/mp4", description: "M4R ringtone" },
     { brand: "F4A ", expected: "audio/mp4", description: "F4A Flash audio" },
+    { brand: "F4B ", expected: "audio/mp4", description: "F4B Flash audiobook" },
     { brand: "mp41", expected: "video/mp4", description: "MP4v1 video" },
     { brand: "isom", expected: "video/mp4", description: "ISO Base Media" },
     { brand: "avc1", expected: "video/mp4", description: "AVC video" },
