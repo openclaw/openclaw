@@ -31,8 +31,21 @@ import {
   normalizeRequiredName,
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
+import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+/**
+ * Buffer added on top of the per-job timeout when deciding whether a
+ * `runningAtMs` marker is stuck.  Keeps the threshold close to the job's
+ * actual timeout so locks don't linger for hours after a crash while still
+ * giving legitimate long-running executions headroom.
+ */
+const STUCK_RUN_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fallback stuck-run threshold for jobs whose timeout resolver returns
+ * `undefined` (e.g. agent-turn jobs with `timeoutSeconds <= 0`).
+ */
+const STUCK_RUN_FALLBACK_MS = 30 * 60 * 1000; // 30 minutes
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
@@ -368,13 +381,18 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   }
 
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
-    state.deps.log.warn(
-      { jobId: job.id, runningAtMs: runningAt },
-      "cron: clearing stuck running marker",
-    );
-    job.state.runningAtMs = undefined;
-    changed = true;
+  if (typeof runningAt === "number") {
+    const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+    const stuckThresholdMs =
+      typeof jobTimeoutMs === "number" ? jobTimeoutMs + STUCK_RUN_BUFFER_MS : STUCK_RUN_FALLBACK_MS;
+    if (nowMs - runningAt > stuckThresholdMs) {
+      state.deps.log.warn(
+        { jobId: job.id, runningAtMs: runningAt, stuckThresholdMs },
+        "cron: clearing stuck running marker",
+      );
+      job.state.runningAtMs = undefined;
+      changed = true;
+    }
   }
 
   return { changed, skip: false };
