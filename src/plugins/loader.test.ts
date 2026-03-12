@@ -1443,7 +1443,98 @@ describe("loadOpenClawPlugins", () => {
     const subpaths = __testing.listPluginSdkExportedSubpaths();
     expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
+    // regression #35869: keyed-async-queue must be in the scoped alias list
+    expect(subpaths).toContain("keyed-async-queue");
     expect(subpaths).not.toContain("root-alias");
+  });
+
+  it("resolvePluginSdkScopedAliasMap includes openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
+    const aliasMap = __testing.resolvePluginSdkScopedAliasMap();
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toBeTruthy();
+  });
+
+  it("resolves keyed-async-queue.js when loader runs from dist, not as subpath of index.js (regression #35869)", () => {
+    // Reproduces the v2026.3.2 failure mode: jiti resolved `openclaw/plugin-sdk/keyed-async-queue`
+    // as `/dist/plugin-sdk/index.js/keyed-async-queue` because the root alias pointed to index.js
+    // and there was no explicit scoped alias. Verify the direct file-system resolution works from
+    // a production dist/ loader path — i.e., it finds the keyed-async-queue.js file, not index.js.
+    const { root, distFile } = createPluginSdkAliasFixture({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+      srcBody: "module.exports = {};\n",
+      distBody: "module.exports = { KeyedAsyncQueue: function() {} };\n",
+    });
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "keyed-async-queue.ts",
+      distFile: "keyed-async-queue.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    // Must resolve to dist/plugin-sdk/keyed-async-queue.js, not anything containing index.js
+    expect(resolved).toBe(distFile);
+    expect(resolved).not.toContain("index.js");
+  });
+
+  it("generic fallback populates keyed-async-queue, matrix, and account-id when export-map discovery returns empty (regression #35869)", () => {
+    // Reproduces the failure mode where listPluginSdkExportedSubpaths() returns [] (e.g.,
+    // package.json exports unavailable in non-standard production layouts). Passing subpaths:[]
+    // bypasses discovery and forces the directory-scan fallback, proving it covers all
+    // critical Matrix-plugin imports — not just keyed-async-queue alone.
+    const root = makeTempDir();
+    const pluginSdkDir = path.join(root, "dist", "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    // anchor file + the three subpaths the Matrix plugin imports
+    for (const subpath of ["core", "keyed-async-queue", "matrix", "account-id"]) {
+      fs.writeFileSync(path.join(pluginSdkDir, `${subpath}.js`), "module.exports = {};\n");
+    }
+    // a test file that must be excluded by the scan filter
+    fs.writeFileSync(path.join(pluginSdkDir, "core.test.js"), "module.exports = {};\n");
+
+    const aliasMap = __testing.resolvePluginSdkScopedAliasMap({
+      subpaths: [],
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toBeTruthy();
+    expect(aliasMap["openclaw/plugin-sdk/matrix"]).toBeTruthy();
+    expect(aliasMap["openclaw/plugin-sdk/account-id"]).toBeTruthy();
+    // path must point to the actual subpath file, not index.js
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).toContain("keyed-async-queue.js");
+    expect(aliasMap["openclaw/plugin-sdk/keyed-async-queue"]).not.toContain("index.js");
+    // test files must be excluded from fallback scan
+    expect(aliasMap["openclaw/plugin-sdk/core.test"]).toBeUndefined();
+  });
+
+  it("loads bundled plugin that imports openclaw/plugin-sdk/keyed-async-queue (regression #35869)", () => {
+    const pluginDir = makeTempDir();
+    writePlugin({
+      id: "keyed-queue-consumer",
+      filename: "keyed-queue-consumer.cjs",
+      body: `
+const { KeyedAsyncQueue } = require("openclaw/plugin-sdk/keyed-async-queue");
+module.exports = {
+  id: "keyed-queue-consumer",
+  register() {
+    void new KeyedAsyncQueue();
+  },
+};`,
+      dir: pluginDir,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: pluginDir,
+      config: {
+        plugins: {
+          allow: ["keyed-queue-consumer"],
+          entries: { "keyed-queue-consumer": { enabled: true } },
+        },
+      },
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "keyed-queue-consumer");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.error).toBeUndefined();
   });
 
   it("falls back to src plugin-sdk alias when dist is missing in production", () => {
