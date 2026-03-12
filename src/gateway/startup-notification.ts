@@ -38,8 +38,9 @@ export function isStartupNotificationEnabled(config?: GatewayStartupNotification
 
 /**
  * Send startup notification to a single target
+ * Exported for testing purposes
  */
-async function sendNotificationToTarget(params: {
+export async function sendNotificationToTarget(params: {
   cfg: OpenClawConfig;
   target: GatewayStartupNotificationTarget;
   message: string;
