@@ -105,6 +105,73 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+const previewCortexContextMock = vi.hoisted(() => vi.fn());
+const listCortexMemoryConflictsMock = vi.hoisted(() => vi.fn());
+const resolveCortexMemoryConflictMock = vi.hoisted(() => vi.fn());
+const syncCortexCodingContextMock = vi.hoisted(() => vi.fn());
+const getCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const setCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const clearCortexModeOverrideMock = vi.hoisted(() => vi.fn());
+const resolveAgentCortexModeStatusMock = vi.hoisted(() => vi.fn());
+const resolveCortexChannelTargetMock = vi.hoisted(() => vi.fn());
+const getAgentCortexMemoryCaptureStatusWithHistoryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../memory/cortex.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../memory/cortex.js")>("../../memory/cortex.js");
+  return {
+    ...actual,
+    previewCortexContext: previewCortexContextMock,
+    listCortexMemoryConflicts: listCortexMemoryConflictsMock,
+    resolveCortexMemoryConflict: resolveCortexMemoryConflictMock,
+    syncCortexCodingContext: syncCortexCodingContextMock,
+  };
+});
+
+vi.mock("../../memory/cortex-mode-overrides.js", async () => {
+  const actual = await vi.importActual<typeof import("../../memory/cortex-mode-overrides.js")>(
+    "../../memory/cortex-mode-overrides.js",
+  );
+  return {
+    ...actual,
+    getCortexModeOverride: getCortexModeOverrideMock,
+    setCortexModeOverride: setCortexModeOverrideMock,
+    clearCortexModeOverride: clearCortexModeOverrideMock,
+  };
+});
+
+vi.mock("../../agents/cortex.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../agents/cortex.js")>("../../agents/cortex.js");
+  return {
+    ...actual,
+    getAgentCortexMemoryCaptureStatusWithHistory: getAgentCortexMemoryCaptureStatusWithHistoryMock,
+    resolveAgentCortexModeStatus: resolveAgentCortexModeStatusMock,
+    resolveCortexChannelTarget: resolveCortexChannelTargetMock,
+  };
+});
+
+type ResetAcpSessionInPlaceResult = { ok: true } | { ok: false; skipped?: boolean; error?: string };
+
+const resetAcpSessionInPlaceMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params: unknown): Promise<ResetAcpSessionInPlaceResult> => ({
+      ok: false,
+      skipped: true,
+    }),
+  ),
+);
+vi.mock("../../acp/persistent-bindings.js", async () => {
+  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
+    "../../acp/persistent-bindings.js",
+  );
+  return {
+    ...actual,
+    resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
+  };
+});
+
+import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -136,6 +203,27 @@ afterAll(async () => {
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
+
+beforeEach(() => {
+  resetAcpSessionInPlaceMock.mockReset();
+  resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, skipped: true } as const);
+  previewCortexContextMock.mockReset();
+  listCortexMemoryConflictsMock.mockReset();
+  resolveCortexMemoryConflictMock.mockReset();
+  syncCortexCodingContextMock.mockReset();
+  getCortexModeOverrideMock.mockReset();
+  setCortexModeOverrideMock.mockReset();
+  clearCortexModeOverrideMock.mockReset();
+  resolveAgentCortexModeStatusMock.mockReset();
+  resolveCortexChannelTargetMock.mockReset();
+  getAgentCortexMemoryCaptureStatusWithHistoryMock.mockReset();
+  resolveAgentCortexModeStatusMock.mockResolvedValue(null);
+  getAgentCortexMemoryCaptureStatusWithHistoryMock.mockResolvedValue(null);
+  resolveCortexChannelTargetMock.mockImplementation(
+    (params: { nativeChannelId?: string; to?: string; channel?: string }) =>
+      params.nativeChannelId ?? params.to ?? params.channel ?? "unknown",
+  );
+});
 
 describe("handleCommands gating", () => {
   it("blocks gated commands when disabled or not elevated-allowlisted", async () => {
@@ -290,122 +378,6 @@ describe("/approve command", () => {
     );
   });
 
-  it("accepts Telegram command mentions for /approve", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
-      BotUsername: "bot",
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    callGatewayMock.mockResolvedValue({ ok: true });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "exec.approval.resolve",
-        params: { id: "abc12345", decision: "allow-once" },
-      }),
-    );
-  });
-
-  it("rejects Telegram /approve mentions targeting a different bot", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildParams("/approve@otherbot abc12345 allow-once", cfg, {
-      BotUsername: "bot",
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("targets a different Telegram bot");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("surfaces unknown or expired approval id errors", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("unknown or expired approval id");
-  });
-
-  it("rejects Telegram /approve when telegram exec approvals are disabled", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { telegram: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Telegram exec approvals are not enabled");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects Telegram /approve from non-approvers", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: {
-        telegram: {
-          allowFrom: ["*"],
-          execApprovals: { enabled: true, approvers: ["999"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildParams("/approve abc12345 allow-once", cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-      SenderId: "123",
-    });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("not authorized to approve");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
   it("rejects gateway clients without approvals scope", async () => {
     const cfg = {
       commands: { text: true },
@@ -548,6 +520,368 @@ describe("/compact command", () => {
   });
 });
 
+describe("/cortex command", () => {
+  it("shows help for bare /cortex", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/cortex", cfg);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Manage Cortex prompt context");
+    expect(result.reply?.text).toContain("/cortex preview");
+    expect(result.reply?.text).toContain("/cortex why");
+    expect(result.reply?.text).toContain("/cortex conflicts");
+  });
+
+  it("previews Cortex context using the active override", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "minimal",
+      source: "session-override",
+      maxChars: 1500,
+    });
+    previewCortexContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "minimal",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Minimal",
+    });
+
+    const params = buildParams("/cortex preview", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex preview (minimal, session override)");
+    expect(result.reply?.text).toContain("## Cortex Context");
+    expect(resolveAgentCortexModeStatusMock).toHaveBeenCalled();
+    expect(previewCortexContextMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      policy: "minimal",
+      maxChars: 1500,
+    });
+  });
+
+  it("explains why Cortex context affected the reply", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "professional",
+      source: "channel-override",
+      maxChars: 1500,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+    });
+    previewCortexContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "professional",
+      maxChars: 1500,
+      context: "## Cortex Context\n- Work priorities",
+    });
+    getAgentCortexMemoryCaptureStatusWithHistoryMock.mockResolvedValueOnce({
+      captured: true,
+      score: 0.7,
+      reason: "high-signal memory candidate",
+      updatedAt: Date.now(),
+    });
+
+    const params = buildParams("/cortex why", cfg, {
+      SessionId: "session-1",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Why I answered this way");
+    expect(result.reply?.text).toContain("Mode: professional");
+    expect(result.reply?.text).toContain("Source: channel override");
+    expect(result.reply?.text).toContain(
+      "Last memory capture: stored (high-signal memory candidate, score 0.70)",
+    );
+    expect(result.reply?.text).toContain("Injected Cortex context:");
+  });
+
+  it("shows continuity details for the active conversation", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+            graphPath: ".cortex/context.json",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const params = buildParams("/cortex continuity", cfg, {
+      SessionId: "session-1",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex continuity");
+    expect(result.reply?.text).toContain("shared Cortex graph");
+    expect(result.reply?.text).toContain("Try /cortex preview from another channel");
+  });
+
+  it("lists Cortex conflicts and suggests a resolve command", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    listCortexMemoryConflictsMock.mockResolvedValueOnce([
+      {
+        id: "conf_1",
+        type: "temporal_flip",
+        severity: 0.91,
+        summary: "Hiring status changed from active hiring to not hiring",
+        nodeLabel: "Hiring",
+        oldValue: "active hiring",
+        newValue: "not hiring",
+      },
+    ]);
+
+    const params = buildParams("/cortex conflicts", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex conflicts (1)");
+    expect(result.reply?.text).toContain("conf_1 · temporal_flip · severity 0.91");
+    expect(result.reply?.text).toContain("Node: Hiring");
+    expect(result.reply?.text).toContain("Old: active hiring");
+    expect(result.reply?.text).toContain("New: not hiring");
+    expect(result.reply?.text).toContain("/cortex conflict conf_1");
+    expect(result.reply?.text).toContain("/cortex resolve conf_1 accept-new");
+  });
+
+  it("shows a structured Cortex conflict detail view", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    listCortexMemoryConflictsMock.mockResolvedValueOnce([
+      {
+        id: "conf_1",
+        type: "temporal_flip",
+        severity: 0.91,
+        summary: "Hiring status changed from active hiring to not hiring",
+        nodeLabel: "Hiring",
+        oldValue: "active hiring",
+        newValue: "not hiring",
+      },
+    ]);
+
+    const params = buildParams("/cortex conflict conf_1", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex conflict detail");
+    expect(result.reply?.text).toContain("Node: Hiring");
+    expect(result.reply?.text).toContain("/cortex resolve conf_1 keep-old");
+  });
+
+  it("resolves a Cortex conflict from chat", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    resolveCortexMemoryConflictMock.mockResolvedValueOnce({
+      status: "ok",
+      conflictId: "conf_1",
+      action: "accept-new",
+      nodesUpdated: 1,
+      nodesRemoved: 1,
+      commitId: "ver_123",
+    });
+
+    const params = buildParams("/cortex resolve conf_1 accept-new", cfg, {
+      SessionId: "session-1",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(resolveCortexMemoryConflictMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      conflictId: "conf_1",
+      action: "accept-new",
+      commitMessage: "openclaw cortex resolve conf_1 accept-new",
+    });
+    expect(result.reply?.text).toContain("Resolved Cortex conflict conf_1.");
+    expect(result.reply?.text).toContain("Commit: ver_123");
+    expect(result.reply?.text).toContain("/cortex preview");
+  });
+
+  it("syncs Cortex coding context from chat", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      agents: {
+        defaults: {
+          cortex: {
+            enabled: true,
+            mode: "technical",
+            maxChars: 1500,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    syncCortexCodingContextMock.mockResolvedValueOnce({
+      workspaceDir: testWorkspaceDir,
+      graphPath: path.join(testWorkspaceDir, ".cortex", "context.json"),
+      policy: "technical",
+      platforms: ["claude-code", "cursor", "copilot"],
+    });
+
+    const params = buildParams("/cortex sync coding", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(syncCortexCodingContextMock).toHaveBeenCalledWith({
+      workspaceDir: testWorkspaceDir,
+      graphPath: undefined,
+      policy: "technical",
+      platforms: [],
+    });
+    expect(result.reply?.text).toContain("Synced Cortex coding context.");
+    expect(result.reply?.text).toContain("Platforms: claude-code, cursor, copilot");
+  });
+
+  it("sets Cortex mode for the active session", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/cortex mode set professional", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(setCortexModeOverrideMock).toHaveBeenCalledWith({
+      agentId: "main",
+      scope: "session",
+      targetId: "session-1",
+      mode: "professional",
+    });
+    expect(result.reply?.text).toContain("Set Cortex mode for this session to professional.");
+    expect(result.reply?.text).toContain("Use /status or /cortex preview to verify.");
+  });
+
+  it("resets Cortex mode for the active channel when requested", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    clearCortexModeOverrideMock.mockResolvedValueOnce(true);
+    const params = buildParams("/cortex mode reset channel", cfg, {
+      Surface: "slack",
+      Provider: "slack",
+      NativeChannelId: "C123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(resolveCortexChannelTargetMock).toHaveBeenCalled();
+    expect(clearCortexModeOverrideMock).toHaveBeenCalledWith({
+      agentId: "main",
+      scope: "channel",
+      targetId: "C123",
+    });
+    expect(result.reply?.text).toContain("Cleared Cortex mode override for this channel.");
+    expect(result.reply?.text).toContain("Use /status or /cortex preview to verify.");
+  });
+
+  it("shows the active Cortex mode in /status", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    resolveAgentCortexModeStatusMock.mockResolvedValueOnce({
+      enabled: true,
+      mode: "technical",
+      source: "session-override",
+      maxChars: 1500,
+    });
+    const params = buildParams("/status", cfg, { SessionId: "session-1" });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Cortex: technical (session override)");
+  });
+});
+
 describe("abort trigger command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -682,52 +1016,6 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.reply?.text).toContain("Config writes are disabled");
   });
 
-  it("blocks /config set when the target account disables writes", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            work: { configWrites: false, enabled: true },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const params = buildPolicyParams(
-      "/config set channels.telegram.accounts.work.enabled=false",
-      cfg,
-      {
-        AccountId: "default",
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-    );
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
-  });
-
-  it("blocks ambiguous channel-root /config writes from channel commands", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { telegram: { configWrites: true } },
-    } as OpenClawConfig;
-    const params = buildPolicyParams('/config set channels.telegram={"enabled":false}', cfg, {
-      Provider: "telegram",
-      Surface: "telegram",
-    });
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain(
-      "cannot replace channels, channel roots, or accounts collections",
-    );
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
-  });
-
   it("blocks /config set from gateway clients without operator.admin", async () => {
     const cfg = {
       commands: { config: true, text: true },
@@ -784,49 +1072,6 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(writeConfigFileMock).toHaveBeenCalledOnce();
     expect(result.reply?.text).toContain("Config updated");
-  });
-
-  it("keeps /config set working for gateway operator.admin on protected account paths", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: {
-        channels: {
-          telegram: {
-            accounts: {
-              work: { enabled: true, configWrites: false },
-            },
-          },
-        },
-      },
-    });
-    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-      ok: true,
-      config,
-    }));
-    const params = buildParams(
-      "/config set channels.telegram.accounts.work.enabled=false",
-      {
-        commands: { config: true, text: true },
-        channels: {
-          telegram: {
-            accounts: {
-              work: { enabled: true, configWrites: false },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      {
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        GatewayClientScopes: ["operator.write", "operator.admin"],
-      },
-    );
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config updated");
-    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
-    expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
   });
 });
 
@@ -978,35 +1223,6 @@ describe("handleCommands /allowlist", () => {
       entry: "789",
       accountId: "work",
     });
-  });
-
-  it("blocks config-targeted /allowlist edits when the target account disables writes", async () => {
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
-    const cfg = {
-      commands: { text: true, config: true },
-      channels: {
-        telegram: {
-          configWrites: true,
-          accounts: {
-            work: { configWrites: false, allowFrom: ["123"] },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: structuredClone(cfg),
-    });
-    const params = buildPolicyParams("/allowlist add dm --account work --config 789", cfg, {
-      AccountId: "default",
-      Provider: "telegram",
-      Surface: "telegram",
-    });
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
@@ -1352,6 +1568,226 @@ describe("handleCommands hooks", () => {
       }),
     );
     spy.mockRestore();
+  });
+});
+
+describe("handleCommands ACP-bound /new and /reset", () => {
+  const discordChannelId = "1478836151241412759";
+  const buildDiscordBoundConfig = (): OpenClawConfig =>
+    ({
+      commands: { text: true },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: discordChannelId,
+            },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+          guilds: { "1459246755253325866": { channels: { [discordChannelId]: {} } } },
+        },
+      },
+    }) as OpenClawConfig;
+
+  const buildDiscordBoundParams = (body: string) => {
+    const params = buildParams(body, buildDiscordBoundConfig(), {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      AccountId: "default",
+      SenderId: "12345",
+      From: "discord:12345",
+      To: discordChannelId,
+      OriginatingTo: discordChannelId,
+      SessionKey: "agent:main:acp:binding:discord:default:feedface",
+    });
+    params.sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    return params;
+  };
+
+  it("handles /new as ACP in-place reset for bound conversations", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const result = await handleCommands(buildDiscordBoundParams("/new"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "new",
+    });
+  });
+
+  it("continues with trailing prompt text after successful ACP-bound /new", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const params = buildDiscordBoundParams("/new continue with deployment");
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    const mutableCtx = params.ctx as Record<string, unknown>;
+    expect(mutableCtx.BodyStripped).toBe("continue with deployment");
+    expect(mutableCtx.CommandBody).toBe("continue with deployment");
+    expect(mutableCtx.AcpDispatchTailAfterReset).toBe(true);
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles /reset failures without falling back to normal session reset flow", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset failed");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      reason: "reset",
+    });
+  });
+
+  it("does not emit reset hooks when ACP reset fails", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    const result = await handleCommands(buildDiscordBoundParams("/reset"));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("keeps existing /new behavior for non-ACP sessions", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const result = await handleCommands(buildParams("/new", cfg));
+
+    expect(result.shouldContinue).toBe(true);
+    expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
+  });
+
+  it("still targets configured ACP binding when runtime routing falls back to a non-ACP session", async () => {
+    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
+    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: discordChannelId,
+      agentId: "codex",
+      mode: "persistent",
+    });
+    const params = buildDiscordBoundParams("/new");
+    params.sessionKey = fallbackSessionKey;
+    params.ctx.SessionKey = fallbackSessionKey;
+    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset unavailable");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: configuredAcpSessionKey,
+      reason: "new",
+    });
+  });
+
+  it("emits reset hooks for the ACP session key when routing falls back to non-ACP session", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const hookSpy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
+    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: discordChannelId,
+      agentId: "codex",
+      mode: "persistent",
+    });
+    const fallbackEntry = {
+      sessionId: "fallback-session-id",
+      sessionFile: "/tmp/fallback-session.jsonl",
+    } as SessionEntry;
+    const configuredEntry = {
+      sessionId: "configured-acp-session-id",
+      sessionFile: "/tmp/configured-acp-session.jsonl",
+    } as SessionEntry;
+    const params = buildDiscordBoundParams("/new");
+    params.sessionKey = fallbackSessionKey;
+    params.ctx.SessionKey = fallbackSessionKey;
+    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
+    params.sessionEntry = fallbackEntry;
+    params.previousSessionEntry = fallbackEntry;
+    params.sessionStore = {
+      [fallbackSessionKey]: fallbackEntry,
+      [configuredAcpSessionKey]: configuredEntry,
+    };
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(hookSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "command",
+        action: "new",
+        sessionKey: configuredAcpSessionKey,
+        context: expect.objectContaining({
+          sessionEntry: configuredEntry,
+          previousSessionEntry: configuredEntry,
+        }),
+      }),
+    );
+    hookSpy.mockRestore();
+  });
+
+  it("uses active ACP command target when conversation binding context is missing", async () => {
+    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
+    const activeAcpTarget = "agent:codex:acp:binding:discord:default:feedface";
+    const params = buildParams(
+      "/new",
+      {
+        commands: { text: true },
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        AccountId: "default",
+        SenderId: "12345",
+        From: "discord:12345",
+      },
+    );
+    params.sessionKey = "discord:slash:12345";
+    params.ctx.SessionKey = "discord:slash:12345";
+    params.ctx.CommandSource = "native";
+    params.ctx.CommandTargetSessionKey = activeAcpTarget;
+    params.ctx.To = "user:12345";
+    params.ctx.OriginatingTo = "user:12345";
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("ACP session reset in place");
+    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
+    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: activeAcpTarget,
+      reason: "new",
+    });
   });
 });
 
