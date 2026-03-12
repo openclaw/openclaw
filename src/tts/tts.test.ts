@@ -172,7 +172,7 @@ describe("tts", () => {
   });
 
   describe("resolveOpenAITtsInstructions", () => {
-    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
+    it("keeps instructions for gpt-4o-mini-tts variants and custom endpoints", () => {
       expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
         "Speak warmly",
       );
@@ -181,6 +181,12 @@ describe("tts", () => {
       );
       expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
       expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
+      expect(
+        resolveOpenAITtsInstructions("tts-1", " Speak warmly ", "http://127.0.0.1:8880/v1"),
+      ).toBe("Speak warmly");
+      withEnv({ OPENAI_TTS_BASE_URL: "http://127.0.0.1:8880/v1" }, () => {
+        expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
+      });
       expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
     });
   });
