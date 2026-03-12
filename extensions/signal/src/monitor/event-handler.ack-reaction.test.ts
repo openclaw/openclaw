@@ -153,6 +153,34 @@ describe("Signal ACK reactions", () => {
     expect(sendReactionSignal).not.toHaveBeenCalled();
   });
 
+  it("sends ack for group when scope=group-mentions and agent is mentioned", async () => {
+    const deps = makeDeps({
+      messages: {
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { mentionPatterns: ["\\bpinky\\b"] },
+      },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      makeEvent({
+        dataMessage: {
+          message: "hey pinky what do you think?",
+          timestamp: 1700000000000,
+          groupInfo: { groupId: "grp123", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    // group-mentions with a configured pattern that matches the message → should ACK
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      "+15550001111",
+      1700000000000,
+      "👀",
+      expect.objectContaining({ groupId: "grp123" }),
+    );
+  });
+
   it("does NOT send ack when reactionLevel=minimal", async () => {
     const deps = makeDeps({
       accountOverrides: { reactionLevel: "minimal" },
