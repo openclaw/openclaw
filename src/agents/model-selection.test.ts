@@ -73,6 +73,12 @@ describe("model-selection", () => {
     });
   });
 
+  describe("modelKey", () => {
+    it("keeps canonical OpenRouter native ids without duplicating the provider", () => {
+      expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe("openrouter/hunter-alpha");
+    });
+  });
+
   describe("parseModelRef", () => {
     it("should parse full model refs", () => {
       expect(parseModelRef("anthropic/claude-3-5-sonnet", "openai")).toEqual({
@@ -752,6 +758,28 @@ describe("model-selection", () => {
       } as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
+    });
+
+    it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/hunter-alpha": {
+                params: { thinking: "high" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "openrouter",
+          model: "openrouter/hunter-alpha",
+        }),
+      ).toBe("high");
     });
 
     it("accepts per-model params.thinking=adaptive", () => {

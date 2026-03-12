@@ -273,6 +273,29 @@ describe("models list/status", () => {
     expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
   });
 
+  it("models list plain keeps canonical OpenRouter native ids", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { model: "openrouter/hunter-alpha" } },
+    });
+    const runtime = makeRuntime();
+
+    modelRegistryState.models = [
+      {
+        provider: "openrouter",
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        input: ["text"],
+        baseUrl: "https://openrouter.ai/api/v1",
+        contextWindow: 1048576,
+      },
+    ];
+    modelRegistryState.available = modelRegistryState.models;
+    await modelsListCommand({ plain: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log.mock.calls[0]?.[0]).toBe("openrouter/hunter-alpha");
+  });
+
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(
     "models list provider filter normalizes %s alias",
     async (provider) => {
