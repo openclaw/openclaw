@@ -1105,6 +1105,7 @@ export async function runEmbeddedPiAgent(
                       messageCount: -1,
                       compactedCount: -1,
                       tokenCount: compactResult.result?.tokensAfter,
+                      summary: compactResult.result?.summary,
                       sessionFile: params.sessionFile,
                     },
                     hookCtx,

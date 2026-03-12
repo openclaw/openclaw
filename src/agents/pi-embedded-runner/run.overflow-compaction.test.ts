@@ -208,12 +208,13 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       }),
     );
     expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         messageCount: -1,
         compactedCount: -1,
         tokenCount: 50,
+        summary: "engine-owned compaction",
         sessionFile: "/tmp/session.json",
-      },
+      }),
       expect.objectContaining({
         sessionKey: "test-key",
       }),
