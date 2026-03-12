@@ -756,6 +756,89 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("memory_refresh rollback failure: restored_id is null when both insert and rollback fail", async () => {
+    const existingId = "dddddddd-0000-0000-0000-000000000002";
+    const existingEntry = {
+      id: existingId,
+      text: "Memory that cannot be recovered",
+      vector: [0.1, 0.2, 0.3],
+      importance: 0.8,
+      category: "fact",
+      createdAt: 1000,
+    };
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.15, 0.25, 0.35] }],
+    }));
+    const tableDelete = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => [existingEntry]);
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({
+      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+    }));
+
+    // Both insert and rollback fail
+    const tableAdd = vi.fn(async () => {
+      throw new Error("Simulated storage failure");
+    });
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 1),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      const result = await refreshTool.execute("test-double-fail", {
+        text: "New text that will fail to insert",
+        memoryId: existingId,
+      });
+
+      expect(result.details.operation).toBe("error");
+      expect(result.details.error).toBe("insert_failed");
+      expect(result.details.success).toBe(false);
+      expect(result.details.rollbackWarning).toContain("DATA LOSS POSSIBLE");
+      // When rollback also failed, restored_id must be null — not the original ID.
+      // Callers must not be misled into thinking the row was restored.
+      expect(result.details.restored_id).toBeNull();
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
   test("memory_refresh replace inherits category and importance from existing when not provided", async () => {
     const existingId = "eeeeeeee-0000-0000-0000-000000000001";
     const existingEntry = {

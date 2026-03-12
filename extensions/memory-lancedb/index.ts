@@ -627,8 +627,10 @@ const memoryPlugin = {
             // Best-effort rollback: restore the original entry with its
             // original ID so callers are never left with a stale reference
             // to a non-existent ID (Fix 1).
+            let rollbackSucceeded = false;
             try {
               await db.storeRaw(existing);
+              rollbackSucceeded = true;
               rollbackWarning = `Insert failed; original restored with original ID ${existing.id}. Insert error: ${String(insertErr)}`;
             } catch (rollbackErr) {
               rollbackWarning = `Insert failed AND rollback failed (DATA LOSS POSSIBLE). Insert: ${String(insertErr)}. Rollback: ${String(rollbackErr)}`;
@@ -638,10 +640,13 @@ const memoryPlugin = {
               details: {
                 operation: "error",
                 error: "insert_failed",
+                success: false,
                 rollbackWarning,
-                // Always expose the restored ID so callers can verify it.
-                // When storeRaw succeeds this equals the original memoryId.
-                restored_id: existing.id,
+                // Only populate restored_id when the rollback actually succeeded.
+                // If rollback also failed, the row is gone — omit restored_id so
+                // callers are not misled into treating a failed recovery as
+                // successful.
+                ...(rollbackSucceeded ? { restored_id: existing.id } : { restored_id: null }),
               },
             };
           }
