@@ -120,6 +120,36 @@ describe("executeSendAction", () => {
     );
   });
 
+  it("throws when plugin send action returns payload status=error", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { ignored: true },
+      details: {
+        status: "error",
+        error: 'Unknown target "telegram:267407190" for iMessage.',
+      },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "imessage",
+          params: { target: "+14155592088", message: "hello" },
+          dryRun: false,
+        },
+        to: "+14155592088",
+        message: "hello",
+      }),
+    ).rejects.toThrow(/unknown target/i);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendPoll.mockResolvedValue({

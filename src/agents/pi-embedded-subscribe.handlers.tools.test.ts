@@ -487,4 +487,33 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
+
+  it("treats JSON-encoded status:error tool results as failures", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      args: { action: "send", to: "channel:123", message: "hello" },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: '{"status":"error","tool":"message","error":"Action send accepts a single destination."}',
+          },
+        ],
+      },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toHaveLength(0);
+    expect(ctx.state.pendingMessagingTexts.has("tool-m4")).toBe(false);
+  });
 });
