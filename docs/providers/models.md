@@ -35,6 +35,7 @@ model as `provider/model`.
 - [OpenCode (Zen + Go)](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
+- [Google / Gemini (API key, Vertex, Gemini CLI)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/providers/bedrock)
