@@ -85,7 +85,9 @@ describe("persistence storage discovery", () => {
     expect(artifacts.sessionStores).toHaveLength(1);
     expect(artifacts.transcripts).toHaveLength(1);
     expect(artifacts.authStores).toHaveLength(1);
-    expect(artifacts.subagentRegistryPath).toContain("subagents/runs.json");
+    expect(path.normalize(artifacts.subagentRegistryPath ?? "")).toContain(
+      path.join("subagents", "runs.json"),
+    );
     expect(artifacts.memoryDocuments.map((entry) => entry.logicalPath).toSorted()).toEqual([
       "MEMORY.md",
       "memory/2026-03-11.md",

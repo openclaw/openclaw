@@ -1,4 +1,7 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const TEST_AGENT_DIR = path.resolve("/tmp/openclaw-agent-main");
 
 const loadAuthProfileStoreSnapshotsFromPostgresMock = vi.hoisted(() =>
   vi.fn(async () => [] as Array<{ agentDir: string; store: Record<string, unknown> }>),
@@ -19,7 +22,7 @@ describe("secrets runtime snapshot postgres auth loading", () => {
   it("prefers postgres-backed auth stores when persistence backend is postgres", async () => {
     loadAuthProfileStoreSnapshotsFromPostgresMock.mockResolvedValue([
       {
-        agentDir: "/tmp/openclaw-agent-main",
+        agentDir: TEST_AGENT_DIR,
         store: {
           version: 1,
           profiles: {
@@ -42,7 +45,7 @@ describe("secrets runtime snapshot postgres auth loading", () => {
           },
         },
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
+      agentDirs: [TEST_AGENT_DIR],
     });
 
     expect(loadAuthProfileStoreSnapshotsFromPostgresMock).toHaveBeenCalledWith({
@@ -59,7 +62,7 @@ describe("secrets runtime snapshot postgres auth loading", () => {
     });
     expect(snapshot.authStores).toEqual([
       {
-        agentDir: "/tmp/openclaw-agent-main",
+        agentDir: TEST_AGENT_DIR,
         store: {
           version: 1,
           profiles: {

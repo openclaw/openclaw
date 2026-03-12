@@ -1,5 +1,8 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+const TEST_WORKSPACE_ROOT = path.resolve("/tmp/workspace");
 
 function createManagerStatus(params: {
   backend: "qmd" | "builtin";
@@ -120,7 +123,7 @@ type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 function createQmdCfg(agentId: string): OpenClawConfig {
   return {
     memory: { backend: "qmd", qmd: {} },
-    agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },
+    agents: { list: [{ id: agentId, default: true, workspace: TEST_WORKSPACE_ROOT }] },
   };
 }
 
@@ -323,7 +326,7 @@ describe("getMemorySearchManager caching", () => {
     expect(readMemoryDocumentFromPostgresMock).toHaveBeenCalledWith({
       config: cfg,
       lookupMode: "runtime",
-      workspaceRoot: "/tmp/workspace",
+      workspaceRoot: TEST_WORKSPACE_ROOT,
       logicalPath: "MEMORY.md",
     });
     expect(mockPrimary.readFile).not.toHaveBeenCalled();
@@ -391,7 +394,7 @@ describe("getMemorySearchManager caching", () => {
     expect(mockPrimary.sync).toHaveBeenCalledWith({ reason: "watch", force: true });
     expect(reconcileWorkspaceMemoryDocumentsToPostgresMock).toHaveBeenCalledWith(
       {
-        workspaceRoot: "/tmp/workspace",
+        workspaceRoot: TEST_WORKSPACE_ROOT,
         agentId: "postgres-sync",
       },
       {
