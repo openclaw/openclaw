@@ -1457,6 +1457,7 @@ describe("loadOpenClawPlugins", () => {
           allow: ["tracked-install-path"],
           installs: {
             "tracked-install-path": {
+              source: "path",
               installPath: "~/plugins/tracked-install-path",
               sourcePath: "~/plugins/tracked-install-path",
             },
