@@ -42,11 +42,6 @@ let upsertAuthProfile: typeof import("../agents/auth-profiles.js").upsertAuthPro
 type ProviderAuthConfigSnapshot = {
   auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
   agents?: { defaults?: { model?: { primary?: string } } };
-  talk?: {
-    provider?: string;
-    apiKey?: string | { source?: string; id?: string };
-    providers?: Record<string, { apiKey?: string | { source?: string; id?: string } }>;
-  };
   models?: {
     providers?: Record<
       string,
@@ -362,38 +357,6 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("does not persist talk fallback secrets when OpenAI ref onboarding starts from an empty config", async () => {
-    await withOnboardEnv("openclaw-onboard-openai-ref-no-talk-leak-", async (env) => {
-      await withEnvAsync(
-        {
-          OPENAI_API_KEY: "sk-openai-env-key", // pragma: allowlist secret
-          ELEVENLABS_API_KEY: "elevenlabs-env-key", // pragma: allowlist secret
-        },
-        async () => {
-          const cfg = await runOnboardingAndReadConfig(env, {
-            authChoice: "openai-api-key",
-            secretInputMode: "ref", // pragma: allowlist secret
-          });
-
-          expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
-          expect(cfg.talk).toBeUndefined();
-
-          const store = ensureAuthProfileStore();
-          const profile = store.profiles["openai:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENAI_API_KEY",
-            });
-          }
-        },
-      );
-    });
-  });
-
   it.each([
     {
       name: "anthropic",
@@ -479,7 +442,7 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   );
 
-  it("stores the detected env alias as keyRef for opencode ref mode", async () => {
+  it("stores the detected env alias as keyRef for both OpenCode runtime providers", async () => {
     await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
       await withEnvAsync(
         {
@@ -494,15 +457,17 @@ describe("onboard (non-interactive): provider auth", () => {
           });
 
           const store = ensureAuthProfileStore();
-          const profile = store.profiles["opencode:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENCODE_ZEN_API_KEY",
-            });
+          for (const profileId of ["opencode:default", "opencode-go:default"]) {
+            const profile = store.profiles[profileId];
+            expect(profile?.type).toBe("api_key");
+            if (profile?.type === "api_key") {
+              expect(profile.key).toBeUndefined();
+              expect(profile.keyRef).toEqual({
+                source: "env",
+                provider: "default",
+                id: "OPENCODE_ZEN_API_KEY",
+              });
+            }
           }
         },
       );

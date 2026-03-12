@@ -1,15 +1,12 @@
 # OpenClaw iOS (Super Alpha)
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
 This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
 
 ## Distribution Status
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
-- Current distribution: local/manual deploy from source via Xcode.
-- App Store flow is not part of the current internal development path.
+- Public distribution: not available.
+- Internal beta distribution: local archive + TestFlight upload via Fastlane.
+- Local/manual deploy from source via Xcode remains the default development path.
 
 ## Super-Alpha Disclaimer
 
@@ -48,6 +45,45 @@ Shortcut command (same flow + open project):
 
 ```bash
 pnpm ios:open
+```
+
+## Local Beta Release Flow
+
+Prereqs:
+
+- Xcode 16+
+- `pnpm`
+- `xcodegen`
+- `fastlane`
+- Apple account signed into Xcode for automatic signing/provisioning
+- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a beta build number or uploading to TestFlight
+
+Release behavior:
+
+- Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
+- Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
+- The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
+- Root `package.json.version` is the only version source for iOS.
+- A root version like `2026.3.10-beta.1` becomes:
+  - `CFBundleShortVersionString = 2026.3.10`
+  - `CFBundleVersion = next TestFlight build number for 2026.3.10`
+
+Archive without upload:
+
+```bash
+pnpm ios:beta:archive
+```
+
+Archive and upload to TestFlight:
+
+```bash
+pnpm ios:beta
+```
+
+If you need to force a specific build number:
+
+```bash
+pnpm ios:beta -- --build-number 7
 ```
 
 ## APNs Expectations For Local/Manual Builds
