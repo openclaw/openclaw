@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { TtsConfigSchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
@@ -199,6 +200,7 @@ export const FeishuAccountConfigSchema = z
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
+    tts: TtsConfigSchema.optional(),
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
