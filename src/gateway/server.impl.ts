@@ -9,6 +9,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
+import { attemptConfigRollback } from "../config/config-backup-restore.js";
 import {
   CONFIG_PATH,
   type OpenClawConfig,
@@ -312,9 +313,43 @@ export async function startGatewayServer(
       configSnapshot.issues.length > 0
         ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
         : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
+
+    // Attempt automatic rollback if config backup is enabled
+    const configBackupSettings = configSnapshot.config?.gateway?.configBackup;
+    const autoRollbackEnabled = configBackupSettings?.autoRollback !== false; // default true
+    if (autoRollbackEnabled) {
+      log.warn("gateway: config validation failed, attempting automatic rollback...");
+      const rollbackResult = await attemptConfigRollback(configSnapshot.path);
+      if (rollbackResult.restored) {
+        log.info(`gateway: rolled back config from ${rollbackResult.backupPath}`);
+        // Re-read config after rollback
+        configSnapshot = await readConfigFileSnapshot();
+        if (configSnapshot.valid) {
+          log.info("gateway: config rollback successful, continuing startup");
+          // Continue with the rolled-back config
+        } else {
+          // Rollback didn't help, still invalid
+          const rollbackIssues =
+            configSnapshot.issues.length > 0
+              ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join(
+                  "\n",
+                )
+              : "Unknown validation issue.";
+          throw new Error(
+            `Config still invalid after rollback from ${rollbackResult.backupPath}.\n${rollbackIssues}\nRun "${formatCliCommand("openclaw doctor")}" to repair.`,
+          );
+        }
+      } else {
+        log.warn(`gateway: rollback failed: ${rollbackResult.error}`);
+        throw new Error(
+          `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
+        );
+      }
+    } else {
+      throw new Error(
+        `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
+      );
+    }
   }
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
@@ -406,19 +441,62 @@ export async function startGatewayServer(
         freshSnapshot.issues.length > 0
           ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
           : "Unknown validation issue.";
-      throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
+
+      // Attempt automatic rollback if config backup is enabled
+      const configBackupSettings = freshSnapshot.config?.gateway?.configBackup;
+      const autoRollbackEnabled = configBackupSettings?.autoRollback !== false; // default true
+      if (autoRollbackEnabled) {
+        log.warn("gateway: config validation failed, attempting automatic rollback...");
+        const rollbackResult = await attemptConfigRollback(freshSnapshot.path);
+        if (rollbackResult.restored) {
+          log.info(`gateway: rolled back config from ${rollbackResult.backupPath}`);
+          // Re-read config after rollback
+          const rollbackSnapshot = await readConfigFileSnapshot();
+          if (rollbackSnapshot.valid) {
+            log.info("gateway: config rollback successful, continuing startup");
+            // Continue with rolled-back config
+            const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
+              rollbackSnapshot.config,
+              {
+                auth: opts.auth,
+                tailscale: opts.tailscale,
+              },
+            );
+            await activateRuntimeSecrets(startupPreflightConfig, {
+              reason: "startup",
+              activate: false,
+            });
+          } else {
+            const rollbackIssues =
+              rollbackSnapshot.issues.length > 0
+                ? formatConfigIssueLines(rollbackSnapshot.issues, "", { normalizeRoot: true }).join(
+                    "\n",
+                  )
+                : "Unknown validation issue.";
+            throw new Error(
+              `Config still invalid after rollback from ${rollbackResult.backupPath}.\n${rollbackIssues}\nRun "${formatCliCommand("openclaw doctor")}" to repair.`,
+            );
+          }
+        } else {
+          log.warn(`gateway: rollback failed: ${rollbackResult.error}`);
+          throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
+        }
+      } else {
+        throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
+      }
+    } else {
+      const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
+        freshSnapshot.config,
+        {
+          auth: opts.auth,
+          tailscale: opts.tailscale,
+        },
+      );
+      await activateRuntimeSecrets(startupPreflightConfig, {
+        reason: "startup",
+        activate: false,
+      });
     }
-    const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
-      freshSnapshot.config,
-      {
-        auth: opts.auth,
-        tailscale: opts.tailscale,
-      },
-    );
-    await activateRuntimeSecrets(startupPreflightConfig, {
-      reason: "startup",
-      activate: false,
-    });
   }
 
   cfgAtStart = loadConfig();

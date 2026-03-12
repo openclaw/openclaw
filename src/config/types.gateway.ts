@@ -135,7 +135,7 @@ export type GatewayTrustedProxyConfig = {
   userHeader: string;
   /**
    * Additional headers that MUST be present for the request to be trusted.
-   * Use this to verify the request actually came through the proxy.
+   * Use this to verify the request actually came from the proxy.
    * Example: ["x-forwarded-proto", "x-forwarded-host"]
    */
   requiredHeaders?: string[];
@@ -383,6 +383,18 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+/**
+ * Configuration for automatic config backup and rollback on gateway startup failure.
+ */
+export type GatewayConfigBackup = {
+  /** Enable automatic config backups (default: true). */
+  enabled?: boolean;
+  /** Number of backup files to keep (default: 10). */
+  keepBackups?: number;
+  /** Automatically rollback to last known good config on startup failure (default: true). */
+  autoRollback?: boolean;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -443,4 +455,10 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Configuration for automatic config backup and rollback.
+   * When enabled, the gateway automatically backs up config before changes
+   * and can rollback to a known-good backup if startup fails due to config errors.
+   */
+  configBackup?: GatewayConfigBackup;
 };
