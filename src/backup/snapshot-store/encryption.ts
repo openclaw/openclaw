@@ -20,6 +20,13 @@ type ScryptOptions = {
   maxMemoryBytes: number;
 };
 
+export type EncryptedArchivePayload = {
+  archiveSha256: string;
+  archiveBytes: number;
+  ciphertext: BackupSnapshotEnvelope["ciphertext"];
+  encryption: BackupSnapshotEnvelope["encryption"];
+};
+
 class HashPassthrough extends Transform {
   private readonly hash = crypto.createHash("sha256");
   bytes = 0;
@@ -88,7 +95,7 @@ export async function encryptArchiveToPayload(params: {
   archivePath: string;
   payloadPath: string;
   secret: string;
-}): Promise<Pick<BackupSnapshotEnvelope, "archive" | "ciphertext" | "encryption">> {
+}): Promise<EncryptedArchivePayload> {
   const salt = crypto.randomBytes(16);
   const nonce = crypto.randomBytes(NONCE_BYTES);
   const key = await deriveKey(params.secret, salt);
@@ -105,16 +112,8 @@ export async function encryptArchiveToPayload(params: {
   );
 
   return {
-    archive: {
-      format: "openclaw-backup-tar-gz",
-      archiveRoot: "",
-      createdAt: "",
-      mode: "full-host",
-      includeWorkspace: true,
-      verified: false,
-      sha256: archiveDigest.digestHex(),
-      bytes: archiveDigest.bytes,
-    },
+    archiveSha256: archiveDigest.digestHex(),
+    archiveBytes: archiveDigest.bytes,
     ciphertext: {
       sha256: ciphertextDigest.digestHex(),
       bytes: ciphertextDigest.bytes,

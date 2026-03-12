@@ -252,4 +252,40 @@ describe("workspace backup commands", () => {
       "Workspace backup source contains symbolic links",
     );
   });
+
+  it("cleans up the temp status file when the atomic rename fails", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceDir = path.join(tempHome.home, "workspace");
+    targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-target-"));
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await workspaceBackupInitCommand(runtime, { target: targetDir });
+
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (sourcePath, destPath) => {
+      if (destPath.toString() === path.join(targetDir!, "workspace", "status.json")) {
+        throw new Error("rename failed");
+      }
+      return await originalRename(sourcePath, destPath);
+    });
+
+    await expect(workspaceBackupRunCommand(runtime, {})).rejects.toThrow("rename failed");
+    const tempEntries = await fs.readdir(path.join(targetDir, "workspace"));
+    expect(
+      tempEntries.some((entry) => entry.includes("status.json") && entry.endsWith(".tmp")),
+    ).toBe(false);
+    renameSpy.mockRestore();
+  });
 });

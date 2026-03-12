@@ -8,6 +8,7 @@ import {
   type ResolvedSnapshotStoreConfig,
   type ResolvedSnapshotStoreTargetConfig,
 } from "../backup/snapshot-store/config.js";
+import type { EncryptedArchivePayload } from "../backup/snapshot-store/encryption.js";
 import { resolveInstallationId } from "../backup/snapshot-store/installation-id.js";
 import { createSnapshotStore, createSnapshotListStore } from "../backup/snapshot-store/provider.js";
 import type {
@@ -121,7 +122,7 @@ export function buildEnvelope(params: {
   verified: boolean;
   onlyConfig: boolean;
   snapshotName?: string;
-  encryption: Pick<BackupSnapshotEnvelope, "archive" | "ciphertext" | "encryption">;
+  encryption: EncryptedArchivePayload;
 }): BackupSnapshotEnvelope {
   return {
     schemaVersion: 1,
@@ -130,12 +131,14 @@ export function buildEnvelope(params: {
     createdAt: params.createdAt,
     openclawVersion: resolveRuntimeServiceVersion(),
     archive: {
-      ...params.encryption.archive,
+      format: "openclaw-backup-tar-gz",
       archiveRoot: params.archiveRoot,
       createdAt: params.archiveCreatedAt,
       mode: params.onlyConfig ? "config-only" : "full-host",
       includeWorkspace: params.includeWorkspace,
       verified: params.verified,
+      sha256: params.encryption.archiveSha256,
+      bytes: params.encryption.archiveBytes,
     },
     ciphertext: params.encryption.ciphertext,
     encryption: params.encryption.encryption,

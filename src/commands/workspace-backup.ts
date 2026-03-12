@@ -185,11 +185,23 @@ async function readWorkspaceBackupStatus(
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await fs.rename(tempPath, filePath);
+  const handle = await fs.open(tempPath, "wx", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+    });
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  try {
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function replaceDirectoryAtomically(sourcePath: string, targetPath: string): Promise<void> {

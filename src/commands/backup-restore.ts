@@ -242,6 +242,26 @@ function tryResolveExtractedConfigPath(params: {
   return path.join(getAssetExtractPath(params.extractedRoot, stateAsset), relative);
 }
 
+function tryResolveExtractedCredentialsPath(params: {
+  manifest: BackupManifest;
+  assetByKind: Map<string, BackupManifestAsset[]>;
+  extractedRoot: string;
+}): string | undefined {
+  const credentialsAsset = params.assetByKind.get("credentials")?.[0];
+  if (credentialsAsset) {
+    return getAssetExtractPath(params.extractedRoot, credentialsAsset);
+  }
+
+  const stateAsset = params.assetByKind.get("state")?.[0];
+  const oldStateDir = params.manifest.paths?.stateDir;
+  const oldOauthDir = params.manifest.paths?.oauthDir;
+  if (!stateAsset || !oldStateDir || !oldOauthDir || !isPathWithin(oldOauthDir, oldStateDir)) {
+    return undefined;
+  }
+  const relative = path.relative(oldStateDir, oldOauthDir);
+  return path.join(getAssetExtractPath(params.extractedRoot, stateAsset), relative);
+}
+
 async function loadRestoredConfig(params: {
   manifest: BackupManifest;
   assetByKind: Map<string, BackupManifestAsset[]>;
@@ -449,9 +469,12 @@ async function assertSafeWorkspaceRestoreTarget(params: {
   if (
     isUnsafeRestoreTarget(resolved, canonicalHomeDir) ||
     isPathWithin(resolved, stateDir) ||
+    isPathWithin(stateDir, resolved) ||
     resolved === configPath ||
+    isPathWithin(configPath, resolved) ||
     resolved === oauthDir ||
-    isPathWithin(resolved, oauthDir)
+    isPathWithin(resolved, oauthDir) ||
+    isPathWithin(oauthDir, resolved)
   ) {
     throw new Error(`Refusing to restore workspace to an unsafe path: ${resolved}`);
   }
@@ -523,18 +546,34 @@ export async function buildRestoreOperations(params: {
       });
     }
 
-    if (configAsset && !isPathWithin(configPath, stateDir)) {
+    const configSourcePath = !isPathWithin(configPath, stateDir)
+      ? ((configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
+        tryResolveExtractedConfigPath({
+          manifest: params.manifest,
+          assetByKind,
+          extractedRoot: params.extractedRoot,
+        }))
+      : undefined;
+    if (configSourcePath) {
       operations.push({
         kind: "config",
-        sourcePath: getAssetExtractPath(params.extractedRoot, configAsset),
+        sourcePath: configSourcePath,
         targetPath: configPath,
       });
     }
 
-    if (credentialsAsset && !isPathWithin(oauthDir, stateDir)) {
+    const credentialsSourcePath = !isPathWithin(oauthDir, stateDir)
+      ? ((credentialsAsset && getAssetExtractPath(params.extractedRoot, credentialsAsset)) ??
+        tryResolveExtractedCredentialsPath({
+          manifest: params.manifest,
+          assetByKind,
+          extractedRoot: params.extractedRoot,
+        }))
+      : undefined;
+    if (credentialsSourcePath) {
       operations.push({
         kind: "credentials",
-        sourcePath: getAssetExtractPath(params.extractedRoot, credentialsAsset),
+        sourcePath: credentialsSourcePath,
         targetPath: oauthDir,
       });
     }

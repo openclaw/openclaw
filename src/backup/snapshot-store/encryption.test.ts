@@ -29,14 +29,25 @@ describe("snapshot backup encryption", () => {
       payloadPath,
       secret: "test-secret", // pragma: allowlist secret
     });
-    encrypted.archive.archiveRoot = "fake-root";
-    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
 
     await decryptPayloadToArchive({
       payloadPath,
       archivePath: restoredPath,
       secret: "test-secret", // pragma: allowlist secret
-      envelope: encrypted,
+      envelope: {
+        archive: {
+          format: "openclaw-backup-tar-gz",
+          archiveRoot: "fake-root",
+          createdAt: "2026-03-09T00:00:00.000Z",
+          mode: "full-host",
+          includeWorkspace: true,
+          verified: false,
+          sha256: encrypted.archiveSha256,
+          bytes: encrypted.archiveBytes,
+        },
+        ciphertext: encrypted.ciphertext,
+        encryption: encrypted.encryption,
+      },
     });
 
     expect(await fs.readFile(restoredPath, "utf8")).toBe("backup archive test\n");
@@ -54,16 +65,26 @@ describe("snapshot backup encryption", () => {
       payloadPath,
       secret: "test-secret", // pragma: allowlist secret
     });
-    encrypted.archive.archiveRoot = "fake-root";
-    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
-    encrypted.archive.sha256 = "bad-sha";
 
     await expect(
       decryptPayloadToArchive({
         payloadPath,
         archivePath: restoredPath,
         secret: "test-secret", // pragma: allowlist secret
-        envelope: encrypted,
+        envelope: {
+          archive: {
+            format: "openclaw-backup-tar-gz",
+            archiveRoot: "fake-root",
+            createdAt: "2026-03-09T00:00:00.000Z",
+            mode: "full-host",
+            includeWorkspace: true,
+            verified: false,
+            sha256: "bad-sha",
+            bytes: encrypted.archiveBytes,
+          },
+          ciphertext: encrypted.ciphertext,
+          encryption: encrypted.encryption,
+        },
       }),
     ).rejects.toThrow("Decrypted archive checksum mismatch.");
     await expect(fs.access(restoredPath)).rejects.toThrow();
@@ -82,16 +103,33 @@ describe("snapshot backup encryption", () => {
       payloadPath,
       secret: "test-secret", // pragma: allowlist secret
     });
-    encrypted.archive.archiveRoot = "fake-root";
-    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
-    encrypted.encryption.keyDerivation.cost = encrypted.encryption.keyDerivation.cost + 1;
+    const envelope = {
+      archive: {
+        format: "openclaw-backup-tar-gz" as const,
+        archiveRoot: "fake-root",
+        createdAt: "2026-03-09T00:00:00.000Z",
+        mode: "full-host" as const,
+        includeWorkspace: true,
+        verified: false,
+        sha256: encrypted.archiveSha256,
+        bytes: encrypted.archiveBytes,
+      },
+      ciphertext: encrypted.ciphertext,
+      encryption: {
+        ...encrypted.encryption,
+        keyDerivation: {
+          ...encrypted.encryption.keyDerivation,
+          cost: encrypted.encryption.keyDerivation.cost + 1,
+        },
+      },
+    };
 
     await expect(
       decryptPayloadToArchive({
         payloadPath,
         archivePath: restoredPath,
         secret: "test-secret", // pragma: allowlist secret
-        envelope: encrypted,
+        envelope,
       }),
     ).rejects.toThrow("Invalid snapshot envelope: unsupported encryption.keyDerivation.cost.");
   });
@@ -108,16 +146,30 @@ describe("snapshot backup encryption", () => {
       payloadPath,
       secret: "test-secret", // pragma: allowlist secret
     });
-    encrypted.archive.archiveRoot = "fake-root";
-    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
-    encrypted.encryption.authTagBase64Url = Buffer.alloc(8).toString("base64url");
+    const envelope = {
+      archive: {
+        format: "openclaw-backup-tar-gz" as const,
+        archiveRoot: "fake-root",
+        createdAt: "2026-03-09T00:00:00.000Z",
+        mode: "full-host" as const,
+        includeWorkspace: true,
+        verified: false,
+        sha256: encrypted.archiveSha256,
+        bytes: encrypted.archiveBytes,
+      },
+      ciphertext: encrypted.ciphertext,
+      encryption: {
+        ...encrypted.encryption,
+        authTagBase64Url: Buffer.alloc(8).toString("base64url"),
+      },
+    };
 
     await expect(
       decryptPayloadToArchive({
         payloadPath,
         archivePath: restoredPath,
         secret: "test-secret", // pragma: allowlist secret
-        envelope: encrypted,
+        envelope,
       }),
     ).rejects.toThrow(
       "Invalid snapshot envelope: encryption.authTagBase64Url must decode to 16 bytes.",

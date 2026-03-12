@@ -565,6 +565,105 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects workspace restore targets that would replace a parent of the state directory", async () => {
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = path.join(tempHome.home, "projects", ".openclaw");
+    const workspaceTarget = path.join(tempHome.home, "projects");
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await fs.writeFile(
+        path.join(tempHome.home, ".openclaw", "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: workspaceTarget,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(rootDir, "assets", "workspace"), { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [workspaceTarget],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: workspaceTarget,
+                archivePath: "archive-root/assets/workspace",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Refusing to restore workspace to an unsafe path");
+    } finally {
+      if (originalStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects workspace restore targets that would replace a parent of the oauth directory", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const oauthDir = path.join(tempHome.home, "shared", "oauth");
+    const workspaceTarget = path.join(tempHome.home, "shared");
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+      await fs.mkdir(path.join(rootDir, "assets", "workspace"), { recursive: true });
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [workspaceTarget],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: workspaceTarget,
+                archivePath: "archive-root/assets/workspace",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow("Refusing to restore workspace to an unsafe path");
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");
@@ -675,6 +774,82 @@ describe("backup restore", () => {
       expect(restored.mode).toBe("config-only");
       expect(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8")).toContain('"backup"');
     } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores external config paths from state-backed full-host archives", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-full-config-"));
+    const externalConfigPath = path.join(tempHome.home, "external", "openclaw.json");
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          backup: {
+            target: path.join(tempHome.home, "backups"),
+          },
+        }),
+        "utf8",
+      );
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      process.env.OPENCLAW_CONFIG_PATH = externalConfigPath;
+      await fs.rm(path.join(stateDir, "openclaw.json"), { force: true });
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+      });
+
+      expect(await fs.readFile(externalConfigPath, "utf8")).toContain('"backup"');
+    } finally {
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores external oauth dirs from state-backed full-host archives", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const defaultOauthDir = path.join(stateDir, "credentials");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-full-oauth-"));
+    const externalOauthDir = path.join(tempHome.home, "external-oauth");
+    try {
+      await fs.mkdir(defaultOauthDir, { recursive: true });
+      await fs.writeFile(path.join(defaultOauthDir, "token.json"), '{"token":"abc"}\n', "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      process.env.OPENCLAW_OAUTH_DIR = externalOauthDir;
+      await fs.rm(defaultOauthDir, { recursive: true, force: true });
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+      });
+
+      expect(await fs.readFile(path.join(externalOauthDir, "token.json"), "utf8")).toContain(
+        '"token":"abc"',
+      );
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
