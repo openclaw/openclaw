@@ -20,6 +20,8 @@ const webhookStats = {
   errors: 0,
   lastReceived: 0,
 };
+const FIRST_VISIBLE_SAMPLE_LIMIT = 50;
+const firstVisibleSamples: number[] = [];
 
 let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -36,6 +38,35 @@ function loadCommandPollBackoffRuntime() {
 
 function markActivity() {
   lastActivityAt = Date.now();
+}
+
+function recordFirstVisibleSample(durationMs: number) {
+  firstVisibleSamples.push(durationMs);
+  if (firstVisibleSamples.length > FIRST_VISIBLE_SAMPLE_LIMIT) {
+    firstVisibleSamples.splice(0, firstVisibleSamples.length - FIRST_VISIBLE_SAMPLE_LIMIT);
+  }
+}
+
+function buildFirstVisibleSummary():
+  | {
+      sampleCount: number;
+      avgMs: number;
+      p95Ms: number;
+      maxMs: number;
+    }
+  | undefined {
+  if (firstVisibleSamples.length === 0) {
+    return undefined;
+  }
+  const ordered = [...firstVisibleSamples].toSorted((left, right) => left - right);
+  const total = ordered.reduce((sum, value) => sum + value, 0);
+  const p95Index = Math.min(ordered.length - 1, Math.max(0, Math.ceil(ordered.length * 0.95) - 1));
+  return {
+    sampleCount: ordered.length,
+    avgMs: Math.round(total / ordered.length),
+    p95Ms: ordered[p95Index] ?? ordered[ordered.length - 1] ?? 0,
+    maxMs: ordered[ordered.length - 1] ?? 0,
+  };
 }
 
 export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
@@ -219,6 +250,7 @@ export function logMessageFirstVisible(params: {
     kind: params.kind,
     dispatchToFirstVisibleMs: params.dispatchToFirstVisibleMs,
   });
+  recordFirstVisibleSample(params.dispatchToFirstVisibleMs);
   markActivity();
 }
 
@@ -400,8 +432,13 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       return;
     }
 
+    const firstVisible = buildFirstVisibleSummary();
     diag.debug(
-      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}`,
+      `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}${
+        firstVisible
+          ? ` firstVisible=${firstVisible.sampleCount} avg=${firstVisible.avgMs}ms p95=${firstVisible.p95Ms}ms max=${firstVisible.maxMs}ms`
+          : ""
+      }`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -413,6 +450,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       active: activeCount,
       waiting: waitingCount,
       queued: totalQueued,
+      firstVisible,
     });
 
     void loadCommandPollBackoffRuntime()
@@ -457,6 +495,7 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.processed = 0;
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
+  firstVisibleSamples.length = 0;
   lastActivityAt = 0;
   stopDiagnosticHeartbeat();
 }

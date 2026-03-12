@@ -9,6 +9,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
+  logMessageFirstVisible,
   logSessionStateChange,
   resetDiagnosticStateForTest,
   resolveStuckSessionWarnMs,
@@ -130,6 +131,54 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+  });
+
+  it("includes recent first-visible summary in heartbeat events", () => {
+    const events: Array<{
+      type: string;
+      firstVisible?: { sampleCount: number; avgMs: number; p95Ms: number; maxMs: number };
+    }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.heartbeat") {
+        events.push({
+          type: event.type,
+          firstVisible: event.firstVisible,
+        });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "final",
+        dispatchToFirstVisibleMs: 1200,
+      });
+      logMessageFirstVisible({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        kind: "final",
+        dispatchToFirstVisibleMs: 2200,
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.at(-1)).toEqual({
+      type: "diagnostic.heartbeat",
+      firstVisible: {
+        sampleCount: 2,
+        avgMs: 1700,
+        p95Ms: 2200,
+        maxMs: 2200,
+      },
+    });
   });
 
   it("uses default threshold for invalid values", () => {

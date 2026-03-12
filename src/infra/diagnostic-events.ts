@@ -143,6 +143,12 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  firstVisible?: {
+    sampleCount: number;
+    avgMs: number;
+    p95Ms: number;
+    maxMs: number;
+  };
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
