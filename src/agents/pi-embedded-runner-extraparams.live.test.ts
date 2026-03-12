@@ -6,12 +6,16 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
 const LIVE = isTruthyEnvValue(process.env.OPENAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const ANTHROPIC_LIVE =
+  isTruthyEnvValue(process.env.ANTHROPIC_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 const GEMINI_LIVE =
   isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
+const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
 const describeGeminiLive = GEMINI_LIVE && GEMINI_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
@@ -65,6 +69,79 @@ describeLive("pi embedded extra params (live)", () => {
     // Should respect maxTokens from config (16) — allow a small buffer for provider rounding.
     expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
   }, 30_000);
+
+  it("verifies OpenAI fast-mode service_tier semantics against the live API", async () => {
+    const headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${OPENAI_KEY}`,
+    };
+
+    const runProbe = async (serviceTier: "default" | "priority") => {
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "gpt-5.4",
+          input: "Reply with OK.",
+          max_output_tokens: 32,
+          service_tier: serviceTier,
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: { message?: string };
+        service_tier?: string;
+        status?: string;
+      };
+      expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+      return json;
+    };
+
+    const standard = await runProbe("default");
+    expect(standard.service_tier).toBe("default");
+    expect(standard.status).toBe("completed");
+
+    const fast = await runProbe("priority");
+    expect(fast.service_tier).toBe("priority");
+    expect(fast.status).toBe("completed");
+  }, 45_000);
+});
+
+describeAnthropicLive("pi embedded extra params (anthropic live)", () => {
+  it("verifies Anthropic fast-mode service_tier semantics against the live API", async () => {
+    const headers = {
+      "content-type": "application/json",
+      "x-api-key": ANTHROPIC_KEY,
+      "anthropic-version": "2023-06-01",
+    };
+
+    const runProbe = async (serviceTier: "auto" | "standard_only") => {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 32,
+          service_tier: serviceTier,
+          messages: [{ role: "user", content: "Reply with OK." }],
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: { message?: string };
+        stop_reason?: string;
+        usage?: { service_tier?: string };
+      };
+      expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+      return json;
+    };
+
+    const standard = await runProbe("standard_only");
+    expect(standard.usage?.service_tier).toBe("standard");
+    expect(standard.stop_reason).toBe("end_turn");
+
+    const fast = await runProbe("auto");
+    expect(["standard", "priority"]).toContain(fast.usage?.service_tier);
+    expect(fast.stop_reason).toBe("end_turn");
+  }, 45_000);
 });
 
 describeGeminiLive("pi embedded extra params (gemini live)", () => {
