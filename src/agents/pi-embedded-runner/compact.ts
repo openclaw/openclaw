@@ -114,6 +114,8 @@ export type CompactEmbeddedPiSessionParams = {
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;
+  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
+  currentTokenCount?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;
@@ -150,6 +152,12 @@ function hasRealConversationContent(msg: AgentMessage): boolean {
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function normalizeObservedTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -227,6 +235,9 @@ function classifyCompactionReason(reason?: string): string {
   }
   if (text.includes("already compacted")) {
     return "already_compacted_recently";
+  }
+  if (text.includes("still exceeds target")) {
+    return "live_context_still_exceeds_target";
   }
   if (text.includes("guard")) {
     return "guard_blocked";
@@ -701,6 +712,7 @@ export async function compactEmbeddedPiSessionDirect(
         const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
         const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
         const hookRunner = getGlobalHookRunner();
+        const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);
         const messageCountOriginal = originalMessages.length;
         let tokenCountOriginal: number | undefined;
         try {
@@ -712,14 +724,16 @@ export async function compactEmbeddedPiSessionDirect(
           tokenCountOriginal = undefined;
         }
         const messageCountBefore = session.messages.length;
-        let tokenCountBefore: number | undefined;
-        try {
-          tokenCountBefore = 0;
-          for (const message of session.messages) {
-            tokenCountBefore += estimateTokens(message);
+        let tokenCountBefore = observedTokenCount;
+        if (tokenCountBefore === undefined) {
+          try {
+            tokenCountBefore = 0;
+            for (const message of session.messages) {
+              tokenCountBefore += estimateTokens(message);
+            }
+          } catch {
+            tokenCountBefore = undefined;
           }
-        } catch {
-          tokenCountBefore = undefined;
         }
         // TODO(#7175): Consider exposing full message snapshots or pre-compaction injection
         // hooks; current events only report counts/metadata.
@@ -802,7 +816,7 @@ export async function compactEmbeddedPiSessionDirect(
             tokensAfter += estimateTokens(message);
           }
           // Sanity check: tokensAfter should be less than tokensBefore
-          if (tokensAfter > result.tokensBefore) {
+          if (tokensAfter > (observedTokenCount ?? result.tokensBefore)) {
             tokensAfter = undefined; // Don't trust the estimate
           }
         } catch {
@@ -876,7 +890,7 @@ export async function compactEmbeddedPiSessionDirect(
           result: {
             summary: result.summary,
             firstKeptEntryId: result.firstKeptEntryId,
-            tokensBefore: result.tokensBefore,
+            tokensBefore: observedTokenCount ?? result.tokensBefore,
             tokensAfter,
             details: result.details,
           },
@@ -936,14 +950,69 @@ export async function compactEmbeddedPiSession(
           modelContextWindow: ceModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
+        // When the context engine owns compaction, its compact() implementation
+        // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
+        // Fire before_compaction / after_compaction hooks here so plugin subscribers
+        // are notified regardless of which engine is active.
+        const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const hookRunner = engineOwnsCompaction ? getGlobalHookRunner() : null;
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const { sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
+        const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+        const hookCtx = {
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          sessionKey: hookSessionKey,
+          workspaceDir: resolveUserPath(params.workspaceDir),
+          messageProvider: resolvedMessageProvider,
+        };
+        // Engine-owned compaction doesn't load the transcript at this level, so
+        // message counts are unavailable.  We pass sessionFile so hook subscribers
+        // can read the transcript themselves if they need exact counts.
+        if (hookRunner?.hasHooks("before_compaction")) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: -1,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("before_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           tokenBudget: ceCtxInfo.tokens,
+          currentTokenCount: params.currentTokenCount,
           customInstructions: params.customInstructions,
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (result.ok && result.compacted && hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: -1,
+                compactedCount: -1,
+                tokenCount: result.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn("after_compaction hook failed", {
+              errorMessage: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
         return {
           ok: result.ok,
           compacted: result.compacted,
