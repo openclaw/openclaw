@@ -3,6 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -467,11 +468,15 @@ function extractGrokContent(data: GrokSearchResponse): {
   // xAI Responses API format: find the message output with text content
   for (const output of data.output ?? []) {
     // Guard against null/undefined entries that can appear in malformed payloads (#35063)
-    if (output == null || typeof output !== "object") continue;
+    if (output == null || typeof output !== "object") {
+      continue;
+    }
     if (output.type === "message") {
       for (const block of output.content ?? []) {
         // Guard against null/undefined content entries (#35063)
-        if (block == null || typeof block !== "object") continue;
+        if (block == null || typeof block !== "object") {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = (block.annotations ?? [])
             .filter((a) => a != null && a.type === "url_citation" && typeof a.url === "string")
@@ -1370,10 +1375,11 @@ async function runGrokSearch(params: {
     // tool execution framework returns a structured JSON error to the LLM instead of
     // re-throwing them as session-level aborts (which silently swallows the result).
     // See: https://github.com/openclaw/openclaw/issues/26355
-    if (err instanceof Error && err.name === "AbortError") {
+    if (isAbortError(err)) {
       throw new Error(
         `xAI web search timed out after ${params.timeoutSeconds}s. ` +
           `Increase tools.web.search.timeoutSeconds in your config if queries are complex.`,
+        { cause: err },
       );
     }
     throw err;
