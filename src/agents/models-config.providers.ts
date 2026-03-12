@@ -610,6 +610,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    explicitProvider?: ProviderConfig;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -618,7 +619,11 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({
+        apiKey,
+        discoveryApiKey,
+        explicitProvider: ctx.explicitProviders?.[providerKey],
+      }),
     };
   };
 }
@@ -651,7 +656,16 @@ function mergeImplicitProviderSet(
 
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
-  withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
+  withApiKey("moonshot", async ({ apiKey, explicitProvider }) => {
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    return {
+      ...buildMoonshotProvider(),
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      apiKey,
+    };
+  }),
   withApiKey("kimi-coding", async ({ apiKey }) => ({ ...buildKimiCodingProvider(), apiKey })),
   withApiKey("synthetic", async ({ apiKey }) => ({ ...buildSyntheticProvider(), apiKey })),
   withApiKey("venice", async ({ apiKey }) => ({ ...(await buildVeniceProvider()), apiKey })),
