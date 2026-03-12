@@ -207,6 +207,26 @@ describe("gateway run option collisions", () => {
     expectAuthOverrideMode("trusted-proxy");
   });
 
+  it("allows --auth none on non-loopback bind", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--bind",
+      "lan",
+      "--auth",
+      "none",
+      "--allow-unconfigured",
+    ]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "lan",
+        auth: expect.objectContaining({ mode: "none" }),
+      }),
+    );
+  });
+
   it("prints all supported modes on invalid --auth value", async () => {
     await expect(
       runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),

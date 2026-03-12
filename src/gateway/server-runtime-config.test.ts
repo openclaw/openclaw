@@ -143,6 +143,18 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedAuthMode: "none",
         expectedBindHost: "127.0.0.1",
       },
+      {
+        name: "lan binding with explicit none auth",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: { mode: "none" as const },
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        expectedAuthMode: "none",
+        expectedBindHost: "0.0.0.0",
+      },
     ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe(expectedAuthMode);
@@ -155,11 +167,6 @@ describe("resolveGatewayRuntimeConfig", () => {
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
         expectedMessage:
           "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
-      },
-      {
-        name: "lan binding with explicit none auth",
-        cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
-        expectedMessage: "refusing to bind gateway",
       },
       {
         name: "loopback binding that resolves to non-loopback host",
