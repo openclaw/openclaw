@@ -28,6 +28,17 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Ensure docs-scope base commit
         uses: ./.github/actions/ensure-base-commit
@@ -60,6 +71,17 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Ensure changed-scope base commit
         uses: ./.github/actions/ensure-base-commit
@@ -92,6 +114,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
@@ -173,6 +206,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Node environment
         if: matrix.runtime != 'bun' || github.event_name != 'push'
@@ -204,6 +248,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -230,6 +285,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -249,6 +315,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -273,6 +350,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Ensure secrets base commit
         uses: ./.github/actions/ensure-base-commit
@@ -386,6 +474,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh
@@ -472,6 +571,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -544,6 +654,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Select Xcode 26.1
         run: |
@@ -713,6 +834,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Setup Java
         uses: actions/setup-java@v4

@@ -1,0 +1,50 @@
+name: Prepare PR merge result
+description: Reconstruct the pull_request merge result locally without fetching refs/pull/*/merge.
+inputs:
+  base-repo:
+    description: Base repository in owner/name form.
+    required: true
+  base-ref:
+    description: Base branch/ref name to fetch from the base repository.
+    required: true
+  base-sha:
+    description: Base commit SHA from the pull_request event payload.
+    required: true
+  head-ref:
+    description: Head branch/ref name from the pull_request event payload.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Merge base into checked out PR head
+      shell: bash
+      env:
+        BASE_REMOTE_URL: ${{ github.server_url }}/${{ inputs.base-repo }}.git
+        BASE_REF: ${{ inputs.base-ref }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_REF: ${{ inputs.head-ref }}
+      run: |
+        set -euo pipefail
+
+        git remote add pr-base "$BASE_REMOTE_URL" 2>/dev/null || git remote set-url pr-base "$BASE_REMOTE_URL"
+
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          git fetch --no-tags --prune --unshallow origin "$HEAD_REF"
+        else
+          git fetch --no-tags --prune origin "$HEAD_REF"
+        fi
+
+        git fetch --no-tags --prune pr-base "$BASE_REF"
+
+        if ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+          git fetch --no-tags pr-base "$BASE_SHA"
+        fi
+
+        if git merge-base --is-ancestor "$BASE_SHA" HEAD; then
+          echo "PR head already contains base commit $BASE_SHA; using checked out head as merge result."
+          exit 0
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git merge --no-ff --no-edit "$BASE_SHA"
