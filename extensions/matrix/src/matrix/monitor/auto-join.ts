@@ -34,13 +34,11 @@ export function registerMatrixAutoJoin(params: {
 
   // For "allowlist" mode, handle invites manually
   client.on("room.invite", async (roomId: string, inviteEvent: unknown) => {
-    if (autoJoin !== "allowlist") {
-      return;
-    }
-
     const sender =
       inviteEvent && typeof inviteEvent === "object" && "sender" in inviteEvent
-        ? String((inviteEvent as { sender?: unknown }).sender ?? "").trim()
+        ? typeof (inviteEvent as { sender?: unknown }).sender === "string"
+          ? (inviteEvent as { sender: string }).sender.trim()
+          : ""
         : "";
 
     // Get room alias if available
