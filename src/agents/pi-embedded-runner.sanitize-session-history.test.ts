@@ -52,6 +52,20 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
+  const sanitizeAnthropicHistory = async (params: {
+    messages: AgentMessage[];
+    provider?: string;
+    modelId?: string;
+  }) =>
+    sanitizeSessionHistory({
+      messages: params.messages,
+      modelApi: "anthropic-messages",
+      provider: params.provider ?? "anthropic",
+      modelId: params.modelId ?? "claude-opus-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
   const getAssistantMessage = (messages: AgentMessage[]) => {
     expect(messages[1]?.role).toBe("assistant");
     return messages[1] as Extract<AgentMessage, { role: "assistant" }>;
@@ -760,22 +774,15 @@ describe("sanitizeSessionHistory", () => {
     expect(types).not.toContain("thinking");
   });
 
-  it("does not drop thinking blocks for non-copilot providers", async () => {
+  it("drops assistant thinking blocks for anthropic replay", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      sessionManager: makeMockSessionManager(),
-      sessionId: TEST_SESSION_ID,
-    });
+    const result = await sanitizeAnthropicHistory({ messages });
 
-    const types = getAssistantContentTypes(result);
-    expect(types).toContain("thinking");
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {
