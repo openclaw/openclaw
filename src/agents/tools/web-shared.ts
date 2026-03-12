@@ -140,8 +140,13 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(decoder.decode(chunk, { stream: true }));
 
-        if (truncated || bytesRead >= maxBytes) {
-          truncated = true;
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          // Exact fit — peek to see if the stream has more data
+          const peek = await reader.read();
+          truncated = !peek.done;
           break;
         }
       }
@@ -166,5 +171,117 @@ export async function readResponseText(
     return { text, truncated: false, bytesRead: text.length };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
+  }
+}
+
+export type ReadResponseBufferResult = {
+  buffer: Uint8Array;
+  truncated: boolean;
+  bytesRead: number;
+};
+
+/**
+ * Read a Response body as raw bytes, with optional maxBytes truncation.
+ * Unlike readResponseText, this preserves binary content byte-for-byte.
+ */
+export async function readResponseBuffer(
+  res: Response,
+  options?: { maxBytes?: number },
+): Promise<ReadResponseBufferResult> {
+  const maxBytesRaw = options?.maxBytes;
+  const maxBytes =
+    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
+      ? Math.floor(maxBytesRaw)
+      : undefined;
+
+  const body = (res as unknown as { body?: unknown }).body;
+  if (
+    maxBytes &&
+    body &&
+    typeof body === "object" &&
+    "getReader" in body &&
+    typeof (body as { getReader: () => unknown }).getReader === "function"
+  ) {
+    const reader = (body as ReadableStream<Uint8Array>).getReader();
+    let bytesRead = 0;
+    let truncated = false;
+    const chunks: Uint8Array[] = [];
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+
+        let chunk = value;
+        if (bytesRead + chunk.byteLength > maxBytes) {
+          const remaining = Math.max(0, maxBytes - bytesRead);
+          if (remaining <= 0) {
+            truncated = true;
+            break;
+          }
+          chunk = chunk.subarray(0, remaining);
+          truncated = true;
+        }
+
+        bytesRead += chunk.byteLength;
+        chunks.push(chunk);
+
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          // Exact fit — peek to see if the stream has more data
+          const peek = await reader.read();
+          truncated = !peek.done;
+          break;
+        }
+      }
+    } catch {
+      // Best-effort: return whatever we read so far.
+    } finally {
+      if (truncated) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    const merged = new Uint8Array(bytesRead);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.byteLength;
+    }
+    return { buffer: merged, truncated, bytesRead };
+  }
+
+  try {
+    const ab = await res.arrayBuffer();
+    const buffer = new Uint8Array(ab);
+    if (maxBytes && buffer.byteLength > maxBytes) {
+      return { buffer: buffer.subarray(0, maxBytes), truncated: true, bytesRead: maxBytes };
+    }
+    return { buffer, truncated: false, bytesRead: buffer.byteLength };
+  } catch {
+    // Last-resort fallback for non-standard/mock Response objects that only
+    // implement text(). Real fetch Responses support arrayBuffer().
+  }
+
+  try {
+    const text = await res.text();
+    const buffer = new TextEncoder().encode(text);
+    if (maxBytes && buffer.byteLength > maxBytes) {
+      return { buffer: buffer.subarray(0, maxBytes), truncated: true, bytesRead: maxBytes };
+    }
+    return { buffer, truncated: false, bytesRead: buffer.byteLength };
+  } catch {
+    return { buffer: new Uint8Array(0), truncated: false, bytesRead: 0 };
   }
 }

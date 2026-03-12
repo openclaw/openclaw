@@ -834,6 +834,7 @@ export const ToolsSchema = z
       .object({
         enabled: z.boolean().optional(),
         apiKey: z.string().optional(),
+        region: z.enum(["global", "cn"]).optional(),
         baseUrl: z.string().optional(),
         /** @deprecated use searchTimeoutSeconds / executeTimeoutSeconds */
         timeoutSeconds: z.number().int().positive().optional(),
@@ -841,6 +842,9 @@ export const ToolsSchema = z
         executeTimeoutSeconds: z.number().int().positive().optional(),
         maxResponseSize: z.number().int().positive().optional(),
         searchLimit: z.number().int().positive().optional(),
+        autoMaterializeFullContent: z.boolean().optional(),
+        fullContentMaxBytes: z.number().int().positive().optional(),
+        fullContentTimeoutSeconds: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

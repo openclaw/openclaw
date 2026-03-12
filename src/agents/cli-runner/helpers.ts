@@ -95,6 +95,7 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    qverisAutoMaterialize: params.config?.tools?.qveris?.autoMaterializeFullContent === true,
   });
 }
 

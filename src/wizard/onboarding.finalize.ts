@@ -474,8 +474,13 @@ export async function finalizeOnboardingWizard(
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   if (webSearchProvider) {
-    const { SEARCH_PROVIDER_OPTIONS, resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
+    const {
+      SEARCH_PROVIDER_OPTIONS,
+      resolveExistingKey,
+      hasExistingKey,
+      hasKeyInEnv,
+      resolveSearchProviderSignupUrl,
+    } = await import("../commands/onboard-search.js");
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = resolveExistingKey(nextConfig, webSearchProvider);
@@ -507,7 +512,7 @@ export async function finalizeOnboardingWizard(
           "web_search will not work until a key is added.",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          `Get your key at: ${entry ? resolveSearchProviderSignupUrl(entry, nextConfig) : "https://docs.openclaw.ai/tools/web"}`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",

@@ -227,6 +227,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.grok.inlineCitations": "Grok Inline Citations",
   "tools.qveris.enabled": "Enable QVeris Tools",
   "tools.qveris.apiKey": "QVeris API Key", // pragma: allowlist secret
+  "tools.qveris.region": "QVeris Region",
   "tools.qveris.baseUrl": "QVeris API Base URL",
   "tools.qveris.timeoutSeconds": "QVeris Timeout (sec, deprecated)",
   "tools.qveris.searchTimeoutSeconds": "QVeris Search Timeout (sec)",

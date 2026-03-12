@@ -122,6 +122,7 @@ export function createOpenClawTools(
     config: options?.config,
     sandboxed: options?.sandboxed,
     agentSessionKey: options?.agentSessionKey,
+    workspaceDir,
   });
   const messageTool = options?.disableMessageTool
     ? null

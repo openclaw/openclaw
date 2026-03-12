@@ -402,7 +402,7 @@ type QverisExecutionResponse = {
   elapsed_time_ms: number;
 };
 
-const DEFAULT_QVERIS_BASE_URL = "https://qveris.ai/api/v1";
+import { QVERIS_REGION_DOMAINS, type QverisRegion } from "./qveris-tools.js";
 const DEFAULT_QVERIS_SEARCH_TOOL_ID = "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic";
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
@@ -819,7 +819,11 @@ function resolveQverisBaseUrl(
     return fromGlobalConfig;
   }
 
-  return DEFAULT_QVERIS_BASE_URL;
+  const region: QverisRegion =
+    (globalQveris?.qveris as Record<string, unknown> | undefined)?.region === "cn"
+      ? "cn"
+      : "global";
+  return `https://${QVERIS_REGION_DOMAINS[region]}/api/v1`;
 }
 
 function resolveQverisToolId(qverisSearch?: QverisSearchConfig): string {
@@ -1665,7 +1669,7 @@ async function runWebSearch(params: {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
     params.provider === "qveris"
-      ? `${params.qverisToolId || "default"}:${params.qverisBaseUrl || DEFAULT_QVERIS_BASE_URL}`
+      ? `${params.qverisToolId || "default"}:${params.qverisBaseUrl || `https://${QVERIS_REGION_DOMAINS.global}/api/v1`}`
       : params.provider === "perplexity"
         ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
         : params.provider === "grok"
@@ -1692,7 +1696,7 @@ async function runWebSearch(params: {
       query: params.query,
       toolId: params.qverisToolId ?? DEFAULT_QVERIS_SEARCH_TOOL_ID,
       apiKey: params.apiKey,
-      baseUrl: params.qverisBaseUrl ?? DEFAULT_QVERIS_BASE_URL,
+      baseUrl: params.qverisBaseUrl ?? `https://${QVERIS_REGION_DOMAINS.global}/api/v1`,
       timeoutSeconds: params.timeoutSeconds,
       sessionId: params.qverisSessionId,
     });

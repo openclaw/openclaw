@@ -63,24 +63,24 @@ describe("tool-policy", () => {
 
   it("includes qveris tools in coding profile", () => {
     const coding = resolveToolProfilePolicy("coding");
-    expect(coding?.allow).toContain("qveris_search");
-    expect(coding?.allow).toContain("qveris_execute");
+    expect(coding?.allow).toContain("qveris_discover");
+    expect(coding?.allow).toContain("qveris_call");
   });
 
   it("includes qveris tools in messaging profile", () => {
     const messaging = resolveToolProfilePolicy("messaging");
-    expect(messaging?.allow).toContain("qveris_search");
-    expect(messaging?.allow).toContain("qveris_execute");
+    expect(messaging?.allow).toContain("qveris_discover");
+    expect(messaging?.allow).toContain("qveris_call");
   });
 
   it("includes qveris tools in group:web and group:openclaw", () => {
     const webGroup = TOOL_GROUPS["group:web"];
-    expect(webGroup).toContain("qveris_search");
-    expect(webGroup).toContain("qveris_execute");
+    expect(webGroup).toContain("qveris_discover");
+    expect(webGroup).toContain("qveris_call");
 
     const openclawGroup = TOOL_GROUPS["group:openclaw"];
-    expect(openclawGroup).toContain("qveris_search");
-    expect(openclawGroup).toContain("qveris_execute");
+    expect(openclawGroup).toContain("qveris_discover");
+    expect(openclawGroup).toContain("qveris_call");
   });
 
   it("includes core tool groups in group:openclaw", () => {
@@ -96,6 +96,12 @@ describe("tool-policy", () => {
     expect(normalizeToolName(" BASH ")).toBe("exec");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
     expect(normalizeToolName("READ")).toBe("read");
+  });
+
+  it("normalizes legacy QVeris tool names to new names", () => {
+    expect(normalizeToolName("qveris_search")).toBe("qveris_discover");
+    expect(normalizeToolName("qveris_execute")).toBe("qveris_call");
+    expect(normalizeToolName("qveris_get_by_ids")).toBe("qveris_inspect");
   });
 
   it("identifies owner-only tools", () => {

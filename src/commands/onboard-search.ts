@@ -1,3 +1,4 @@
+import { QVERIS_REGION_DOMAINS, type QverisRegion } from "../agents/tools/qveris-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -12,7 +13,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "qveris";
 
-type SearchProviderEntry = {
+export type SearchProviderEntry = {
   value: SearchProvider;
   label: string;
   hint: string;
@@ -74,6 +75,25 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
   return entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
+}
+
+function resolveRegionFromConfig(config: OpenClawConfig): QverisRegion {
+  const r = (config.tools?.qveris as Record<string, unknown> | undefined)?.region;
+  return r === "cn" ? "cn" : "global";
+}
+
+/**
+ * Returns the region-aware signup URL for a search provider entry.
+ * QVeris URLs vary by configured region; others are static.
+ */
+export function resolveSearchProviderSignupUrl(
+  entry: SearchProviderEntry,
+  config: OpenClawConfig,
+): string {
+  if (entry.value === "qveris") {
+    return `https://${QVERIS_REGION_DOMAINS[resolveRegionFromConfig(config)]}`;
+  }
+  return entry.signupUrl;
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -327,10 +347,14 @@ export async function setupSearch(
     return preserveDisabledState(config, applyProviderOnly(config, choice));
   }
 
+  const displaySignupUrl =
+    choice === "qveris"
+      ? `https://${QVERIS_REGION_DOMAINS[resolveRegionFromConfig(config)]}`
+      : entry.signupUrl;
   await prompter.note(
     [
       "No API key stored — web_search won't work until a key is available.",
-      `Get your key at: ${entry.signupUrl}`,
+      `Get your key at: ${displaySignupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

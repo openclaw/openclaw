@@ -27,9 +27,13 @@ A new `switch_model` tool allows users to change the active LLM model through na
 The Qveris tool integration has been significantly upgraded with smarter routing and session awareness:
 
 - **Structured routing decision tree** — `buildQverisSection()` now generates a 6-step decision tree in the system prompt with explicit anti-patterns (local filesystem ops, docs/tutorials, non-English queries), guiding the agent on when to use Qveris vs local tools vs `web_search`.
-- **`qveris_get_by_ids` tool** — A new tool that verifies known tool IDs via `POST /tools/get-by-ids` without a full search, reducing unnecessary API calls when the agent already knows which tools to use.
-- **Session-scoped tool rolodex** — Successful tool executions are recorded in a per-session rolodex. Search results are annotated with `previously_used` and `session_uses` metadata, and `session_known_tools` is exposed to the agent so it can reuse proven tools efficiently.
-- **Improved search boundaries** — `qveris_search` descriptions now include negative boundaries and GOOD/BAD examples to prevent task-goal searches and improve search precision.
+- **Renamed tools for clarity** — `qveris_search` → `qveris_discover`, `qveris_execute` → `qveris_invoke`, `qveris_get_by_ids` → `qveris_inspect`. The new names prevent LLMs from confusing QVeris capability discovery with web search or shell execution.
+- **`qveris_inspect` tool** — Verifies known tool IDs via `POST /tools/get-by-ids` without a full discovery, reducing unnecessary API calls when the agent already knows which tools to use.
+- **Session-scoped tool rolodex** — Successful tool invocations are recorded in a per-session rolodex. Discovery results are annotated with `previously_used` and `session_uses` metadata, `session_known_tools` exposes reusable `discovery_id` values when known, and `qveris_inspect` can return that `discovery_id` for closed-loop reuse.
+- **Improved discovery boundaries** — `qveris_discover` descriptions now include negative boundaries and GOOD/BAD examples to prevent task-goal queries and improve discovery precision.
+- **Progressive error recovery** — `qveris_invoke` failures now include `recovery_step` (fix_params → simplify → switch_tool) and `attempt_number` to guide the agent through structured recovery.
+- **Truncation detection** — Invoke responses flag `truncated: true` with a hint when data exceeds `max_response_size`.
+- **Rate-limit awareness** — 429 responses are classified as `rate_limited` with `retry_after_seconds` parsed from the Retry-After header.
 
 ### Merged from OpenClaw Upstream (v2026.3.7)
 

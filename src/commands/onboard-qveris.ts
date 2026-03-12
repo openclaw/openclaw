@@ -1,3 +1,5 @@
+import type { QverisRegion } from "../agents/tools/qveris-tools.js";
+import { QVERIS_REGION_DOMAINS } from "../agents/tools/qveris-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -9,6 +11,11 @@ function resolveEnvApiKey(): string {
   return process.env.QVERIS_API_KEY?.trim() ?? "";
 }
 
+function resolveConfigRegion(cfg: OpenClawConfig): QverisRegion {
+  const r = (cfg.tools?.qveris as Record<string, unknown> | undefined)?.region;
+  return r === "cn" ? "cn" : "global";
+}
+
 export async function promptQverisConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
@@ -17,12 +24,13 @@ export async function promptQverisConfig(
   const envApiKey = resolveEnvApiKey();
   const hasAnyApiKey = Boolean(configApiKey || envApiKey);
   const currentlyEnabled = cfg.tools?.qveris?.enabled ?? hasAnyApiKey;
+  const currentRegion = resolveConfigRegion(cfg);
 
   await prompter.note(
     [
       "QVeris enables dynamic tool search/execution across domains like finance and research.",
       "Web search via QVeris is configured separately in the web search step.",
-      "Docs: https://qveris.ai",
+      `Docs: https://${QVERIS_REGION_DOMAINS[currentRegion]}`,
     ].join("\n"),
     "QVeris",
   );
@@ -44,6 +52,15 @@ export async function promptQverisConfig(
       },
     };
   }
+
+  const region = await prompter.select<QverisRegion>({
+    message: "QVeris region",
+    options: [
+      { value: "global", label: "Global (qveris.ai)", hint: "International" },
+      { value: "cn", label: "China (qveris.cn)", hint: "中国大陆" },
+    ],
+    initialValue: currentRegion,
+  });
 
   const enteredApiKey = (
     await prompter.text({
@@ -72,6 +89,7 @@ export async function promptQverisConfig(
       qveris: {
         ...cfg.tools?.qveris,
         enabled: true,
+        region,
         ...(nextApiKey ? { apiKey: nextApiKey } : {}),
       },
     },

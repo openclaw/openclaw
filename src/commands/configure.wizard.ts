@@ -173,6 +173,7 @@ async function promptWebToolsConfig(
     hasExistingKey,
     applySearchKey,
     hasKeyInEnv,
+    resolveSearchProviderSignupUrl,
   } = await import("./onboard-search.js");
   type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
 
@@ -270,7 +271,7 @@ async function promptWebToolsConfig(
         [
           "No key stored yet — web_search won't work until a key is available.",
           `Store a key here or set ${envVarNames} in the Gateway environment.`,
-          `Get your API key at: ${entry.signupUrl}`,
+          `Get your API key at: ${resolveSearchProviderSignupUrl(entry, nextConfig)}`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",

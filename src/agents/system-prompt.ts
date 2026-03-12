@@ -63,45 +63,106 @@ function buildMemorySection(params: {
   return lines;
 }
 
-function buildQverisSection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+function buildQverisSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  autoMaterialize?: boolean;
+}) {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("qveris_search")) {
+  if (!params.availableTools.has("qveris_discover")) {
     return [];
   }
-  const hasGetByIds = params.availableTools.has("qveris_get_by_ids");
+  const hasInvoke = params.availableTools.has("qveris_call");
+  const hasInspect = params.availableTools.has("qveris_inspect");
+  const hasWebSearch = params.availableTools.has("web_search");
+  const hasWebFetch = params.availableTools.has("web_fetch");
+  const qverisExecutionLine = hasInvoke
+    ? "   -> Prefer qveris_discover + qveris_call. Specialized APIs/services return precise structured data or service outputs from dedicated providers."
+    : "   -> Use qveris_discover to identify the best specialized API/service available in this session. If qveris_call is unavailable here, report the limitation honestly instead of promising a tool call you cannot make.";
+  const inspectLine = hasInspect
+    ? "   -> Use qveris_inspect with the known tool_id to verify availability and get current parameter schemas. If the tool is available, run qveris_discover to register it for this session, then call it."
+    : undefined;
+  const webResearchLine =
+    hasWebSearch && hasWebFetch
+      ? "   -> Use web_search + web_fetch. This path is for articles, opinions, explanations, documentation, and broad research where the page content itself is the answer."
+      : hasWebSearch
+        ? "   -> Use web_search for articles, opinions, explanations, documentation, and broad research."
+        : hasWebFetch
+          ? "   -> Use web_fetch when you already have a URL and need to read that page."
+          : "   -> Web research tools are unavailable in this session. Report the limitation honestly.";
+  const fallbackLine = hasWebSearch
+    ? "- **After 3 failures**: Report which tools were tried, what errors occurred. Use web_search as fallback only when web content or broad research is still helpful. Never fabricate data."
+    : "- **After 3 failures**: Report which tools were tried and what errors occurred. If no other relevant local tool exists, report the limitation honestly. Never fabricate data.";
   return [
     "## Tool Routing: QVeris vs Local vs Web",
     "",
-    "Before calling qveris_search, classify the task:",
+    "When the user needs specialized external capabilities, prefer qveris_discover first.",
     "",
     "1. **Local operation?** (read files, check config, session status, run commands)",
-    "   -> Use local tools (read, exec, session_status). NEVER search QVeris for local tasks.",
-    "2. **Need a specific web page or article content?**",
-    "   -> Use web_search or web_fetch directly. QVeris indexes API tools, not web pages.",
-    "3. **Need structured real-time data?** (prices, metrics, exchange rates, weather, financials)",
-    "   -> Use qveris_search. Describe the CAPABILITY needed, not the task.",
-    "4. **Need an external service capability?** (image generation, OCR, TTS, translation, geocoding)",
-    "   -> Use qveris_search. Search for the tool type, not the specific input.",
-    ...(hasGetByIds
-      ? [
-          "5. **Previously used a QVeris tool for this type of task?**",
-          "   -> Use qveris_get_by_ids with the known tool_id to verify availability, then execute directly.",
-        ]
-      : []),
-    `${hasGetByIds ? "6" : "5"}. **None of the above?**`,
-    "   -> Do NOT use qveris_search. Use web_search for general research or report the limitation.",
+    "   -> Use local tools (read, exec, session_status). NEVER discover QVeris tools for local tasks.",
+    "2. **Need exact current values, historical sequence data, live ranked data, or structured reports?** (stock prices, time series, exchange rates, weather, crypto, AQI, top gainers, earnings/filings)",
+    "3. **Need an external processing, retrieval, or generation service?** (web crawling/extraction, PDF parsing/generation, OCR, TTS, speech/image/video understanding or generation, translation, geocoding)",
     "",
-    "qveris_search anti-patterns (NEVER do these):",
+    "   For steps 2 and 3:",
+    qverisExecutionLine,
+    "   Convert any user request (Chinese or English) into an English API capability query:",
+    '   "腾讯最新股价" / "latest Tencent stock price" -> "stock quote real-time API"',
+    '   "腾讯最近30天股价走势" / "Tencent 30-day stock trend" -> "stock historical price time series API"',
+    '   "港股涨幅最大的三只" / "top HK stock gainers" -> "hong kong stock market top gainers API"',
+    '   "美元兑人民币汇率" / "USD/CNY exchange rate" -> "forex exchange rate real-time API"',
+    '   "今天北京天气" / "Beijing weather today" -> "weather forecast API"',
+    '   "英伟达最新财报" / "Nvidia latest earnings" -> "company earnings report API"',
+    '   "抓取网页正文" / "extract webpage content" -> "web page content extraction API"',
+    '   "网页导出 PDF" / "convert webpage to PDF" -> "HTML to PDF conversion API"',
+    '   "识别语音内容" / "transcribe audio" -> "speech to text API"',
+    '   "文字生成图片" / "generate image from text" -> "text to image generation API"',
+    "",
+    ...(hasInspect
+      ? ["4. **Previously used a QVeris tool for this type of task?**", inspectLine]
+      : []),
+    `${hasInspect ? "5" : "4"}. **Need articles, opinions, explanations, documentation, or broad research?**`,
+    webResearchLine,
+    `${hasInspect ? "6" : "5"}. **None of the above?**`,
+    "   -> Report the limitation honestly. Never fabricate data.",
+    "",
+    "qveris_discover anti-patterns (NEVER do these):",
     "- Searching for software configuration or setup instructions",
     "- Searching for documentation, tutorials, or how-to guides",
-    "- Passing natural language task descriptions as search queries",
-    "- Using non-English search queries (always use English)",
+    "- Using non-English discovery queries (always use English)",
     "",
-    "After qveris_search: evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms. If results look irrelevant (wrong domain, unrelated tools), abandon and fall back to web_search.",
-    "Execute with qveris_execute, using sample_parameters from search results as your parameter template. If execution fails, check error_type: for parameter errors, fix and retry; for HTTP/timeout errors, try an alternative tool.",
-    "Do not fabricate data when both qveris_search and web_search fail — report the gap honestly.",
+    "After qveris_discover: evaluate results by success_rate (prefer >= 0.9) and avg_execution_time_ms. If results look irrelevant, try a different query.",
+    hasInvoke
+      ? `Invoke with qveris_call, using sample_parameters from ${hasInspect ? "qveris_discover or qveris_inspect" : "qveris_discover"} as your parameter template.`
+      : "If qveris_call is unavailable in this session, do not imply that you executed the discovered tool.",
+    "",
+    ...(hasInvoke
+      ? [
+          "qveris_call error recovery (follow in order):",
+          "- **Attempt 1 — Fix params**: Read error_type and detail. Check required params are present with correct types (strings quoted, numbers unquoted, dates ISO 8601). Fix and retry.",
+          "- **Attempt 2 — Simplify**: Drop all optional params. Use well-known/standard values (e.g. common ticker symbols, major cities). Retry.",
+          "- **Attempt 3 — Switch tool**: Go back to the qveris_discover results and select the next-best alternative tool by success_rate. Invoke with new params.",
+          fallbackLine,
+          "",
+          ...(params.autoMaterialize
+            ? [
+                "qveris_call large-data handling:",
+                "- When a tool returns data exceeding the transport limit, the integration layer auto-downloads and saves the full content locally.",
+                "- You receive a materialized_content manifest with file path, content type, schema, and preview — not the raw data.",
+                "- ALWAYS use read or exec to process the materialized file for analysis. NEVER base conclusions on truncated transport data alone.",
+                "- For large JSON/CSV: write a script via exec to load, filter, and summarize the data.",
+                "- For media files (image/audio/video): the binary file is saved to disk. Report the file path and metadata to the user; use the image tool to analyze images.",
+              ]
+            : [
+                "qveris_call large-data handling:",
+                "- When a response contains truncated_content and full_content_file_url, the transport data is incomplete.",
+                "- For text/JSON/CSV: use web_fetch on full_content_file_url to download, then process it.",
+                "- For binary files (images, audio, video): use exec with curl to download the file directly (web_fetch only handles text/HTML).",
+                "- NEVER base conclusions on truncated transport data alone.",
+              ]),
+        ]
+      : []),
     "",
   ];
 }
@@ -276,10 +337,13 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Whether QVeris auto-materialization of large results is enabled. */
+  qverisAutoMaterialize?: boolean;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  const qverisAutoMat = params.qverisAutoMaterialize === true;
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -314,17 +378,20 @@ export function buildAgentSystemPrompt(params: {
     switch_model:
       'Switch the AI model for this session. When the user asks to change/switch models (e.g. "use kimi", "switch to sonnet", "切换模型"), call this tool with the model name. Accepts aliases, partial names, or full provider/model. model=default resets. Takes effect from the next message.',
     image: "Analyze an image with the configured image model",
-    qveris_search:
-      "Discover third-party API tools for structured data or external capabilities. " +
-      "Use for: real-time data APIs, external services (image gen, OCR, TTS), geo APIs. " +
-      "NOT for: local operations, documentation, config help, general web content. " +
-      "Query must describe a tool capability in English, not a task goal.",
-    qveris_execute:
-      "Execute a discovered QVeris tool. Requires tool_id and search_id from a prior qveris_search or qveris_get_by_ids. " +
-      "Pass params as JSON in params_to_tool using sample_parameters as template.",
-    qveris_get_by_ids:
-      "Look up known QVeris tools by ID without a full search. " +
-      "Use when you already have a tool_id from a previous search or session context.",
+    qveris_discover:
+      "Find specialized API/service tools for exact current data, historical sequences, structured reports, " +
+      "web extraction, PDF workflows, or external processing/generation (OCR, speech, image, video, translation). " +
+      "Preferred over web_search when a specialized provider can return the answer or perform the work. " +
+      "Query in English describing the capability needed.",
+    qveris_call:
+      "Call a QVeris API/service tool to get structured data, reports, extracted content, PDFs, or processed/generated media. " +
+      "Provide the tool_id from qveris_discover results. " +
+      (qverisAutoMat
+        ? "When the response is large, full content is auto-materialized locally; use read/exec to process."
+        : "When the response is truncated, use web_fetch (text) or exec+curl (binary) on full_content_file_url to get the complete data."),
+    qveris_inspect:
+      "Quick-verify known tool IDs and get current parameter schemas for reuse. " +
+      "Use when you already have a tool_id from this session.",
   };
 
   const toolOrder = [
@@ -337,11 +404,11 @@ export function buildAgentSystemPrompt(params: {
     "ls",
     "exec",
     "process",
+    "qveris_discover",
+    "qveris_call",
+    "qveris_inspect",
     "web_search",
     "web_fetch",
-    "qveris_search",
-    "qveris_execute",
-    "qveris_get_by_ids",
     "browser",
     "canvas",
     "nodes",
@@ -373,6 +440,11 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
+  if (availableTools.has("qveris_discover")) {
+    coreToolSummaries.web_search =
+      "Search web pages for articles, opinions, explanations, documentation, and broad research. " +
+      "For exact current values, historical sequence data, provider-backed reports, or specialized services like crawling, PDF, OCR, or media generation, prefer qveris_discover.";
+  }
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const externalToolSummaries = new Map<string, string>();
@@ -467,7 +539,11 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
-  const qverisSection = buildQverisSection({ isMinimal, availableTools });
+  const qverisSection = buildQverisSection({
+    isMinimal,
+    availableTools,
+    autoMaterialize: qverisAutoMat,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,

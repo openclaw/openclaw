@@ -6,6 +6,7 @@ import { promptQverisConfig } from "./onboard-qveris.js";
 function createPrompter(params: {
   confirmValue: boolean;
   textValue: string;
+  selectValue?: string;
   note?: WizardPrompter["note"];
 }): WizardPrompter {
   const note = params.note ?? (vi.fn(async () => {}) as unknown as WizardPrompter["note"]);
@@ -13,7 +14,9 @@ function createPrompter(params: {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
     note,
-    select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+    select: vi.fn(
+      async () => params.selectValue ?? "global",
+    ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []),
     text: vi.fn(async () => params.textValue),
     confirm: vi.fn(async () => params.confirmValue),
@@ -36,6 +39,7 @@ describe("promptQverisConfig", () => {
 
     expect(next.tools?.qveris?.enabled).toBe(true);
     expect(next.tools?.qveris?.apiKey).toBe("qv_test_key");
+    expect((next.tools?.qveris as Record<string, unknown>)?.region).toBe("global");
     expect(next.tools?.web?.search?.provider).toBeUndefined();
   });
 
@@ -97,5 +101,19 @@ describe("promptQverisConfig", () => {
     expect(next.tools?.qveris?.enabled).toBe(true);
     expect(next.tools?.web?.search?.provider).toBe("brave");
     expect(next.tools?.web?.search?.apiKey).toBe("BSA-existing");
+  });
+
+  it("stores cn region when user selects China", async () => {
+    const prompter = createPrompter({
+      confirmValue: true,
+      textValue: "qv_cn_key",
+      selectValue: "cn",
+    });
+
+    const next = await promptQverisConfig({} as OpenClawConfig, prompter);
+
+    expect(next.tools?.qveris?.enabled).toBe(true);
+    expect((next.tools?.qveris as Record<string, unknown>)?.region).toBe("cn");
+    expect(next.tools?.qveris?.apiKey).toBe("qv_cn_key");
   });
 });
