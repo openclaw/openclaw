@@ -4,6 +4,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -594,6 +595,15 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const environment = obj.environment;
       try {
         if (transport === "relay") {
+          const gatewayDeviceId =
+            typeof obj.gatewayDeviceId === "string" ? obj.gatewayDeviceId.trim() : "";
+          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
+            ctx.logGateway.warn(
+              `push relay register rejected node=${nodeId}: gateway identity mismatch`,
+            );
+            return;
+          }
           await registerApnsRegistration({
             nodeId,
             transport: "relay",

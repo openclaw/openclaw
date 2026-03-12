@@ -26,6 +26,13 @@ const buildSessionLookup = (
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    deviceId: "gateway-device-1",
+    publicKeyPem: "public",
+    privateKeyPem: "private",
+  })),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
@@ -46,6 +53,9 @@ vi.mock("../config/sessions.js", () => ({
 }));
 vi.mock("../infra/push-apns.js", () => ({
   registerApnsRegistration: registerApnsRegistrationMock,
+}));
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
@@ -104,6 +114,7 @@ describe("node exec events", () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
+    loadOrCreateDeviceIdentityMock.mockClear();
   });
 
   it("enqueues exec.started events", async () => {
@@ -291,6 +302,7 @@ describe("node exec events", () => {
         transport: "relay",
         relayHandle: "relay-handle-123",
         sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-1",
         installationId: "install-123",
         topic: "ai.openclaw.ios",
         environment: "production",
@@ -310,6 +322,25 @@ describe("node exec events", () => {
       distribution: "official",
       tokenDebugSuffix: "abcd1234",
     });
+  });
+
+  it("rejects relay registrations bound to a different gateway identity", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-other",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
   });
 });
 

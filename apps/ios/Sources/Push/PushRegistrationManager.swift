@@ -12,6 +12,7 @@ private struct RelayGatewayPushRegistrationPayload: Encodable {
     var transport: String = PushTransportMode.relay.rawValue
     var relayHandle: String
     var sendGrant: String
+    var gatewayDeviceId: String
     var installationId: String
     var topic: String
     var environment: String
@@ -19,9 +20,18 @@ private struct RelayGatewayPushRegistrationPayload: Encodable {
     var tokenDebugSuffix: String?
 }
 
+struct PushRelayGatewayIdentity: Codable {
+    var deviceId: String
+    var publicKey: String
+}
+
 actor PushRegistrationManager {
     private let buildConfig: PushBuildConfig
     private let relayClient: PushRelayClient?
+
+    var usesRelayTransport: Bool {
+        self.buildConfig.transport == .relay
+    }
 
     init(buildConfig: PushBuildConfig = .current) {
         self.buildConfig = buildConfig
@@ -30,7 +40,8 @@ actor PushRegistrationManager {
 
     func makeGatewayRegistrationPayload(
         apnsTokenHex: String,
-        topic: String)
+        topic: String,
+        gatewayIdentity: PushRelayGatewayIdentity?)
     async throws -> String {
         switch self.buildConfig.transport {
         case .direct:
@@ -40,11 +51,21 @@ actor PushRegistrationManager {
                     topic: topic,
                     environment: self.buildConfig.apnsEnvironment.rawValue))
         case .relay:
-            return try await self.makeRelayPayload(apnsTokenHex: apnsTokenHex, topic: topic)
+            guard let gatewayIdentity else {
+                throw PushRelayError.relayMisconfigured("Missing gateway identity for relay registration")
+            }
+            return try await self.makeRelayPayload(
+                apnsTokenHex: apnsTokenHex,
+                topic: topic,
+                gatewayIdentity: gatewayIdentity)
         }
     }
 
-    private func makeRelayPayload(apnsTokenHex: String, topic: String) async throws -> String {
+    private func makeRelayPayload(
+        apnsTokenHex: String,
+        topic: String,
+        gatewayIdentity: PushRelayGatewayIdentity)
+    async throws -> String {
         guard self.buildConfig.distribution == .official else {
             throw PushRelayError.relayMisconfigured(
                 "Relay transport requires OpenClawPushDistribution=official")
@@ -71,6 +92,7 @@ actor PushRegistrationManager {
         let tokenHashHex = Self.sha256Hex(apnsTokenHex)
         if let stored = PushRelayRegistrationStore.loadRegistrationState(),
            stored.installationId == installationId,
+           stored.gatewayDeviceId == gatewayIdentity.deviceId,
            stored.lastAPNsTokenHashHex == tokenHashHex,
            !Self.isExpired(stored.relayHandleExpiresAtMs)
         {
@@ -78,6 +100,7 @@ actor PushRegistrationManager {
                 RelayGatewayPushRegistrationPayload(
                     relayHandle: stored.relayHandle,
                     sendGrant: stored.sendGrant,
+                    gatewayDeviceId: gatewayIdentity.deviceId,
                     installationId: installationId,
                     topic: topic,
                     environment: self.buildConfig.apnsEnvironment.rawValue,
@@ -91,10 +114,12 @@ actor PushRegistrationManager {
             appVersion: DeviceInfoHelper.appVersion(),
             environment: self.buildConfig.apnsEnvironment,
             distribution: self.buildConfig.distribution,
-            apnsTokenHex: apnsTokenHex)
+            apnsTokenHex: apnsTokenHex,
+            gatewayIdentity: gatewayIdentity)
         let registrationState = PushRelayRegistrationStore.RegistrationState(
             relayHandle: response.relayHandle,
             sendGrant: response.sendGrant,
+            gatewayDeviceId: gatewayIdentity.deviceId,
             relayHandleExpiresAtMs: response.expiresAtMs,
             tokenDebugSuffix: Self.normalizeTokenSuffix(response.tokenSuffix),
             lastAPNsTokenHashHex: tokenHashHex,
@@ -105,6 +130,7 @@ actor PushRegistrationManager {
             RelayGatewayPushRegistrationPayload(
                 relayHandle: response.relayHandle,
                 sendGrant: response.sendGrant,
+                gatewayDeviceId: gatewayIdentity.deviceId,
                 installationId: installationId,
                 topic: topic,
                 environment: self.buildConfig.apnsEnvironment.rawValue,

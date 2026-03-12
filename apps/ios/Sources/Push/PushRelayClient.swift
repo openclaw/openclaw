@@ -41,6 +41,7 @@ private struct PushRelayRegisterSignedPayload: Encodable {
     var bundleId: String
     var environment: String
     var distribution: String
+    var gateway: PushRelayGatewayIdentity
     var appVersion: String
     var apnsToken: String
 }
@@ -63,6 +64,7 @@ private struct PushRelayRegisterRequest: Encodable {
     var bundleId: String
     var environment: String
     var distribution: String
+    var gateway: PushRelayGatewayIdentity
     var appVersion: String
     var apnsToken: String
     var appAttest: PushRelayAppAttestPayload
@@ -233,7 +235,8 @@ final class PushRelayClient: @unchecked Sendable {
         appVersion: String,
         environment: PushAPNsEnvironment,
         distribution: PushDistributionMode,
-        apnsTokenHex: String)
+        apnsTokenHex: String,
+        gatewayIdentity: PushRelayGatewayIdentity)
     async throws -> PushRelayRegisterResponse {
         let challenge = try await self.fetchChallenge()
         let signedPayload = PushRelayRegisterSignedPayload(
@@ -242,6 +245,7 @@ final class PushRelayClient: @unchecked Sendable {
             bundleId: bundleId,
             environment: environment.rawValue,
             distribution: distribution.rawValue,
+            gateway: gatewayIdentity,
             appVersion: appVersion,
             apnsToken: apnsTokenHex)
         let signedPayloadData = try self.jsonEncoder.encode(signedPayload)
@@ -255,6 +259,7 @@ final class PushRelayClient: @unchecked Sendable {
             bundleId: signedPayload.bundleId,
             environment: signedPayload.environment,
             distribution: signedPayload.distribution,
+            gateway: signedPayload.gateway,
             appVersion: signedPayload.appVersion,
             apnsToken: signedPayload.apnsToken,
             appAttest: PushRelayAppAttestPayload(

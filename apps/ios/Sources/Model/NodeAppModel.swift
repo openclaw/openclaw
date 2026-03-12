@@ -12,6 +12,12 @@ import UserNotifications
 private struct NotificationCallError: Error, Sendable {
     let message: String
 }
+
+private struct GatewayRelayIdentityResponse: Decodable {
+    let deviceId: String
+    let publicKey: String
+}
+
 // Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -2502,15 +2508,36 @@ extension NodeAppModel {
         }
 
         do {
+            let gatewayIdentity: PushRelayGatewayIdentity?
+            if await self.pushRegistrationManager.usesRelayTransport {
+                gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+            } else {
+                gatewayIdentity = nil
+            }
             let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
                 apnsTokenHex: token,
-                topic: topic)
+                topic: topic,
+                gatewayIdentity: gatewayIdentity)
             await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
         } catch {
             self.pushWakeLogger.error(
                 "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
+        let response = try await self.operatorGateway.request(
+            method: "gateway.identity.get",
+            paramsJSON: "{}",
+            timeoutSeconds: 8)
+        let decoded = try JSONDecoder().decode(GatewayRelayIdentityResponse.self, from: response)
+        let deviceId = decoded.deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let publicKey = decoded.publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deviceId.isEmpty, !publicKey.isEmpty else {
+            throw PushRelayError.relayMisconfigured("Gateway identity response missing required fields")
+        }
+        return PushRelayGatewayIdentity(deviceId: deviceId, publicKey: publicKey)
     }
 
     private static func isSilentPushPayload(_ userInfo: [AnyHashable: Any]) -> Bool {

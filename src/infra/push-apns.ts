@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { DeviceIdentity } from "./device-identity.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 import {
   type ApnsRelayConfig,
@@ -826,6 +827,7 @@ async function sendRelayApnsPush(params: {
   payload: object;
   pushType: ApnsPushType;
   priority: "10" | "5";
+  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   requestSender?: ApnsRelayRequestSender;
 }): Promise<ApnsPushResult> {
   const response = await sendApnsRelayPush({
@@ -835,6 +837,7 @@ async function sendRelayApnsPush(params: {
     payload: params.payload,
     pushType: params.pushType,
     priority: params.priority,
+    gatewayIdentity: params.gatewayIdentity,
     requestSender: params.requestSender,
   });
   return toPushResult({ registration: params.registration, response });
@@ -888,6 +891,7 @@ type RelayApnsAlertParams = ApnsAlertCommonParams & {
   registration: RelayApnsRegistration;
   relayConfig: ApnsRelayConfig;
   relayRequestSender?: ApnsRelayRequestSender;
+  relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   auth?: never;
   requestSender?: never;
 };
@@ -910,6 +914,7 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
   registration: RelayApnsRegistration;
   relayConfig: ApnsRelayConfig;
   relayRequestSender?: ApnsRelayRequestSender;
+  relayGatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   auth?: never;
   requestSender?: never;
 };
@@ -931,6 +936,7 @@ export async function sendApnsAlert(
       payload,
       pushType: "alert",
       priority: "10",
+      gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
     });
   }
@@ -962,6 +968,7 @@ export async function sendApnsBackgroundWake(
       payload,
       pushType: "background",
       priority: "5",
+      gatewayIdentity: relayParams.relayGatewayIdentity,
       requestSender: relayParams.relayRequestSender,
     });
   }

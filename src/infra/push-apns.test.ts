@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  deriveDeviceIdFromPublicKey,
+  publicKeyRawBase64UrlFromPem,
+  verifyDeviceSignature,
+} from "./device-identity.js";
+import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -23,6 +28,20 @@ const tempDirs: string[] = [];
 const testAuthPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
   .privateKey.export({ format: "pem", type: "pkcs8" })
   .toString();
+const relayGatewayIdentity = (() => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
+  if (!deviceId) {
+    throw new Error("failed to derive test gateway device id");
+  }
+  return {
+    deviceId,
+    publicKey: publicKeyRaw,
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+  };
+})();
 
 async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-test-"));
@@ -545,12 +564,14 @@ describe("push APNs send semantics", () => {
       nodeId: "ios-node-relay",
       title: "Wake",
       body: "Ping",
+      relayGatewayIdentity: relayGatewayIdentity,
       relayRequestSender: send,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toMatchObject({
       relayHandle: "relay-handle-123",
+      gatewayDeviceId: relayGatewayIdentity.deviceId,
       pushType: "alert",
       priority: "10",
       payload: {
@@ -560,6 +581,18 @@ describe("push APNs send semantics", () => {
         },
       },
     });
+    const sent = send.mock.calls[0]?.[0];
+    expect(typeof sent?.signature).toBe("string");
+    expect(typeof sent?.signedAtMs).toBe("number");
+    const signedPayload = [
+      "openclaw-relay-send-v1",
+      sent?.gatewayDeviceId,
+      String(sent?.signedAtMs),
+      sent?.bodyJson,
+    ].join("\n");
+    expect(
+      verifyDeviceSignature(relayGatewayIdentity.publicKey, signedPayload, sent?.signature),
+    ).toBe(true);
     expect(result).toMatchObject({
       ok: true,
       status: 200,
@@ -587,6 +620,7 @@ describe("push APNs send semantics", () => {
       payload: { aps: { "content-available": 1 } },
       pushType: "background",
       priority: "5",
+      gatewayIdentity: relayGatewayIdentity,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);

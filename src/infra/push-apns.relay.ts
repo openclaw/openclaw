@@ -1,5 +1,10 @@
 import { URL } from "node:url";
 import type { GatewayConfig } from "../config/types.gateway.js";
+import {
+  loadOrCreateDeviceIdentity,
+  signDevicePayload,
+  type DeviceIdentity,
+} from "./device-identity.js";
 
 export type ApnsRelayPushType = "alert" | "background";
 
@@ -25,12 +30,19 @@ export type ApnsRelayRequestSender = (params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
   relayHandle: string;
+  gatewayDeviceId: string;
+  signature: string;
+  signedAtMs: number;
+  bodyJson: string;
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
   payload: object;
 }) => Promise<ApnsRelayPushResponse>;
 
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
+const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
+const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
+const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
 
 function normalizeNonEmptyString(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? "";
@@ -67,6 +79,19 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 
 function parseReason(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function buildRelayGatewaySignaturePayload(params: {
+  gatewayDeviceId: string;
+  signedAtMs: number;
+  bodyJson: string;
+}): string {
+  return [
+    "openclaw-relay-send-v1",
+    params.gatewayDeviceId.trim(),
+    String(Math.trunc(params.signedAtMs)),
+    params.bodyJson,
+  ].join("\n");
 }
 
 export function resolveApnsRelayConfigFromEnv(
@@ -132,6 +157,10 @@ async function sendApnsRelayRequest(params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
   relayHandle: string;
+  gatewayDeviceId: string;
+  signature: string;
+  signedAtMs: number;
+  bodyJson: string;
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
   payload: object;
@@ -142,13 +171,11 @@ async function sendApnsRelayRequest(params: {
     headers: {
       authorization: `Bearer ${params.sendGrant}`,
       "content-type": "application/json",
+      [GATEWAY_DEVICE_ID_HEADER]: params.gatewayDeviceId,
+      [GATEWAY_SIGNATURE_HEADER]: params.signature,
+      [GATEWAY_SIGNED_AT_HEADER]: String(params.signedAtMs),
     },
-    body: JSON.stringify({
-      relayHandle: params.relayHandle,
-      pushType: params.pushType,
-      priority: Number(params.priority),
-      payload: params.payload,
-    }),
+    body: params.bodyJson,
     signal: AbortSignal.timeout(params.relayConfig.timeoutMs),
   });
   if (response.status >= 300 && response.status < 400) {
@@ -192,13 +219,34 @@ export async function sendApnsRelayPush(params: {
   pushType: ApnsRelayPushType;
   priority: "10" | "5";
   payload: object;
+  gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
   requestSender?: ApnsRelayRequestSender;
 }): Promise<ApnsRelayPushResponse> {
   const sender = params.requestSender ?? sendApnsRelayRequest;
+  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateDeviceIdentity();
+  const signedAtMs = Date.now();
+  const bodyJson = JSON.stringify({
+    relayHandle: params.relayHandle,
+    pushType: params.pushType,
+    priority: Number(params.priority),
+    payload: params.payload,
+  });
+  const signature = signDevicePayload(
+    gatewayIdentity.privateKeyPem,
+    buildRelayGatewaySignaturePayload({
+      gatewayDeviceId: gatewayIdentity.deviceId,
+      signedAtMs,
+      bodyJson,
+    }),
+  );
   return await sender({
     relayConfig: params.relayConfig,
     sendGrant: params.sendGrant,
     relayHandle: params.relayHandle,
+    gatewayDeviceId: gatewayIdentity.deviceId,
+    signature,
+    signedAtMs,
+    bodyJson,
     pushType: params.pushType,
     priority: params.priority,
     payload: params.payload,
