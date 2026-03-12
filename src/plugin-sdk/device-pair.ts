@@ -1,5 +1,4 @@
 import { resolveGatewayPort as resolveCoreGatewayPort } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 
 // Narrow plugin-sdk surface for the bundled device-pair plugin.
