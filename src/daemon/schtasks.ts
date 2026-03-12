@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
+import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
@@ -15,6 +16,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
+  GatewayServiceRestartResult,
 } from "./service-types.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
@@ -35,7 +37,9 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   return path.join(stateDir, scriptName);
 }
 
-function quoteCmdArg(value: string): string {
+// `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
+// Keep their quoting strategies separate so each parser gets the encoding it expects.
+function quoteSchtasksArg(value: string): string {
   if (!/[ \t"]/g.test(value)) {
     return value;
   }
@@ -57,12 +61,6 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
-function parseCommandLine(value: string): string[] {
-  // `buildTaskScript` only escapes quotes (`\"`).
-  // Keep all other backslashes literal so drive and UNC paths are preserved.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" });
-}
-
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -77,25 +75,21 @@ export async function readScheduledTaskCommand(
       if (!line) {
         continue;
       }
+      const lower = line.toLowerCase();
       if (line.startsWith("@echo")) {
         continue;
       }
-      if (line.toLowerCase().startsWith("rem ")) {
+      if (lower.startsWith("rem ")) {
         continue;
       }
-      if (line.toLowerCase().startsWith("set ")) {
-        const assignment = line.slice(4).trim();
-        const index = assignment.indexOf("=");
-        if (index > 0) {
-          const key = assignment.slice(0, index).trim();
-          const value = assignment.slice(index + 1).trim();
-          if (key) {
-            environment[key] = value;
-          }
+      if (lower.startsWith("set ")) {
+        const assignment = parseCmdSetAssignment(line.slice(4));
+        if (assignment) {
+          environment[assignment.key] = assignment.value;
         }
         continue;
       }
-      if (line.toLowerCase().startsWith("cd /d ")) {
+      if (lower.startsWith("cd /d ")) {
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
@@ -106,7 +100,7 @@ export async function readScheduledTaskCommand(
       return null;
     }
     return {
-      programArguments: parseCommandLine(commandLine),
+      programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
     };
@@ -139,6 +133,53 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   return info;
 }
 
+function normalizeTaskResultCode(value?: string): string | null {
+  if (!value) {
+    return null;
+  }
+  const raw = value.trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^0x[0-9a-f]+$/.test(raw)) {
+    return `0x${raw.slice(2).replace(/^0+/, "") || "0"}`;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number.parseInt(raw, 10);
+    if (Number.isFinite(numeric)) {
+      return `0x${numeric.toString(16)}`;
+    }
+  }
+
+  return null;
+}
+
+const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const UNKNOWN_STATUS_DETAIL =
+  "Task status is locale-dependent and no numeric Last Run Result was available.";
+
+export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
+  status: GatewayServiceRuntime["status"];
+  detail?: string;
+} {
+  const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
+  if (normalizedResult != null) {
+    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+      return { status: "running" };
+    }
+    return {
+      status: "stopped",
+      detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
+    };
+  }
+  if (parsed.status?.trim()) {
+    return { status: "unknown", detail: UNKNOWN_STATUS_DETAIL };
+  }
+  return { status: "unknown" };
+}
+
 function buildTaskScript({
   description,
   programArguments,
@@ -146,21 +187,26 @@ function buildTaskScript({
   environment,
 }: GatewayServiceRenderArgs): string {
   const lines: string[] = ["@echo off"];
-  if (description?.trim()) {
-    lines.push(`rem ${description.trim()}`);
+  const trimmedDescription = description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, "Task description");
+    lines.push(`rem ${trimmedDescription}`);
   }
   if (workingDirectory) {
-    lines.push(`cd /d ${quoteCmdArg(workingDirectory)}`);
+    lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
       if (!value) {
         continue;
       }
-      lines.push(`set ${key}=${value}`);
+      if (key.toUpperCase() === "PATH") {
+        continue;
+      }
+      lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  const command = programArguments.map(quoteCmdArg).join(" ");
+  const command = programArguments.map(quoteCmdScriptArg).join(" ");
   lines.push(command);
   return `${lines.join("\r\n")}\r\n`;
 }
@@ -195,7 +241,7 @@ export async function installScheduledTask({
   await fs.writeFile(scriptPath, script, "utf8");
 
   const taskName = resolveTaskName(env);
-  const quotedScript = quoteCmdArg(scriptPath);
+  const quotedScript = quoteSchtasksArg(scriptPath);
   const baseArgs = [
     "/Create",
     "/F",
@@ -271,7 +317,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
-}: GatewayServiceControlArgs): Promise<void> {
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
   await execSchtasks(["/End", "/TN", taskName]);
@@ -280,6 +326,7 @@ export async function restartScheduledTask({
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
+  return { outcome: "completed" };
 }
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
@@ -312,12 +359,12 @@ export async function readScheduledTaskRuntime(
     };
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
-  const statusRaw = parsed.status?.toLowerCase();
-  const status = statusRaw === "running" ? "running" : statusRaw ? "stopped" : "unknown";
+  const derived = deriveScheduledTaskRuntimeStatus(parsed);
   return {
-    status,
+    status: derived.status,
     state: parsed.status,
     lastRunTime: parsed.lastRunTime,
     lastRunResult: parsed.lastRunResult,
+    ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }

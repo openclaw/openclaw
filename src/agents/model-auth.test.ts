@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import {
+  hasUsableCustomProviderApiKey,
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthMode,
+  resolveUsableCustomProviderApiKey,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
     const env = {
       AWS_BEARER_TOKEN_BEDROCK: "bearer",
       AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret",
+      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
 
@@ -17,7 +24,7 @@ describe("resolveAwsSdkEnvVarName", () => {
   it("uses access keys when bearer token is missing", () => {
     const env = {
       AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret",
+      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
       AWS_PROFILE: "default",
     } as NodeJS.ProcessEnv;
 
@@ -77,6 +84,18 @@ describe("resolveModelAuthMode", () => {
       ),
     ).toBe("aws-sdk");
   });
+
+  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
+  });
+
+  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
+    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
+      "aws-sdk",
+    );
+  });
 });
 
 describe("requireApiKey", () => {
@@ -103,5 +122,104 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+});
+
+describe("resolveUsableCustomProviderApiKey", () => {
+  it("returns literal custom provider keys", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: "sk-custom-runtime", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toEqual({
+      apiKey: "sk-custom-runtime",
+      source: "models.json",
+    });
+  });
+
+  it("does not treat non-env markers as usable credentials", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toBeNull();
+  });
+
+  it("resolves known env marker names from process env for custom providers", () => {
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-from-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: "OPENAI_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-from-env");
+      expect(resolved?.source).toContain("OPENAI_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat known env marker names as usable when env value is missing", () => {
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      expect(
+        hasUsableCustomProviderApiKey(
+          {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.com/v1",
+                  apiKey: "OPENAI_API_KEY",
+                  models: [],
+                },
+              },
+            },
+          },
+          "custom",
+        ),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
   });
 });

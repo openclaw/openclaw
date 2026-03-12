@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   loadApnsRegistration: vi.fn(),
   resolveApnsAuthConfigFromEnv: vi.fn(),
   sendApnsBackgroundWake: vi.fn(),
+  sendApnsAlert: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -32,6 +33,7 @@ vi.mock("../../infra/push-apns.js", () => ({
   loadApnsRegistration: mocks.loadApnsRegistration,
   resolveApnsAuthConfigFromEnv: mocks.resolveApnsAuthConfigFromEnv,
   sendApnsBackgroundWake: mocks.sendApnsBackgroundWake,
+  sendApnsAlert: mocks.sendApnsAlert,
 }));
 
 type RespondCall = [
@@ -47,6 +49,7 @@ type RespondCall = [
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
+  platform?: string;
 };
 
 const WAKE_WAIT_TIMEOUT_MS = 3_001;
@@ -81,15 +84,68 @@ async function invokeNode(params: {
   requestParams?: Partial<Record<string, unknown>>;
 }) {
   const respond = vi.fn();
+  const logGateway = {
+    info: vi.fn(),
+    warn: vi.fn(),
+  };
   await nodeHandlers["node.invoke"]({
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
+      logGateway,
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
+async function pullPending(nodeId: string) {
+  const respond = vi.fn();
+  await nodeHandlers["node.pending.pull"]({
+    params: {},
+    respond: respond as never,
+    context: {} as never,
+    client: {
+      connect: {
+        role: "node",
+        client: {
+          id: nodeId,
+          mode: "node",
+          name: "ios-test",
+          platform: "iOS 26.4.0",
+          version: "test",
+        },
+      },
+    } as never,
+    req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
+async function ackPending(nodeId: string, ids: string[]) {
+  const respond = vi.fn();
+  await nodeHandlers["node.pending.ack"]({
+    params: { ids },
+    respond: respond as never,
+    context: {} as never,
+    client: {
+      connect: {
+        role: "node",
+        client: {
+          id: nodeId,
+          mode: "node",
+          name: "ios-test",
+          platform: "iOS 26.4.0",
+          version: "test",
+        },
+      },
+    } as never,
+    req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });
   return respond;
@@ -108,7 +164,7 @@ function mockSuccessfulWakeConfig(nodeId: string) {
     value: {
       teamId: "TEAM123",
       keyId: "KEY123",
-      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
     },
   });
   mocks.sendApnsBackgroundWake.mockResolvedValue({
@@ -122,19 +178,20 @@ function mockSuccessfulWakeConfig(nodeId: string) {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockReset();
+    mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({});
-    mocks.resolveNodeCommandAllowlist.mockReset();
+    mocks.resolveNodeCommandAllowlist.mockClear();
     mocks.resolveNodeCommandAllowlist.mockReturnValue([]);
-    mocks.isNodeCommandAllowed.mockReset();
+    mocks.isNodeCommandAllowed.mockClear();
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
-    mocks.sanitizeNodeInvokeParamsForForwarding.mockReset();
+    mocks.sanitizeNodeInvokeParamsForForwarding.mockClear();
     mocks.sanitizeNodeInvokeParamsForForwarding.mockImplementation(
       ({ rawParams }: { rawParams: unknown }) => ({ ok: true, params: rawParams }),
     );
-    mocks.loadApnsRegistration.mockReset();
-    mocks.resolveApnsAuthConfigFromEnv.mockReset();
-    mocks.sendApnsBackgroundWake.mockReset();
+    mocks.loadApnsRegistration.mockClear();
+    mocks.resolveApnsAuthConfigFromEnv.mockClear();
+    mocks.sendApnsBackgroundWake.mockClear();
+    mocks.sendApnsAlert.mockClear();
   });
 
   afterEach(() => {
@@ -202,7 +259,7 @@ describe("node.invoke APNs wake path", () => {
     expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
   });
 
-  it("throttles repeated wake attempts for the same disconnected node", async () => {
+  it("forces one retry wake when the first wake still fails to reconnect", async () => {
     vi.useFakeTimers();
     mockSuccessfulWakeConfig("ios-node-throttle");
 
@@ -211,21 +268,148 @@ describe("node.invoke APNs wake path", () => {
       invoke: vi.fn().mockResolvedValue({ ok: true }),
     };
 
-    const first = invokeNode({
+    const invokePromise = invokeNode({
       nodeRegistry,
       requestParams: { nodeId: "ios-node-throttle", idempotencyKey: "idem-throttle-1" },
     });
-    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
-    await first;
+    await vi.advanceTimersByTimeAsync(20_000);
+    await invokePromise;
 
-    const second = invokeNode({
-      nodeRegistry,
-      requestParams: { nodeId: "ios-node-throttle", idempotencyKey: "idem-throttle-2" },
-    });
-    await vi.advanceTimersByTimeAsync(WAKE_WAIT_TIMEOUT_MS);
-    await second;
-
-    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("queues iOS foreground-only command failures and keeps them until acked", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-queued",
+        commands: ["canvas.navigate"],
+        platform: "iOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+        },
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-queued",
+        command: "canvas.navigate",
+        params: { url: "http://example.com/" },
+        idempotencyKey: "idem-queued",
+      },
+    });
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(call?.[2]?.message).toBe("node command queued until iOS returns to foreground");
+    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+
+    const pullRespond = await pullPending("ios-node-queued");
+    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(pullCall?.[0]).toBe(true);
+    expect(pullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      actions: [
+        expect.objectContaining({
+          command: "canvas.navigate",
+          paramsJSON: JSON.stringify({ url: "http://example.com/" }),
+        }),
+      ],
+    });
+
+    const repeatedPullRespond = await pullPending("ios-node-queued");
+    const repeatedPullCall = repeatedPullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(repeatedPullCall?.[0]).toBe(true);
+    expect(repeatedPullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      actions: [
+        expect.objectContaining({
+          command: "canvas.navigate",
+          paramsJSON: JSON.stringify({ url: "http://example.com/" }),
+        }),
+      ],
+    });
+
+    const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
+      ?.actions?.[0]?.id;
+    expect(queuedActionId).toBeTruthy();
+
+    const ackRespond = await ackPending("ios-node-queued", [queuedActionId!]);
+    const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
+    expect(ackCall?.[0]).toBe(true);
+    expect(ackCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      ackedIds: [queuedActionId],
+      remainingCount: 0,
+    });
+
+    const emptyPullRespond = await pullPending("ios-node-queued");
+    const emptyPullCall = emptyPullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(emptyPullCall?.[0]).toBe(true);
+    expect(emptyPullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-queued",
+      actions: [],
+    });
+  });
+
+  it("dedupes queued foreground actions by idempotency key", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "ios-node-dedupe",
+        commands: ["canvas.navigate"],
+        platform: "iPadOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+        },
+      }),
+    };
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-dedupe",
+        command: "canvas.navigate",
+        params: { url: "http://example.com/first" },
+        idempotencyKey: "idem-dedupe",
+      },
+    });
+    await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "ios-node-dedupe",
+        command: "canvas.navigate",
+        params: { url: "http://example.com/first" },
+        idempotencyKey: "idem-dedupe",
+      },
+    });
+
+    const pullRespond = await pullPending("ios-node-dedupe");
+    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    expect(pullCall?.[0]).toBe(true);
+    expect(pullCall?.[1]).toMatchObject({
+      nodeId: "ios-node-dedupe",
+      actions: [
+        expect.objectContaining({
+          command: "canvas.navigate",
+          paramsJSON: JSON.stringify({ url: "http://example.com/first" }),
+        }),
+      ],
+    });
+    const actions = (pullCall?.[1] as { actions?: unknown[] } | undefined)?.actions ?? [];
+    expect(actions).toHaveLength(1);
   });
 });

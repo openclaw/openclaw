@@ -26,10 +26,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
+vi.mock("../pairing/pairing-store.js", () => {
+  return {
+    readChannelAllowFromStore(...args: unknown[]) {
+      return readAllowFromStoreMock(...args);
+    },
+    upsertChannelPairingRequest(...args: unknown[]) {
+      return upsertPairingRequestMock(...args);
+    },
+  };
+});
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
@@ -87,6 +93,7 @@ vi.mock("./session.js", () => {
 });
 
 import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
+let createWaSocket: typeof import("./session.js").createWaSocket;
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
@@ -97,12 +104,19 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
 }
 
 describe("web inbound media saves with extension", () => {
+  async function getMockSocket() {
+    return (await createWaSocket(false, false)) as unknown as {
+      ev: import("node:events").EventEmitter;
+    };
+  }
+
   beforeEach(() => {
     saveMediaBufferSpy.mockClear();
     resetWebInboundDedupe();
   });
 
   beforeAll(async () => {
+    ({ createWaSocket } = await import("./session.js"));
     await fs.rm(HOME, { recursive: true, force: true });
   });
 
@@ -118,12 +132,7 @@ describe("web inbound media saves with extension", () => {
       accountId: "default",
       authDir: path.join(HOME, "wa-auth"),
     });
-    const { createWaSocket } = await import("./session.js");
-    const realSock = await (
-      createWaSocket as unknown as () => Promise<{
-        ev: import("node:events").EventEmitter;
-      }>
-    )();
+    const realSock = await getMockSocket();
 
     realSock.ev.emit("messages.upsert", {
       type: "notify",
@@ -202,12 +211,7 @@ describe("web inbound media saves with extension", () => {
       accountId: "default",
       authDir: path.join(HOME, "wa-auth"),
     });
-    const { createWaSocket } = await import("./session.js");
-    const realSock = await (
-      createWaSocket as unknown as () => Promise<{
-        ev: import("node:events").EventEmitter;
-      }>
-    )();
+    const realSock = await getMockSocket();
 
     const upsert = {
       type: "notify",

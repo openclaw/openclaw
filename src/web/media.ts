@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
+import { type MediaKind, maxBytesForKind } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
   convertHeicToJpeg,
@@ -13,13 +13,13 @@ import {
   resizeToJpeg,
 } from "../media/image-ops.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime, extensionForMime } from "../media/mime.js";
+import { detectMime, extensionForMime, kindFromMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
 
 export type WebMediaResult = {
   buffer: Buffer;
   contentType?: string;
-  kind: MediaKind;
+  kind: MediaKind | undefined;
   fileName?: string;
 };
 
@@ -33,6 +33,27 @@ type WebMediaOptions = {
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
 };
+
+function resolveWebMediaOptions(params: {
+  maxBytesOrOptions?: number | WebMediaOptions;
+  options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" };
+  optimizeImages: boolean;
+}): WebMediaOptions {
+  if (typeof params.maxBytesOrOptions === "number" || params.maxBytesOrOptions === undefined) {
+    return {
+      maxBytes: params.maxBytesOrOptions,
+      optimizeImages: params.optimizeImages,
+      ssrfPolicy: params.options?.ssrfPolicy,
+      localRoots: params.options?.localRoots,
+    };
+  }
+  return {
+    ...params.maxBytesOrOptions,
+    optimizeImages: params.optimizeImages
+      ? (params.maxBytesOrOptions.optimizeImages ?? true)
+      : false,
+  };
+}
 
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
@@ -73,9 +94,9 @@ async function assertLocalMediaAllowed(
     resolved = path.resolve(mediaPath);
   }
 
-  // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
+  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
   // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the tmpdir prefix match; require explicit
+  // `workspace-*` state roots via the temp-root prefix match; require explicit
   // localRoots for those.
   if (localRoots === undefined) {
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
@@ -263,12 +284,12 @@ async function loadWebMediaInternal(
   const clampAndFinalize = async (params: {
     buffer: Buffer;
     contentType?: string;
-    kind: MediaKind;
+    kind: MediaKind | undefined;
     fileName?: string;
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
-    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
+    const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {
@@ -303,7 +324,7 @@ async function loadWebMediaInternal(
   if (/^https?:\/\//i.test(mediaUrl)) {
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
-    const defaultFetchCap = maxBytesForKind("unknown");
+    const defaultFetchCap = maxBytesForKind("document");
     const fetchCap =
       maxBytes === undefined
         ? defaultFetchCap
@@ -312,7 +333,7 @@ async function loadWebMediaInternal(
           : maxBytes;
     const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
     const { buffer, contentType, fileName } = fetched;
-    const kind = mediaKindFromMime(contentType);
+    const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
@@ -364,7 +385,7 @@ async function loadWebMediaInternal(
     }
   }
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
-  const kind = mediaKindFromMime(mime);
+  const kind = kindFromMime(mime);
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
@@ -385,18 +406,10 @@ export async function loadWebMedia(
   maxBytesOrOptions?: number | WebMediaOptions,
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
-  if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
-    return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
-      optimizeImages: true,
-      ssrfPolicy: options?.ssrfPolicy,
-      localRoots: options?.localRoots,
-    });
-  }
-  return await loadWebMediaInternal(mediaUrl, {
-    ...maxBytesOrOptions,
-    optimizeImages: maxBytesOrOptions.optimizeImages ?? true,
-  });
+  return await loadWebMediaInternal(
+    mediaUrl,
+    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: true }),
+  );
 }
 
 export async function loadWebMediaRaw(
@@ -404,18 +417,10 @@ export async function loadWebMediaRaw(
   maxBytesOrOptions?: number | WebMediaOptions,
   options?: { ssrfPolicy?: SsrFPolicy; localRoots?: readonly string[] | "any" },
 ): Promise<WebMediaResult> {
-  if (typeof maxBytesOrOptions === "number" || maxBytesOrOptions === undefined) {
-    return await loadWebMediaInternal(mediaUrl, {
-      maxBytes: maxBytesOrOptions,
-      optimizeImages: false,
-      ssrfPolicy: options?.ssrfPolicy,
-      localRoots: options?.localRoots,
-    });
-  }
-  return await loadWebMediaInternal(mediaUrl, {
-    ...maxBytesOrOptions,
-    optimizeImages: false,
-  });
+  return await loadWebMediaInternal(
+    mediaUrl,
+    resolveWebMediaOptions({ maxBytesOrOptions, options, optimizeImages: false }),
+  );
 }
 
 export async function optimizeImageToJpeg(

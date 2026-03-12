@@ -1,20 +1,13 @@
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupBrowserControlServerTestContext,
   getBrowserControlServerBaseUrl,
-  getBrowserControlServerTestState,
-  getCdpMocks,
-  getFreePort,
   installBrowserControlServerHooks,
   makeResponse,
-  getPwMocks,
+  resetBrowserControlServerTestContext,
   startBrowserControlServerFromConfig,
-  stopBrowserControlServer,
 } from "./server.control-server.test-harness.js";
-
-const state = getBrowserControlServerTestState();
-const cdpMocks = getCdpMocks();
-const pwMocks = getPwMocks();
 
 describe("browser control server", () => {
   installBrowserControlServerHooks();
@@ -50,20 +43,7 @@ describe("browser control server", () => {
 
 describe("profile CRUD endpoints", () => {
   beforeEach(async () => {
-    state.reachable = false;
-    state.cfgAttachOnly = false;
-
-    for (const fn of Object.values(pwMocks)) {
-      fn.mockClear();
-    }
-    for (const fn of Object.values(cdpMocks)) {
-      fn.mockClear();
-    }
-
-    state.testPort = await getFreePort();
-    state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
-    state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    await resetBrowserControlServerTestContext();
 
     vi.stubGlobal(
       "fetch",
@@ -78,14 +58,7 @@ describe("profile CRUD endpoints", () => {
   });
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-    if (state.prevGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
-    } else {
-      process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
-    }
-    await stopBrowserControlServer();
+    await cleanupBrowserControlServerTestContext();
   });
 
   it("validates profile create/delete endpoints", async () => {
@@ -137,11 +110,24 @@ describe("profile CRUD endpoints", () => {
     const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
+      body: JSON.stringify({ name: "badremote", cdpUrl: "ftp://bad" }),
     });
     expect(createBadRemote.status).toBe(400);
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
+
+    const createBadExtension = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "badextension",
+        driver: "extension",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    });
+    expect(createBadExtension.status).toBe(400);
+    const createBadExtensionBody = (await createBadExtension.json()) as { error: string };
+    expect(createBadExtensionBody.error).toContain("loopback cdpUrl host");
 
     const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
       method: "DELETE",

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { logVerbose } from "../../globals.js";
+import { sleep } from "../../utils.js";
+import { loadWebMedia } from "../media.js";
 import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
@@ -22,10 +25,6 @@ vi.mock("../../utils.js", async (importOriginal) => {
     sleep: vi.fn(async () => {}),
   };
 });
-
-const { loadWebMedia } = await import("../media.js");
-const { sleep } = await import("../../utils.js");
-const { logVerbose } = await import("../../globals.js");
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -53,12 +52,64 @@ function mockFirstSendMediaFailure(msg: WebInboundMsg, message: string) {
   ).mockRejectedValueOnce(new Error(message));
 }
 
+function mockFirstReplyFailure(msg: WebInboundMsg, message: string) {
+  (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+    new Error(message),
+  );
+}
+
+function mockSecondReplySuccess(msg: WebInboundMsg) {
+  (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    undefined,
+  );
+}
+
 const replyLogger = {
   info: vi.fn(),
   warn: vi.fn(),
 };
 
+async function expectReplySuppressed(replyResult: { text: string; isReasoning?: boolean }) {
+  const msg = makeMsg();
+  await deliverWebReply({
+    replyResult,
+    msg,
+    maxMediaBytes: 1024 * 1024,
+    textLimit: 200,
+    replyLogger,
+    skipLog: true,
+  });
+  expect(msg.reply).not.toHaveBeenCalled();
+  expect(msg.sendMedia).not.toHaveBeenCalled();
+}
+
 describe("deliverWebReply", () => {
+  it("suppresses payloads flagged as reasoning", async () => {
+    await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
+  });
+
+  it("suppresses payloads that start with reasoning prefix text", async () => {
+    await expectReplySuppressed({ text: "   \n Reasoning:\n_hidden_" });
+  });
+
+  it("does not suppress messages that mention Reasoning: mid-text", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalledWith(
+      "Intro line\nReasoning: appears in content but is not a prefix",
+    );
+  });
+
   it("sends chunked text replies and logs a summary", async () => {
     const msg = makeMsg();
 
@@ -77,38 +128,31 @@ describe("deliverWebReply", () => {
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
-  it("retries text send on transient failure", async () => {
-    const msg = makeMsg();
-    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
-      new Error("connection closed"),
-    );
-    (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
-      undefined,
-    );
+  it.each(["connection closed", "operation timed out"])(
+    "retries text send on transient failure: %s",
+    async (errorMessage) => {
+      const msg = makeMsg();
+      mockFirstReplyFailure(msg, errorMessage);
+      mockSecondReplySuccess(msg);
 
-    await deliverWebReply({
-      replyResult: { text: "hi" },
-      msg,
-      maxMediaBytes: 1024 * 1024,
-      textLimit: 200,
-      replyLogger,
-      skipLog: true,
-    });
+      await deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      });
 
-    expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
-  });
+      expect(msg.reply).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(500);
+    },
+  );
 
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
+    mockLoadedImageMedia();
 
     await deliverWebReply({
       replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },

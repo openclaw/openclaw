@@ -1,15 +1,12 @@
 # OpenClaw iOS (Super Alpha)
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
 This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
 
 ## Distribution Status
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
-- Current distribution: local/manual deploy from source via Xcode.
-- App Store flow is not part of the current internal development path.
+- Public distribution: not available.
+- Internal beta distribution: local archive + TestFlight upload via Fastlane.
+- Local/manual deploy from source via Xcode remains the default development path.
 
 ## Super-Alpha Disclaimer
 
@@ -50,6 +47,45 @@ Shortcut command (same flow + open project):
 pnpm ios:open
 ```
 
+## Local Beta Release Flow
+
+Prereqs:
+
+- Xcode 16+
+- `pnpm`
+- `xcodegen`
+- `fastlane`
+- Apple account signed into Xcode for automatic signing/provisioning
+- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a beta build number or uploading to TestFlight
+
+Release behavior:
+
+- Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
+- Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
+- The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
+- Root `package.json.version` is the only version source for iOS.
+- A root version like `2026.3.11-beta.1` becomes:
+  - `CFBundleShortVersionString = 2026.3.11`
+  - `CFBundleVersion = next TestFlight build number for 2026.3.11`
+
+Archive without upload:
+
+```bash
+pnpm ios:beta:archive
+```
+
+Archive and upload to TestFlight:
+
+```bash
+pnpm ios:beta
+```
+
+If you need to force a specific build number:
+
+```bash
+pnpm ios:beta -- --build-number 7
+```
+
 ## APNs Expectations For Local/Manual Builds
 
 - The app calls `registerForRemoteNotifications()` at launch.
@@ -66,6 +102,37 @@ pnpm ios:open
 - Chat + Talk surfaces through the operator gateway session.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Share extension deep-link forwarding into the connected gateway session.
+
+## Location Automation Use Case (Testing)
+
+Use this for automation signals ("I moved", "I arrived", "I left"), not as a keep-awake mechanism.
+
+- Product intent:
+  - movement-aware automations driven by iOS location events
+  - example: arrival/exit geofence, significant movement, visit detection
+- Non-goal:
+  - continuous GPS polling just to keep the app alive
+
+Test path to include in QA runs:
+
+1. Enable location permission in app:
+   - set `Always` permission
+   - verify background location capability is enabled in the build profile
+2. Background the app and trigger movement:
+   - walk/drive enough for a significant location update, or cross a configured geofence
+3. Validate gateway side effects:
+   - node reconnect/wake if needed
+   - expected location/movement event arrives at gateway
+   - automation trigger executes once (no duplicate storm)
+4. Validate resource impact:
+   - no sustained high thermal state
+   - no excessive background battery drain over a short observation window
+
+Pass criteria:
+
+- movement events are delivered reliably enough for automation UX
+- no location-driven reconnect spam loops
+- app remains stable after repeated background/foreground transitions
 
 ## Known Issues / Limitations / Problems
 

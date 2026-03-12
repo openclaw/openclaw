@@ -56,10 +56,13 @@ describe("isTransientNetworkError", () => {
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EAI_AGAIN",
+      "EPROTO",
       "UND_ERR_CONNECT_TIMEOUT",
       "UND_ERR_SOCKET",
       "UND_ERR_HEADERS_TIMEOUT",
       "UND_ERR_BODY_TIMEOUT",
+      "ERR_SSL_WRONG_VERSION_NUMBER",
+      "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
     ];
 
     for (const code of codes) {
@@ -79,6 +82,12 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for fetch failed with unclassified cause", () => {
+    const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
+    const error = Object.assign(new TypeError("fetch failed"), { cause });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for nested cause chain with network error", () => {
     const innerCause = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
     const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
@@ -86,10 +95,54 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for Slack request errors that wrap network codes in .original", () => {
+    const error = Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN"), {
+      code: "slack_webapi_request_error",
+      original: {
+        errno: -3001,
+        code: "EAI_AGAIN",
+        syscall: "getaddrinfo",
+        hostname: "slack.com",
+      },
+    });
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for network codes nested in .data payloads", () => {
+    const error = {
+      code: "slack_webapi_request_error",
+      message: "A request error occurred",
+      data: {
+        code: "EAI_AGAIN",
+      },
+    };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for AggregateError containing network errors", () => {
     const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
     const error = new AggregateError([networkError], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped fetch-failed messages from integration clients", () => {
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for non-network fetch-failed wrappers from tools", () => {
+    const error = new Error("Web fetch failed (404): Not Found");
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns true for TLS/SSL transient message snippets", () => {
+    expect(isTransientNetworkError(new Error("write EPROTO 00A8B0C9:error"))).toBe(true);
+    expect(
+      isTransientNetworkError(
+        new Error("SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER while connecting"),
+      ),
+    ).toBe(true);
+    expect(isTransientNetworkError(new Error("tlsv1 alert protocol version"))).toBe(true);
   });
 
   it("returns false for regular errors without network codes", () => {
@@ -100,6 +153,18 @@ describe("isTransientNetworkError", () => {
 
   it("returns false for errors with non-network codes", () => {
     const error = Object.assign(new Error("test"), { code: "INVALID_CONFIG" });
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns false for Slack request errors without network indicators", () => {
+    const error = Object.assign(new Error("A request error occurred"), {
+      code: "slack_webapi_request_error",
+    });
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns false for non-transient undici codes that only appear in message text", () => {
+    const error = new Error("Request failed with UND_ERR_INVALID_ARG");
     expect(isTransientNetworkError(error)).toBe(false);
   });
 

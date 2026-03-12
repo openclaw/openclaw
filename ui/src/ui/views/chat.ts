@@ -21,6 +21,16 @@ export type CompactionIndicatorStatus = {
   completedAt: number | null;
 };
 
+export type FallbackIndicatorStatus = {
+  phase?: "active" | "cleared";
+  selected: string;
+  active: string;
+  previous?: string;
+  reason?: string;
+  attempts: string[];
+  occurredAt: number;
+};
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -30,8 +40,10 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   compactionStatus?: CompactionIndicatorStatus | null;
+  fallbackStatus?: FallbackIndicatorStatus | null;
   messages: unknown[];
   toolMessages: unknown[];
+  streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
@@ -72,6 +84,7 @@ export type ChatProps = {
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const FALLBACK_TOAST_DURATION_MS = 8000;
 
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
@@ -105,6 +118,45 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
   }
 
   return nothing;
+}
+
+function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefined) {
+  if (!status) {
+    return nothing;
+  }
+  const phase = status.phase ?? "active";
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
+    return nothing;
+  }
+  const details = [
+    `Selected: ${status.selected}`,
+    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
+    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
+    status.reason ? `Reason: ${status.reason}` : null,
+    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const message =
+    phase === "cleared"
+      ? `Fallback cleared: ${status.selected}`
+      : `Fallback active: ${status.active}`;
+  const className =
+    phase === "cleared"
+      ? "compaction-indicator compaction-indicator--fallback-cleared"
+      : "compaction-indicator compaction-indicator--fallback";
+  const icon = phase === "cleared" ? icons.check : icons.brain;
+  return html`
+    <div
+      class=${className}
+      role="status"
+      aria-live="polite"
+      title=${details}
+    >
+      ${icon} ${message}
+    </div>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -352,6 +404,7 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
+      ${renderFallbackIndicator(props.fallbackStatus)}
       ${renderCompactionIndicator(props.compactionStatus)}
 
       ${
@@ -445,9 +498,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
+    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 
-    if (!currentGroup || currentGroup.role !== role) {
+    if (
+      !currentGroup ||
+      currentGroup.role !== role ||
+      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+    ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
@@ -455,6 +513,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
+        senderLabel,
         messages: [{ message: item.message, key: item.key }],
         timestamp,
         isStreaming: false,
@@ -514,8 +573,21 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
+  // Interleave stream segments and tool cards in order. Each segment
+  // contains text that was streaming before the corresponding tool started.
+  // This ensures correct visual ordering: text → tool → text → tool → ...
+  const segments = props.streamSegments ?? [];
+  const maxLen = Math.max(segments.length, tools.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < segments.length && segments[i].text.trim().length > 0) {
+      items.push({
+        kind: "stream" as const,
+        key: `stream-seg:${props.sessionKey}:${i}`,
+        text: segments[i].text,
+        startedAt: segments[i].ts,
+      });
+    }
+    if (i < tools.length) {
       items.push({
         kind: "message",
         key: messageKey(tools[i], i + history.length),

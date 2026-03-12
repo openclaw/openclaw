@@ -1,16 +1,27 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+const log = createSubsystemLogger("agent-scope");
 
-export { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+/** Strip null bytes from paths to prevent ENOTDIR errors. */
+function stripNullBytes(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\0/g, "");
+}
+
+export { resolveAgentIdFromSessionKey };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
@@ -66,21 +77,29 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    console.warn("Multiple agents marked default=true; using the first entry as default.");
+    log.warn("Multiple agents marked default=true; using the first entry as default.");
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
 }
 
-export function resolveSessionAgentIds(params: { sessionKey?: string; config?: OpenClawConfig }): {
+export function resolveSessionAgentIds(params: {
+  sessionKey?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+}): {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+  const explicitAgentIdRaw =
+    typeof params.agentId === "string" ? params.agentId.trim().toLowerCase() : "";
+  const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? sessionKey.toLowerCase() : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
-  const sessionAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId;
+  const sessionAgentId =
+    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
   return { defaultAgentId, sessionAgentId };
 }
 
@@ -132,16 +151,43 @@ export function resolveAgentSkillsFilter(
   return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
 }
 
-export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
-  const raw = resolveAgentConfig(cfg, agentId)?.model;
-  if (!raw) {
+function resolveModelPrimary(raw: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  if (typeof raw === "string") {
-    return raw.trim() || undefined;
+  const primary = (raw as { primary?: unknown }).primary;
+  if (typeof primary !== "string") {
+    return undefined;
   }
-  const primary = raw.primary?.trim();
-  return primary || undefined;
+  const trimmed = primary.trim();
+  return trimmed || undefined;
+}
+
+export function resolveAgentExplicitModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  return resolveModelPrimary(raw);
+}
+
+export function resolveAgentEffectiveModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return (
+    resolveAgentExplicitModelPrimary(cfg, agentId) ??
+    resolveModelPrimary(cfg.agents?.defaults?.model)
+  );
+}
+
+// Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
+export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
+  return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
 
 export function resolveAgentModelFallbacksOverride(
@@ -159,6 +205,41 @@ export function resolveAgentModelFallbacksOverride(
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
+export function resolveFallbackAgentId(params: {
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): string {
+  const explicitAgentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+  if (explicitAgentId) {
+    return normalizeAgentId(explicitAgentId);
+  }
+  return resolveAgentIdFromSessionKey(params.sessionKey);
+}
+
+export function resolveRunModelFallbacksOverride(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): string[] | undefined {
+  if (!params.cfg) {
+    return undefined;
+  }
+  return resolveAgentModelFallbacksOverride(
+    params.cfg,
+    resolveFallbackAgentId({ agentId: params.agentId, sessionKey: params.sessionKey }),
+  );
+}
+
+export function hasConfiguredModelFallbacks(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): boolean {
+  const fallbacksOverride = resolveRunModelFallbacksOverride(params);
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
+  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+}
+
 export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -168,10 +249,7 @@ export function resolveEffectiveModelFallbacks(params: {
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
-  const defaultFallbacks =
-    typeof params.cfg.agents?.defaults?.model === "object"
-      ? (params.cfg.agents.defaults.model.fallbacks ?? [])
-      : [];
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
@@ -179,18 +257,74 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return stripNullBytes(resolveUserPath(configured));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
     const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
-      return resolveUserPath(fallback);
+      return stripNullBytes(resolveUserPath(fallback));
     }
-    return resolveDefaultAgentWorkspaceDir(process.env);
+    return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
   }
   const stateDir = resolveStateDir(process.env);
-  return path.join(stateDir, `workspace-${id}`);
+  return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+function normalizePathForComparison(input: string): string {
+  const resolved = path.resolve(stripNullBytes(resolveUserPath(input)));
+  let normalized = resolved;
+  // Prefer realpath when available to normalize aliases/symlinks (for example /tmp -> /private/tmp)
+  // and canonical path case without forcing case-folding on case-sensitive macOS volumes.
+  try {
+    normalized = fs.realpathSync.native(resolved);
+  } catch {
+    // Keep lexical path for non-existent directories.
+  }
+  if (process.platform === "win32") {
+    return normalized.toLowerCase();
+  }
+  return normalized;
+}
+
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export function resolveAgentIdsByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string[] {
+  const normalizedWorkspacePath = normalizePathForComparison(workspacePath);
+  const ids = listAgentIds(cfg);
+  const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
+
+  for (let index = 0; index < ids.length; index += 1) {
+    const id = ids[index];
+    const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
+    if (!isPathWithinRoot(normalizedWorkspacePath, workspaceDir)) {
+      continue;
+    }
+    matches.push({ id, workspaceDir, order: index });
+  }
+
+  matches.sort((left, right) => {
+    const workspaceLengthDelta = right.workspaceDir.length - left.workspaceDir.length;
+    if (workspaceLengthDelta !== 0) {
+      return workspaceLengthDelta;
+    }
+    return left.order - right.order;
+  });
+
+  return matches.map((entry) => entry.id);
+}
+
+export function resolveAgentIdByWorkspacePath(
+  cfg: OpenClawConfig,
+  workspacePath: string,
+): string | undefined {
+  return resolveAgentIdsByWorkspacePath(cfg, workspacePath)[0];
 }
 
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {

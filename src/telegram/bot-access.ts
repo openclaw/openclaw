@@ -1,4 +1,10 @@
+import {
+  firstDefined,
+  isSenderIdAllowed,
+  mergeDmAllowFromSources,
+} from "../channels/allow-from.js";
 import type { AllowlistMatch } from "../channels/allowlist-match.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -10,6 +16,7 @@ export type NormalizedAllowFrom = {
 export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
 
 const warnedInvalidEntries = new Set<string>();
+const log = createSubsystemLogger("telegram/bot-access");
 
 function warnInvalidAllowFromEntries(entries: string[]) {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -20,11 +27,12 @@ function warnInvalidAllowFromEntries(entries: string[]) {
       continue;
     }
     warnedInvalidEntries.add(entry);
-    console.warn(
+    log.warn(
       [
-        "[telegram] Invalid allowFrom entry:",
+        "Invalid allowFrom entry:",
         JSON.stringify(entry),
-        "- allowFrom/groupAllowFrom authorization requires numeric Telegram sender IDs only.",
+        "- allowFrom/groupAllowFrom authorization expects numeric Telegram sender user IDs only.",
+        'To allow a Telegram group or supergroup, add its negative chat ID under "channels.telegram.groups" instead.',
         'If you had "@username" entries, re-run onboarding (it resolves @username to IDs) or replace them manually.',
       ].join(" "),
     );
@@ -50,24 +58,11 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
   };
 };
 
-export const normalizeAllowFromWithStore = (params: {
+export const normalizeDmAllowFromWithStore = (params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: string[];
-}): NormalizedAllowFrom => {
-  const combined = [...(params.allowFrom ?? []), ...(params.storeAllowFrom ?? [])]
-    .map((value) => String(value).trim())
-    .filter(Boolean);
-  return normalizeAllowFrom(combined);
-};
-
-export const firstDefined = <T>(...values: Array<T | undefined>) => {
-  for (const value of values) {
-    if (typeof value !== "undefined") {
-      return value;
-    }
-  }
-  return undefined;
-};
+  dmPolicy?: string;
+}): NormalizedAllowFrom => normalizeAllowFrom(mergeDmAllowFromSources(params));
 
 export const isSenderAllowed = (params: {
   allow: NormalizedAllowFrom;
@@ -75,17 +70,10 @@ export const isSenderAllowed = (params: {
   senderUsername?: string;
 }) => {
   const { allow, senderId } = params;
-  if (!allow.hasEntries) {
-    return true;
-  }
-  if (allow.hasWildcard) {
-    return true;
-  }
-  if (senderId && allow.entries.includes(senderId)) {
-    return true;
-  }
-  return false;
+  return isSenderIdAllowed(allow, senderId, true);
 };
+
+export { firstDefined };
 
 export const resolveSenderAllowMatch = (params: {
   allow: NormalizedAllowFrom;

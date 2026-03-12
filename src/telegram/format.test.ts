@@ -1,45 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
-  it("renders basic inline formatting", () => {
-    const res = markdownToTelegramHtml("hi _there_ **boss** `code`");
-    expect(res).toBe("hi <i>there</i> <b>boss</b> <code>code</code>");
-  });
-
-  it("renders links as Telegram-safe HTML", () => {
-    const res = markdownToTelegramHtml("see [docs](https://example.com)");
-    expect(res).toBe('see <a href="https://example.com">docs</a>');
-  });
-
-  it("escapes raw HTML", () => {
-    const res = markdownToTelegramHtml("<b>nope</b>");
-    expect(res).toBe("&lt;b&gt;nope&lt;/b&gt;");
-  });
-
-  it("escapes unsafe characters", () => {
-    const res = markdownToTelegramHtml("a & b < c");
-    expect(res).toBe("a &amp; b &lt; c");
-  });
-
-  it("renders paragraphs with blank lines", () => {
-    const res = markdownToTelegramHtml("first\n\nsecond");
-    expect(res).toBe("first\n\nsecond");
-  });
-
-  it("renders lists without block HTML", () => {
-    const res = markdownToTelegramHtml("- one\n- two");
-    expect(res).toBe("• one\n• two");
-  });
-
-  it("renders ordered lists with numbering", () => {
-    const res = markdownToTelegramHtml("2. two\n3. three");
-    expect(res).toBe("2. two\n3. three");
-  });
-
-  it("flattens headings", () => {
-    const res = markdownToTelegramHtml("# Title");
-    expect(res).toBe("Title");
+  it("handles core markdown-to-telegram conversions", () => {
+    const cases = [
+      [
+        "renders basic inline formatting",
+        "hi _there_ **boss** `code`",
+        "hi <i>there</i> <b>boss</b> <code>code</code>",
+      ],
+      [
+        "renders links as Telegram-safe HTML",
+        "see [docs](https://example.com)",
+        'see <a href="https://example.com">docs</a>',
+      ],
+      ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
+      ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
+      ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
+      ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
+      ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
+      ["flattens headings", "# Title", "Title"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(markdownToTelegramHtml(input), name).toBe(expected);
+    }
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {
@@ -109,5 +93,45 @@ describe("markdownToTelegramHtml", () => {
   it("renders spoiler with nested formatting", () => {
     const res = markdownToTelegramHtml("||**secret** text||");
     expect(res).toBe("<tg-spoiler><b>secret</b> text</tg-spoiler>");
+  });
+
+  it("does not treat single pipe as spoiler", () => {
+    const res = markdownToTelegramHtml("(￣_￣|) face");
+    expect(res).not.toContain("tg-spoiler");
+    expect(res).toContain("|");
+  });
+
+  it("does not treat unpaired || as spoiler", () => {
+    const res = markdownToTelegramHtml("before || after");
+    expect(res).not.toContain("tg-spoiler");
+    expect(res).toContain("||");
+  });
+
+  it("keeps valid spoiler pairs when a trailing || is unmatched", () => {
+    const res = markdownToTelegramHtml("||secret|| trailing ||");
+    expect(res).toContain("<tg-spoiler>secret</tg-spoiler>");
+    expect(res).toContain("trailing ||");
+  });
+
+  it("splits long multiline html text without breaking balanced tags", () => {
+    const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
+  });
+
+  it("fails loudly when a leading entity cannot fit inside a chunk", () => {
+    expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
+  });
+
+  it("treats malformed leading ampersands as plain text when chunking html", () => {
+    const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("fails loudly when tag overhead leaves no room for text", () => {
+    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });
 });

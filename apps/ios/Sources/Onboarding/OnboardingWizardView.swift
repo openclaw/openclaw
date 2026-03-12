@@ -134,7 +134,10 @@ struct OnboardingWizardView: View {
                     Button("Done") {
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
-                            to: nil, from: nil, for: nil)
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 }
             }
@@ -486,21 +489,7 @@ struct OnboardingWizardView: View {
             TextField("Port", text: self.$manualPortText)
                 .keyboardType(.numberPad)
             Toggle("Use TLS", isOn: self.$manualTLS)
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         } header: {
             Text("Developer Local")
         } footer: {
@@ -547,7 +536,7 @@ struct OnboardingWizardView: View {
                     Text(
                         "Approve this device on the gateway.\n"
                             + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
-                            + "2) `/pair approve` in Telegram\n"
+                            + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
                             + "OpenClaw will also retry automatically when you return to this app.")
                 }
@@ -628,22 +617,25 @@ struct OnboardingWizardView: View {
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-
-            Button {
-                Task { await self.connectManual() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                    }
-                } else {
-                    Text("Connect")
-                }
-            }
-            .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+            self.manualConnectButton
         }
+    }
+
+    private var manualConnectButton: some View {
+        Button {
+            Task { await self.connectManual() }
+        } label: {
+            if self.connectingGatewayID == "manual" {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text("Connecting…")
+                }
+            } else {
+                Text("Connect")
+            }
+        }
+        .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
@@ -716,8 +708,10 @@ struct OnboardingWizardView: View {
     private func detectQRCode(from data: Data) -> String? {
         guard let ciImage = CIImage(data: data) else { return nil }
         let detector = CIDetector(
-            ofType: CIDetectorTypeQRCode, context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
         let features = detector?.features(in: ciImage) ?? []
         for feature in features {
             if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {

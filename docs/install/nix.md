@@ -23,7 +23,7 @@ What I need you to do:
 1. Check if Determinate Nix is installed (if not, install it)
 2. Create a local flake at ~/code/openclaw-local using templates/agent-first/flake.nix
 3. Help me create a Telegram bot (@BotFather) and get my chat ID (@userinfobot)
-4. Set up secrets (bot token, Anthropic key) - plain files at ~/.secrets/ is fine
+4. Set up secrets (bot token, model provider API key) - plain files at ~/.secrets/ is fine
 5. Fill in the template placeholders and run home-manager switch
 6. Verify: launchd running, bot responds to messages
 
@@ -58,7 +58,7 @@ On macOS, the GUI app does not automatically inherit shell env vars. You can
 also enable Nix mode via defaults:
 
 ```bash
-defaults write bot.molt.mac openclaw.nixMode -bool true
+defaults write ai.openclaw.mac openclaw.nixMode -bool true
 ```
 
 ### Config + state paths

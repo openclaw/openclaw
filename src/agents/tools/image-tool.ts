@@ -1,20 +1,9 @@
-import path from "node:path";
-import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
-import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
-import { runWithImageModelFallback } from "../model-fallback.js";
-import { resolveConfiguredModelRef } from "../model-selection.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
-import { normalizeWorkspaceDir } from "../workspace-dir.js";
-import type { AnyAgentTool } from "./common.js";
+import { loadWebMedia } from "../../web/media.js";
+import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -22,6 +11,27 @@ import {
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
+import {
+  applyImageModelConfigDefaults,
+  buildTextToolResult,
+  resolveModelFromRegistry,
+  resolveMediaToolLocalRoots,
+  resolveModelRuntimeApiKey,
+  resolvePromptAndModelOverride,
+} from "./media-tool-shared.js";
+import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
+import {
+  createSandboxBridgeReadFile,
+  discoverAuthStorage,
+  discoverModels,
+  ensureOpenClawModelsJson,
+  resolveSandboxedBridgeMediaPath,
+  runWithImageModelFallback,
+  type AnyAgentTool,
+  type SandboxedBridgeMediaPathConfig,
+  type SandboxFsBridge,
+  type ToolFsPolicy,
+} from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
@@ -43,31 +53,6 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
-function resolveDefaultModelRef(cfg?: OpenClawConfig): {
-  provider: string;
-  model: string;
-} {
-  if (cfg) {
-    const resolved = resolveConfiguredModelRef({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    return { provider: resolved.provider, model: resolved.model };
-  }
-  return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
-}
-
-function hasAuthForProvider(params: { provider: string; agentDir: string }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) {
-    return true;
-  }
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  return listProfilesForProvider(store, params.provider).length > 0;
 }
 
 /**
@@ -125,8 +110,8 @@ export function resolveImageModelConfigForTool(params: {
   let preferred: string | null = null;
 
   // MiniMax users: always try the canonical vision model first when auth exists.
-  if (primary.provider === "minimax" && providerOk) {
-    preferred = "minimax/MiniMax-VL-01";
+  if (isMinimaxVlmProvider(primary.provider) && providerOk) {
+    preferred = `${primary.provider}/MiniMax-VL-01`;
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
   } else if (primary.provider === "zai" && providerOk) {
@@ -209,40 +194,6 @@ type ImageSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
-async function resolveSandboxedImagePath(params: {
-  sandbox: ImageSandboxConfig;
-  imagePath: string;
-}): Promise<{ resolved: string; rewrittenFrom?: string }> {
-  const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
-  const filePath = normalize(params.imagePath);
-  try {
-    const resolved = params.sandbox.bridge.resolvePath({
-      filePath,
-      cwd: params.sandbox.root,
-    });
-    return { resolved: resolved.hostPath };
-  } catch (err) {
-    const name = path.basename(filePath);
-    const candidateRel = path.join("media", "inbound", name);
-    try {
-      const stat = await params.sandbox.bridge.stat({
-        filePath: candidateRel,
-        cwd: params.sandbox.root,
-      });
-      if (!stat) {
-        throw err;
-      }
-    } catch {
-      throw err;
-    }
-    const out = params.sandbox.bridge.resolvePath({
-      filePath: candidateRel,
-      cwd: params.sandbox.root,
-    });
-    return { resolved: out.hostPath, rewrittenFrom: filePath };
-  }
-}
-
 async function runImagePrompt(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -256,18 +207,7 @@ async function runImagePrompt(params: {
   model: string;
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
-  const effectiveCfg: OpenClawConfig | undefined = params.cfg
-    ? {
-        ...params.cfg,
-        agents: {
-          ...params.cfg.agents,
-          defaults: {
-            ...params.cfg.agents?.defaults,
-            imageModel: params.imageModelConfig,
-          },
-        },
-      }
-    : undefined;
+  const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
 
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
@@ -277,23 +217,19 @@ async function runImagePrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-      if (!model) {
-        throw new Error(`Unknown model: ${provider}/${modelId}`);
-      }
+      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
       if (!model.input?.includes("image")) {
         throw new Error(`Model does not support images: ${provider}/${modelId}`);
       }
-      const apiKeyInfo = await getApiKeyForModel({
+      const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
         agentDir: params.agentDir,
+        authStorage,
       });
-      const apiKey = requireApiKey(apiKeyInfo, model.provider);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
 
       // MiniMax VLM only supports a single image; use the first one.
-      if (model.provider === "minimax") {
+      if (isMinimaxVlmModel(model.provider, model.id)) {
         const first = params.images[0];
         const imageDataUrl = `data:${first.mimeType};base64,${first.base64}`;
         const text = await minimaxUnderstandImage({
@@ -336,6 +272,7 @@ export function createImageTool(options?: {
   agentDir?: string;
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
+  fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
 }): AnyAgentTool | null {
@@ -361,14 +298,9 @@ export function createImageTool(options?: {
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
-  const localRoots = (() => {
-    const roots = getDefaultLocalRoots();
-    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
-    if (!workspaceDir) {
-      return roots;
-    }
-    return Array.from(new Set([...roots, workspaceDir]));
-  })();
+  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+  });
 
   return {
     label: "Image",
@@ -433,18 +365,20 @@ export function createImageTool(options?: {
         };
       }
 
-      const promptRaw =
-        typeof record.prompt === "string" && record.prompt.trim()
-          ? record.prompt.trim()
-          : DEFAULT_PROMPT;
-      const modelOverride =
-        typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+      const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
+        record,
+        DEFAULT_PROMPT,
+      );
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
-      const sandboxConfig =
+      const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
-          ? { root: options.sandbox.root.trim(), bridge: options.sandbox.bridge }
+          ? {
+              root: options.sandbox.root.trim(),
+              bridge: options.sandbox.bridge,
+              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+            }
           : null;
 
       // MARK: - Load and resolve each image
@@ -503,9 +437,10 @@ export function createImageTool(options?: {
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }
           : sandboxConfig
-            ? await resolveSandboxedImagePath({
+            ? await resolveSandboxedBridgeMediaPath({
                 sandbox: sandboxConfig,
-                imagePath: resolvedImage,
+                mediaPath: resolvedImage,
+                inboundFallbackDir: "media/inbound",
               })
             : {
                 resolved: resolvedImage.startsWith("file://")
@@ -520,8 +455,7 @@ export function createImageTool(options?: {
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 sandboxValidated: true,
-                readFile: (filePath) =>
-                  sandboxConfig.bridge.readFile({ filePath, cwd: sandboxConfig.root }),
+                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
@@ -571,14 +505,7 @@ export function createImageTool(options?: {
               })),
             };
 
-      return {
-        content: [{ type: "text", text: result.text }],
-        details: {
-          model: `${result.provider}/${result.model}`,
-          ...imageDetails,
-          attempts: result.attempts,
-        },
-      };
+      return buildTextToolResult(result, imageDetails);
     },
   };
 }

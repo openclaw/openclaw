@@ -5,22 +5,36 @@ import {
   MessageReactionAddListener,
   MessageReactionRemoveListener,
   PresenceUpdateListener,
+  ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import { danger } from "../../globals.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "../../security/dm-policy-shared.js";
+import {
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordMemberAccessState,
+  resolveGroupDmAllow,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
+import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
+import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -28,27 +42,71 @@ type Logger = ReturnType<typeof import("../../logging/subsystem.js").createSubsy
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
-export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
+export type DiscordMessageHandler = (
+  data: DiscordMessageEvent,
+  client: Client,
+  options?: { abortSignal?: AbortSignal },
+) => Promise<void>;
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
-  accountId: string;
   runtime: RuntimeEnv;
-  botUserId?: string;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  onEvent?: () => void;
+} & DiscordReactionRoutingParams;
+
+type DiscordReactionRoutingParams = {
+  accountId: string;
+  botUserId?: string;
+  dmEnabled: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom: string[];
+  groupPolicy: "open" | "allowlist" | "disabled";
+  allowNameMatching: boolean;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
+
+function formatListenerContextValue(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
+function formatListenerContextSuffix(context?: Record<string, unknown>): string {
+  if (!context) {
+    return "";
+  }
+  const entries = Object.entries(context).flatMap(([key, value]) => {
+    const formatted = formatListenerContextValue(value);
+    return formatted ? [`${key}=${formatted}`] : [];
+  });
+  if (entries.length === 0) {
+    return "";
+  }
+  return ` (${entries.join(" ")})`;
+}
 
 function logSlowDiscordListener(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
   durationMs: number;
+  context?: Record<string, unknown>;
 }) {
   if (params.durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS) {
     return;
@@ -64,8 +122,72 @@ function logSlowDiscordListener(params: {
     event: params.event,
     durationMs: params.durationMs,
     duration,
-    consoleMessage: message,
+    ...params.context,
+    consoleMessage: `${message}${formatListenerContextSuffix(params.context)}`,
   });
+}
+
+async function runDiscordListenerWithSlowLog(params: {
+  logger: Logger | undefined;
+  listener: string;
+  event: string;
+  run: (abortSignal: AbortSignal | undefined) => Promise<void>;
+  timeoutMs?: number;
+  context?: Record<string, unknown>;
+  onError?: (err: unknown) => void;
+}) {
+  const startedAt = Date.now();
+  const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
+  const logger = params.logger ?? discordEventQueueLog;
+  let timedOut = false;
+
+  try {
+    timedOut = await runDiscordTaskWithTimeout({
+      run: params.run,
+      timeoutMs,
+      onTimeout: (resolvedTimeoutMs) => {
+        logger.error(
+          danger(
+            `discord handler timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
+              decimals: 1,
+              unit: "seconds",
+            })}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
+      onAbortAfterTimeout: () => {
+        logger.warn(
+          `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
+        );
+      },
+      onErrorAfterTimeout: (err) => {
+        logger.error(
+          danger(
+            `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
+          ),
+        );
+      },
+    });
+    if (timedOut) {
+      return;
+    }
+  } catch (err) {
+    if (params.onError) {
+      params.onError(err);
+      return;
+    }
+    throw err;
+  } finally {
+    if (!timedOut) {
+      logSlowDiscordListener({
+        logger: params.logger,
+        listener: params.listener,
+        event: params.event,
+        durationMs: Date.now() - startedAt,
+        context: params.context,
+      });
+    }
+  }
 }
 
 export function registerDiscordListener(listeners: Array<object>, listener: object) {
@@ -80,25 +202,23 @@ export class DiscordMessageListener extends MessageCreateListener {
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
+    private onEvent?: () => void,
+    _options?: { timeoutMs?: number },
   ) {
     super();
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
-    const startedAt = Date.now();
-    const task = Promise.resolve(this.handler(data, client));
-    void task
+    this.onEvent?.();
+    // Fire-and-forget: hand off to the handler without blocking the
+    // Carbon listener.  Per-session ordering and run timeouts are owned
+    // by the inbound worker queue, so the listener no longer serializes
+    // or applies its own timeout.
+    void Promise.resolve()
+      .then(() => this.handler(data, client))
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
-      })
-      .finally(() => {
-        logSlowDiscordListener({
-          logger: this.logger,
-          listener: this.constructor.name,
-          event: this.type,
-          durationMs: Date.now() - startedAt,
-        });
       });
   }
 }
@@ -109,6 +229,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -126,6 +247,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -145,38 +267,150 @@ async function runDiscordReactionHandler(params: {
   listener: string;
   event: string;
 }): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    await handleDiscordReactionEvent({
-      data: params.data,
-      client: params.client,
-      action: params.action,
-      cfg: params.handlerParams.cfg,
-      accountId: params.handlerParams.accountId,
-      botUserId: params.handlerParams.botUserId,
-      guildEntries: params.handlerParams.guildEntries,
-      logger: params.handlerParams.logger,
-    });
-  } finally {
-    logSlowDiscordListener({
-      logger: params.handlerParams.logger,
-      listener: params.listener,
-      event: params.event,
-      durationMs: Date.now() - startedAt,
-    });
-  }
+  await runDiscordListenerWithSlowLog({
+    logger: params.handlerParams.logger,
+    listener: params.listener,
+    event: params.event,
+    run: async () =>
+      handleDiscordReactionEvent({
+        data: params.data,
+        client: params.client,
+        action: params.action,
+        cfg: params.handlerParams.cfg,
+        accountId: params.handlerParams.accountId,
+        botUserId: params.handlerParams.botUserId,
+        dmEnabled: params.handlerParams.dmEnabled,
+        groupDmEnabled: params.handlerParams.groupDmEnabled,
+        groupDmChannels: params.handlerParams.groupDmChannels,
+        dmPolicy: params.handlerParams.dmPolicy,
+        allowFrom: params.handlerParams.allowFrom,
+        groupPolicy: params.handlerParams.groupPolicy,
+        allowNameMatching: params.handlerParams.allowNameMatching,
+        guildEntries: params.handlerParams.guildEntries,
+        logger: params.handlerParams.logger,
+      }),
+  });
 }
 
-async function handleDiscordReactionEvent(params: {
-  data: DiscordReactionEvent;
-  client: Client;
-  action: "added" | "removed";
-  cfg: LoadedConfig;
+type DiscordReactionIngressAuthorizationParams = {
   accountId: string;
-  botUserId?: string;
-  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-  logger: Logger;
-}) {
+  user: User;
+  memberRoleIds: string[];
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  isGuildMessage: boolean;
+  channelId: string;
+  channelName?: string;
+  channelSlug: string;
+  dmEnabled: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom: string[];
+  groupPolicy: "open" | "allowlist" | "disabled";
+  allowNameMatching: boolean;
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
+  channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
+};
+
+async function authorizeDiscordReactionIngress(
+  params: DiscordReactionIngressAuthorizationParams,
+): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  if (params.isDirectMessage && !params.dmEnabled) {
+    return { allowed: false, reason: "dm-disabled" };
+  }
+  if (params.isGroupDm && !params.groupDmEnabled) {
+    return { allowed: false, reason: "group-dm-disabled" };
+  }
+  if (params.isDirectMessage) {
+    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "discord",
+      accountId: params.accountId,
+      dmPolicy: params.dmPolicy,
+    });
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: false,
+      dmPolicy: params.dmPolicy,
+      groupPolicy: params.groupPolicy,
+      allowFrom: params.allowFrom,
+      groupAllowFrom: [],
+      storeAllowFrom,
+      isSenderAllowed: (allowEntries) => {
+        const allowList = normalizeDiscordAllowList(allowEntries, ["discord:", "user:", "pk:"]);
+        const allowMatch = allowList
+          ? resolveDiscordAllowListMatch({
+              allowList,
+              candidate: {
+                id: params.user.id,
+                name: params.user.username,
+                tag: formatDiscordUserTag(params.user),
+              },
+              allowNameMatching: params.allowNameMatching,
+            })
+          : { allowed: false };
+        return allowMatch.allowed;
+      },
+    });
+    if (access.decision !== "allow") {
+      return { allowed: false, reason: access.reason };
+    }
+  }
+  if (
+    params.isGroupDm &&
+    !resolveGroupDmAllow({
+      channels: params.groupDmChannels,
+      channelId: params.channelId,
+      channelName: params.channelName,
+      channelSlug: params.channelSlug,
+    })
+  ) {
+    return { allowed: false, reason: "group-dm-not-allowlisted" };
+  }
+  if (!params.isGuildMessage) {
+    return { allowed: true };
+  }
+  const channelAllowlistConfigured =
+    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowed = params.channelConfig?.allowed !== false;
+  if (
+    !isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(params.guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed,
+    })
+  ) {
+    return { allowed: false, reason: "guild-policy" };
+  }
+  if (params.channelConfig?.allowed === false) {
+    return { allowed: false, reason: "guild-channel-denied" };
+  }
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig: params.channelConfig,
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    sender: {
+      id: params.user.id,
+      name: params.user.username,
+      tag: formatDiscordUserTag(params.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
+  if (hasAccessRestrictions && !memberAllowed) {
+    return { allowed: false, reason: "guild-member-denied" };
+  }
+  return { allowed: true };
+}
+
+async function handleDiscordReactionEvent(
+  params: {
+    data: DiscordReactionEvent;
+    client: Client;
+    action: "added" | "removed";
+    cfg: LoadedConfig;
+    logger: Logger;
+  } & DiscordReactionRoutingParams,
+) {
   try {
     const { data, client, action, botUserId, guildEntries } = params;
     if (!("user" in data)) {
@@ -216,12 +450,40 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
-    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
-    let parentName: string | undefined;
-    let parentSlug = "";
     const memberRoleIds = Array.isArray(data.rawMember?.roles)
       ? data.rawMember.roles.map((roleId: string) => String(roleId))
       : [];
+    const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
+      accountId: params.accountId,
+      user,
+      memberRoleIds,
+      isDirectMessage,
+      isGroupDm,
+      isGuildMessage,
+      channelId: data.channel_id,
+      channelName,
+      channelSlug,
+      dmEnabled: params.dmEnabled,
+      groupDmEnabled: params.groupDmEnabled,
+      groupDmChannels: params.groupDmChannels,
+      dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
+      groupPolicy: params.groupPolicy,
+      allowNameMatching: params.allowNameMatching,
+      guildInfo,
+    };
+    // Guild reactions need resolved channel/thread config before member access
+    // can mirror the normal message preflight path.
+    if (!isGuildMessage) {
+      const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
+      if (!ingressAccess.allowed) {
+        logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
+        return;
+      }
+    }
+    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentName: string | undefined;
+    let parentSlug = "";
     let reactionBase: { baseText: string; contextKey: string } | null = null;
     const resolveReactionBase = () => {
       if (reactionBase) {
@@ -266,6 +528,7 @@ async function handleDiscordReactionEvent(params: {
     const shouldNotifyReaction = (options: {
       mode: "off" | "own" | "all" | "allowlist";
       messageAuthorId?: string;
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
     }) =>
       shouldEmitDiscordReactionNotification({
         mode: options.mode,
@@ -274,7 +537,10 @@ async function handleDiscordReactionEvent(params: {
         userId: user.id,
         userName: user.username,
         userTag: formatDiscordUserTag(user),
-        allowlist: guildInfo?.users,
+        channelConfig: options.channelConfig,
+        guildInfo,
+        memberRoleIds,
+        allowNameMatching: params.allowNameMatching,
       });
     const emitReactionWithAuthor = (message: { author?: User } | null) => {
       const { baseText } = resolveReactionBase();
@@ -301,6 +567,20 @@ async function handleDiscordReactionEvent(params: {
         parentSlug,
         scope: "thread",
       });
+    const authorizeReactionIngressForChannel = async (
+      channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
+    ) =>
+      await authorizeDiscordReactionIngress({
+        ...reactionIngressBase,
+        channelConfig,
+      });
+    const resolveThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
+      parentId = channelInfo?.parentId;
+      await loadThreadParentInfo();
+      const channelConfig = resolveThreadChannelConfig();
+      const access = await authorizeReactionIngressForChannel(channelConfig);
+      return { access, channelConfig };
+    };
 
     // Parallelize async operations for thread channels
     if (isThreadChannel) {
@@ -318,19 +598,18 @@ async function handleDiscordReactionEvent(params: {
       // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
       if (reactionMode === "all" || reactionMode === "allowlist") {
         const channelInfo = await channelInfoPromise;
-        parentId = channelInfo?.parentId;
-        await loadThreadParentInfo();
-
-        const channelConfig = resolveThreadChannelConfig();
-        if (channelConfig?.allowed === false) {
+        const { access: threadAccess, channelConfig: threadChannelConfig } =
+          await resolveThreadChannelAccess(channelInfo);
+        if (!threadAccess.allowed) {
           return;
         }
-
-        // For allowlist mode, check if user is in allowlist first
-        if (reactionMode === "allowlist") {
-          if (!shouldNotifyReaction({ mode: reactionMode })) {
-            return;
-          }
+        if (
+          !shouldNotifyReaction({
+            mode: reactionMode,
+            channelConfig: threadChannelConfig,
+          })
+        ) {
+          return;
         }
 
         const { baseText } = resolveReactionBase();
@@ -342,16 +621,20 @@ async function handleDiscordReactionEvent(params: {
       const messagePromise = data.message.fetch().catch(() => null);
 
       const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
-      parentId = channelInfo?.parentId;
-      await loadThreadParentInfo();
-
-      const channelConfig = resolveThreadChannelConfig();
-      if (channelConfig?.allowed === false) {
+      const { access: threadAccess, channelConfig: threadChannelConfig } =
+        await resolveThreadChannelAccess(channelInfo);
+      if (!threadAccess.allowed) {
         return;
       }
 
       const messageAuthorId = message?.author?.id ?? undefined;
-      if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+      if (
+        !shouldNotifyReaction({
+          mode: reactionMode,
+          messageAuthorId,
+          channelConfig: threadChannelConfig,
+        })
+      ) {
         return;
       }
 
@@ -370,8 +653,11 @@ async function handleDiscordReactionEvent(params: {
       parentSlug,
       scope: "channel",
     });
-    if (channelConfig?.allowed === false) {
-      return;
+    if (isGuildMessage) {
+      const channelAccess = await authorizeReactionIngressForChannel(channelConfig);
+      if (!channelAccess.allowed) {
+        return;
+      }
     }
 
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
@@ -383,11 +669,8 @@ async function handleDiscordReactionEvent(params: {
 
     // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
     if (reactionMode === "all" || reactionMode === "allowlist") {
-      // For allowlist mode, check if user is in allowlist first
-      if (reactionMode === "allowlist") {
-        if (!shouldNotifyReaction({ mode: reactionMode })) {
-          return;
-        }
+      if (!shouldNotifyReaction({ mode: reactionMode, channelConfig })) {
+        return;
       }
 
       const { baseText } = resolveReactionBase();
@@ -398,7 +681,7 @@ async function handleDiscordReactionEvent(params: {
     // For "own" mode, we need to fetch the message to check the author
     const message = await data.message.fetch().catch(() => null);
     const messageAuthorId = message?.author?.id ?? undefined;
-    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId, channelConfig })) {
       return;
     }
 
@@ -438,5 +721,51 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
     }
+  }
+}
+
+type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+
+export class DiscordThreadUpdateListener extends ThreadUpdateListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadUpdateEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        // Discord only fires THREAD_UPDATE when a field actually changes, so
+        // `thread_metadata.archived === true` in this payload means the thread
+        // just transitioned to the archived state.
+        if (!isThreadArchived(data)) {
+          return;
+        }
+        const threadId = "id" in data && typeof data.id === "string" ? data.id : undefined;
+        if (!threadId) {
+          return;
+        }
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.info("Discord thread archived — resetting session", { threadId });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          accountId: this.accountId,
+          threadId,
+        });
+        if (count > 0) {
+          logger.info("Discord thread sessions reset after archival", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
   }
 }

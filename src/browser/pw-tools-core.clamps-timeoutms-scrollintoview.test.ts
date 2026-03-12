@@ -23,9 +23,20 @@ describe("pw-tools-core", () => {
 
     expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 500 });
   });
-  it("rewrites strict mode violations for scrollIntoView", async () => {
+  it.each([
+    {
+      name: "strict mode violations for scrollIntoView",
+      errorMessage: 'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
+      expectedMessage: /Run a new snapshot/i,
+    },
+    {
+      name: "not-visible timeouts for scrollIntoView",
+      errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
+      expectedMessage: /not found or not visible/i,
+    },
+  ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {
-      throw new Error('Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements');
+      throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
     setPwToolsCoreCurrentPage({});
@@ -36,26 +47,22 @@ describe("pw-tools-core", () => {
         targetId: "T1",
         ref: "1",
       }),
-    ).rejects.toThrow(/Run a new snapshot/i);
+    ).rejects.toThrow(expectedMessage);
   });
-  it("rewrites not-visible timeouts for scrollIntoView", async () => {
-    const scrollIntoViewIfNeeded = vi.fn(async () => {
-      throw new Error('Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible');
-    });
-    setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
-    setPwToolsCoreCurrentPage({});
-
-    await expect(
-      mod.scrollIntoViewViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-      }),
-    ).rejects.toThrow(/not found or not visible/i);
-  });
-  it("rewrites strict mode violations into snapshot hints", async () => {
+  it.each([
+    {
+      name: "strict mode violations into snapshot hints",
+      errorMessage: 'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
+      expectedMessage: /Run a new snapshot/i,
+    },
+    {
+      name: "not-visible timeouts into snapshot hints",
+      errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
+      expectedMessage: /not found or not visible/i,
+    },
+  ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
     const click = vi.fn(async () => {
-      throw new Error('Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements');
+      throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ click });
     setPwToolsCoreCurrentPage({});
@@ -66,22 +73,7 @@ describe("pw-tools-core", () => {
         targetId: "T1",
         ref: "1",
       }),
-    ).rejects.toThrow(/Run a new snapshot/i);
-  });
-  it("rewrites not-visible timeouts into snapshot hints", async () => {
-    const click = vi.fn(async () => {
-      throw new Error('Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible');
-    });
-    setPwToolsCoreCurrentRefLocator({ click });
-    setPwToolsCoreCurrentPage({});
-
-    await expect(
-      mod.clickViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-      }),
-    ).rejects.toThrow(/not found or not visible/i);
+    ).rejects.toThrow(expectedMessage);
   });
   it("rewrites covered/hidden errors into interactable hints", async () => {
     const click = vi.fn(async () => {

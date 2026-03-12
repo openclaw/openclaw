@@ -9,6 +9,7 @@ export type DebugProps = {
   models: unknown[];
   heartbeat: unknown;
   eventLog: EventLogEntry[];
+  methods: string[];
   callMethod: string;
   callParams: string;
   callResult: string | null;
@@ -71,14 +72,22 @@ export function renderDebug(props: DebugProps) {
       <div class="card">
         <div class="card-title">Manual RPC</div>
         <div class="card-sub">Send a raw gateway method with JSON params.</div>
-        <div class="form-grid" style="margin-top: 16px;">
+        <div class="stack" style="margin-top: 16px;">
           <label class="field">
             <span>Method</span>
-            <input
+            <select
               .value=${props.callMethod}
-              @input=${(e: Event) => props.onCallMethodChange((e.target as HTMLInputElement).value)}
-              placeholder="system-presence"
-            />
+              @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
+            >
+              ${
+                !props.callMethod
+                  ? html`
+                      <option value="" disabled>Select a method…</option>
+                    `
+                  : nothing
+              }
+              ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
+            </select>
           </label>
           <label class="field">
             <span>Params (JSON)</span>
@@ -127,16 +136,18 @@ export function renderDebug(props: DebugProps) {
               <div class="muted" style="margin-top: 12px">No events yet.</div>
             `
           : html`
-            <div class="list" style="margin-top: 12px;">
+            <div class="list debug-event-log" style="margin-top: 12px;">
               ${props.eventLog.map(
                 (evt) => html`
-                  <div class="list-item">
+                  <div class="list-item debug-event-log__item">
                     <div class="list-main">
                       <div class="list-title">${evt.event}</div>
                       <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
                     </div>
-                    <div class="list-meta">
-                      <pre class="code-block">${formatEventPayload(evt.payload)}</pre>
+                    <div class="list-meta debug-event-log__meta">
+                      <pre class="code-block debug-event-log__payload">${formatEventPayload(
+                        evt.payload,
+                      )}</pre>
                     </div>
                   </div>
                 `,

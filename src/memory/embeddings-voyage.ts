@@ -1,3 +1,5 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
@@ -5,6 +7,7 @@ import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.j
 export type VoyageEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
   model: string;
 };
 
@@ -17,14 +20,11 @@ const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
 };
 
 export function normalizeVoyageModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_VOYAGE_EMBEDDING_MODEL;
-  }
-  if (trimmed.startsWith("voyage/")) {
-    return trimmed.slice("voyage/".length);
-  }
-  return trimmed;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_VOYAGE_EMBEDDING_MODEL,
+    prefixes: ["voyage/"],
+  });
 }
 
 export async function createVoyageEmbeddingProvider(
@@ -48,6 +48,7 @@ export async function createVoyageEmbeddingProvider(
     return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
+      ssrfPolicy: client.ssrfPolicy,
       body,
       errorPrefix: "voyage embeddings failed",
     });
@@ -71,11 +72,11 @@ export async function createVoyageEmbeddingProvider(
 export async function resolveVoyageEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<VoyageEmbeddingClient> {
-  const { baseUrl, headers } = await resolveRemoteEmbeddingBearerClient({
+  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: "voyage",
     options,
     defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
   });
   const model = normalizeVoyageModel(options.model);
-  return { baseUrl, headers, model };
+  return { baseUrl, headers, ssrfPolicy, model };
 }

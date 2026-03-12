@@ -1,5 +1,6 @@
 import { afterEach, beforeEach } from "vitest";
-import { OpenClawApp } from "../app.ts";
+import "../app.ts";
+import type { OpenClawApp } from "../app.ts";
 
 export function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
@@ -15,12 +16,14 @@ export function registerAppMountHooks() {
   beforeEach(() => {
     window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
     localStorage.clear();
+    sessionStorage.clear();
     document.body.innerHTML = "";
   });
 
   afterEach(() => {
     window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
     localStorage.clear();
+    sessionStorage.clear();
     document.body.innerHTML = "";
   });
 }

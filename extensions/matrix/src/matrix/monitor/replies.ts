@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
 
@@ -39,6 +39,11 @@ export async function deliverMatrixReplies(params: {
         continue;
       }
       params.runtime.error?.("matrix reply missing text/media");
+      continue;
+    }
+    // Skip pure reasoning messages so internal thinking traces are never delivered.
+    if (reply.text && isReasoningOnlyMessage(reply.text)) {
+      logVerbose("matrix reply is reasoning-only; skipping");
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
@@ -97,4 +102,23 @@ export async function deliverMatrixReplies(params: {
       hasReplied = true;
     }
   }
+}
+
+const REASONING_PREFIX = "Reasoning:\n";
+const THINKING_TAG_RE = /^\s*<\s*(?:think(?:ing)?|thought|antthinking)\b/i;
+
+/**
+ * Detect messages that contain only reasoning/thinking content and no user-facing answer.
+ * These are emitted by the agent when `includeReasoning` is active but should not
+ * be forwarded to channels that do not support a dedicated reasoning lane.
+ */
+function isReasoningOnlyMessage(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.startsWith(REASONING_PREFIX)) {
+    return true;
+  }
+  if (THINKING_TAG_RE.test(trimmed)) {
+    return true;
+  }
+  return false;
 }

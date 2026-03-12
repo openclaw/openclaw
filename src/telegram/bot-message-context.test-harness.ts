@@ -1,5 +1,9 @@
 import { vi } from "vitest";
-import { buildTelegramMessageContext } from "./bot-message-context.js";
+import {
+  buildTelegramMessageContext,
+  type BuildTelegramMessageContextParams,
+  type TelegramMediaRef,
+} from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -9,8 +13,13 @@ export const baseTelegramMessageContextConfig = {
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
-  options?: Record<string, unknown>;
-  resolveGroupActivation?: () => boolean | undefined;
+  allMedia?: TelegramMediaRef[];
+  options?: BuildTelegramMessageContextParams["options"];
+  cfg?: Record<string, unknown>;
+  accountId?: string;
+  resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
+  resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
+  resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
 };
 
 export async function buildTelegramMessageContextForTest(
@@ -27,7 +36,7 @@ export async function buildTelegramMessageContextForTest(
       },
       me: { id: 7, username: "bot" },
     } as never,
-    allMedia: [],
+    allMedia: params.allMedia ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
     bot: {
@@ -36,8 +45,8 @@ export async function buildTelegramMessageContextForTest(
         setMessageReaction: vi.fn(),
       },
     } as never,
-    cfg: baseTelegramMessageContextConfig,
-    account: { accountId: "default" } as never,
+    cfg: (params.cfg ?? baseTelegramMessageContextConfig) as never,
+    account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),
     dmPolicy: "open",
@@ -46,10 +55,13 @@ export async function buildTelegramMessageContextForTest(
     ackReactionScope: "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
-    resolveGroupRequireMention: () => false,
-    resolveTelegramGroupConfig: () => ({
-      groupConfig: { requireMention: false },
-      topicConfig: undefined,
-    }),
+    resolveGroupRequireMention: params.resolveGroupRequireMention ?? (() => false),
+    resolveTelegramGroupConfig:
+      params.resolveTelegramGroupConfig ??
+      (() => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      })),
+    sendChatActionHandler: { sendChatAction: vi.fn() } as never,
   });
 }
