@@ -29,6 +29,7 @@ import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
+  getSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
@@ -527,6 +528,40 @@ export async function killControlledSubagentRun(params: {
     text: stopResult.killed
       ? `killed ${resolveSubagentLabel(params.entry)}${cascadeText}.`
       : `killed ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"} of ${resolveSubagentLabel(params.entry)}.`,
+  };
+}
+
+export async function killSubagentRunAdmin(params: { cfg: OpenClawConfig; sessionKey: string }) {
+  const targetSessionKey = params.sessionKey.trim();
+  if (!targetSessionKey) {
+    return { found: false as const, killed: false };
+  }
+  const entry = getSubagentRunByChildSessionKey(targetSessionKey);
+  if (!entry) {
+    return { found: false as const, killed: false };
+  }
+
+  const killCache = new Map<string, Record<string, SessionEntry>>();
+  const stopResult = await killSubagentRun({
+    cfg: params.cfg,
+    entry,
+    cache: killCache,
+  });
+  const seenChildSessionKeys = new Set<string>([targetSessionKey]);
+  const cascade = await cascadeKillChildren({
+    cfg: params.cfg,
+    parentChildSessionKey: targetSessionKey,
+    cache: killCache,
+    seenChildSessionKeys,
+  });
+
+  return {
+    found: true as const,
+    killed: stopResult.killed || cascade.killed > 0,
+    runId: entry.runId,
+    sessionKey: entry.childSessionKey,
+    cascadeKilled: cascade.killed,
+    cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
   };
 }
 
