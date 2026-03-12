@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { CUSTOM_NO_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { validateConfigObject } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -131,10 +133,13 @@ async function runOnboardingAndReadConfig(
 async function expectWrittenConfigValid(configPath: string): Promise<void> {
   const cfg = await readJsonFile<Record<string, unknown>>(configPath);
   const validated = validateConfigObject(cfg);
-  const details =
-    validated.issues?.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n") ??
-    "";
-  expect(validated.ok, details).toBe(true);
+  if (!validated.ok) {
+    const details = validated.issues
+      .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+      .join("\n");
+    throw new Error(details || "expected config to be valid");
+  }
+  expect(validated.ok).toBe(true);
 }
 
 const CUSTOM_LOCAL_BASE_URL = "https://models.custom.local/v1";
@@ -648,6 +653,37 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(provider?.models?.some((model) => model.id === "foo-large")).toBe(true);
       expect(cfg.agents?.defaults?.model?.primary).toBe("custom-llm-example-com/foo-large");
     });
+  });
+
+  it("allows onboarding a custom provider without an API key and resolves runtime auth", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-no-auth-",
+      async ({ configPath, runtime }) => {
+        await runNonInteractiveOnboardingWithDefaults(runtime, {
+          authChoice: "custom-api-key",
+          customBaseUrl: "http://127.0.0.1:8080/v1",
+          customModelId: "Qwen/Qwen3.5-8B",
+          skipSkills: true,
+        });
+
+        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        const provider = cfg.models?.providers?.["custom-127-0-0-1-8080"];
+
+        expect(provider?.baseUrl).toBe("http://127.0.0.1:8080/v1");
+        expect(provider?.api).toBe("openai-completions");
+        expect(provider?.apiKey).toBe(CUSTOM_NO_AUTH_MARKER);
+        expect(cfg.agents?.defaults?.model?.primary).toBe("custom-127-0-0-1-8080/Qwen/Qwen3.5-8B");
+        await expectWrittenConfigValid(configPath);
+
+        const resolved = await resolveApiKeyForProvider({
+          provider: "custom-127-0-0-1-8080",
+          cfg: cfg as never,
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.apiKey).toBe(CUSTOM_NO_AUTH_MARKER);
+        expect(resolved.source).toContain("no-auth marker");
+      },
+    );
   });
 
   it("infers custom provider auth choice from custom flags", async () => {

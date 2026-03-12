@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { CUSTOM_NO_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
   hasUsableCustomProviderApiKey,
   requireApiKey,
@@ -126,6 +126,27 @@ describe("requireApiKey", () => {
 });
 
 describe("resolveUsableCustomProviderApiKey", () => {
+  it("returns the custom no-auth marker for onboarding-generated custom providers", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: CUSTOM_NO_AUTH_MARKER,
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toEqual({
+      apiKey: CUSTOM_NO_AUTH_MARKER,
+      source: "models.json (custom provider no-auth marker)",
+    });
+  });
+
   it("returns literal custom provider keys", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {

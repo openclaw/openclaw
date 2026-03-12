@@ -19,6 +19,7 @@ import {
 } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import {
+  CUSTOM_NO_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
@@ -77,6 +78,12 @@ export function resolveUsableCustomProviderApiKey(params: {
   const customKey = getCustomProviderApiKey(params.cfg, params.provider);
   if (!customKey) {
     return null;
+  }
+  if (customKey === CUSTOM_NO_AUTH_MARKER) {
+    return {
+      apiKey: CUSTOM_NO_AUTH_MARKER,
+      source: "models.json (custom provider no-auth marker)",
+    };
   }
   if (!isNonSecretApiKeyMarker(customKey)) {
     return { apiKey: customKey, source: "models.json" };

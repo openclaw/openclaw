@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
+import { CUSTOM_NO_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -383,6 +384,20 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
+  it("stores a no-auth marker when a custom provider does not require an API key", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "http://127.0.0.1:8080/v1",
+      modelId: "Qwen/Qwen3.5-8B",
+      compatibility: "openai",
+      providerId: "custom-127-0-0-1-8080",
+    });
+
+    expect(result.config.models?.providers?.["custom-127-0-0-1-8080"]?.apiKey).toBe(
+      CUSTOM_NO_AUTH_MARKER,
+    );
+  });
+
   it.each([
     {
       name: "uses hard-min context window for newly added custom models",

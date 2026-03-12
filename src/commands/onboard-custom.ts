@@ -1,5 +1,6 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { CUSTOM_NO_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -619,7 +620,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
     normalizeOptionalProviderApiKey(params.apiKey) ??
-    normalizeOptionalProviderApiKey(existingApiKey);
+    normalizeOptionalProviderApiKey(existingApiKey) ??
+    CUSTOM_NO_AUTH_MARKER;
 
   let config: OpenClawConfig = {
     ...params.config,
