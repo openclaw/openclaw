@@ -77,6 +77,8 @@ describe("kimi-coding implicit provider (#22409)", () => {
         agentDir,
         explicitProviders: {
           "kimi-coding": {
+            baseUrl: "https://api.kimi.com/coding/",
+            api: "anthropic-messages",
             headers: {
               "User-Agent": "custom-kimi-client/1.0",
               "X-Kimi-Tenant": "tenant-a",
