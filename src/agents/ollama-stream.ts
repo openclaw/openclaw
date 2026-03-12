@@ -539,13 +539,16 @@ export function createOllamaStreamFn(
             }
           }
 
+          // Don't retry if the request was aborted by the caller
+          if (options?.signal?.aborted) {
+            throw new Error("Ollama stream aborted by caller");
+          }
+
           // Check for empty response: done:true but no content and no tool calls.
           // This happens when Ollama fails to parse Qwen3 tool-call JSON internally.
-          if (
-            finalResponse &&
-            accumulatedContent.length === 0 &&
-            accumulatedToolCalls.length === 0
-          ) {
+          // Also treat whitespace-only fallback content as empty.
+          const effectiveContent = accumulatedContent || fallbackContent.trim();
+          if (finalResponse && effectiveContent.length === 0 && accumulatedToolCalls.length === 0) {
             if (attempt < OLLAMA_STREAM_MAX_RETRIES) {
               log.warn(
                 `Ollama returned empty response (attempt ${attempt + 1}/${OLLAMA_STREAM_MAX_RETRIES + 1}), retrying…`,
