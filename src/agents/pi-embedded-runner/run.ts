@@ -803,13 +803,8 @@ export async function runEmbeddedPiAgent(
       const contextEngine = await resolveContextEngine(params.config);
 
       // ── Pre-turn session file size check (maxSessionBytes) ──────────────
-      const maxSessionBytes =
-        params.config?.agents?.defaults?.compaction?.maxSessionBytes;
-      if (
-        typeof maxSessionBytes === "number" &&
-        maxSessionBytes > 0 &&
-        params.sessionFile
-      ) {
+      const maxSessionBytes = params.config?.agents?.defaults?.compaction?.maxSessionBytes;
+      if (typeof maxSessionBytes === "number" && maxSessionBytes > 0 && params.sessionFile) {
         try {
           const sessionStat = await fs.stat(params.sessionFile);
           if (sessionStat.size > maxSessionBytes) {
@@ -830,9 +825,13 @@ export async function runEmbeddedPiAgent(
                 messageChannel: params.messageChannel,
                 messageProvider: params.messageProvider,
                 agentAccountId: params.agentAccountId,
+                authProfileId: lastProfileId,
                 workspaceDir: resolvedWorkspace,
                 agentDir,
                 config: params.config,
+                provider,
+                model: modelId,
+                trigger: "overflow" as const,
               },
             });
           }
