@@ -71,6 +71,12 @@ const DEFAULT_POLICY: CortexPolicy = "technical";
 const DEFAULT_MAX_CHARS = 1_500;
 export const DEFAULT_CORTEX_CODING_PLATFORMS = ["claude-code", "cursor", "copilot"] as const;
 
+type CortexStatusParams = {
+  workspaceDir: string;
+  graphPath?: string;
+  status?: CortexStatus;
+};
+
 function parseJson<T>(raw: string, label: string): T {
   try {
     return JSON.parse(raw) as T;
@@ -158,22 +164,32 @@ export async function getCortexStatus(params: {
   }
 }
 
-export async function previewCortexContext(params: {
-  workspaceDir: string;
-  graphPath?: string;
-  policy?: CortexPolicy;
-  maxChars?: number;
-}): Promise<CortexPreview> {
-  const status = await getCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-  });
+async function resolveCortexStatus(params: CortexStatusParams): Promise<CortexStatus> {
+  return params.status ?? getCortexStatus(params);
+}
+
+function requireCortexStatus(status: CortexStatus): CortexStatus {
   if (!status.available) {
     throw new Error(`Cortex CLI unavailable: ${status.error ?? "unknown error"}`);
   }
   if (!status.graphExists) {
     throw new Error(`Cortex graph not found: ${status.graphPath}`);
   }
+  return status;
+}
+
+export async function previewCortexContext(params: {
+  workspaceDir: string;
+  graphPath?: string;
+  policy?: CortexPolicy;
+  maxChars?: number;
+  status?: CortexStatus;
+}): Promise<CortexPreview> {
+  const status = requireCortexStatus(await resolveCortexStatus({
+    workspaceDir: params.workspaceDir,
+    graphPath: params.graphPath,
+    status: params.status,
+  }));
   const policy = params.policy ?? DEFAULT_POLICY;
   const maxChars = params.maxChars ?? DEFAULT_MAX_CHARS;
   try {
@@ -202,17 +218,13 @@ export async function listCortexMemoryConflicts(params: {
   workspaceDir: string;
   graphPath?: string;
   minSeverity?: number;
+  status?: CortexStatus;
 }): Promise<CortexMemoryConflict[]> {
-  const status = await getCortexStatus({
+  const status = requireCortexStatus(await resolveCortexStatus({
     workspaceDir: params.workspaceDir,
     graphPath: params.graphPath,
-  });
-  if (!status.available) {
-    throw new Error(`Cortex CLI unavailable: ${status.error ?? "unknown error"}`);
-  }
-  if (!status.graphExists) {
-    throw new Error(`Cortex graph not found: ${status.graphPath}`);
-  }
+    status: params.status,
+  }));
   const args = ["memory", "conflicts", status.graphPath, "--format", "json"];
   if (typeof params.minSeverity === "number" && Number.isFinite(params.minSeverity)) {
     args.push("--severity", String(params.minSeverity));
@@ -244,17 +256,13 @@ export async function resolveCortexMemoryConflict(params: {
   conflictId: string;
   action: CortexMemoryResolveAction;
   commitMessage?: string;
+  status?: CortexStatus;
 }): Promise<CortexMemoryResolveResult> {
-  const status = await getCortexStatus({
+  const status = requireCortexStatus(await resolveCortexStatus({
     workspaceDir: params.workspaceDir,
     graphPath: params.graphPath,
-  });
-  if (!status.available) {
-    throw new Error(`Cortex CLI unavailable: ${status.error ?? "unknown error"}`);
-  }
-  if (!status.graphExists) {
-    throw new Error(`Cortex graph not found: ${status.graphPath}`);
-  }
+    status: params.status,
+  }));
   const args = [
     "memory",
     "resolve",
@@ -295,17 +303,13 @@ export async function syncCortexCodingContext(params: {
   graphPath?: string;
   policy?: CortexPolicy;
   platforms?: string[];
+  status?: CortexStatus;
 }): Promise<CortexCodingSyncResult> {
-  const status = await getCortexStatus({
+  const status = requireCortexStatus(await resolveCortexStatus({
     workspaceDir: params.workspaceDir,
     graphPath: params.graphPath,
-  });
-  if (!status.available) {
-    throw new Error(`Cortex CLI unavailable: ${status.error ?? "unknown error"}`);
-  }
-  if (!status.graphExists) {
-    throw new Error(`Cortex graph not found: ${status.graphPath}`);
-  }
+    status: params.status,
+  }));
   const policy = params.policy ?? DEFAULT_POLICY;
   const requestedPlatforms = params.platforms?.map((entry) => entry.trim()).filter(Boolean) ?? [];
   const platforms =
@@ -366,18 +370,17 @@ export async function ingestCortexMemoryFromText(params: {
   workspaceDir: string;
   graphPath?: string;
   event: CortexMemoryEvent;
+  status?: CortexStatus;
 }): Promise<CortexMemoryIngestResult> {
   const text = params.event.text.trim();
   if (!text) {
     throw new Error("Cortex memory ingest requires non-empty text");
   }
-  const status = await getCortexStatus({
+  const status = requireCortexStatus(await resolveCortexStatus({
     workspaceDir: params.workspaceDir,
     graphPath: params.graphPath,
-  });
-  if (!status.available) {
-    throw new Error(`Cortex CLI unavailable: ${status.error ?? "unknown error"}`);
-  }
+    status: params.status,
+  }));
   await fs.mkdir(path.dirname(status.graphPath), { recursive: true });
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-ingest-"));
   const inputPath = path.join(tmpDir, "memory.txt");
