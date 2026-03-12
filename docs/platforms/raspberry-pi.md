@@ -153,29 +153,35 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Access the Dashboard
+## 9) Access the OpenClaw Dashboard
 
-Since the Pi is headless, use an SSH tunnel:
-
-```bash
-# From your laptop/desktop
-ssh -L 18789:localhost:18789 user@gateway-host
-
-# Then open in browser
-open http://localhost:18789
-```
-
-Or use Tailscale for always-on access:
+On a terminal on your local machine, run:
 
 ```bash
-# On the Pi
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Update config
-openclaw config set gateway.bind tailnet
-sudo systemctl restart openclaw
+ssh admin@10.0.0.82
 ```
+
+Then run:
+
+```bash
+openclaw dashboard
+```
+
+The output will look something like:
+
+```text
+Dashboard URL: http://127.0.0.1:18789#token=<token>
+```
+
+Open another terminal and run:
+
+```bash
+ssh -L 18789:localhost:18789 admin@10.0.0.82
+```
+
+Then open your browser and go to `http://127.0.0.1:18789#token=<token>`.
+
+You should see the OpenClaw dashboard.
 
 ---
 
