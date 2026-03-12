@@ -218,6 +218,40 @@ describe("inspectGatewayRestart", () => {
     const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
     expect(snapshot.healthy).toBe(true);
-    expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("skips stale-PID kill on Windows when runtime is stopped but gateway is reachable (schtasks race)", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [
+        "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+      ],
+    });
+
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({
+      service,
+      port: 18789,
+      includeUnknownListenersAsStale: true,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
   });
 });

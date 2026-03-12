@@ -123,6 +123,26 @@ export async function inspectGatewayRestart(params: {
     };
   }
 
+  if (
+    portUsage.status === "busy" &&
+    process.platform === "win32" &&
+    hasListenerAttributionGap(portUsage)
+  ) {
+    try {
+      const reachable = await confirmGatewayReachable(params.port);
+      if (reachable) {
+        return {
+          runtime,
+          portUsage,
+          healthy: true,
+          staleGatewayPids: [],
+        };
+      }
+    } catch {
+      // probe failed, continue
+    }
+  }
+
   const gatewayListeners =
     portUsage.status === "busy"
       ? portUsage.listeners.filter(
