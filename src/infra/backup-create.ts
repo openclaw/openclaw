@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 import {
   buildBackupArchiveBasename,
@@ -342,21 +343,23 @@ export async function createBackupArchive(
     });
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-    await tar.c(
-      {
-        file: tempArchivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
-            manifestPath,
-            archiveRoot,
-          });
+    await pipeline(
+      tar.c(
+        {
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            entry.path = remapArchiveEntryPath({
+              entryPath: entry.path,
+              manifestPath,
+              archiveRoot,
+            });
+          },
         },
-      },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+        [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
+      ),
+      createWriteStream(tempArchivePath),
     );
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {

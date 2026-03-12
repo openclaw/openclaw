@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -37,7 +38,14 @@ describe("backupCreateCommand atomic archive write", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-      tarCreateMock.mockRejectedValueOnce(new Error("disk full"));
+      tarCreateMock.mockImplementationOnce(() => {
+        const stream = new Readable({ read() {} });
+        setImmediate(() => {
+          stream.push(Buffer.from("1f8b08000000000000ff", "hex"));
+          stream.emit("error", new Error("disk full"));
+        });
+        return stream;
+      });
 
       const runtime = {
         log: vi.fn(),
@@ -69,9 +77,7 @@ describe("backupCreateCommand atomic archive write", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-      tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {
-        await fs.writeFile(file, "archive-bytes", "utf8");
-      });
+      tarCreateMock.mockImplementationOnce(() => Readable.from(["archive-bytes"]));
       linkSpy.mockImplementationOnce(async (existingPath, newPath) => {
         await fs.writeFile(newPath, "concurrent-archive", "utf8");
         return await realLink(existingPath, newPath);
@@ -105,9 +111,7 @@ describe("backupCreateCommand atomic archive write", () => {
       await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
-      tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {
-        await fs.writeFile(file, "archive-bytes", "utf8");
-      });
+      tarCreateMock.mockImplementationOnce(() => Readable.from(["archive-bytes"]));
       linkSpy.mockRejectedValueOnce(
         Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
       );
