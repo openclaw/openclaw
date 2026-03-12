@@ -411,11 +411,18 @@ async function getPidStartTime(pid: number): Promise<string | null> {
  * SIGKILL if it is still running after the timeout.
  * Returns true if the process is confirmed gone, false if SIGKILL also
  * failed (e.g. permission denied or the PID was already recycled).
+ *
+ * @param preBootoutIdentity - Optional identity token (start time) captured
+ *   *before* bootout/stop was requested.  Passing this avoids the race where
+ *   the original process exits quickly, the PID is reused, and the identity
+ *   snapshot inside this function would bind to the new, unrelated process.
  */
-async function ensurePidGone(pid: number): Promise<boolean> {
-  // Capture process identity (start time) before waiting so we can validate
-  // the PID has not been recycled by the OS before we send SIGKILL.
-  const identityBefore = await getPidStartTime(pid);
+async function ensurePidGone(pid: number, preBootoutIdentity?: string | null): Promise<boolean> {
+  // Use the caller-supplied identity if provided (captured before bootout);
+  // otherwise fall back to capturing it now.  The caller-supplied value is
+  // strongly preferred because capturing it after bootout can race with PID reuse.
+  const identityBefore =
+    preBootoutIdentity !== undefined ? preBootoutIdentity : await getPidStartTime(pid);
 
   const exited = await waitForPidExit(pid);
   if (exited) {
@@ -464,17 +471,21 @@ async function ensurePidGone(pid: number): Promise<boolean> {
   return false;
 }
 
-
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
 
-  // Capture the PID before bootout so we can wait for the process to exit.
+  // Capture the PID (and its identity) before bootout so we can wait for the
+  // process to exit and guard against accidental SIGKILL of a recycled PID.
   const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
   const currentPid =
     runtime.code === 0
       ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
       : undefined;
+  // Capture identity (process start time) NOW — before bootout — so that if the
+  // original process exits quickly and the PID is reused, ensurePidGone can
+  // detect the substitution and avoid killing the wrong process.
+  const pidIdentity = typeof currentPid === "number" ? await getPidStartTime(currentPid) : null;
 
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
@@ -483,7 +494,7 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
 
   // Wait for the process to actually exit; SIGKILL as fallback.
   if (typeof currentPid === "number") {
-    const gone = await ensurePidGone(currentPid);
+    const gone = await ensurePidGone(currentPid, pidIdentity);
     if (!gone) {
       stdout.write(
         `Warning: PID ${currentPid} may still be running after SIGKILL; port may not be free yet.\n`,
