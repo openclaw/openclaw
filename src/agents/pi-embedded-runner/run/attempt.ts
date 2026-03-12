@@ -256,18 +256,7 @@ async function persistSessionsYieldContextMessage(
 function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { replaceMessages: (messages: AgentMessage[]) => void };
-  sessionManager?: {
-    fileEntries?: Array<{
-      type?: string;
-      id?: string;
-      parentId?: string | null;
-      message?: { role?: string; stopReason?: string };
-      customType?: string;
-    }>;
-    byId?: Map<string, { id: string }>;
-    leafId?: string | null;
-    _rewriteFile?: () => void;
-  };
+  sessionManager?: unknown;
 }) {
   const strippedMessages = activeSession.messages.slice();
   while (strippedMessages.length > 0) {
@@ -292,7 +281,20 @@ function stripSessionsYieldArtifacts(activeSession: {
     activeSession.agent.replaceMessages(strippedMessages);
   }
 
-  const sessionManager = activeSession.sessionManager;
+  const sessionManager = activeSession.sessionManager as
+    | {
+        fileEntries?: Array<{
+          type?: string;
+          id?: string;
+          parentId?: string | null;
+          message?: { role?: string; stopReason?: string };
+          customType?: string;
+        }>;
+        byId?: Map<string, { id: string }>;
+        leafId?: string | null;
+        _rewriteFile?: () => void;
+      }
+    | undefined;
   const fileEntries = sessionManager?.fileEntries;
   const byId = sessionManager?.byId;
   if (!fileEntries || !byId) {
@@ -1848,7 +1850,9 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = (model, context, options) => {
         const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
         if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
-          return createYieldAbortedResponse(model) as Awaited<ReturnType<typeof innerStreamFn>>;
+          return createYieldAbortedResponse(model) as unknown as Awaited<
+            ReturnType<typeof innerStreamFn>
+          >;
         }
         return innerStreamFn(model, context, options);
       };
