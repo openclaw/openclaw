@@ -686,6 +686,75 @@ describe("agentCommand", () => {
     });
   });
 
+  it("falls back to session entry channel when messageChannel is not resolved", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:discord:stored-channel-test";
+      // Pre-populate session store with a channel on the entry
+      fs.writeFileSync(
+        store,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "session-stored-channel",
+            channel: "discord",
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+
+      configSpy.mockReturnValue({
+        diagnostics: { enabled: true },
+        models: { providers: {} },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "reply" }],
+        meta: {
+          durationMs: 10,
+          agentMeta: {
+            sessionId: "session-stored-channel",
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            usage: { input: 50, output: 20, total: 70 },
+          },
+        },
+      } as never);
+
+      const events: Array<{ type: string; [key: string]: unknown }> = [];
+      resetDiagnosticEventsForTest();
+      const stop = onDiagnosticEvent((evt) => {
+        events.push(evt as { type: string; [key: string]: unknown });
+      });
+
+      try {
+        await agentCommand(
+          {
+            message: "stored channel test",
+            sessionKey,
+            // no replyChannel or channel — should fall back to session entry
+          },
+          runtime,
+        );
+      } finally {
+        stop();
+      }
+
+      const usageEvents = events.filter((evt) => evt.type === "model.usage");
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]).toHaveProperty("channel", "discord");
+
+      resetDiagnosticEventsForTest();
+    });
+  });
+
   it("emits model.usage using sessionId as fallback when no sessionKey is available", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
