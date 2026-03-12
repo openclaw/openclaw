@@ -197,6 +197,25 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.announceType).toBe("cron job");
   });
 
+  it("regression, keeps child announce internal when requester is a cron run session", async () => {
+    const cronSessionKey = "agent:main:cron:daily-check:run:run-123";
+
+    await runAnnounceFlowForTest("run-cron-internal", {
+      requesterSessionKey: cronSessionKey,
+      requesterDisplayKey: cronSessionKey,
+      requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
+    });
+
+    const directAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(directAgentCall?.params?.sessionKey).toBe(cronSessionKey);
+    expect(directAgentCall?.params?.deliver).toBe(false);
+    expect(directAgentCall?.params?.channel).toBeUndefined();
+    expect(directAgentCall?.params?.to).toBeUndefined();
+    expect(directAgentCall?.params?.accountId).toBeUndefined();
+  });
+
   it("regression, routes child announce to parent session instead of grandparent when parent session still exists", async () => {
     const parentSessionKey = "agent:main:subagent:parent";
     requesterDepthResolver = (sessionKey?: string) =>

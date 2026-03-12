@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
+  assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -366,6 +367,99 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_mismatch");
     expect(limiter.check).toHaveBeenCalledWith(undefined, "custom-scope");
     expect(limiter.recordFailure).toHaveBeenCalledWith(undefined, "custom-scope");
+  });
+  it("does not record rate-limit failure for missing token (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not record rate-limit failure for missing password (misconfigured client, not brute-force)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: null,
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_missing");
+    expect(limiter.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong token (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
+
+  it("still records rate-limit failure for wrong password (brute-force attempt)", async () => {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+      rateLimiter: limiter,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_mismatch");
+    expect(limiter.recordFailure).toHaveBeenCalled();
+  });
+  it("throws specific error when password is a provider reference object", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "password",
+        password: { source: "exec", provider: "op", id: "pw" } as never,
+      },
+    });
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "password",
+        password: { source: "exec", provider: "op", id: "pw" } as never,
+      }),
+    ).toThrow(/provider reference object/);
+  });
+
+  it("accepts password mode when env provides OPENCLAW_GATEWAY_PASSWORD", () => {
+    const rawPasswordRef = { source: "exec", provider: "op", id: "pw" } as never;
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "password",
+        password: rawPasswordRef,
+      },
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(auth.password).toBe("env-password");
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "password",
+        password: rawPasswordRef,
+      }),
+    ).not.toThrow();
+  });
+
+  it("throws generic error when password mode has no password at all", () => {
+    const auth = resolveGatewayAuth({ authConfig: { mode: "password" } });
+    expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
+      "gateway auth mode is password, but no password was configured",
+    );
   });
 });
 

@@ -43,16 +43,25 @@ export type SystemRunApprovalBinding = {
   envHash: string | null;
 };
 
+export type SystemRunApprovalFileOperand = {
+  argvIndex: number;
+  path: string;
+  sha256: string;
+};
+
 export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
-  rawCommand: string | null;
+  commandText: string;
+  commandPreview?: string | null;
   agentId: string | null;
   sessionKey: string | null;
+  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  commandPreview?: string | null;
   commandArgv?: string[];
   // Optional UI-safe env key preview for approval prompts.
   envKeys?: string[];

@@ -298,6 +298,7 @@ function buildPluginRequestStages(params: {
   if (!params.handlePluginRequest) {
     return [];
   }
+  let pluginGatewayAuthSatisfied = false;
   return [
     {
       name: "plugin-auth",
@@ -325,6 +326,7 @@ function buildPluginRequestStages(params: {
         if (!pluginAuthOk) {
           return true;
         }
+        pluginGatewayAuthSatisfied = true;
         return false;
       },
     },
@@ -333,7 +335,11 @@ function buildPluginRequestStages(params: {
       run: () => {
         const pathContext =
           params.pluginPathContext ?? resolvePluginRoutePathContext(params.requestPath);
-        return params.handlePluginRequest?.(params.req, params.res, pathContext) ?? false;
+        return (
+          params.handlePluginRequest?.(params.req, params.res, pathContext, {
+            gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+          }) ?? false
+        );
       },
     },
   ];

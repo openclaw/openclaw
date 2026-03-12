@@ -15,10 +15,10 @@ import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onb
 import {
   applySingleTokenPromptResult,
   patchChannelConfigForAccount,
-  promptSingleChannelSecretInput,
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
+  runSingleChannelSecretStep,
   setChannelDmPolicyWithAllowFrom,
   setOnboardingChannelEnabled,
   splitOnboardingEntries,
@@ -192,57 +192,47 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
     const hasConfiguredBotToken = hasConfiguredSecretInput(resolvedAccount.config.botToken);
     const hasConfigToken =
       hasConfiguredBotToken || Boolean(resolvedAccount.config.tokenFile?.trim());
-    const accountConfigured = Boolean(resolvedAccount.token) || hasConfigToken;
     const allowEnv = telegramAccountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv && !hasConfigToken && Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
-
-    if (!accountConfigured) {
-      await noteTelegramTokenHelp(prompter);
-    }
-
-    const tokenResult = await promptSingleChannelSecretInput({
+    const tokenStep = await runSingleChannelSecretStep({
       cfg: next,
       prompter,
       providerHint: "telegram",
       credentialLabel: "Telegram bot token",
       secretInputMode: options?.secretInputMode,
-      accountConfigured,
-      canUseEnv,
+      accountConfigured: Boolean(resolvedAccount.token) || hasConfigToken,
       hasConfigToken,
+      allowEnv,
+      envValue: process.env.TELEGRAM_BOT_TOKEN,
       envPrompt: "TELEGRAM_BOT_TOKEN detected. Use env var?",
       keepPrompt: "Telegram token already configured. Keep it?",
       inputPrompt: "Enter Telegram bot token",
       preferredEnvVar: allowEnv ? "TELEGRAM_BOT_TOKEN" : undefined,
+      onMissingConfigured: async () => await noteTelegramTokenHelp(prompter),
+      applyUseEnv: async (cfg) =>
+        applySingleTokenPromptResult({
+          cfg,
+          channel: "telegram",
+          accountId: telegramAccountId,
+          tokenPatchKey: "botToken",
+          tokenResult: { useEnv: true, token: null },
+        }),
+      applySet: async (cfg, value) =>
+        applySingleTokenPromptResult({
+          cfg,
+          channel: "telegram",
+          accountId: telegramAccountId,
+          tokenPatchKey: "botToken",
+          tokenResult: { useEnv: false, token: value },
+        }),
     });
-
-    let resolvedTokenForAllowFrom: string | undefined;
-    if (tokenResult.action === "use-env") {
-      next = applySingleTokenPromptResult({
-        cfg: next,
-        channel: "telegram",
-        accountId: telegramAccountId,
-        tokenPatchKey: "botToken",
-        tokenResult: { useEnv: true, token: null },
-      });
-      resolvedTokenForAllowFrom = process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined;
-    } else if (tokenResult.action === "set") {
-      next = applySingleTokenPromptResult({
-        cfg: next,
-        channel: "telegram",
-        accountId: telegramAccountId,
-        tokenPatchKey: "botToken",
-        tokenResult: { useEnv: false, token: tokenResult.value },
-      });
-      resolvedTokenForAllowFrom = tokenResult.resolvedValue;
-    }
+    next = tokenStep.cfg;
 
     if (forceAllowFrom) {
       next = await promptTelegramAllowFrom({
         cfg: next,
         prompter,
         accountId: telegramAccountId,
-        tokenOverride: resolvedTokenForAllowFrom,
+        tokenOverride: tokenStep.resolvedValue,
       });
     }
 
