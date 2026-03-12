@@ -1,0 +1,771 @@
+{
+  "schema_version": "routing-groups-v1",
+  "generated_at": "2026-02-23T14:05:00Z",
+  "source_cards_file": "/Users/rdy/Documents/openclaw/cards.metadata.merged64.json",
+  "description": "Grouped wizard routing to guarantee 3 clear recommendations via exact-first then constrained fallback.",
+  "wizard_axes": {
+    "single_choice": ["audience", "stance", "safety", "exposure", "pace", "authority"],
+    "multi_choice": ["urgency", "population", "interaction", "outcomes", "boundaries"]
+  },
+  "band_rules": {
+    "intent_band": [
+      {
+        "id": "discovery",
+        "if_urgency_any": ["unsure", "lived_experience"],
+        "priority": 1
+      },
+      {
+        "id": "care",
+        "if_urgency_any": ["care_coaching_reflection"],
+        "priority": 2
+      },
+      {
+        "id": "transition",
+        "if_urgency_any": ["transition_disruption_repair"],
+        "priority": 3
+      },
+      {
+        "id": "governance",
+        "if_urgency_any": ["decision_awareness", "recurring_tensions"],
+        "priority": 4
+      },
+      {
+        "id": "ethics_risk",
+        "if_urgency_any": ["risk_ethics_accountability"],
+        "priority": 5
+      }
+    ],
+    "risk_band": [
+      {
+        "id": "high_unknown",
+        "if_safety_any": ["unknown"],
+        "or_urgency_any": ["risk_ethics_accountability"]
+      },
+      {
+        "id": "high_fragile",
+        "if_safety_any": ["fragile"]
+      },
+      {
+        "id": "medium_uneven",
+        "if_safety_any": ["uneven"]
+      },
+      {
+        "id": "lower_stable",
+        "if_safety_any": ["stable"]
+      }
+    ],
+    "cadence_band": {
+      "one_time": ["one_time"],
+      "short_cycle": ["short_cycle_weeks"],
+      "longitudinal": ["ongoing_longitudinal"],
+      "undetermined": ["undetermined"]
+    },
+    "authority_band": {
+      "none": ["none"],
+      "advisory": ["advisory"],
+      "restrained": ["exists_not_exercised_here"],
+      "decide_later": ["exists_exercised_later"]
+    }
+  },
+  "selection_policy": {
+    "top_k": 3,
+    "slots": [
+      {
+        "id": "best_fit_now",
+        "label": "Best fit now",
+        "objective": "Maximum contextual fit with current posture"
+      },
+      {
+        "id": "safer_governed",
+        "label": "Safer governed option",
+        "objective": "Increase safeguards and explicit boundaries"
+      },
+      {
+        "id": "faster_lighter",
+        "label": "Faster/lighter option",
+        "objective": "Reduce setup burden while preserving signal quality"
+      }
+    ],
+    "weights": {
+      "single_match": 10,
+      "multi_overlap": 5,
+      "boundary_overlap": 6,
+      "outcome_overlap": 5,
+      "intent_overlap": 4,
+      "authority_match_bonus": 3,
+      "pace_match_bonus": 3,
+      "safety_match_bonus": 4,
+      "memory_accept_boost": 8,
+      "memory_reject_penalty": -10,
+      "recent_shown_penalty": -4
+    },
+    "hard_conflicts": [
+      "safety=unknown + exposure=identified_trusted_group for public-facing contexts",
+      "boundaries include performance_evaluations when stance implies care-first",
+      "authority=none + outcome clear_direction when high_risk",
+      "single-point verdict framing when unresolved_tension is selected"
+    ],
+    "fallback_order": ["pace", "interaction", "stance"],
+    "non_relaxable_first": ["safety", "authority", "critical_boundaries"]
+  },
+  "memory_policy": {
+    "enabled": true,
+    "exploration_epsilon": 0.15,
+    "accept_signal": ["added_to_conversation", "selected", "advanced"],
+    "reject_signal": ["dismissed", "ignored_repeatedly"],
+    "cooldown_days": 30,
+    "diversity_rules": {
+      "max_same_primary_intent_in_top3": 2,
+      "require_distinct_population_shape": true,
+      "require_distinct_interaction_shape": true
+    }
+  },
+  "commercial_mapping": {
+    "default_tiers": ["Free", "Orientation", "Project", "Add-ons", "Enterprise"],
+    "upgrade_triggers": [
+      "authority is restrained or decide_later",
+      "risk_band is high_unknown or high_fragile",
+      "cross-group population is selected",
+      "longitudinal cadence is selected",
+      "public commitments or formal oversight boundaries are selected"
+    ],
+    "add_ons": {
+      "journally": "Recommend when reflective participation over time is required",
+      "insider_pools": "Recommend when continuity pools and consent-forward invitations are required",
+      "eri": "Recommend when external recruitment channels are required"
+    }
+  },
+  "groups": [
+    {
+      "id": "G01_discovery_unknown_no_authority",
+      "label": "Discovery with unknown safety and low formal authority",
+      "when": {
+        "intent_band": ["discovery"],
+        "risk_band": ["high_unknown"],
+        "authority_band": ["none", "advisory", "restrained"],
+        "cadence_band": ["undetermined", "one_time", "short_cycle"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "safety": ["unknown", "fragile"],
+            "pace": ["undetermined", "one_time", "short_cycle_weeks"],
+            "authority": ["none", "advisory", "exists_not_exercised_here"]
+          },
+          "seed_card_ids": ["card_57", "card_60", "card_64"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["verdicts_judgments", "attribution_to_individuals"],
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_60", "card_26", "card_38"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_57", "card_11", "card_64"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Free"],
+        "add_ons": [],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G02_discovery_stable_team",
+      "label": "Discovery in stable trusted groups",
+      "when": {
+        "intent_band": ["discovery", "governance"],
+        "risk_band": ["lower_stable"],
+        "authority_band": ["none", "restrained", "advisory"],
+        "cadence_band": ["one_time", "short_cycle", "undetermined"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "safety": ["stable"],
+            "exposure": ["identified_trusted_group", "mixed"]
+          },
+          "seed_card_ids": ["card_58", "card_61", "card_64"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["public_commitments", "consensus_statements"]
+          },
+          "seed_card_ids": ["card_58", "card_59", "card_63"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["one_time", "short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_61", "card_06", "card_64"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Free",
+        "secondary": ["Orientation"],
+        "add_ons": [],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G03_care_fragile_private",
+      "label": "Care/coaching in fragile safety contexts",
+      "when": {
+        "intent_band": ["care"],
+        "risk_band": ["high_fragile"],
+        "authority_band": ["none", "advisory"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "stance": ["care_before_clarity", "learning_without_fixing"],
+            "safety": ["fragile"]
+          },
+          "seed_card_ids": ["card_03", "card_42", "card_62"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "exposure": ["anonymous", "pseudonymous"],
+            "boundaries": ["attribution_to_individuals"]
+          },
+          "seed_card_ids": ["card_42", "card_62", "card_45"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_01", "card_02", "card_62"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Free",
+        "secondary": ["Orientation"],
+        "add_ons": ["journally"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G04_care_uneven_collective",
+      "label": "Care-oriented collective reflection with uneven safety",
+      "when": {
+        "intent_band": ["care", "transition"],
+        "risk_band": ["medium_uneven"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "safety": ["uneven"],
+            "interaction": ["async_over_time", "live_conversation"]
+          },
+          "seed_card_ids": ["card_18", "card_45", "card_21"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["verdicts_judgments", "attribution_to_individuals"]
+          },
+          "seed_card_ids": ["card_45", "card_30", "card_55"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_18", "card_35", "card_41"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["journally"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G05_transition_reintegration_fragile",
+      "label": "Transition and reintegration under fragile trust",
+      "when": {
+        "intent_band": ["transition"],
+        "risk_band": ["high_fragile", "high_unknown"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "urgency": ["transition_disruption_repair"],
+            "safety": ["fragile", "uneven"]
+          },
+          "seed_card_ids": ["card_54", "card_27", "card_19"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "authority": ["advisory", "exists_exercised_later"],
+            "boundaries": ["rankings_scores", "attribution_to_individuals"]
+          },
+          "seed_card_ids": ["card_54", "card_26", "card_31"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_19", "card_27", "card_57"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["journally", "insider_pools"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G06_governance_advisory_exec",
+      "label": "Governance and oversight with advisory authority",
+      "when": {
+        "intent_band": ["governance", "ethics_risk"],
+        "risk_band": ["medium_uneven", "high_fragile", "lower_stable"],
+        "authority_band": ["advisory", "restrained"],
+        "cadence_band": ["short_cycle", "one_time"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "urgency": ["decision_awareness"],
+            "population": ["specific_stakeholder"]
+          },
+          "seed_card_ids": ["card_08", "card_31", "card_61"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["verdicts_judgments", "consensus_statements"]
+          },
+          "seed_card_ids": ["card_39", "card_53", "card_26"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["one_time", "short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_61", "card_43", "card_58"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": [],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G07_governance_decide_later",
+      "label": "Governance where decision authority is exercised later",
+      "when": {
+        "intent_band": ["governance", "ethics_risk"],
+        "risk_band": ["medium_uneven", "lower_stable", "high_fragile"],
+        "authority_band": ["decide_later"],
+        "cadence_band": ["short_cycle", "longitudinal", "one_time"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "authority": ["exists_exercised_later"]
+          },
+          "seed_card_ids": ["card_53", "card_59", "card_63"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["public_commitments", "consensus_statements", "verdicts_judgments"]
+          },
+          "seed_card_ids": ["card_63", "card_31", "card_39"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_53", "card_61", "card_64"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Project",
+        "secondary": ["Orientation"],
+        "add_ons": ["journally"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G08_ethics_incident_unknown",
+      "label": "Incident, ethics, or oversight under uncertainty",
+      "when": {
+        "intent_band": ["ethics_risk"],
+        "risk_band": ["high_unknown", "high_fragile"],
+        "authority_band": ["restrained", "advisory", "decide_later"],
+        "cadence_band": ["one_time", "short_cycle", "undetermined"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "urgency": ["risk_ethics_accountability"],
+            "safety": ["unknown", "fragile"]
+          },
+          "seed_card_ids": ["card_60", "card_20", "card_38"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["verdicts_judgments", "attribution_to_individuals"],
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_26", "card_38", "card_52"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["one_time", "short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_20", "card_60", "card_57"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["eri"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G09_ethics_regulated_stable",
+      "label": "Regulated context with stable participation and formal accountability",
+      "when": {
+        "intent_band": ["ethics_risk", "governance"],
+        "risk_band": ["lower_stable"],
+        "authority_band": ["decide_later", "restrained"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "safety": ["stable"],
+            "outcomes": ["decisions_deferred", "partial_clarity"]
+          },
+          "seed_card_ids": ["card_59", "card_58", "card_52"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["performance_evaluations", "public_commitments"]
+          },
+          "seed_card_ids": ["card_59", "card_63", "card_31"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_58", "card_64", "card_61"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Project",
+        "secondary": ["Orientation"],
+        "add_ons": ["journally"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G10_community_public_policy",
+      "label": "Community and public-interest engagement",
+      "when": {
+        "intent_band": ["discovery", "governance", "ethics_risk"],
+        "risk_band": ["high_fragile", "medium_uneven"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "population": ["broad_anonymous", "multiple_groups"],
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_55", "card_10", "card_07"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": [
+              "public_commitments",
+              "consensus_statements",
+              "attribution_to_individuals"
+            ]
+          },
+          "seed_card_ids": ["card_63", "card_55", "card_24"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_11", "card_07", "card_57"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["insider_pools", "eri"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G11_partner_ecosystem_federated",
+      "label": "Partner ecosystem and federated governance",
+      "when": {
+        "intent_band": ["governance", "transition"],
+        "risk_band": ["medium_uneven", "high_fragile"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["longitudinal", "short_cycle"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "population": ["multiple_groups", "insiders_opt_in"],
+            "interaction": ["async_over_time", "live_conversation"]
+          },
+          "seed_card_ids": ["card_56", "card_50", "card_15"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["rankings_scores", "public_commitments", "attribution_to_individuals"]
+          },
+          "seed_card_ids": ["card_56", "card_23", "card_36"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_23", "card_36", "card_50"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Project",
+        "secondary": ["Orientation"],
+        "add_ons": ["insider_pools", "journally"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G12_enterprise_longitudinal_program",
+      "label": "Enterprise longitudinal listening program",
+      "when": {
+        "intent_band": ["governance", "ethics_risk", "transition"],
+        "risk_band": ["medium_uneven", "high_fragile", "lower_stable"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "pace": ["ongoing_longitudinal"],
+            "population": ["insiders_opt_in", "multiple_groups"]
+          },
+          "seed_card_ids": ["card_12", "card_40", "card_49"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "authority": ["exists_exercised_later", "advisory"],
+            "boundaries": ["verdicts_judgments", "attribution_to_individuals"]
+          },
+          "seed_card_ids": ["card_50", "card_56", "card_59"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_13", "card_14", "card_29"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Enterprise",
+        "secondary": ["Project"],
+        "add_ons": ["insider_pools", "journally", "eri"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G13_culture_shift_program",
+      "label": "Culture shift and role-segmented trust monitoring",
+      "when": {
+        "intent_band": ["governance", "transition"],
+        "risk_band": ["medium_uneven", "high_fragile"],
+        "authority_band": ["advisory", "decide_later"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "urgency": ["recurring_tensions", "decision_awareness"],
+            "population": ["multiple_groups"]
+          },
+          "seed_card_ids": ["card_51", "card_29", "card_54"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": [
+              "rankings_scores",
+              "performance_evaluations",
+              "attribution_to_individuals"
+            ]
+          },
+          "seed_card_ids": ["card_51", "card_58", "card_59"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_06", "card_64", "card_58"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["journally", "insider_pools"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G14_ai_readiness_governed",
+      "label": "AI readiness with risk and accountability",
+      "when": {
+        "intent_band": ["ethics_risk", "governance"],
+        "risk_band": ["high_fragile", "medium_uneven", "lower_stable"],
+        "authority_band": ["advisory", "decide_later", "restrained"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "urgency": ["risk_ethics_accountability", "decision_awareness"],
+            "population": ["multiple_groups", "specific_stakeholder"]
+          },
+          "seed_card_ids": ["card_52", "card_59", "card_53"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": [
+              "performance_evaluations",
+              "verdicts_judgments",
+              "attribution_to_individuals"
+            ]
+          },
+          "seed_card_ids": ["card_52", "card_26", "card_60"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_57", "card_64", "card_52"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Orientation",
+        "secondary": ["Project"],
+        "add_ons": ["journally"],
+        "enterprise": true
+      }
+    },
+    {
+      "id": "G15_learning_method_individual",
+      "label": "Learning-method and individual practice",
+      "when": {
+        "intent_band": ["discovery", "care"],
+        "risk_band": ["high_fragile", "medium_uneven", "lower_stable"],
+        "authority_band": ["none", "advisory"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "audience": ["learning_method", "educator", "org_project"],
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_01", "card_62", "card_17"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "boundaries": ["attribution_to_individuals", "performance_evaluations"]
+          },
+          "seed_card_ids": ["card_62", "card_02", "card_03"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "pace": ["short_cycle_weeks"]
+          },
+          "seed_card_ids": ["card_01", "card_02", "card_17"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Free",
+        "secondary": ["Orientation"],
+        "add_ons": ["journally"],
+        "enterprise": false
+      }
+    },
+    {
+      "id": "G16_education_cohort_program",
+      "label": "Education/classroom and cohort pathways",
+      "when": {
+        "intent_band": ["discovery", "care", "transition"],
+        "risk_band": ["high_fragile", "medium_uneven", "lower_stable"],
+        "authority_band": ["advisory", "none"],
+        "cadence_band": ["short_cycle", "longitudinal"]
+      },
+      "slot_recipes": {
+        "best_fit_now": {
+          "must_match": {
+            "audience": ["educator", "org_project"],
+            "population": ["specific_stakeholder", "broad_anonymous"]
+          },
+          "seed_card_ids": ["card_17", "card_28", "card_55"]
+        },
+        "safer_governed": {
+          "must_match": {
+            "safety": ["fragile", "uneven"],
+            "exposure": ["anonymous", "pseudonymous"]
+          },
+          "seed_card_ids": ["card_62", "card_30", "card_55"]
+        },
+        "faster_lighter": {
+          "must_match": {
+            "interaction": ["async_over_time"]
+          },
+          "seed_card_ids": ["card_17", "card_11", "card_57"]
+        }
+      },
+      "commercial_hint": {
+        "primary": "Free",
+        "secondary": ["Orientation"],
+        "add_ons": ["journally", "insider_pools"],
+        "enterprise": false
+      }
+    }
+  ],
+  "routing_execution": {
+    "step_order": [
+      "derive bands from wizard",
+      "match candidate groups by when",
+      "score cards within each slot recipe",
+      "apply memory boosts/penalties",
+      "apply fallback_order until 3 recommendations",
+      "emit rationale and why-not notes"
+    ],
+    "output_contract": {
+      "returns": 3,
+      "fields": [
+        "card_id",
+        "slot",
+        "match_confidence",
+        "why_this_showed_up",
+        "tradeoffs",
+        "commercial_hint"
+      ]
+    }
+  }
+}
