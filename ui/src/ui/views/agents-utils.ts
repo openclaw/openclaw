@@ -4,6 +4,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { escapeRegExp } from "../regex.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -601,7 +602,7 @@ function compilePattern(pattern: string): CompiledPattern {
   if (!normalized.includes("*")) {
     return { kind: "exact", value: normalized };
   }
-  const escaped = normalized.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+  const escaped = escapeRegExp(normalized);
   return { kind: "regex", value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`) };
 }
 

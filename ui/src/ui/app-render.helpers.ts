@@ -10,6 +10,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { escapeRegExp } from "./regex.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -410,7 +411,7 @@ export function resolveSessionDisplayName(
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    const prefixPattern = new RegExp(`^${escapeRegExp(prefix)}\\s*`, "i");
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 

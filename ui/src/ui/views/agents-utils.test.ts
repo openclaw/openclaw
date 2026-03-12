@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAllowedByPolicy,
+  matchesList,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
@@ -96,5 +98,17 @@ describe("sortLocaleStrings", () => {
 
   it("accepts any iterable input, including sets", () => {
     expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("tool policy wildcard matching", () => {
+  it("treats square brackets as literal characters in wildcard patterns", () => {
+    expect(matchesList("exec[child]-stdout", ["exec[child]*"])).toBe(true);
+    expect(
+      isAllowedByPolicy("exec[child]-stdout", {
+        allow: ["exec[child]*"],
+        deny: [],
+      }),
+    ).toBe(true);
   });
 });
