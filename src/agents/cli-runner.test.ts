@@ -4,7 +4,11 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
-import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import {
+  parseCliJson,
+  parseCliJsonl,
+  resolveCliNoOutputTimeoutMs,
+} from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
@@ -313,5 +317,44 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       useResume: true,
     });
     expect(timeoutMs).toBe(42_000);
+  });
+});
+
+describe("CLI session id parsing", () => {
+  it("ignores non-UUID canonical session ids from JSON output", () => {
+    const parsed = parseCliJson(
+      JSON.stringify({
+        message: "rate limited",
+        session_id: "rate-limited",
+      }),
+      { command: "claude" },
+    );
+
+    expect(parsed?.sessionId).toBeUndefined();
+  });
+
+  it("preserves UUID canonical session ids from JSON output", () => {
+    const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const parsed = parseCliJson(
+      JSON.stringify({
+        message: "ok",
+        session_id: sessionId,
+      }),
+      { command: "claude" },
+    );
+
+    expect(parsed?.sessionId).toBe(sessionId);
+  });
+
+  it("keeps JSONL thread_id fallback when canonical session ids are invalid", () => {
+    const parsed = parseCliJsonl(
+      [
+        JSON.stringify({ session_id: "rate-limited" }),
+        JSON.stringify({ thread_id: "thread-123", item: { type: "message", text: "ok" } }),
+      ].join("\n"),
+      { command: "codex" },
+    );
+
+    expect(parsed?.sessionId).toBe("thread-123");
   });
 });
