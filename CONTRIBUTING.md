@@ -75,6 +75,7 @@ Welcome to the lobster tank! 🦞
 
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
