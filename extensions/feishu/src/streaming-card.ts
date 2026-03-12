@@ -330,7 +330,9 @@ export class FeishuStreamingSession {
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    // Final reply payloads are authoritative; do not merge unrelated buffered
+    // content into a completed message.
+    const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed

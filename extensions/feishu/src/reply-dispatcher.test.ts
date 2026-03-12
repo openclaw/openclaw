@@ -304,13 +304,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
     await options.deliver({ text: "```md\n完整回复第一段\n```" }, { kind: "final" });
-    await options.deliver({ text: "```md\n完整回复第一段 + 第二段\n```" }, { kind: "final" });
+    await options.deliver({ text: "```md\n独立的第二条回复\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```");
     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n完整回复第一段 + 第二段\n```");
+    expect(streamingInstances[1].close).toHaveBeenCalledWith("```md\n独立的第二条回复\n```");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });

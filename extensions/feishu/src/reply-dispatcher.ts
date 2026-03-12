@@ -206,13 +206,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  const closeStreaming = async (finalText?: string) => {
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
-      let text = streamText;
+      let text = finalText ?? streamText;
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
@@ -283,8 +283,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
+              await closeStreaming(text);
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
