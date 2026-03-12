@@ -372,6 +372,18 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onOpenCortexPreview: () => {
+                  state.tab = "chat";
+                  state.chatMessage = "/cortex preview";
+                },
+                onOpenCortexConflicts: () => {
+                  state.tab = "chat";
+                  state.chatMessage = "/cortex conflicts";
+                },
+                onOpenCortexSync: () => {
+                  state.tab = "chat";
+                  state.chatMessage = "/cortex sync coding";
+                },
               })
             : nothing
         }
@@ -1081,7 +1093,6 @@ export function renderApp(state: AppViewState) {
                 models: state.debugModels,
                 heartbeat: state.debugHeartbeat,
                 eventLog: state.eventLog,
-                methods: (state.hello?.features?.methods ?? []).toSorted(),
                 callMethod: state.debugCallMethod,
                 callParams: state.debugCallParams,
                 callResult: state.debugCallResult,
