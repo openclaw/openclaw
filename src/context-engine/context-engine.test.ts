@@ -1,10 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
-import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
+import {
+  LegacyContextEngine,
+  registerLegacyContextEngine,
+  estimateMessageTokens,
+  resolveAutoCompactionThreshold,
+  DEFAULT_AUTO_COMPACTION_THRESHOLD,
+} from "./legacy.js";
 import {
   registerContextEngine,
   getContextEngineFactory,
@@ -460,5 +466,191 @@ describe("Bundle chunk isolation (#40096)", () => {
     for (const id of ids) {
       expect(allIds).toContain(id);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. Auto-compaction threshold resolution
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("resolveAutoCompactionThreshold", () => {
+  it("returns default (0.75) when config is undefined", () => {
+    expect(resolveAutoCompactionThreshold(undefined)).toBe(DEFAULT_AUTO_COMPACTION_THRESHOLD);
+  });
+
+  it("returns default when compaction section is absent", () => {
+    expect(resolveAutoCompactionThreshold({ agents: { defaults: {} } } as never)).toBe(
+      DEFAULT_AUTO_COMPACTION_THRESHOLD,
+    );
+  });
+
+  it("returns configured value when within valid range", () => {
+    const cfg = { agents: { defaults: { compaction: { autoThreshold: 0.8 } } } } as never;
+    expect(resolveAutoCompactionThreshold(cfg)).toBe(0.8);
+  });
+
+  it("clamps to 0.5 when below minimum", () => {
+    const cfg = { agents: { defaults: { compaction: { autoThreshold: 0.1 } } } } as never;
+    expect(resolveAutoCompactionThreshold(cfg)).toBe(0.5);
+  });
+
+  it("clamps to 0.95 when above maximum", () => {
+    const cfg = { agents: { defaults: { compaction: { autoThreshold: 0.99 } } } } as never;
+    expect(resolveAutoCompactionThreshold(cfg)).toBe(0.95);
+  });
+
+  it("returns default for non-finite values", () => {
+    const cfg = { agents: { defaults: { compaction: { autoThreshold: NaN } } } } as never;
+    expect(resolveAutoCompactionThreshold(cfg)).toBe(DEFAULT_AUTO_COMPACTION_THRESHOLD);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. estimateMessageTokens helper
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("estimateMessageTokens", () => {
+  it("returns 0 for empty array", () => {
+    expect(estimateMessageTokens([])).toBe(0);
+  });
+
+  it("returns a positive number for messages with content", () => {
+    const messages = [
+      makeMockMessage("user", "Hello world, this is a test message"),
+      makeMockMessage("assistant", "Sure, here is a response"),
+    ];
+    const tokens = estimateMessageTokens(messages);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it("increases with more messages", () => {
+    const small = [makeMockMessage("user", "Hi")];
+    const large = [
+      makeMockMessage("user", "Hi"),
+      makeMockMessage("assistant", "Hello! How can I help you today?"),
+      makeMockMessage("user", "Tell me about the weather forecast for tomorrow"),
+    ];
+    expect(estimateMessageTokens(large)).toBeGreaterThan(estimateMessageTokens(small));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10. LegacyContextEngine.afterTurn() proactive auto-compaction (#43603)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("LegacyContextEngine.afterTurn() auto-compaction (#43603)", () => {
+  it("does not compact when tokenBudget is missing", async () => {
+    const engine = new LegacyContextEngine();
+    const compactSpy = vi.spyOn(engine, "compact");
+    await engine.afterTurn({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      messages: [makeMockMessage("user", "x".repeat(1000))],
+      prePromptMessageCount: 0,
+    });
+    expect(compactSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not compact when token usage is below threshold", async () => {
+    const engine = new LegacyContextEngine();
+    const compactSpy = vi.spyOn(engine, "compact");
+    // Use tiny messages against a huge budget — well under 75%
+    await engine.afterTurn({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      messages: [makeMockMessage("user", "Hi")],
+      prePromptMessageCount: 0,
+      tokenBudget: 1_000_000,
+    });
+    expect(compactSpy).not.toHaveBeenCalled();
+  });
+
+  it("triggers compact when token usage exceeds threshold", async () => {
+    const engine = new LegacyContextEngine();
+    // Mock compact to avoid the heavy real compaction pipeline
+    const compactSpy = vi.spyOn(engine, "compact").mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 800, tokensAfter: 200 },
+    });
+
+    // Create messages that will exceed 75% of a small budget.
+    // estimateTokens uses chars/4 heuristic, so 400 chars ≈ 100 tokens.
+    // With budget=100, threshold=75, 100 tokens > 75 → triggers.
+    const bigMessage = makeMockMessage("user", "x".repeat(400));
+    await engine.afterTurn({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      messages: [bigMessage],
+      prePromptMessageCount: 0,
+      tokenBudget: 100,
+    });
+    expect(compactSpy).toHaveBeenCalledOnce();
+    expect(compactSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s1",
+        sessionFile: "/tmp/s1.jsonl",
+        tokenBudget: 100,
+        force: true,
+        compactionTarget: "budget",
+      }),
+    );
+  });
+
+  it("respects custom threshold from config in runtimeContext", async () => {
+    const engine = new LegacyContextEngine();
+    const compactSpy = vi.spyOn(engine, "compact").mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 800, tokensAfter: 200 },
+    });
+
+    // 400 chars ≈ 100 tokens. Budget=200, default threshold 0.75 → triggerAt=150.
+    // 100 < 150 → should NOT compact with default threshold.
+    // But with threshold=0.5 → triggerAt=100 → 100 >= 100 → SHOULD compact.
+    const msg = makeMockMessage("user", "x".repeat(400));
+    const config = { agents: { defaults: { compaction: { autoThreshold: 0.5 } } } };
+
+    await engine.afterTurn({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      messages: [msg],
+      prePromptMessageCount: 0,
+      tokenBudget: 200,
+      runtimeContext: { config },
+    });
+
+    // With threshold=0.5, triggerAt=100, currentTokens≈100 → should trigger
+    expect(compactSpy).toHaveBeenCalledOnce();
+  });
+
+  it("does not crash when compact() throws (best-effort)", async () => {
+    const engine = new LegacyContextEngine();
+    vi.spyOn(engine, "compact").mockRejectedValue(new Error("boom"));
+
+    const bigMessage = makeMockMessage("user", "x".repeat(400));
+    // Should not throw — auto-compaction is best-effort
+    await expect(
+      engine.afterTurn({
+        sessionId: "s1",
+        sessionFile: "/tmp/s1.jsonl",
+        messages: [bigMessage],
+        prePromptMessageCount: 0,
+        tokenBudget: 100,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not compact when messages array is empty", async () => {
+    const engine = new LegacyContextEngine();
+    const compactSpy = vi.spyOn(engine, "compact");
+    await engine.afterTurn({
+      sessionId: "s1",
+      sessionFile: "/tmp/s1.jsonl",
+      messages: [],
+      prePromptMessageCount: 0,
+      tokenBudget: 100,
+    });
+    expect(compactSpy).not.toHaveBeenCalled();
   });
 });

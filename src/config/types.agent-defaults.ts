@@ -326,6 +326,13 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /**
+   * Proactive auto-compaction threshold as a fraction of the context window (0.5–0.95).
+   * When session token usage exceeds this ratio after a turn, compaction triggers
+   * automatically instead of waiting for a provider overflow error.
+   * Default: 0.75 (75% of context window).
+   */
+  autoThreshold?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

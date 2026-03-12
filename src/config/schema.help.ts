@@ -1027,6 +1027,8 @@ export const FIELD_HELP: Record<string, string> = {
     'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+  "agents.defaults.compaction.autoThreshold":
+    "Proactive auto-compaction threshold as a fraction of the context window (0.5–0.95). When session token usage exceeds this ratio after a turn, compaction triggers automatically instead of waiting for a provider overflow error. Default: 0.75.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

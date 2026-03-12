@@ -1,4 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { registerContextEngine } from "./registry.js";
 import type {
   ContextEngine,
@@ -8,6 +11,49 @@ import type {
   ContextEngineRuntimeContext,
   IngestResult,
 } from "./types.js";
+
+const log = createSubsystemLogger("legacy-context-engine");
+
+/** Default proactive auto-compaction threshold (fraction of context window). */
+export const DEFAULT_AUTO_COMPACTION_THRESHOLD = 0.75;
+
+/**
+ * Estimate total token count for a message array using the same heuristic
+ * as the compaction subsystem (chars/4). Returns 0 on estimation failure.
+ */
+export function estimateMessageTokens(messages: AgentMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    try {
+      total += estimateTokens(msg);
+    } catch {
+      // Estimation failure on a single message — skip, don't abort.
+    }
+  }
+  return total;
+}
+
+/**
+ * Resolve the effective auto-compaction threshold from config.
+ * Returns `null` when auto-compaction is explicitly disabled (set to 0 or falsy mode).
+ */
+export function resolveAutoCompactionThreshold(config?: OpenClawConfig): number | null {
+  const value = config?.agents?.defaults?.compaction?.autoThreshold;
+  if (value === undefined || value === null) {
+    return DEFAULT_AUTO_COMPACTION_THRESHOLD;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_AUTO_COMPACTION_THRESHOLD;
+  }
+  // Clamp to valid range
+  if (value < 0.5) {
+    return 0.5;
+  }
+  if (value > 0.95) {
+    return 0.95;
+  }
+  return value;
+}
 
 /**
  * LegacyContextEngine wraps the existing compaction behavior behind the
@@ -47,7 +93,7 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  async afterTurn(_params: {
+  async afterTurn(params: {
     sessionId: string;
     sessionFile: string;
     messages: AgentMessage[];
@@ -57,7 +103,63 @@ export class LegacyContextEngine implements ContextEngine {
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
-    // No-op: legacy flow persists context directly in SessionManager.
+    // Proactive auto-compaction: estimate current token usage and compact
+    // before the next turn hits a provider overflow error.
+    const { messages, tokenBudget, runtimeContext } = params;
+    if (!tokenBudget || tokenBudget <= 0 || messages.length === 0) {
+      return;
+    }
+
+    const config = runtimeContext?.config as OpenClawConfig | undefined;
+    const threshold = resolveAutoCompactionThreshold(config);
+    if (threshold === null) {
+      return;
+    }
+
+    const currentTokens = estimateMessageTokens(messages);
+    const triggerAt = Math.floor(tokenBudget * threshold);
+
+    if (currentTokens < triggerAt) {
+      return;
+    }
+
+    const ratio = currentTokens / tokenBudget;
+    log.info(
+      `[auto-compaction] triggered: sessionId=${params.sessionId} ` +
+        `tokens=${currentTokens} budget=${tokenBudget} ratio=${ratio.toFixed(3)} ` +
+        `threshold=${threshold} triggerAt=${triggerAt}`,
+    );
+
+    try {
+      const result = await this.compact({
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+        tokenBudget,
+        force: true,
+        currentTokenCount: currentTokens,
+        compactionTarget: "budget",
+        runtimeContext,
+      });
+
+      if (result.compacted) {
+        log.info(
+          `[auto-compaction] completed: sessionId=${params.sessionId} ` +
+            `tokensBefore=${result.result?.tokensBefore ?? "?"} ` +
+            `tokensAfter=${result.result?.tokensAfter ?? "?"}`,
+        );
+      } else {
+        log.info(
+          `[auto-compaction] skipped by compactor: sessionId=${params.sessionId} ` +
+            `reason=${result.reason ?? "unknown"}`,
+        );
+      }
+    } catch (err) {
+      // Auto-compaction is best-effort — don't crash the session.
+      log.warn(
+        `[auto-compaction] failed: sessionId=${params.sessionId} ` +
+          `error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async compact(params: {
