@@ -392,6 +392,38 @@ describe("workspace lock manager", () => {
     await lockB.release();
   });
 
+  it("canonicalizes unresolved suffix casing for missing-file lock targets", async () => {
+    const dir = await makeCaseDir();
+    const targetUpper = path.join(dir, "New", "State.JSON");
+    const targetLower = path.join(dir, "new", "state.json");
+
+    const lockA = await acquireWorkspaceLock(targetUpper, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await expect(
+      acquireWorkspaceLock(targetLower, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    await lockA.release();
+
+    const lockB = await acquireWorkspaceLock(targetLower, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    await lockB.release();
+  });
+
   it("keeps file lock path stable when parent directories appear later", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "new", "nested", "state.json");

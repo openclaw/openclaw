@@ -61,7 +61,9 @@ async function canonicalizePathViaNearestExistingAncestor(targetPath: string): P
       if (parent === cursor) {
         return suffix.length === 0 ? resolved : path.join(cursor, ...suffix.toReversed());
       }
-      suffix.push(path.basename(cursor));
+      // Lock identity should collapse case-only variants for unresolved suffixes
+      // so missing-file aliases on case-insensitive filesystems map to one lock.
+      suffix.push(path.basename(cursor).toLowerCase());
       cursor = parent;
     }
   }
