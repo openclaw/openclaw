@@ -53,11 +53,11 @@ export function resolveStuckThresholdMs(config?: CronReliabilityConfig): number 
  * Check if a cron job is stuck (running too long).
  */
 export function isJobStuck(job: CronJob, nowMs: number, config?: CronReliabilityConfig): boolean {
-  if (job.state.status !== "running") {
+  if (!job.state.runningAtMs) {
     return false;
   }
 
-  const startedAt = job.state.startedAt;
+  const startedAt = job.state.runningAtMs;
   if (!startedAt) {
     return false;
   }
@@ -70,10 +70,7 @@ export function isJobStuck(job: CronJob, nowMs: number, config?: CronReliability
  * Format a cron job execution state for logging.
  */
 export function formatCronJobState(state: CronJobExecutionState): string {
-  const lines: string[] = [
-    `Job: ${state.jobName} (${state.jobId})`,
-    `Status: ${state.status}`,
-  ];
+  const lines: string[] = [`Job: ${state.jobName} (${state.jobId})`, `Status: ${state.status}`];
 
   if (state.startedAt) {
     lines.push(`Started: ${new Date(state.startedAt).toISOString()}`);
@@ -116,10 +113,10 @@ export function formatDuration(ms: number): string {
  * Extract error information from a cron job failure.
  */
 export function extractCronJobError(job: CronJob): string | undefined {
-  if (job.state.status === "failed" && job.state.error) {
-    return typeof job.state.error === "string"
-      ? job.state.error
-      : job.state.error?.message ?? String(job.state.error);
+  if (job.state.lastRunStatus === "error" && job.state.lastError) {
+    return typeof job.state.lastError === "string"
+      ? job.state.lastError
+      : String(job.state.lastError);
   }
   return undefined;
 }
@@ -133,25 +130,33 @@ export function calculateCronReliabilityMetrics(
   config?: CronReliabilityConfig,
 ): CronReliabilityMetrics {
   const enabledJobs = jobs.filter((j) => j.enabled);
-  const runningJobs = enabledJobs.filter((j) => j.state.status === "running");
+  const runningJobs = enabledJobs.filter((j) => j.state.runningAtMs !== undefined);
   const stuckJobs = runningJobs.filter((j) => isJobStuck(j, nowMs, config));
-  const failedJobs = enabledJobs.filter((j) => j.state.status === "failed");
-  const disabledWithPendingRuns = jobs.filter((j) => !j.enabled && j.state.status === "pending").length;
+  const failedJobs = enabledJobs.filter((j) => j.state.lastRunStatus === "error");
+  const disabledWithPendingRuns = jobs.filter(
+    (j) => !j.enabled && j.state.runningAtMs !== undefined,
+  ).length;
 
   // Calculate average execution time from successful jobs
-  const successfulJobs = enabledJobs.filter((j) => j.state.status === "completed" && j.state.endedAt);
+  const successfulJobs = enabledJobs.filter(
+    (j) => j.state.lastRunStatus === "ok" && j.state.lastRunAtMs,
+  );
   let averageExecutionTimeMs = 0;
   if (successfulJobs.length > 0) {
     const totalTime = successfulJobs.reduce((sum, j) => {
-      const duration = (j.state.endedAt ?? 0) - (j.state.startedAt ?? 0);
+      const duration = (j.state.lastRunAtMs ?? 0) - (j.state.runningAtMs ?? 0);
       return sum + duration;
     }, 0);
     averageExecutionTimeMs = totalTime / successfulJobs.length;
   }
 
-  // Find last failure time (use startedAt as fallback if endedAt is not set)
-  const lastFailed = [...failedJobs].toSorted((a, b) => (b.state.endedAt ?? b.state.startedAt ?? 0) - (a.state.endedAt ?? a.state.startedAt ?? 0))[0];
-  const lastFailureTime = lastFailed?.state.endedAt ?? lastFailed?.state.startedAt;
+  // Find last failure time (use runningAtMs as fallback if lastRunAtMs is not set)
+  const lastFailed = [...failedJobs].toSorted(
+    (a, b) =>
+      (b.state.lastRunAtMs ?? b.state.runningAtMs ?? 0) -
+      (a.state.lastRunAtMs ?? a.state.runningAtMs ?? 0),
+  )[0];
+  const lastFailureTime = lastFailed?.state.lastRunAtMs ?? lastFailed?.state.runningAtMs;
 
   return {
     totalJobs: jobs.length,
@@ -206,12 +211,12 @@ export function cronJobNeedsAttention(
   }
 
   // Job has failed
-  if (job.state.status === "failed") {
+  if (job.state.lastRunStatus === "error") {
     return true;
   }
 
-  // Job is disabled and has pending runs
-  if (!job.enabled && job.state.status === "pending") {
+  // Job is disabled and has running/pending state
+  if (!job.enabled && job.state.runningAtMs) {
     return true;
   }
 
@@ -224,7 +229,7 @@ export function cronJobNeedsAttention(
 export function getCronJobRecommendations(job: CronJob): string[] {
   const recommendations: string[] = [];
 
-  if (job.state.status === "failed" && job.state.error) {
+  if (job.state.lastRunStatus === "error" && job.state.lastError) {
     const error = extractCronJobError(job);
     if (error) {
       recommendations.push(`Check job error: ${error}`);
@@ -233,7 +238,7 @@ export function getCronJobRecommendations(job: CronJob): string[] {
     recommendations.push("Consider increasing timeout if job takes too long");
   }
 
-  if (job.state.status === "running" && !job.state.startedAt) {
+  if (job.state.runningAtMs) {
     recommendations.push("Job may be stuck in queue - try restarting");
   }
 
@@ -241,7 +246,7 @@ export function getCronJobRecommendations(job: CronJob): string[] {
     recommendations.push("Job is disabled - enable with: openclaw cron enable <job-id>");
   }
 
-  if (job.schedule.kind === "cron" && !job.schedule.cron) {
+  if (job.schedule.kind === "cron" && !job.schedule.expr) {
     recommendations.push("Job has invalid cron schedule - check configuration");
   }
 

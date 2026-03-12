@@ -255,6 +255,9 @@ describe("validateConfigObject - memorySearch", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.message).toContain("non-empty baseUrl");
   });
@@ -274,6 +277,9 @@ describe("validateConfigObject - memorySearch", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.message).toContain("non-empty baseUrl");
   });
@@ -303,6 +309,9 @@ describe("validateConfigObject - memorySearch", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.path).toBe("agents.list[0].memorySearch");
     expect(result.issues[0]?.message).toContain("host (baseUrl)");
@@ -372,6 +381,9 @@ describe("validateConfigObject - memorySearch", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
     expect(result.issues).toHaveLength(2);
     expect(result.issues[0]?.path).toBe("agents.list[0].memorySearch");
     expect(result.issues[1]?.path).toBe("agents.list[1].memorySearch");
