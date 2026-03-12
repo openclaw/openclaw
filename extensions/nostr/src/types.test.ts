@@ -183,11 +183,30 @@ describe("NostrConfigSchema relay URL validation", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts ws:// relay URLs", () => {
+  it("accepts ws:// relay URLs for localhost development", () => {
     const result = NostrConfigSchema.safeParse({
       relays: ["ws://localhost:7777"],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts ws:// relay URLs for loopback IPs", () => {
+    const ipv4Result = NostrConfigSchema.safeParse({
+      relays: ["ws://127.0.0.1:7777"],
+    });
+    expect(ipv4Result.success).toBe(true);
+
+    const ipv6Result = NostrConfigSchema.safeParse({
+      relays: ["ws://[::1]:7777"],
+    });
+    expect(ipv6Result.success).toBe(true);
+  });
+
+  it("rejects ws:// relay URLs for remote hosts", () => {
+    const result = NostrConfigSchema.safeParse({
+      relays: ["ws://relay.damus.io"],
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects https:// relay URLs", () => {
