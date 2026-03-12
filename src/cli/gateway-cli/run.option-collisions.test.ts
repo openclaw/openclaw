@@ -215,6 +215,38 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("treats empty OPENCLAW_GATEWAY_BIND as unset and falls through", async () => {
+    configState.cfg = {
+      gateway: {
+        bind: "lan",
+      },
+    };
+
+    await withEnvOverride({ OPENCLAW_GATEWAY_BIND: "" }, async () => {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    });
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "lan",
+      }),
+    );
+  });
+
+  it("--bind CLI flag takes precedence over OPENCLAW_GATEWAY_BIND", async () => {
+    await withEnvOverride({ OPENCLAW_GATEWAY_BIND: "lan" }, async () => {
+      await runGatewayCli(["gateway", "run", "--bind", "loopback", "--allow-unconfigured"]);
+    });
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "loopback",
+      }),
+    );
+  });
+
   it("accepts --auth none override", async () => {
     await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
 
