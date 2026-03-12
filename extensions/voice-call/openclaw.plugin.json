@@ -134,6 +134,21 @@
       "label": "ElevenLabs Base URL",
       "advanced": true
     },
+    "tts.cli.command": {
+      "label": "CLI TTS Command",
+      "help": "Command to run for CLI-based TTS (e.g., say, espeak)",
+      "advanced": true
+    },
+    "tts.cli.args": {
+      "label": "CLI TTS Arguments",
+      "help": "Arguments to pass to the CLI TTS command",
+      "advanced": true
+    },
+    "tts.cli.sampleRate": {
+      "label": "CLI TTS Sample Rate",
+      "help": "Sample rate for CLI TTS output in Hz",
+      "advanced": true
+    },
     "publicUrl": {
       "label": "Public Webhook URL",
       "advanced": true
@@ -421,7 +436,7 @@
           },
           "provider": {
             "type": "string",
-            "enum": ["openai", "elevenlabs", "edge"]
+            "enum": ["openai", "elevenlabs", "edge", "cli"]
           },
           "summaryModel": {
             "type": "string"
@@ -565,6 +580,26 @@
                 "type": "integer",
                 "minimum": 1000,
                 "maximum": 120000
+              }
+            }
+          },
+          "cli": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "type": "string",
+                "minLength": 1
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sampleRate": {
+                "type": "integer",
+                "minimum": 1
               }
             }
           },
