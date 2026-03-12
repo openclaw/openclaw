@@ -19,7 +19,7 @@ describe("applySessionsPatchToStore - spawnedBy validation", () => {
       cfg: minimalCfg(),
       store,
       storeKey,
-      patch: { spawnedBy: "agent:main:discord:channel:ops" },
+      patch: { key: storeKey, spawnedBy: "agent:main:discord:channel:ops" },
     });
 
     expect(res.ok).toBe(true);
@@ -36,7 +36,7 @@ describe("applySessionsPatchToStore - spawnedBy validation", () => {
       cfg: minimalCfg(),
       store,
       storeKey,
-      patch: { spawnedBy: "agent:main:discord:channel:ops" },
+      patch: { key: storeKey, spawnedBy: "agent:main:discord:channel:ops" },
     });
 
     expect(res.ok).toBe(true);
@@ -53,7 +53,7 @@ describe("applySessionsPatchToStore - spawnedBy validation", () => {
       cfg: minimalCfg(),
       store,
       storeKey,
-      patch: { spawnedBy: "agent:main:discord:channel:ops" },
+      patch: { key: storeKey, spawnedBy: "agent:main:discord:channel:ops" },
     });
 
     expect(res.ok).toBe(false);
