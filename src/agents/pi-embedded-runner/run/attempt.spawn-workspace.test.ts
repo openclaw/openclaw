@@ -257,6 +257,14 @@ const testModel = {
   input: ["text"],
 } as unknown as Model<Api>;
 
+const cacheTtlEligibleModel = {
+  api: "anthropic",
+  provider: "anthropic",
+  compat: {},
+  contextWindow: 8192,
+  input: ["text"],
+} as unknown as Model<Api>;
+
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   const tempPaths: string[] = [];
 
@@ -377,6 +385,123 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       expect.anything(),
       expect.objectContaining({
         workspaceDir: sandboxWorkspace,
+      }),
+    );
+  });
+});
+
+describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    hoisted.createAgentSessionMock.mockReset();
+    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+    hoisted.resolveSandboxContextMock.mockReset();
+    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
+      release: async () => {},
+    });
+    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+    hoisted.sessionManager.branch.mockReset();
+    hoisted.sessionManager.resetLeaf.mockReset();
+    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages: [] });
+    hoisted.sessionManager.appendCustomEntry.mockReset();
+  });
+
+  afterEach(async () => {
+    while (tempPaths.length > 0) {
+      const target = tempPaths.pop();
+      if (target) {
+        await fs.rm(target, { recursive: true, force: true });
+      }
+    }
+  });
+
+  async function runAttemptWithCacheTtl(compactionCount: number) {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cache-ttl-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cache-ttl-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(() => ({
+      ...createSubscriptionMock(),
+      getCompactionCount: () => compactionCount,
+    }));
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        },
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    return await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:test-cache-ttl",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {
+        agents: {
+          defaults: {
+            contextPruning: {
+              mode: "cache-ttl",
+            },
+          },
+        },
+      },
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: `run-cache-ttl-${compactionCount}`,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: cacheTtlEligibleModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+  }
+
+  it("skips cache-ttl append when compaction completed during the attempt", async () => {
+    const result = await runAttemptWithCacheTtl(1);
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
+      "openclaw.cache-ttl",
+      expect.anything(),
+    );
+  });
+
+  it("appends cache-ttl when no compaction completed during the attempt", async () => {
+    const result = await runAttemptWithCacheTtl(0);
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.sessionManager.appendCustomEntry).toHaveBeenCalledWith(
+      "openclaw.cache-ttl",
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-20250514",
+        timestamp: expect.any(Number),
       }),
     );
   });
