@@ -47,18 +47,142 @@ Model note: while many providers/models are supported, for the best experience a
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
 
-## Install (recommended)
+## Merlin AI provider (fork feature)
 
-Runtime: **Node ≥22**.
+This fork adds **[Merlin AI](https://www.getmerlin.in/)** as a built-in provider. Merlin is a web-based AI aggregator that gives you access to multiple frontier models (GPT-5, Claude 4.6 Opus, Gemini 3, Grok 4, and more) through a single account with its own credit system (bolts).
+
+### Available Merlin models
+
+| Model ID                       | Name                  | Reasoning |
+| ------------------------------ | --------------------- | --------- |
+| `merlin/gemini-3.0-flash`      | Gemini 3 Flash        | No        |
+| `merlin/gemini-3.1-pro`        | Gemini 3.1 Pro        | Yes       |
+| `merlin/gemini-3.1-flash-lite` | Gemini 3.1 Flash Lite | No        |
+| `merlin/gpt-5.2`               | GPT 5.2               | No        |
+| `merlin/gpt-5-mini`            | GPT 5 Mini            | Yes       |
+| `merlin/gpt-oss-120b`          | GPT OSS 120B          | Yes       |
+| `merlin/grok-4.1-fast`         | Grok 4.1 Fast         | No        |
+| `merlin/grok-4`                | Grok 4                | Yes       |
+| `merlin/claude-4.6-opus`       | Claude 4.6 Opus       | Yes       |
+| `merlin/kimi-k2.5-thinking`    | Kimi K2.5 Thinking    | No        |
+| `merlin/minimax-m2.5`          | MiniMax M2.5          | Yes       |
+| `merlin/glm-5`                 | GLM 5                 | No        |
+
+Some models (`claude-sonnet-4.6`, `claude-haiku-4.5`, `claude-sonnet-4.5`, `gpt-5.2-high-reasoning`) are included in the catalog but may not work on all account plans.
+
+### Merlin quick setup
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+# Set credentials
+export MERLIN_EMAIL="your-merlin-email@example.com"
+export MERLIN_PASSWORD="your-merlin-password"
 
-openclaw onboard --install-daemon
+# Or use a refresh token instead
+# export MERLIN_REFRESH_TOKEN="your-refresh-token"
+
+# Set a Merlin model as default
+pnpm openclaw config set agents.defaults.model.primary merlin/gemini-3.0-flash
+
+# Test it
+pnpm openclaw agent --message "Hello from Merlin"
 ```
 
-The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+### Discovering token limits
+
+Merlin does not publish per-model token limits. Use the included probe script to discover actual limits for your account:
+
+```bash
+MERLIN_EMAIL="you@example.com" MERLIN_PASSWORD="secret" npx tsx scripts/probe-merlin-limits.ts
+```
+
+Or test a single model: `npx tsx scripts/probe-merlin-limits.ts gemini-3.0-flash`
+
+Token limits are visible in `openclaw models list` (Ctx column) and the interactive model picker.
+
+## Install (this fork)
+
+This is a fork — install from source (the npm `openclaw` package is the upstream project).
+
+Runtime: **Node ≥22**, **pnpm**.
+
+### macOS
+
+```bash
+# Install Node 22+ (if needed)
+brew install node
+
+# Install pnpm (if needed)
+npm install -g pnpm
+
+# Clone and build
+git clone https://github.com/oskarlimebooking-debug/openclaw.git
+cd openclaw
+git checkout claude/merlin-ai-integration-CyUGG
+
+pnpm install
+pnpm ui:build
+pnpm build
+
+# Option A: link globally
+pnpm link --global
+openclaw onboard --install-daemon
+
+# Option B: run from repo without linking
+pnpm openclaw onboard --install-daemon
+```
+
+### Linux (Ubuntu/Debian)
+
+```bash
+# Install Node 22+
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Install pnpm
+npm install -g pnpm
+
+# Clone and build
+git clone https://github.com/oskarlimebooking-debug/openclaw.git
+cd openclaw
+git checkout claude/merlin-ai-integration-CyUGG
+
+pnpm install
+pnpm ui:build
+pnpm build
+
+# Option A: link globally
+pnpm link --global
+openclaw onboard --install-daemon
+
+# Option B: run from repo
+pnpm openclaw onboard --install-daemon
+```
+
+### Merlin credentials
+
+Add to your shell profile (`~/.zshrc`, `~/.bashrc`, or `~/.profile`):
+
+```bash
+export MERLIN_EMAIL="your-merlin-email@example.com"
+export MERLIN_PASSWORD="your-merlin-password"
+```
+
+Or use a refresh token if you have one:
+
+```bash
+export MERLIN_REFRESH_TOKEN="your-refresh-token"
+```
+
+### Updating this fork
+
+```bash
+cd openclaw
+git pull origin claude/merlin-ai-integration-CyUGG
+pnpm install
+pnpm build
+```
+
+If you used `pnpm link --global`, the `openclaw` command automatically picks up the new build.
 
 ## Quick start (TL;DR)
 
@@ -78,7 +202,7 @@ openclaw message send --to +1234567890 --message "Hello from OpenClaw"
 openclaw agent --message "Ship checklist" --thinking high
 ```
 
-Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
+Upgrading? See [Updating this fork](#updating-this-fork) above (and run `openclaw doctor`).
 
 ## Development channels
 
@@ -94,8 +218,9 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
+git clone https://github.com/oskarlimebooking-debug/openclaw.git
 cd openclaw
+git checkout claude/merlin-ai-integration-CyUGG
 
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run

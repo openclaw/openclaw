@@ -350,6 +350,47 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
+### Merlin AI
+
+[Merlin AI](https://www.getmerlin.in/) is a web-based AI aggregator providing access to multiple frontier models through a single account. It uses its own credit system (bolts) instead of per-token billing.
+
+- Provider: `merlin`
+- Auth: `MERLIN_EMAIL` + `MERLIN_PASSWORD` (or `MERLIN_REFRESH_TOKEN`)
+- Example model: `merlin/gemini-3.0-flash`
+- No `models.providers` config needed — Merlin is auto-detected from environment variables
+
+```bash
+export MERLIN_EMAIL="you@example.com"
+export MERLIN_PASSWORD="your-password"
+```
+
+```json5
+{
+  agents: { defaults: { model: { primary: "merlin/gemini-3.0-flash" } } },
+}
+```
+
+Available models:
+
+- `merlin/gemini-3.0-flash` — Gemini 3 Flash (cheapest, 1 bolt)
+- `merlin/gemini-3.1-pro` — Gemini 3.1 Pro (reasoning)
+- `merlin/gemini-3.1-flash-lite` — Gemini 3.1 Flash Lite
+- `merlin/gpt-5.2` — GPT 5.2
+- `merlin/gpt-5-mini` — GPT 5 Mini (reasoning)
+- `merlin/gpt-oss-120b` — GPT OSS 120B (reasoning)
+- `merlin/grok-4.1-fast` — Grok 4.1 Fast
+- `merlin/grok-4` — Grok 4 (reasoning)
+- `merlin/claude-4.6-opus` — Claude 4.6 Opus (most expensive, 150 bolts)
+- `merlin/kimi-k2.5-thinking` — Kimi K2.5 Thinking
+- `merlin/minimax-m2.5` — MiniMax M2.5 (reasoning)
+- `merlin/glm-5` — GLM 5
+
+Notes:
+
+- Tool calling is supported via a prompt-injection workaround (Merlin does not support native function calling).
+- Token limits are not published by Merlin. Use `scripts/probe-merlin-limits.ts` to discover actual limits.
+- Cost is reported as 0 in OpenClaw since Merlin uses its own bolt credit system.
+
 ### Ollama
 
 Ollama is a local LLM runtime that provides an OpenAI-compatible API:
