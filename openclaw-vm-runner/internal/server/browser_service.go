@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
@@ -21,13 +23,28 @@ type browserProxy struct {
 	mgr          VMManager
 	connCache    *envdclient.ConnCache
 	vncProxyPort int
+	vncProxy     *VNCProxy
 }
 
 // NewBrowserServer creates a new BrowserService gRPC handler that bridges browser
 // requests to the envd BrowserService running inside the target sandbox VM.
 // vncProxyPort is the TCP port for the VNC WebSocket proxy (0 = disabled).
-func NewBrowserServer(mgr VMManager, connCache *envdclient.ConnCache, vncProxyPort int) *browserProxy {
-	return &browserProxy{mgr: mgr, connCache: connCache, vncProxyPort: vncProxyPort}
+// vncProxy is optional; if non-nil, Launch registers a VNC auth token.
+func NewBrowserServer(mgr VMManager, connCache *envdclient.ConnCache, vncProxyPort int, vncProxy ...*VNCProxy) *browserProxy {
+	bp := &browserProxy{mgr: mgr, connCache: connCache, vncProxyPort: vncProxyPort}
+	if len(vncProxy) > 0 {
+		bp.vncProxy = vncProxy[0]
+	}
+	return bp
+}
+
+// generateToken returns a cryptographically random hex token.
+func generateToken() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // getEnvdBrowserClient resolves the sandbox_id, dials envd via ConnCache,
@@ -80,7 +97,18 @@ func (s *browserProxy) Launch(ctx context.Context, req *pb.LaunchRequest) (*pb.L
 
 	// Populate VNC WebSocket URL if proxy is enabled
 	if s.vncProxyPort > 0 {
-		launchResp.VncWebsocketUrl = fmt.Sprintf("ws://localhost:%d/vnc?sandbox_id=%s", s.vncProxyPort, req.GetSandboxId())
+		sandboxID := req.GetSandboxId()
+		token, tokenErr := generateToken()
+		if tokenErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to generate VNC token: %v", tokenErr)
+		}
+		if s.vncProxy != nil {
+			s.vncProxy.RegisterToken(sandboxID, token)
+		}
+		launchResp.VncWebsocketUrl = fmt.Sprintf(
+			"ws://localhost:%d/vnc?sandbox_id=%s&token=%s",
+			s.vncProxyPort, sandboxID, token,
+		)
 	}
 
 	return launchResp, nil
@@ -308,6 +336,11 @@ func (s *browserProxy) Close(ctx context.Context, req *pb.CloseRequest) (*pb.Clo
 	})
 	if err != nil {
 		return nil, translateEnvdError(err, req.GetSandboxId())
+	}
+
+	// Unregister VNC token when browser session closes.
+	if s.vncProxy != nil {
+		s.vncProxy.UnregisterToken(req.GetSandboxId())
 	}
 
 	return &pb.CloseResponse{}, nil

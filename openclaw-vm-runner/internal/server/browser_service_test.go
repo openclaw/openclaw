@@ -336,7 +336,7 @@ func TestBrowserService_LaunchVNCWebsocketURL(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "sess-123", resp.GetSessionId())
-	assert.Equal(t, "ws://localhost:6080/vnc?sandbox_id=sb-1", resp.GetVncWebsocketUrl())
+	assert.Contains(t, resp.GetVncWebsocketUrl(), "ws://localhost:6080/vnc?sandbox_id=sb-1&token=")
 }
 
 func TestBrowserService_NotFound(t *testing.T) {
