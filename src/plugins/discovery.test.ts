@@ -406,8 +406,9 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(realPlugin, { recursive: true });
     fs.writeFileSync(path.join(realPlugin, "index.ts"), "export default function () {}", "utf-8");
 
-    // Create directories that should be ignored — each containing a fake
-    // "plugin" that must NOT be discovered
+    // Place index.ts directly inside each ignored directory so
+    // discoverInDirectory would find it via DEFAULT_PLUGIN_ENTRY_CANDIDATES
+    // if shouldIgnoreScannedDirectory did not filter the directory out.
     for (const ignored of [
       "node_modules",
       ".git",
@@ -416,14 +417,9 @@ describe("discoverOpenClawPlugins", () => {
       "__pycache__",
       "browser_data",
     ]) {
-      const fakeDir = path.join(extensionsDir, ignored, "fake-pkg");
+      const fakeDir = path.join(extensionsDir, ignored);
       fs.mkdirSync(fakeDir, { recursive: true });
       fs.writeFileSync(path.join(fakeDir, "index.ts"), "export default function () {}", "utf-8");
-      writePluginPackageManifest({
-        packageDir: fakeDir,
-        packageName: `@fake/${ignored}`,
-        extensions: ["index.ts"],
-      });
     }
 
     const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
