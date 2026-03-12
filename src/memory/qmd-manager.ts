@@ -897,6 +897,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (relPath.startsWith("qmd/")) {
         const qmdText = await this.getQmdDoc(relPath);
         if (qmdText !== null) {
+          if (params.from !== undefined || params.lines !== undefined) {
+            const allLines = qmdText.split("\n");
+            const start = Math.max(1, params.from ?? 1);
+            const count = Math.max(1, params.lines ?? allLines.length);
+            return { text: allLines.slice(start - 1, start - 1 + count).join("\n"), path: relPath };
+          }
           return { text: qmdText, path: relPath };
         }
       }
