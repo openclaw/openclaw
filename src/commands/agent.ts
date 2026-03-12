@@ -497,7 +497,9 @@ function runAgentAttempt(params: {
   }
 
   const isCrossProviderRetry =
-    params.isFallbackRetry && params.primaryProvider !== params.providerOverride;
+    params.isFallbackRetry &&
+    !!params.primaryProvider &&
+    params.primaryProvider !== params.providerOverride;
 
   const authProfileId =
     params.providerOverride === params.primaryProvider

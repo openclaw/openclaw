@@ -881,6 +881,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             images: params.images,
+            suppressPromptImageDetection: params.suppressPromptImageDetection,
             disableTools: params.disableTools,
             provider,
             modelId,
