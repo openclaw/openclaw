@@ -20,6 +20,81 @@ function isOpenAINativeEndpoint(baseUrl: string): boolean {
   }
 }
 
+/**
+ * Returns true for OpenAI-compatible local inference servers that are known to
+ * support `stream_options: { include_usage: true }` and return a valid usage
+ * chunk at the end of the stream (llama.cpp, Ollama, vLLM, LMStudio, llamafile).
+ *
+ * Detection is based on the endpoint's IP address or hostname falling within
+ * a private / loopback / link-local range:
+ *
+ *   - 127.0.0.0/8  — full loopback range (not only 127.0.0.1)
+ *   - 10.0.0.0/8   — RFC-1918 class A
+ *   - 172.16.0.0/12 — RFC-1918 class B
+ *   - 192.168.0.0/16 — RFC-1918 class C
+ *   - 169.254.0.0/16 — link-local
+ *   - ::1           — IPv6 loopback
+ *   - *.local       — mDNS (e.g. spark-38f8.local, raspberrypi.local)
+ *
+ * False positives (a cloud proxy that happens to be on a private subnet) are
+ * acceptable: those endpoints either support include_usage or will silently
+ * ignore the flag.
+ */
+export function isLocalInferenceEndpoint(baseUrl: string): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const { hostname } = new URL(baseUrl);
+    const h = hostname.toLowerCase();
+
+    // IPv6 loopback
+    if (h === "::1" || h === "[::1]") {
+      return true;
+    }
+
+    // hostname-based loopback
+    if (h === "localhost") {
+      return true;
+    }
+
+    // mDNS (.local) — covers raspberrypi.local, spark-38f8.local, etc.
+    if (h.endsWith(".local")) {
+      return true;
+    }
+
+    // Numeric IPv4: parse octets and check ranges
+    const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      const [, a, b] = ipv4.map(Number);
+      // 127.0.0.0/8 — full loopback range
+      if (a === 127) {
+        return true;
+      }
+      // 10.0.0.0/8
+      if (a === 10) {
+        return true;
+      }
+      // 172.16.0.0/12 (172.16–172.31)
+      if (a === 172 && b >= 16 && b <= 31) {
+        return true;
+      }
+      // 192.168.0.0/16
+      if (a === 192 && b === 168) {
+        return true;
+      }
+      // 169.254.0.0/16 — link-local
+      if (a === 169 && b === 254) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -36,6 +111,7 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
 
@@ -56,20 +132,37 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
   // chunks that break strict parsers expecting choices[0]. For non-native
   // openai-completions endpoints, force both compat flags off.
+  //
+  // Exception: local inference servers (llama.cpp, Ollama, vLLM, LMStudio, etc.)
+  // running on private/loopback addresses DO support stream_options.include_usage
+  // and return valid usage chunks.  For those we only disable supportsDeveloperRole
+  // (they do not accept the OpenAI `developer` system-message role) but leave
+  // supportsUsageInStreaming at its configured value (default: true).
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
+
+  if (isLocalInferenceEndpoint(baseUrl)) {
+    // Local server: disable developer role but keep streaming usage.
+    if (compat?.supportsDeveloperRole === false) {
+      return model;
+    }
+    return {
+      ...model,
+      compat: compat
+        ? { ...compat, supportsDeveloperRole: false }
+        : { supportsDeveloperRole: false },
+    } as typeof model;
+  }
+
+  // Remote non-native endpoint: disable both flags (existing behavior).
   if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
     return model;
   }
-
-  // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
     compat: compat
