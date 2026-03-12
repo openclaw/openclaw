@@ -194,16 +194,44 @@ export function createSessionStatusTool(opts?: {
         sandboxed: opts?.sandboxed,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const requesterAgentId = resolveAgentIdFromSessionKey(
+        opts?.agentSessionKey ?? effectiveRequesterKey,
+      );
+
+      const normalizeVisibilitySessionKey = (sessionKey: string, sessionAgentId: string) => {
+        const trimmed = sessionKey.trim();
+        if (trimmed.startsWith("agent:")) {
+          return trimmed;
+        }
+        if (trimmed === "main" || trimmed === alias || trimmed === mainKey) {
+          return buildAgentMainSessionKey({
+            agentId: sessionAgentId,
+            mainKey,
+          });
+        }
+        return trimmed;
+      };
+      const visibilityGuard =
+        opts?.sandboxed === true
+          ? await createSessionVisibilityGuard({
+              action: "status",
+              requesterSessionKey: normalizeVisibilitySessionKey(
+                effectiveRequesterKey,
+                requesterAgentId,
+              ),
+              visibility: resolveEffectiveSessionToolsVisibility({
+                cfg,
+                sandboxed: true,
+              }),
+              a2aPolicy,
+            })
+          : null;
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
-
-      const requesterAgentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? requestedKeyRaw,
-      );
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
@@ -220,7 +248,14 @@ export function createSessionStatusTool(opts?: {
       };
 
       if (requestedKeyRaw.startsWith("agent:")) {
-        ensureAgentAccess(resolveAgentIdFromSessionKey(requestedKeyRaw));
+        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
+        ensureAgentAccess(requestedAgentId);
+        const access = visibilityGuard?.check(
+          normalizeVisibilitySessionKey(requestedKeyRaw, requestedAgentId),
+        );
+        if (access && !access.allowed) {
+          throw new Error(access.error);
+        }
       }
 
       const isExplicitAgentKey = requestedKeyRaw.startsWith("agent:");
@@ -265,34 +300,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      const normalizeVisibilitySessionKey = (sessionKey: string, sessionAgentId: string) => {
-        const trimmed = sessionKey.trim();
-        if (trimmed.startsWith("agent:")) {
-          return trimmed;
-        }
-        if (trimmed === "main" || trimmed === alias || trimmed === mainKey) {
-          return buildAgentMainSessionKey({
-            agentId: sessionAgentId,
-            mainKey,
-          });
-        }
-        return trimmed;
-      };
-
-      if (opts?.sandboxed === true) {
-        const visibility = resolveEffectiveSessionToolsVisibility({
-          cfg,
-          sandboxed: true,
-        });
-        const visibilityGuard = await createSessionVisibilityGuard({
-          action: "status",
-          requesterSessionKey: normalizeVisibilitySessionKey(
-            effectiveRequesterKey,
-            requesterAgentId,
-          ),
-          visibility,
-          a2aPolicy,
-        });
+      if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
         const access = visibilityGuard.check(normalizeVisibilitySessionKey(resolved.key, agentId));
         if (!access.allowed) {
           throw new Error(access.error);
