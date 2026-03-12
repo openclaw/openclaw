@@ -220,6 +220,12 @@ func main() {
 		log.Fatalf("Failed to listen on %s: %v", cfg.SocketPath, err)
 	}
 
+	// Harden socket permissions: restrict to owner only (prevents
+	// unauthorized local access to VM lifecycle / exec / file APIs).
+	if err := os.Chmod(cfg.SocketPath, 0600); err != nil {
+		log.Fatalf("Failed to set socket permissions on %s: %v", cfg.SocketPath, err)
+	}
+
 	// 9. Signal handling for graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

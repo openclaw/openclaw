@@ -17,10 +17,13 @@ import (
 // Versions below this are vulnerable to CVE-2026-1386 (Jailer symlink attack).
 const MinFirecrackerVersion = "1.14.1"
 
-var versionRegexp = regexp.MustCompile(`(?i)firecracker\s+v(\d+\.\d+\.\d+)`)
+// versionRegexp captures the full version string including optional prerelease suffix.
+var versionRegexp = regexp.MustCompile(`(?i)firecracker\s+v(\d+\.\d+\.\d+(?:-[0-9A-Za-z._-]+)?)`)
 
 // ValidateFirecrackerVersion parses the output of `firecracker --version`
 // and returns an error if the version is below MinFirecrackerVersion.
+// Prerelease versions (e.g. 1.14.1-rc1) are rejected because they may
+// not contain the security fixes present in the final release.
 func ValidateFirecrackerVersion(versionOutput string) error {
 	matches := versionRegexp.FindStringSubmatch(versionOutput)
 	if len(matches) < 2 {
@@ -28,9 +31,28 @@ func ValidateFirecrackerVersion(versionOutput string) error {
 	}
 
 	version := matches[1]
-	if compareSemver(version, MinFirecrackerVersion) < 0 {
+
+	// Split off prerelease suffix if present.
+	base := version
+	prerelease := ""
+	if idx := strings.IndexByte(version, '-'); idx >= 0 {
+		base = version[:idx]
+		prerelease = version[idx:]
+	}
+
+	if compareSemver(base, MinFirecrackerVersion) < 0 {
 		return fmt.Errorf(
 			"Firecracker version %s is below minimum required %s; upgrade to mitigate CVE-2026-1386 (Jailer symlink attack)",
+			version, MinFirecrackerVersion,
+		)
+	}
+
+	// Reject prerelease builds even if the base version matches, because
+	// a prerelease (e.g. 1.14.1-rc1) semantically precedes 1.14.1 and
+	// may not contain the security fix.
+	if prerelease != "" && compareSemver(base, MinFirecrackerVersion) == 0 {
+		return fmt.Errorf(
+			"Firecracker prerelease version %s is not accepted; the minimum required stable release is %s",
 			version, MinFirecrackerVersion,
 		)
 	}
