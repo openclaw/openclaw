@@ -145,7 +145,8 @@ function isSyntheticAssistantTranscriptMessage(message: AgentMessage): boolean {
     return false;
   }
   const provider = (message as { provider?: unknown }).provider;
-  return provider === "openclaw";
+  const model = (message as { model?: unknown }).model;
+  return provider === "openclaw" && model === "delivery-mirror";
 }
 
 function dropSyntheticAssistantTranscriptMessages(messages: AgentMessage[]): AgentMessage[] {

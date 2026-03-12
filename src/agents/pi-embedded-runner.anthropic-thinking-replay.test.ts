@@ -56,6 +56,16 @@ function isLlmMessage(message: AgentMessage): message is Message {
   );
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === "AbortError") ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError")
+  );
+}
+
 async function captureAnthropicPayload(messages: Message[]) {
   const controller = new AbortController();
   controller.abort();
@@ -74,7 +84,14 @@ async function captureAnthropicPayload(messages: Message[]) {
       },
     },
   );
-  await stream.result();
+  try {
+    // The stream is pre-aborted on purpose; this test only needs the constructed payload from onPayload.
+    await stream.result();
+  } catch (error) {
+    if (!isAbortError(error)) {
+      throw error;
+    }
+  }
   return payload;
 }
 
@@ -87,6 +104,21 @@ function getPayloadAssistantMessages(payload: Record<string, unknown> | undefine
       (message as { role?: unknown }).role === "assistant" &&
       Array.isArray((message as { content?: unknown }).content),
   );
+}
+
+async function getReplayableMessages(sessionFile: string) {
+  const reopened = SessionManager.open(sessionFile);
+  const context = reopened.buildSessionContext();
+  return validateAnthropicTurns(
+    await sanitizeSessionHistory({
+      messages: context.messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: reopened,
+      sessionId: "test-session",
+    }),
+  ).filter(isLlmMessage);
 }
 
 describe("anthropic thinking replay", () => {
@@ -141,18 +173,7 @@ describe("anthropic thinking replay", () => {
       timestamp: Date.now(),
     });
 
-    const reopened = SessionManager.open(sessionFile);
-    const context = reopened.buildSessionContext();
-    const replayable = validateAnthropicTurns(
-      await sanitizeSessionHistory({
-        messages: context.messages,
-        modelApi: "anthropic-messages",
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        sessionManager: reopened,
-        sessionId: "test-session",
-      }),
-    ).filter(isLlmMessage);
+    const replayable = await getReplayableMessages(sessionFile);
 
     expect(replayable.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
     const payload = await captureAnthropicPayload(replayable);
@@ -174,5 +195,56 @@ describe("anthropic thinking replay", () => {
         text: "final answer",
       },
     ]);
+  });
+
+  it("keeps gateway-injected assistant entries in replay history", async () => {
+    const sessionFile = path.join(tempRoot, `session-${Date.now()}-gateway.jsonl`);
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "partial reply" }],
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "gateway-injected",
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "resume from here" }],
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "continue",
+      timestamp: Date.now(),
+    });
+
+    const replayable = await getReplayableMessages(sessionFile);
+
+    expect(replayable.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "user",
+    ]);
+    expect(replayable[2]).toMatchObject({
+      role: "assistant",
+      provider: "openclaw",
+      model: "gateway-injected",
+      content: [{ type: "text", text: "resume from here" }],
+    });
   });
 });
