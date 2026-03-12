@@ -83,6 +83,7 @@ type StatusArgs = {
   modelAuth?: string;
   activeModelAuth?: string;
   usageLine?: string;
+  cortexLine?: string;
   timeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
@@ -673,6 +674,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     usageCostLine,
     cacheLine,
     `📚 ${contextLine}`,
+    args.cortexLine,
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
@@ -741,6 +743,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
 
   lines.push("Status");
   lines.push("  /status  |  /whoami  |  /context");
+  lines.push("");
+
+  lines.push("Cortex");
+  lines.push("  /cortex preview  |  /cortex mode show  |  /cortex mode set <mode>");
   lines.push("");
 
   lines.push("Skills");
@@ -868,6 +874,12 @@ export function buildCommandsMessagePaginated(
   if (!isTelegram) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
+    if (items.some((item) => item.text.startsWith("/cortex "))) {
+      lines.push("");
+      lines.push(
+        "Tip: /cortex preview shows the active Cortex context; /status shows mode and source.",
+      );
+    }
     return {
       text: lines.join("\n").trim(),
       totalPages: 1,
@@ -886,6 +898,10 @@ export function buildCommandsMessagePaginated(
 
   const lines = [`ℹ️ Commands (${currentPage}/${totalPages})`, ""];
   lines.push(formatCommandList(pageItems));
+  if (currentPage === 1 && items.some((item) => item.text.startsWith("/cortex "))) {
+    lines.push("");
+    lines.push("Tip: /cortex preview shows context; /status shows mode/source.");
+  }
 
   return {
     text: lines.join("\n").trim(),
