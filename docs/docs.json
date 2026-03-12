@@ -876,6 +876,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/kubernetes",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
