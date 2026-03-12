@@ -82,6 +82,7 @@ export function shouldSkipBackendSelfPairing(params: {
   isLocalClient: boolean;
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
+  authOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
   const isGatewayBackendClient =
@@ -90,23 +91,22 @@ export function shouldSkipBackendSelfPairing(params: {
   if (!isGatewayBackendClient) {
     return false;
   }
-  // device-token is a derived credential issued after initial shared-secret pairing, so it
-  // carries equivalent trust for the internal backend path.
-  const usesSharedSecretAuth =
-    params.authMethod === "token" ||
-    params.authMethod === "password" ||
-    params.authMethod === "device-token";
-  // When auth is disabled entirely (mode="none"), there is no shared secret to verify, but a
-  // local client with no browser origin and the correct gateway-client/backend identity is still
-  // a trusted internal connection.
+  // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // device-token: a derived credential issued after initial shared-secret pairing. sharedAuthOk
+  // stays false for device-token in the WS flow (auth-context.ts only sets it for token/password/
+  // trusted-proxy), so we gate on authOk directly instead.
+  const usesDeviceTokenAuth = params.authMethod === "device-token";
+  // When auth is disabled entirely (mode="none"), there is no credential to verify. Restrict to
+  // local connections only — remote + no-auth would be a security hole.
   const authIsDisabled = params.authMethod === "none";
-  // Remote backend clients (gateway.mode=remote) connecting with a valid shared-secret credential
-  // are trusted too — isLocalClient is false for remote gateways but the shared secret provides
-  // equivalent trust. Only the auth-disabled path is restricted to local connections, because
-  // remote + no-auth would be a security hole.
+  // Remote backend clients (gateway.mode=remote) with shared-secret or device-token auth are
+  // trusted. Only the auth-disabled path requires isLocalClient.
   return (
     !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || (params.isLocalClient && authIsDisabled))
+    ((params.sharedAuthOk && usesSharedSecretAuth) ||
+      (params.authOk && usesDeviceTokenAuth) ||
+      (params.isLocalClient && authIsDisabled))
   );
 }
 

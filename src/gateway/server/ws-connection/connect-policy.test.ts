@@ -424,7 +424,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
-    // Backend client authenticating via device-token (derived from initial shared-secret pairing) is trusted.
+    // Backend client authenticating via device-token is trusted via authOk, not sharedAuthOk
+    // (sharedAuthOk stays false for device-token in the WS flow per auth-context.ts).
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -433,10 +434,26 @@ describe("ws connect policy", () => {
         ),
         isLocalClient: true,
         hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
+        sharedAuthOk: false,
+        authOk: true,
         authMethod: "device-token",
       }),
     ).toBe(true);
+
+    // device-token with authOk=false is rejected.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authOk: false,
+        authMethod: "device-token",
+      }),
+    ).toBe(false);
 
     // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
     expect(

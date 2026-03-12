@@ -679,6 +679,7 @@ export function attachGatewayWsMessageHandler(params: {
           isLocalClient,
           hasBrowserOriginHeader,
           sharedAuthOk,
+          authOk,
           authMethod,
         });
         // auth.mode=none disables all authentication — device pairing is an
