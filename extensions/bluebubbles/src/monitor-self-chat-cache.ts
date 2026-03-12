@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 
 type SelfChatCacheKeyParts = {
   accountId: string;
@@ -43,12 +44,26 @@ function trimOrUndefined(value?: string | null): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function buildScope(parts: SelfChatCacheKeyParts): string {
-  const target =
+function resolveCanonicalChatTarget(parts: SelfChatCacheKeyParts): string | null {
+  const handleFromGuid = parts.chatGuid ? extractHandleFromChatGuid(parts.chatGuid) : null;
+  if (handleFromGuid) {
+    return handleFromGuid;
+  }
+
+  const normalizedIdentifier = normalizeBlueBubblesHandle(parts.chatIdentifier ?? "");
+  if (normalizedIdentifier) {
+    return normalizedIdentifier;
+  }
+
+  return (
     trimOrUndefined(parts.chatGuid) ??
     trimOrUndefined(parts.chatIdentifier) ??
-    (typeof parts.chatId === "number" ? String(parts.chatId) : null) ??
-    parts.senderId;
+    (typeof parts.chatId === "number" ? String(parts.chatId) : null)
+  );
+}
+
+function buildScope(parts: SelfChatCacheKeyParts): string {
+  const target = resolveCanonicalChatTarget(parts) ?? parts.senderId;
   return `${parts.accountId}:${target}`;
 }
 
