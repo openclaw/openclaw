@@ -111,6 +111,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: true,
+        keywordFilterEnabled: true,
       };
       const result = plugin.security.resolveDmPolicy({ cfg: {}, account });
       expect(result.policy).toBe("allowlist");
@@ -145,6 +146,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: false,
+        keywordFilterEnabled: true,
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings.some((w: string) => w.includes("token"))).toBe(true);
@@ -164,6 +166,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: true,
+        keywordFilterEnabled: true,
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings.some((w: string) => w.includes("SSL"))).toBe(true);
@@ -183,6 +186,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: false,
+        keywordFilterEnabled: true,
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
@@ -202,6 +206,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: false,
+        keywordFilterEnabled: true,
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
@@ -221,6 +226,7 @@ describe("createSynologyChatPlugin", () => {
         rateLimitPerMinute: 30,
         botName: "Bot",
         allowInsecureSsl: false,
+        keywordFilterEnabled: true,
       };
       const warnings = plugin.security.collectWarnings({ account });
       expect(warnings).toHaveLength(0);

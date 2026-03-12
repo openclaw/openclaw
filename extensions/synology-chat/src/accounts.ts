@@ -92,5 +92,7 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
       accountOverride.rateLimitPerMinute ?? channelCfg.rateLimitPerMinute ?? envRateLimitValue,
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
+    keywordFilterEnabled:
+      accountOverride.keywordFilterEnabled ?? channelCfg.keywordFilterEnabled ?? true,
   };
 }

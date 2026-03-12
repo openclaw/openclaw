@@ -28,6 +28,7 @@ function makeAccount(
     rateLimitPerMinute: 30,
     botName: "TestBot",
     allowInsecureSsl: true,
+    keywordFilterEnabled: true,
     ...overrides,
   };
 }
@@ -351,10 +352,13 @@ describe("createWebhookHandler", () => {
     expect(res2._status).toBe(429);
   });
 
-  it("strips trigger word from message", async () => {
+  it("strips trigger word from message when keywordFilterEnabled is true", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "trigger-test-" + Date.now() }),
+      account: makeAccount({
+        accountId: "trigger-test-" + Date.now(),
+        keywordFilterEnabled: true,
+      }),
       deliver,
       log,
     });
@@ -374,6 +378,37 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(204);
     // deliver should have been called with the stripped text
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ body: "Hello there" }));
+  });
+
+  it("preserves full message including trigger word when keywordFilterEnabled is false", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "no-filter-test-" + Date.now(),
+        keywordFilterEnabled: false,
+      }),
+      deliver,
+      log,
+    });
+
+    const body = makeFormBody({
+      token: "valid-token",
+      user_id: "123",
+      username: "testuser",
+      text: "ask Explain contextWindow configuration for OpenClaw",
+      trigger_word: "ask",
+    });
+
+    const req = makeReq("POST", body);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ask Explain contextWindow configuration for OpenClaw",
+      }),
+    );
   });
 
   it("responds 204 immediately and delivers async", async () => {

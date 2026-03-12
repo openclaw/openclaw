@@ -55,6 +55,25 @@ Minimal config:
 }
 ```
 
+## Keyword filtering
+
+By default, when Synology Chat sends a webhook with a `trigger_word` (e.g. `ask`), OpenClaw strips that prefix from the message before sending it to the agent. Example: `ask What is OpenClaw?` becomes `What is OpenClaw?`.
+
+To send the **full message** (including the trigger word) to the agent, set `keywordFilterEnabled: false`:
+
+```json5
+{
+  channels: {
+    "synology-chat": {
+      keywordFilterEnabled: false,
+      // ...other options
+    },
+  },
+}
+```
+
+When `keywordFilterEnabled` is false, the entire message body is passed to the agent unchanged. This is useful when you want to process all messages in a channel without requiring a keyword prefix, or when the trigger is configured broadly in Synology Chat.
+
 ## Environment variables
 
 For the default account, you can use env vars:
