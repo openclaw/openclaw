@@ -1,10 +1,10 @@
-import { createAsyncLock } from "../utils/async-lock.js";
+import { createAsyncLock } from "./async-lock";
 
 // Types for operation classifications
-export type OperationType = "read" | "write" | "io" | "compute" | "network" | "default";
+export type OperationType = "read" | "write" | "io" | "compute" | "network";
 export type ConcurrencyLimits = {
   [key in OperationType]?: number;
-};
+} & { default: number };
 
 // Type for the operation to be executed
 export type Operation<T = unknown> = {
@@ -21,56 +21,6 @@ type PendingOperation<T = unknown> = {
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (reason?: unknown) => void;
 };
-
-// Types for basic concurrency
-export type ConcurrencyErrorMode = "continue" | "stop";
-
-export async function runTasksWithConcurrency<T>(params: {
-  tasks: Array<() => Promise<T>>;
-  limit: number;
-  errorMode?: ConcurrencyErrorMode;
-  onTaskError?: (error: unknown, index: number) => void;
-}): Promise<{ results: T[]; firstError: unknown; hasError: boolean }> {
-  const { tasks, limit, onTaskError } = params;
-  const errorMode = params.errorMode ?? "continue";
-  if (tasks.length === 0) {
-    return { results: [], firstError: undefined, hasError: false };
-  }
-
-  const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
-  const results: T[] = Array.from({ length: tasks.length });
-  let next = 0;
-  let firstError: unknown = undefined;
-  let hasError = false;
-
-  const workers = Array.from({ length: resolvedLimit }, async () => {
-    while (true) {
-      if (errorMode === "stop" && hasError) {
-        return;
-      }
-      const index = next;
-      next += 1;
-      if (index >= tasks.length) {
-        return;
-      }
-      try {
-        results[index] = await tasks[index]();
-      } catch (error) {
-        if (!hasError) {
-          firstError = error;
-          hasError = true;
-        }
-        onTaskError?.(error, index);
-        if (errorMode === "stop") {
-          return;
-        }
-      }
-    }
-  });
-
-  await Promise.allSettled(workers);
-  return { results, firstError, hasError };
-}
 
 /**
  * SelectiveConcurrencyManager allows different operation types to run with
@@ -103,7 +53,7 @@ class SelectiveConcurrencyManager {
 
   private constructor() {
     // Initialize locks for each operation type
-    const allTypes: OperationType[] = ["read", "write", "io", "compute", "network", "default"];
+    const allTypes: OperationType[] = ["read", "write", "io", "compute", "network"];
     for (const type of allTypes) {
       this.typeLocks.set(type, createAsyncLock());
       this.queues.set(type, []);
@@ -132,7 +82,7 @@ class SelectiveConcurrencyManager {
    * @returns The concurrency limit
    */
   getLimit(type: OperationType): number {
-    return this.limits[type] ?? this.limits.default ?? 1;
+    return this.limits[type] ?? this.limits.default;
   }
 
   /**
@@ -265,7 +215,6 @@ class SelectiveConcurrencyManager {
       io: { queueLength: 0, running: 0, limit: 0 },
       compute: { queueLength: 0, running: 0, limit: 0 },
       network: { queueLength: 0, running: 0, limit: 0 },
-      default: { queueLength: 0, running: 0, limit: 0 },
     };
 
     for (const [type, queue] of this.queues.entries()) {

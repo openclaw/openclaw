@@ -1,6 +1,4 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { createAsyncLock } from "../utils/async-lock";
 
 // Type definition for file locks
 type FileLock = {
@@ -75,77 +73,70 @@ class FileLocker {
 
 export const fileLocker = FileLocker.getInstance();
 
-export async function readJsonFile<T>(filePath: string): Promise<T | null> {
+/**
+ * Utility function to safely write to a file with locking
+ * @param filePath The path to the file to write to
+ * @param content The content to write
+ * @param options Additional options for writing
+ * @returns Promise that resolves when write is complete
+ */
+export async function writeToFileWithLock(
+  filePath: string,
+  content: string,
+  options?: { mode?: number; ensureDirMode?: number; trailingNewline?: boolean },
+): Promise<void> {
   return await fileLocker.acquire(filePath, async () => {
+    // This would integrate with the existing writeTextAtomic function
+    // from the json-files module, but since we're creating a new source
+    // structure, we'll implement the functionality here
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const crypto = await import("node:crypto");
+
+    const mode = options?.mode ?? 0o600; // Default to owner-only read/write
+    const payload = options?.trailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+
+    const mkdirOptions = { recursive: true };
+    if (typeof options?.ensureDirMode === "number") {
+      mkdirOptions.mode = options.ensureDirMode;
+    }
+
+    await fs.mkdir(path.dirname(filePath), mkdirOptions);
+    const tmp = `${filePath}.${crypto.randomUUID()}.tmp`;
+
     try {
-      const raw = await fs.readFile(filePath, "utf8");
-      return JSON.parse(raw) as T;
+      await fs.writeFile(tmp, payload, "utf8");
+
+      try {
+        await fs.chmod(tmp, mode);
+      } catch {}
+
+      await fs.rename(tmp, filePath);
+
+      try {
+        await fs.chmod(filePath, mode);
+      } catch {}
+    } finally {
+      try {
+        await fs.rm(tmp, { force: true }).catch(() => {});
+      } catch {}
+    }
+  });
+}
+
+/**
+ * Utility function to read from a file with locking to prevent conflicts
+ * @param filePath The path to the file to read from
+ * @returns Promise that resolves to the file content
+ */
+export async function readFromFileWithLock(filePath: string): Promise<string | null> {
+  return await fileLocker.acquire(filePath, async () => {
+    const fs = await import("node:fs/promises");
+
+    try {
+      return await fs.readFile(filePath, "utf8");
     } catch {
       return null;
     }
   });
-}
-
-export async function writeJsonAtomic(
-  filePath: string,
-  value: unknown,
-  options?: { mode?: number; trailingNewline?: boolean; ensureDirMode?: number },
-) {
-  const text = JSON.stringify(value, null, 2);
-  await writeTextAtomic(filePath, text, {
-    mode: options?.mode,
-    ensureDirMode: options?.ensureDirMode,
-    appendTrailingNewline: options?.trailingNewline,
-  });
-}
-
-export async function writeTextAtomic(
-  filePath: string,
-  content: string,
-  options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
-) {
-  return await fileLocker.acquire(filePath, async () => {
-    const mode = options?.mode ?? 0o600;
-    const payload =
-      options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
-    const mkdirOptions: { recursive: true; mode?: number } = { recursive: true };
-    if (typeof options?.ensureDirMode === "number") {
-      mkdirOptions.mode = options.ensureDirMode;
-    }
-    await fs.mkdir(path.dirname(filePath), mkdirOptions);
-    const tmp = `${filePath}.${randomUUID()}.tmp`;
-    try {
-      await fs.writeFile(tmp, payload, "utf8");
-      try {
-        await fs.chmod(tmp, mode);
-      } catch {
-        // best-effort; ignore on platforms without chmod
-      }
-      await fs.rename(tmp, filePath);
-      try {
-        await fs.chmod(filePath, mode);
-      } catch {
-        // best-effort; ignore on platforms without chmod
-      }
-    } finally {
-      await fs.rm(tmp, { force: true }).catch(() => undefined);
-    }
-  });
-}
-
-export function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await prev;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
 }
