@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 
@@ -223,6 +224,51 @@ function parseManifest(raw: string): BackupManifest {
     assets,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
   };
+}
+
+function buildSourcePathAliases(sourcePath: string): string[] {
+  const normalized = path.resolve(sourcePath);
+  const aliases = new Set([normalized]);
+  if (normalized.startsWith("/private/")) {
+    aliases.add(normalized.slice("/private".length));
+  } else if (normalized.startsWith("/")) {
+    aliases.add(path.join("/private", normalized));
+  }
+  return [...aliases];
+}
+
+async function canonicalizeWorkspaceSourcePath(sourcePath: string): Promise<string> {
+  try {
+    return await fs.realpath(sourcePath);
+  } catch {
+    return path.resolve(sourcePath);
+  }
+}
+
+async function assertNoCanonicalWorkspaceDuplicates(manifest: BackupManifest): Promise<void> {
+  const seenAliases = new Set<string>();
+  for (const asset of manifest.assets) {
+    if (asset.kind !== "workspace") {
+      continue;
+    }
+
+    const aliasCandidates = new Set<string>();
+    for (const alias of buildSourcePathAliases(asset.sourcePath)) {
+      aliasCandidates.add(alias);
+    }
+    for (const alias of buildSourcePathAliases(
+      await canonicalizeWorkspaceSourcePath(asset.sourcePath),
+    )) {
+      aliasCandidates.add(alias);
+    }
+
+    if ([...aliasCandidates].some((alias) => seenAliases.has(alias))) {
+      throw new Error(`Backup manifest contains duplicate workspace assets: ${asset.sourcePath}`);
+    }
+    for (const alias of aliasCandidates) {
+      seenAliases.add(alias);
+    }
+  }
 }
 
 async function scanArchive(params: { archivePath: string }): Promise<{
@@ -459,6 +505,7 @@ export async function readVerifiedBackupArchive(
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
   const manifest = parseManifest(manifestRaw);
+  await assertNoCanonicalWorkspaceDuplicates(manifest);
   verifyManifestAgainstEntries(manifest, entries, normalizedEntrySet);
 
   return {
