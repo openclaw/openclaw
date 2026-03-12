@@ -21,6 +21,17 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
   })),
 );
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
+const setupRescueWatchdog = vi.hoisted(() =>
+  vi.fn(async () => ({
+    enabled: true,
+    monitoredProfile: "default",
+    rescueProfile: "rescue",
+    rescuePort: 19789,
+    rescueWorkspace: "/tmp-rescue",
+    cronAction: "created",
+    cronJobId: "job-1",
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -41,6 +52,12 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
 
 vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
+}));
+
+vi.mock("../commands/onboard-rescue.js", () => ({
+  canEnableRescueWatchdog: vi.fn(() => true),
+  resolveMonitoredProfileName: vi.fn(() => "default"),
+  setupRescueWatchdog,
 }));
 
 vi.mock("../commands/daemon-runtime.js", () => ({
@@ -116,6 +133,7 @@ describe("finalizeOnboardingWizard", () => {
     resolveGatewayInstallToken.mockClear();
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
+    setupRescueWatchdog.mockClear();
   });
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
@@ -243,5 +261,296 @@ describe("finalizeOnboardingWizard", () => {
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets up rescue watchdog and forces main daemon install when requested", async () => {
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async (params: { message: string }) => {
+        if (params.message === "Gateway service runtime") {
+          return "node";
+        }
+        return "later";
+      }) as never,
+      confirm: vi.fn(async () => false),
+    });
+    const runtime = createRuntime();
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        rescueWatchdog: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "session-token",
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+    expect(setupRescueWatchdog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mainPort: 18789,
+        workspaceDir: "/tmp",
+        runtime: "node",
+      }),
+    );
+  });
+
+  it("skips rescue watchdog when the primary managed service install fails", async () => {
+    gatewayServiceInstall.mockRejectedValueOnce(new Error("boom"));
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async (params: { message: string }) => {
+        if (params.message === "Gateway service runtime") {
+          return "node";
+        }
+        return "later";
+      }) as never,
+      confirm: vi.fn(async () => false),
+      note: note as never,
+    });
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        rescueWatchdog: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "session-token",
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(setupRescueWatchdog).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "Rescue watchdog requires a healthy primary managed service. Gateway service install failed during onboarding, so rescue watchdog was skipped.",
+      "Rescue watchdog",
+    );
+  });
+
+  it("prompts for rescue watchdog when the flag is not explicitly provided", async () => {
+    const confirm = vi.fn(async (params: { message: string }) => {
+      if (params.message.includes("Enable rescue watchdog")) {
+        return false;
+      }
+      if (params.message === "Install Gateway service (recommended)") {
+        return false;
+      }
+      return false;
+    });
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: confirm as never,
+    });
+
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Enable rescue watchdog (second isolated gateway that auto-restarts this profile if it goes unhealthy)",
+      }),
+    );
+    expect(setupRescueWatchdog).not.toHaveBeenCalled();
+  });
+
+  it("does not prompt for rescue watchdog in quickstart unless explicitly requested", async () => {
+    const confirm = vi.fn(async () => false);
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: confirm as never,
+    });
+
+    await finalizeOnboardingWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(confirm).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Enable rescue watchdog (second isolated gateway that auto-restarts this profile if it goes unhealthy)",
+      }),
+    );
+    expect(setupRescueWatchdog).not.toHaveBeenCalled();
+  });
+
+  it("throws when setupRescueWatchdog fails and --rescue-watchdog was explicitly requested", async () => {
+    setupRescueWatchdog.mockRejectedValueOnce(new Error("ownership conflict"));
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async (params: { message: string }) => {
+        if (params.message === "Gateway service runtime") {
+          return "node";
+        }
+        return "later";
+      }) as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await expect(
+      finalizeOnboardingWizard({
+        flow: "advanced",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          rescueWatchdog: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        baseConfig: {},
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "session-token",
+            },
+          },
+        },
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "session-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow("ownership conflict");
+  });
+
+  it("shows note but continues when setupRescueWatchdog fails and rescue was prompt-confirmed", async () => {
+    setupRescueWatchdog.mockRejectedValueOnce(new Error("service install failed"));
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async (params: { message: string }) => {
+        if (params.message.includes("Enable rescue watchdog")) {
+          return true;
+        }
+        if (params.message === "Install Gateway service (recommended)") {
+          return true;
+        }
+        return false;
+      }) as never,
+      note: note as never,
+    });
+
+    // Should NOT throw; rescue was not explicitly flagged via --rescue-watchdog
+    await finalizeOnboardingWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        skipHealth: true,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "session-token",
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(note).toHaveBeenCalledWith("service install failed", "Rescue watchdog");
   });
 });

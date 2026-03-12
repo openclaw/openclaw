@@ -54,6 +54,7 @@ describe("registerOnboardCommand", () => {
     expect(onboardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         installDaemon: undefined,
+        rescueWatchdog: undefined,
       }),
       runtime,
     );
@@ -134,6 +135,16 @@ describe("registerOnboardCommand", () => {
     expect(onboardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards --rescue-watchdog", async () => {
+    await runCli(["onboard", "--rescue-watchdog"]);
+    expect(onboardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rescueWatchdog: true,
       }),
       runtime,
     );
