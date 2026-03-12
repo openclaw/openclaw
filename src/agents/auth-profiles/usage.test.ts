@@ -207,7 +207,7 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("overloaded");
   });
 
-  it("falls back to rate_limit when active cooldown has no reason history", () => {
+  it("falls back to unknown when active cooldown has no reason history", () => {
     const now = Date.now();
     const store = makeStore({
       "anthropic:default": {
@@ -221,7 +221,7 @@ describe("resolveProfilesUnavailableReason", () => {
         profileIds: ["anthropic:default"],
         now,
       }),
-    ).toBe("rate_limit");
+    ).toBe("unknown");
   });
 
   it("ignores expired windows and returns null when no profile is actively unavailable", () => {
