@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   coerceSecretRef,
@@ -159,7 +160,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
 function resolveOpenAICodexProfileId(
   provider: string,
   creds: OAuthCredentials,
-  existingProfiles: Record<string, OAuthCredentials & { type?: string }>,
+  existingProfiles: Record<string, AuthProfileCredential>,
 ): string {
   const email = typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "";
   if (email) {
@@ -177,13 +178,12 @@ function resolveOpenAICodexProfileId(
       .toLowerCase();
     const base = `${provider}:acct_${normalized || "unknown"}`;
     const existingEntries = Object.entries(existingProfiles).filter(
-      ([profileId]) => profileId === base || profileId.startsWith(`${base}_`),
+      ([profileId, profile]) =>
+        (profileId === base || profileId.startsWith(`${base}_`)) && profile.type === "oauth",
     );
     for (const [profileId, profile] of existingEntries) {
       const existingAccountId =
-        typeof (profile as { accountId?: unknown }).accountId === "string"
-          ? (profile as { accountId?: string }).accountId?.trim()
-          : "";
+        typeof profile.accountId === "string" ? profile.accountId.trim() : "";
       if (existingAccountId === accountIdRaw) {
         return profileId;
       }
