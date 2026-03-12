@@ -27,6 +27,6 @@ jobs:
           submodules: false
 
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@2.0.0
+        uses: ludeeus/action-shellcheck@86575e39fca4f6fbb2fdf36cdd72c97dc7e78a9f # 2.0.0
         with:
-          severity: warning
+          severity: error
