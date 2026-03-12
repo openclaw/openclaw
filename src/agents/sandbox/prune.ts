@@ -40,6 +40,7 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
   onRemoved?: (entry: TEntry) => Promise<void>;
+  cleanupWorkspace?: boolean;
 }) {
   const now = Date.now();
   if (params.cfg.prune.idleHours === 0 && params.cfg.prune.maxAgeDays === 0) {
@@ -61,8 +62,8 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       await params.onRemoved?.(entry);
     }
 
-    // Clean up workspace directory (only for non-shared scopes)
-    if (params.cfg.scope !== "shared") {
+    // Clean up workspace directory (only for sandbox containers, not browsers)
+    if (params.cleanupWorkspace && params.cfg.scope !== "shared") {
       try {
         const scopeKey = resolveSandboxScopeKey(params.cfg.scope, entry.sessionKey);
         const workspaceDir = resolveSandboxWorkspaceDir(params.cfg.workspaceRoot, scopeKey);
@@ -79,6 +80,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
+    cleanupWorkspace: true,
   });
 }
 
