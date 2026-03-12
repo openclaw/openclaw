@@ -173,7 +173,7 @@ export function createHooksHandler(bindHost: string) {
       info: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
-    dispatchWakeHook: () => {},
+    dispatchWakeHook: () => ({ ok: true }),
     dispatchAgentHook: () => "run-1",
   });
 }

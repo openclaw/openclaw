@@ -13,6 +13,7 @@ import {
   type HooksConfigResolved,
 } from "../hooks.js";
 import { createHooksRequestHandler } from "../server-http.js";
+import { canonicalizeWakeSessionKey } from "../session-utils.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -25,12 +26,34 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey });
-    if (value.mode === "now") {
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }): { ok: true } | { ok: false; error: string } => {
+    let sessionKey: string | undefined;
+    if (value.sessionKey) {
+      try {
+        sessionKey = canonicalizeWakeSessionKey(value.sessionKey);
+      } catch (err) {
+        const message = (err as Error).message;
+        logHooks.warn?.(`hook:wake canonicalization failed: ${message}`);
+        return { ok: false, error: message };
+      }
+    }
+    // Always enqueue the event — use the explicit session key or fall back to
+    // the main session key so the event lands somewhere.
+    enqueueSystemEvent(value.text, { sessionKey: sessionKey ?? resolveMainSessionKeyFromConfig() });
+    if (sessionKey) {
+      // Targeted session dispatch always needs a wake nudge, even for
+      // mode=next-heartbeat, because heartbeat polling does not scan arbitrary
+      // non-main session keys.
+      requestHeartbeatNow({ reason: "hook:wake", sessionKey });
+    } else if (value.mode === "now") {
+      // No session key means fan-out. Keep mode=next-heartbeat deferred.
       requestHeartbeatNow({ reason: "hook:wake" });
     }
+    return { ok: true };
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
