@@ -28,7 +28,9 @@ import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  DEFAULT_DEEPGRAM_BASE_URL,
   DEFAULT_OPENAI_BASE_URL,
+  deepgramTTS,
   edgeTTS,
   elevenLabsTTS,
   inferEdgeExtension,
@@ -58,6 +60,7 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_DEEPGRAM_MODEL = "aura-2-thalia-en";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -72,6 +75,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  deepgram: "opus" as const,
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -79,6 +83,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  deepgram: "mp3" as const,
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -86,6 +91,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  deepgram: { format: "linear16" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -133,6 +139,11 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  deepgram: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -326,6 +337,14 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    deepgram: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.deepgram?.apiKey,
+        path: "messages.tts.deepgram.apiKey",
+      }),
+      baseUrl: (raw.deepgram?.baseUrl?.trim() || DEFAULT_DEEPGRAM_BASE_URL).replace(/\/+$/, ""),
+      model: raw.deepgram?.model?.trim() || DEFAULT_DEEPGRAM_MODEL,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -464,6 +483,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "deepgram")) {
+    return "deepgram";
+  }
   return "edge";
 }
 
@@ -531,10 +553,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "deepgram") {
+    return config.deepgram.apiKey || process.env.DEEPGRAM_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "deepgram", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -668,7 +693,17 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
-      if (provider === "elevenlabs") {
+      if (provider === "deepgram") {
+        const modelOverride = params.overrides?.deepgram?.model;
+        audioBuffer = await deepgramTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.deepgram.baseUrl,
+          model: modelOverride ?? config.deepgram.model,
+          encoding: output.deepgram,
+          timeoutMs: config.timeoutMs,
+        });
+      } else if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
         const voiceSettings = {
@@ -721,7 +756,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "deepgram"
+            ? output.deepgram
+            : provider === "openai"
+              ? output.openai
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -764,6 +804,29 @@ export async function textToSpeechTelephony(params: {
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
         continue;
+      }
+
+      if (provider === "deepgram") {
+        const output = TELEPHONY_OUTPUT.deepgram;
+        const audioBuffer = await deepgramTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.deepgram.baseUrl,
+          model: config.deepgram.model,
+          encoding: output.format,
+          sampleRate: output.sampleRate,
+          container: "none",
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
       }
 
       if (provider === "elevenlabs") {
