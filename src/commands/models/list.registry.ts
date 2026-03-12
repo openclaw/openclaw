@@ -4,11 +4,10 @@ import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -36,7 +35,7 @@ const hasAuthForProvider = (
   if (resolveEnvApiKey(provider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (hasUsableCustomProviderApiKey(cfg, provider)) {
     return true;
   }
   return false;
@@ -94,8 +93,10 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
+export async function loadModelRegistry(
+  _cfg: OpenClawConfig,
+  _opts?: { sourceConfig?: OpenClawConfig },
+) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);

@@ -75,6 +75,10 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        deliveryContract?: string;
+      };
+      expect(firstCall?.deliveryContract).toBe("shared");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -381,6 +385,26 @@ describe("gateway server hooks", () => {
         { token: "wrong" },
       );
       expect(failAfterSuccess.status).toBe(401);
+    });
+  });
+
+  test("rejects non-POST hook requests without consuming auth failure budget", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      let lastGet: Response | null = null;
+      for (let i = 0; i < 21; i++) {
+        lastGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+          method: "GET",
+          headers: { Authorization: "Bearer wrong" },
+        });
+      }
+      expect(lastGet?.status).toBe(405);
+      expect(lastGet?.headers.get("allow")).toBe("POST");
+
+      const allowed = await postHook(port, "/hooks/wake", { text: "still works" });
+      expect(allowed.status).toBe(200);
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
     });
   });
 });

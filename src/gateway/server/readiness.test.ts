@@ -31,23 +31,27 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
+function createHealthyDiscordManager(startedAt: number, lastEventAt: number): ChannelManager {
+  return createManager(
+    snapshotWith({
+      discord: {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: startedAt,
+        lastEventAt,
+      },
+    }),
+  );
+}
+
 describe("createReadinessChecker", () => {
   it("reports ready when all managed channels are healthy", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
     const startedAt = Date.now() - 5 * 60_000;
-    const manager = createManager(
-      snapshotWith({
-        discord: {
-          running: true,
-          connected: true,
-          enabled: true,
-          configured: true,
-          lastStartAt: startedAt,
-          lastEventAt: Date.now() - 1_000,
-        },
-      }),
-    );
+    const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
 
     const readiness = createReadinessChecker({ channelManager: manager, startedAt });
     expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
@@ -167,22 +171,33 @@ describe("createReadinessChecker", () => {
     vi.useRealTimers();
   });
 
-  it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
+  it("keeps telegram long-polling channels ready without stale-socket classification", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
-    const startedAt = Date.now() - 5 * 60_000;
+    const startedAt = Date.now() - 31 * 60_000;
     const manager = createManager(
       snapshotWith({
-        discord: {
+        telegram: {
           running: true,
           connected: true,
           enabled: true,
           configured: true,
           lastStartAt: startedAt,
-          lastEventAt: Date.now() - 1_000,
+          lastEventAt: null,
         },
       }),
     );
+
+    const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+    expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 1_860_000 });
+    vi.useRealTimers();
+  });
+
+  it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00Z"));
+    const startedAt = Date.now() - 5 * 60_000;
+    const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
 
     const readiness = createReadinessChecker({
       channelManager: manager,

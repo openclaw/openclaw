@@ -1,17 +1,50 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hookRunner, triggerInternalHook, sanitizeSessionHistoryMock } = vi.hoisted(() => ({
+const {
+  hookRunner,
+  ensureRuntimePluginsLoaded,
+  resolveModelMock,
+  sessionCompactImpl,
+  triggerInternalHook,
+  sanitizeSessionHistoryMock,
+  contextEngineCompactMock,
+} = vi.hoisted(() => ({
   hookRunner: {
     hasHooks: vi.fn(),
     runBeforeCompaction: vi.fn(),
     runAfterCompaction: vi.fn(),
   },
+  ensureRuntimePluginsLoaded: vi.fn(),
+  resolveModelMock: vi.fn(() => ({
+    model: { provider: "openai", api: "responses", id: "fake", input: [] },
+    error: null,
+    authStorage: { setRuntimeApiKey: vi.fn() },
+    modelRegistry: {},
+  })),
+  sessionCompactImpl: vi.fn(async () => ({
+    summary: "summary",
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 120,
+    details: { ok: true },
+  })),
   triggerInternalHook: vi.fn(),
   sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
+  contextEngineCompactMock: vi.fn(async () => ({
+    ok: true as boolean,
+    compacted: true as boolean,
+    reason: undefined as string | undefined,
+    result: { summary: "engine-summary", tokensAfter: 50 } as
+      | { summary: string; tokensAfter: number }
+      | undefined,
+  })),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded,
 }));
 
 vi.mock("../../hooks/internal-hooks.js", async () => {
@@ -50,12 +83,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
         compact: vi.fn(async () => {
           // simulate compaction trimming to a single message
           session.messages.splice(1);
-          return {
-            summary: "summary",
-            firstKeptEntryId: "entry-1",
-            tokensBefore: 120,
-            details: { ok: true },
-          };
+          return await sessionCompactImpl();
         }),
         dispose: vi.fn(),
       };
@@ -104,6 +132,27 @@ vi.mock("../session-write-lock.js", () => ({
   resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
 }));
 
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+  resolveContextEngine: vi.fn(async () => ({
+    info: { ownsCompaction: true },
+    compact: contextEngineCompactMock,
+  })),
+}));
+
+vi.mock("../../process/command-queue.js", () => ({
+  enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+}));
+
+vi.mock("./lanes.js", () => ({
+  resolveSessionLane: vi.fn(() => "test-session-lane"),
+  resolveGlobalLane: vi.fn(() => "test-global-lane"),
+}));
+
+vi.mock("../context-window-guard.js", () => ({
+  resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
+}));
+
 vi.mock("../bootstrap-files.js", () => ({
   makeBootstrapWarn: vi.fn(() => () => {}),
   resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
@@ -141,7 +190,7 @@ vi.mock("../transcript-policy.js", () => ({
 }));
 
 vi.mock("./extensions.js", () => ({
-  buildEmbeddedExtensionFactories: vi.fn(() => []),
+  buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
 }));
 
 vi.mock("./history.js", () => ({
@@ -173,6 +222,7 @@ vi.mock("../date-time.js", () => ({
 vi.mock("../defaults.js", () => ({
   DEFAULT_MODEL: "fake-model",
   DEFAULT_PROVIDER: "openai",
+  DEFAULT_CONTEXT_TOKENS: 128_000,
 }));
 
 vi.mock("../utils.js", () => ({
@@ -209,12 +259,7 @@ vi.mock("./sandbox-info.js", () => ({
 
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
-  resolveModel: vi.fn(() => ({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
-    error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
-    modelRegistry: {},
-  })),
+  resolveModel: resolveModelMock,
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -234,7 +279,9 @@ vi.mock("./utils.js", () => ({
   resolveExecToolDefaults: vi.fn(() => undefined),
 }));
 
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
+import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
+import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -243,13 +290,42 @@ const sessionHook = (action: string) =>
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
   beforeEach(() => {
+    ensureRuntimePluginsLoaded.mockReset();
     triggerInternalHook.mockClear();
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
     hookRunner.runAfterCompaction.mockReset();
+    resolveModelMock.mockReset();
+    resolveModelMock.mockReturnValue({
+      model: { provider: "openai", api: "responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    sessionCompactImpl.mockReset();
+    sessionCompactImpl.mockResolvedValue({
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      details: { ok: true },
+    });
     sanitizeSessionHistoryMock.mockReset();
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
+    });
+    unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
+  });
+
+  it("bootstraps runtime plugins with the resolved workspace", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
     });
   });
 
@@ -353,5 +429,140 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       messageCount: 0,
       tokenCount: 0,
     });
+  });
+
+  it("registers the Ollama api provider before compaction", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "ollama",
+        api: "ollama",
+        id: "qwen3:8b",
+        input: ["text"],
+        baseUrl: "http://127.0.0.1:11434",
+        headers: { Authorization: "Bearer ollama-cloud" },
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(getApiProvider("ollama" as Parameters<typeof getApiProvider>[0])).toBeDefined();
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
+  beforeEach(() => {
+    hookRunner.hasHooks.mockReset();
+    hookRunner.runBeforeCompaction.mockReset();
+    hookRunner.runAfterCompaction.mockReset();
+    contextEngineCompactMock.mockReset();
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: { summary: "engine-summary", tokensAfter: 50 },
+    });
+    resolveModelMock.mockReset();
+    resolveModelMock.mockReturnValue({
+      model: { provider: "openai", api: "responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+  });
+
+  it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      messageChannel: "telegram",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: "/tmp/session.jsonl" },
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+      }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      {
+        messageCount: -1,
+        compactedCount: -1,
+        tokenCount: 50,
+        sessionFile: "/tmp/session.jsonl",
+      },
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("does not fire after_compaction when compaction fails", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalled();
+    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("catches and logs hook exceptions without aborting compaction", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeCompaction.mockRejectedValue(new Error("hook boom"));
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(contextEngineCompactMock).toHaveBeenCalled();
   });
 });
