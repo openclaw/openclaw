@@ -9,6 +9,10 @@ The companion product/design document lives in:
 
 - `docs/design/long-running-task-visibility.md`
 
+The rollout and implementation sequencing note lives in:
+
+- `docs/experiments/plans/long-running-task-visibility-rollout.md`
+
 This technical note focuses on:
 
 - where first-visible timing is measured
