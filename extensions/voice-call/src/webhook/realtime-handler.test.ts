@@ -99,7 +99,9 @@ describe("RealtimeCallHandler", () => {
       expect(payload.headers?.["Content-Type"]).toBe("text/xml");
       expect(payload.body).toContain("<Connect>");
       expect(payload.body).toContain("<Stream");
-      expect(payload.body).toMatch(/wss:\/\/gateway\.ts\.net\/voice\/stream\/realtime\/[0-9a-f-]{36}/);
+      expect(payload.body).toMatch(
+        /wss:\/\/gateway\.ts\.net\/voice\/stream\/realtime\/[0-9a-f-]{36}/,
+      );
     });
 
     it("falls back to localhost when no host header is present", () => {
@@ -112,7 +114,9 @@ describe("RealtimeCallHandler", () => {
       const req = makeRequest("/voice/webhook", "");
       const payload = handler.buildTwiMLPayload(req);
 
-      expect(payload.body).toMatch(/wss:\/\/localhost:8443\/voice\/stream\/realtime\/[0-9a-f-]{36}/);
+      expect(payload.body).toMatch(
+        /wss:\/\/localhost:8443\/voice\/stream\/realtime\/[0-9a-f-]{36}/,
+      );
     });
 
     it("embeds a unique token on each call", () => {
