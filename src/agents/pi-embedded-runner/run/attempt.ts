@@ -1969,12 +1969,14 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        const memoryRecall = await buildMemoryRecallBeforeResponse({
-          config: params.config,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          prompt: effectivePrompt,
-        });
+        const memoryRecall = await abortable(
+          buildMemoryRecallBeforeResponse({
+            config: params.config,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            prompt: effectivePrompt,
+          }),
+        );
         if (memoryRecall.error && memoryRecall.error !== "empty_prompt") {
           if (memoryRecall.enforced) {
             throw new Error(
