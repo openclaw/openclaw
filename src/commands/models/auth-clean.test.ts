@@ -724,6 +724,118 @@ describe("modelsAuthCleanCommand", () => {
     expect(combined).toContain("name");
   });
 
+  // ---- Fix: empty-config guard must use cfg-derived IDs only, not store.order (#2921223519) ----
+
+  it("empty-config guard fires even when store.order has IDs (guard is cfg-derived only)", async () => {
+    // Regression: store.order IDs were previously included in configuredProfiles before
+    // the guard check. When openclaw.json has no auth config but store.order has entries,
+    // configuredProfiles.size > 0 and the guard silently passes — allowing every profile
+    // not in store.order to be deleted in a store-only setup.
+    // Fix: guard uses configDerivedProfileIds (cfg-only), so store.order IDs cannot
+    // defeat it. (#2921223519)
+    const store = makeStore(["anthropic:me.com", "anthropic:gmail"], {
+      order: { anthropic: ["anthropic:me.com"] }, // store.order with IDs
+    });
+
+    // openclaw.json has NO auth config (empty auth object — no profiles, no order)
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    // Must throw (not silently proceed) because cfg has no auth config
+    await expect(modelsAuthCleanCommand({}, makeRuntime())).rejects.toThrow(
+      /no configured auth profiles/i,
+    );
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("empty-config guard: --dry-run warns even when store.order has IDs", async () => {
+    // Same scenario as above but with --dry-run: must warn rather than throw,
+    // even when store.order IDs are present. (#2921223519)
+    const store = makeStore(["anthropic:me.com"], {
+      order: { anthropic: ["anthropic:me.com"] },
+    });
+
+    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({ dryRun: true }, runtime);
+
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toMatch(/warning/i);
+  });
+
+  // ---- Fix: store.order empty-array pruning ----
+
+  it("updater: removes stale id from store.order[provider] and deletes the key when empty", async () => {
+    // When a profile is stale (not in configuredProfiles at probe time), but happens
+    // to appear in store.order at lock time (e.g. added concurrently), the updater
+    // must remove it from the order array. When that removal leaves the array empty,
+    // the provider key must be deleted (not left as []).
+    //
+    // Scenario: probe store has no order → stale is in toRemove.
+    // Lock-time store has order: { anthropic: ["anthropic:stale"] }.
+    // After updater runs: anthropic key deleted, order object deleted.
+    const probeStore = makeStore(["anthropic:me.com", "anthropic:stale"]);
+    // No store.order at probe → stale not added to configuredProfiles → in toRemove
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(probeStore);
+
+    let capturedStore: AuthProfileStore | undefined;
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+        // Simulate lock-time store with order added concurrently
+        const lockStore: AuthProfileStore = {
+          version: 1,
+          profiles: structuredClone(probeStore.profiles),
+          order: { anthropic: ["anthropic:stale"] },
+        };
+        params.updater(lockStore);
+        capturedStore = lockStore;
+        return lockStore;
+      },
+    );
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    expect(capturedStore?.profiles).not.toHaveProperty("anthropic:stale");
+    // anthropic key deleted (filtered to []) → order object deleted (no remaining keys)
+    expect(capturedStore).not.toHaveProperty("order");
+  });
+
+  it("updater: deletes store.order entirely when all provider entries are emptied", async () => {
+    // When every provider key in store.order is emptied after pruning stale ids,
+    // the order object itself must be deleted (not left as an empty {}).
+    // Scenario: two providers' order arrays each contain only stale.
+    const probeStore = makeStore(["anthropic:me.com", "anthropic:stale"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(probeStore);
+
+    let capturedStore: AuthProfileStore | undefined;
+    mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (params: { updater: (s: AuthProfileStore) => boolean }) => {
+        const lockStore: AuthProfileStore = {
+          version: 1,
+          profiles: structuredClone(probeStore.profiles),
+          order: {
+            anthropic: ["anthropic:stale"],
+            openai: ["anthropic:stale"], // both entries contain only the stale id
+          },
+        };
+        params.updater(lockStore);
+        capturedStore = lockStore;
+        return lockStore;
+      },
+    );
+
+    await modelsAuthCleanCommand({}, makeRuntime());
+
+    // Both provider keys emptied → order object itself must be deleted
+    expect(capturedStore).not.toHaveProperty("order");
+  });
+
   it("strips a bare trailing ESC byte (\\x1b with nothing after it) from profile IDs", async () => {
     // A lone \x1b at the end of a string has no sequence character following it,
     // so the previous regex (requiring [\s\S] — at least one char after ESC)

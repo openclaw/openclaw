@@ -109,10 +109,17 @@ export async function modelsAuthCleanCommand(
   const mainAgentDir = resolveAgentDir(cfg, DEFAULT_AGENT_ID);
   const isMainAgentDir = path.resolve(agentDir) === path.resolve(mainAgentDir);
 
-  // Collect profile ids that are explicitly configured: union of auth.profiles keys,
-  // ids referenced in auth.order, and ids pinned in tools.media model entries.
-  // All three sets represent actively-used credentials that must not be pruned.
-  const configuredProfiles = new Set<string>(
+  // Collect profile ids that are explicitly configured in openclaw.json: union of
+  // auth.profiles keys, ids referenced in auth.order, and ids pinned in tools.media
+  // model entries. All three sets represent actively-used credentials that must not
+  // be pruned.
+  //
+  // IMPORTANT: store.order IDs must NOT be added here. This set is used for the
+  // empty-config safety guard (configDerivedProfileIds.size === 0) — including
+  // store.order IDs would defeat the guard whenever auth-profiles.json has an order
+  // override while openclaw.json has no auth config, allowing the command to silently
+  // delete every profile in a store-only setup. (#2921223519)
+  const configDerivedProfileIds = new Set<string>(
     Object.keys(cfg.auth?.profiles ?? {})
       .map((id) => id.trim())
       .filter(Boolean),
@@ -121,14 +128,20 @@ export async function modelsAuthCleanCommand(
     if (Array.isArray(ids)) {
       for (const id of ids) {
         if (typeof id === "string" && id.trim()) {
-          configuredProfiles.add(id.trim());
+          configDerivedProfileIds.add(id.trim());
         }
       }
     }
   }
   for (const id of collectMediaProfileIds(cfg)) {
-    configuredProfiles.add(id);
+    configDerivedProfileIds.add(id);
   }
+
+  // configuredProfiles extends configDerivedProfileIds with store.order overrides.
+  // store.order can still inform keep/prune decisions (profiles set via
+  // 'models auth order set' must not be removed), but must not count toward the
+  // empty-config safety threshold. (#2921223519)
+  const configuredProfiles = new Set<string>(configDerivedProfileIds);
 
   // Load the store for inspection (collect storeProfileIds and storeOrder).
   // Probe phase is always readOnly:true — a write-capable store must never be opened
@@ -143,7 +156,8 @@ export async function modelsAuthCleanCommand(
   // Also keep profiles referenced in store.order (per-agent overrides set via
   // 'models auth order set'). These are not reflected in cfg.auth.order or
   // cfg.auth.profiles, so they would be incorrectly treated as stale without
-  // this step.
+  // this step. Note: these IDs are added to configuredProfiles (keep/prune), NOT
+  // to configDerivedProfileIds (guard threshold). (#2921223519)
   const storeOrder = store.order;
   if (storeOrder) {
     for (const ids of Object.values(storeOrder)) {
@@ -165,7 +179,11 @@ export async function modelsAuthCleanCommand(
   // Safety guard: refuse to wipe everything when openclaw.json has no auth
   // config at all (e.g. profiles and order both absent/empty). This avoids
   // accidentally nuking a store-only setup. Require --dry-run to inspect.
-  if (configuredProfiles.size === 0 && storeProfileIds.length > 0) {
+  //
+  // Evaluated against configDerivedProfileIds (cfg-only), NOT configuredProfiles.
+  // configuredProfiles may include store.order IDs, which would silently defeat
+  // this guard in a store-only setup. (#2921223519)
+  if (configDerivedProfileIds.size === 0 && storeProfileIds.length > 0) {
     if (opts.dryRun) {
       if (opts.json) {
         runtime.log(
