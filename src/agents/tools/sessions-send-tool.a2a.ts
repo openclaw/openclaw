@@ -31,7 +31,7 @@ export async function runSessionsSendA2AFlow(params: {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
-      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
+      const waitMs = params.announceTimeoutMs;
       const wait = await callGateway<{ status: string }>({
         method: "agent.wait",
         params: {
