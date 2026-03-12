@@ -165,6 +165,46 @@ pass that field through on direct `openai/*` Responses requests.
 
 Supported values are `auto`, `default`, `flex`, and `priority`.
 
+### OpenAI fast mode
+
+OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+`openai-codex/*` sessions:
+
+- Chat/UI: `/fast status|on|off`
+- Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+
+When fast mode is enabled, OpenClaw applies a low-latency OpenAI profile:
+
+- `reasoning.effort = "low"` when the payload does not already specify reasoning
+- `text.verbosity = "low"` when the payload does not already specify verbosity
+- `service_tier = "priority"` for direct `openai/*` Responses calls to `api.openai.com`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+        "openai-codex/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Session overrides win over config. Clearing the session override in the Sessions UI
+returns the session to the configured default.
+
 ### OpenAI Responses server-side compaction
 
 For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
