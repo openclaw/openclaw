@@ -869,6 +869,48 @@ jobs:
         working-directory: apps/android
         run: ${{ matrix.command }}
 
+  # Deploy PR to staging for manual review before merge is allowed.
+  deploy-staging:
+    needs: [docs-scope, changed-scope, checks, checks-lint, build-artifacts, secrets]
+    if: >
+      github.event_name == 'pull_request' &&
+      needs.docs-scope.outputs.docs_only != 'true' &&
+      needs.changed-scope.outputs.run_node == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to staging
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config fly-staging.toml --app openclaw-jhs-staging --ha=false --remote-only
+
+      - name: Comment staging URL on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "**Staging deployed.** Test your changes at: https://openclaw-jhs-staging.fly.dev/
+
+          Once tested, approve the staging gate in the [Actions run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to unblock the merge."
+
+  # Manual approval gate — pauses here until a reviewer approves in the Actions UI.
+  # Requires a GitHub Environment named 'staging-approval' with required reviewers configured.
+  # See: repo Settings → Environments → staging-approval → Required reviewers.
+  staging-approved:
+    needs: [deploy-staging]
+    if: github.event_name == 'pull_request' && needs.deploy-staging.result == 'success'
+    runs-on: ubuntu-latest
+    environment: staging-approval
+    steps:
+      - name: Staging reviewed and approved
+        run: echo "Staging approved. PR is clear to merge."
+
   # Deploy to Fly.io after all critical checks pass (main branch only).
   deploy-fly:
     needs: [checks, checks-lint, build-artifacts, secrets]
