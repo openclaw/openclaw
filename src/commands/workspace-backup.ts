@@ -179,6 +179,9 @@ async function assertWorkspaceBackupSafety(
 ): Promise<void> {
   const canonicalTarget = await canonicalizePathForContainment(target);
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  const canonicalWorkspaceBackupRoot = await canonicalizePathForContainment(
+    workspaceBackupRoot(target),
+  );
   if (isPathWithin(canonicalTarget, canonicalStateDir)) {
     throw new Error("backup.target must not be inside the live state directory.");
   }
@@ -187,6 +190,11 @@ async function assertWorkspaceBackupSafety(
     if (isPathWithin(canonicalTarget, canonicalWorkspaceDir)) {
       throw new Error(
         `backup.target must not live inside a workspace being mirrored: ${shortenHomePath(workspaceDir)}`,
+      );
+    }
+    if (isPathWithin(canonicalWorkspaceDir, canonicalWorkspaceBackupRoot)) {
+      throw new Error(
+        `workspace path must not be inside backup.target/workspace: ${shortenHomePath(workspaceDir)}`,
       );
     }
   }

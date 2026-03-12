@@ -160,4 +160,28 @@ describe("workspace backup commands", () => {
       }),
     ).rejects.toThrow("backup.target must not be inside the live state directory.");
   });
+
+  it("rejects workspace paths nested under backup workspace root", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-target-"));
+    const workspaceDir = path.join(targetDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(
+      workspaceBackupInitCommand(runtime, {
+        target: targetDir,
+      }),
+    ).rejects.toThrow("workspace path must not be inside backup.target/workspace");
+  });
 });
