@@ -478,14 +478,13 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const parentSessionEntry =
+    parentSessionKey && parentSessionKey !== sessionKey
+      ? sessionStore[parentSessionKey]
+      : undefined;
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  if (
-    parentSessionKey &&
-    parentSessionKey !== sessionKey &&
-    sessionStore[parentSessionKey] &&
-    !alreadyForked
-  ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+  if (parentSessionKey && parentSessionEntry && !alreadyForked) {
+    const parentTokens = parentSessionEntry.totalTokens ?? 0;
     if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
       // Parent context is too large — forking would create a thread session
       // that immediately overflows the model's context window. Start fresh
@@ -501,7 +500,7 @@ export async function initSessionState(params: {
           `parentTokens=${parentTokens}`,
       );
       const forked = forkSessionFromParent({
-        parentEntry: sessionStore[parentSessionKey],
+        parentEntry: parentSessionEntry,
         agentId,
         sessionsDir: path.dirname(storePath),
       });
