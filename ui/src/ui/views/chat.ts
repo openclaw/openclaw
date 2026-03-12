@@ -56,6 +56,7 @@ export type ChatProps = {
   sessions: SessionsListResult | null;
   // Focus mode
   focusMode: boolean;
+  chatEnterSends?: boolean;
   // Sidebar state
   sidebarOpen?: boolean;
   sidebarContent?: string | null;
@@ -251,10 +252,14 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const chatEnterSends = props.chatEnterSends ?? true;
+  const sendHint = chatEnterSends
+    ? "↩ to send, Shift+↩ for line breaks"
+    : "Shift+↩ to send, ↩ for line breaks";
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      : `Message (${sendHint}, paste images)`
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -438,9 +443,10 @@ export function renderChat(props: ChatProps) {
                 if (e.isComposing || e.keyCode === 229) {
                   return;
                 }
-                if (e.shiftKey) {
+                const shouldSend = chatEnterSends ? !e.shiftKey : e.shiftKey;
+                if (!shouldSend) {
                   return;
-                } // Allow Shift+Enter for line breaks
+                }
                 if (!props.connected) {
                   return;
                 }
@@ -471,7 +477,7 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected}
               @click=${props.onSend}
             >
-              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">↵</kbd>
+              ${isBusy ? "Queue" : "Send"}<kbd class="btn-kbd">${chatEnterSends ? "↵" : "⇧↵"}</kbd>
             </button>
           </div>
         </div>

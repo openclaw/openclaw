@@ -182,6 +182,59 @@ describe("chat view", () => {
     nowSpy.mockRestore();
   });
 
+  it("uses Enter to send by default", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          onSend,
+          draft: "hello",
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    textarea?.dispatchEvent(event);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses Shift+Enter to send when chatEnterSends is false", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          onSend,
+          draft: "hello",
+          chatEnterSends: false,
+        }),
+      ),
+      container,
+    );
+
+    const textarea = container.querySelector("textarea");
+    expect(textarea).not.toBeNull();
+
+    textarea?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    expect(onSend).toHaveBeenCalledTimes(0);
+
+    textarea?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a stop button when aborting is available", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();

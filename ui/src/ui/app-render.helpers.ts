@@ -255,6 +255,23 @@ export function renderChatControls(state: AppViewState) {
         ${icons.brain}
       </button>
       <button
+        class="btn btn--sm ${state.settings.chatEnterSends ? "" : "active"}"
+        ?disabled=${state.onboarding}
+        @click=${() => {
+          if (state.onboarding) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatEnterSends: !state.settings.chatEnterSends,
+          });
+        }}
+        aria-pressed=${!state.settings.chatEnterSends}
+        title=${state.settings.chatEnterSends ? "Enter sends" : "Shift+Enter sends"}
+      >
+        ${state.settings.chatEnterSends ? "Enter sends" : "Shift+Enter sends"}
+      </button>
+      <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
         @click=${() => {
