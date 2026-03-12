@@ -26,7 +26,7 @@ export async function sendMessageWhatsApp(
     accountId?: string;
   },
 ): Promise<{ messageId: string; toJid: string }> {
-  let text = body;
+  let text = body.trimStart();
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
