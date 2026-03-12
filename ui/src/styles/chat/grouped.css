@@ -64,7 +64,10 @@
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 120ms ease-out, color 120ms ease-out, background 120ms ease-out;
+  transition:
+    opacity 120ms ease-out,
+    color 120ms ease-out,
+    background 120ms ease-out;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -77,7 +80,7 @@
 
 .chat-group-footer button:hover {
   opacity: 1 !important;
-  background: var(--bg-hover, rgba(255,255,255,0.08));
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
 }
 
 .chat-group-footer button svg {
@@ -371,7 +374,7 @@ img.chat-avatar {
 }
 
 .msg-meta__model {
-  background: var(--bg-hover, rgba(255,255,255,0.06));
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
   padding: 1px 6px;
   border-radius: var(--radius-sm, 4px);
   font-family: var(--font-mono, monospace);
@@ -400,11 +403,11 @@ img.chat-avatar {
   bottom: calc(100% + 6px);
   left: 0;
   background: var(--card, #1a1a1a);
-  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-md, 8px);
   padding: 12px;
   min-width: 200px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
   animation: scale-in 0.15s ease-out;
 }
@@ -452,12 +455,12 @@ img.chat-avatar {
 }
 
 .chat-delete-confirm__cancel {
-  background: var(--bg-hover, rgba(255,255,255,0.08));
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
   color: var(--muted, #888);
 }
 
 .chat-delete-confirm__cancel:hover {
-  background: rgba(255,255,255,0.12);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .chat-delete-confirm__yes {
