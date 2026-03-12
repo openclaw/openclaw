@@ -6,6 +6,10 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import {
+  readClaudeCliCredentials,
+  writeClaudeCliCredentials,
+} from "../cli-credentials.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
@@ -172,6 +176,41 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
+    // For Anthropic OAuth, try to adopt fresher credentials from Claude CLI
+    // (macOS Keychain or ~/.claude/.credentials.json) before attempting a
+    // network refresh.  This avoids consuming the single-use refresh token
+    // when the network path (e.g. proxy) is unreliable.
+    if (cred.provider === "anthropic") {
+      try {
+        const cliCred = readClaudeCliCredentials({ allowKeychainPrompt: false });
+        if (cliCred && cliCred.type === "oauth" && Date.now() < cliCred.expires) {
+          const adopted: OAuthCredentials = {
+            access: cliCred.access,
+            refresh: cliCred.refresh,
+            expires: cliCred.expires,
+          };
+          store.profiles[params.profileId] = {
+            ...cred,
+            ...adopted,
+            type: "oauth",
+          };
+          saveAuthProfileStore(store, params.agentDir);
+          log.info("adopted fresher OAuth credentials from Claude CLI", {
+            profileId: params.profileId,
+            expires: new Date(adopted.expires).toISOString(),
+          });
+          return {
+            apiKey: buildOAuthApiKey(cred.provider, adopted),
+            newCredentials: adopted,
+          };
+        }
+      } catch (err) {
+        log.debug("failed to read Claude CLI credentials for pre-refresh adoption", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     const oauthCreds: Record<string, OAuthCredentials> = {
       [cred.provider]: cred,
     };
@@ -205,6 +244,15 @@ async function refreshOAuthTokenWithLock(params: {
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
+
+    // Write refreshed credentials back to Claude CLI so both tools stay in sync.
+    if (cred.provider === "anthropic") {
+      try {
+        writeClaudeCliCredentials(result.newCredentials);
+      } catch {
+        // Best-effort: don't fail the refresh if write-back fails.
+      }
+    }
 
     return result;
   });
