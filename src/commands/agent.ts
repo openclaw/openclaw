@@ -161,6 +161,25 @@ function resolveRetryImages(
   return images;
 }
 
+function buildPartialExecutionSystemContext(partialExecution?: {
+  toolNames: string[];
+  didSendViaMessagingTool: boolean;
+}): string | undefined {
+  if (!partialExecution || partialExecution.toolNames.length === 0) {
+    return undefined;
+  }
+  const toolList = partialExecution.toolNames.join(", ");
+  const messagingWarning = partialExecution.didSendViaMessagingTool
+    ? " Messages were already sent to the user — do NOT re-send them."
+    : "";
+  return (
+    `The previous model attempt partially executed before failing. ` +
+    `It completed these tool calls: ${toolList}.${messagingWarning} ` +
+    `Do not repeat actions that have already been performed. ` +
+    `Review the conversation history and continue from where the previous attempt left off.`
+  );
+}
+
 function prependInternalEventContext(
   body: string,
   events: AgentCommandOpts["internalEvents"],
@@ -360,6 +379,7 @@ function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   previousFailureReason?: FailoverReason;
+  previousPartialExecution?: { toolNames: string[]; didSendViaMessagingTool: boolean };
 }) {
   // Fallback retries only fire on thrown errors (not partial streaming results),
   // so the original prompt is always safe to re-send. The orphaned-user-message
@@ -370,6 +390,9 @@ function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const partialExecContext = buildPartialExecutionSystemContext(params.previousPartialExecution);
+  const effectiveExtraSystemPrompt =
+    [params.opts.extraSystemPrompt, partialExecContext].filter(Boolean).join("\n\n") || undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
@@ -386,7 +409,7 @@ function runAgentAttempt(params: {
         thinkLevel: params.resolvedThinkLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
+        extraSystemPrompt: effectiveExtraSystemPrompt,
         cliSessionId: nextCliSessionId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
@@ -473,6 +496,9 @@ function runAgentAttempt(params: {
     });
   }
 
+  const isCrossProviderRetry =
+    params.isFallbackRetry && params.primaryProvider !== params.providerOverride;
+
   const authProfileId =
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
@@ -518,11 +544,12 @@ function runAgentAttempt(params: {
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
+    extraSystemPrompt: effectiveExtraSystemPrompt,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    suppressPromptImageDetection: isCrossProviderRetry,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
@@ -1167,6 +1194,7 @@ async function agentCommandInternal(
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             previousFailureReason: runOptions?.previousFailureReason,
+            previousPartialExecution: runOptions?.previousPartialExecution,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
@@ -1288,4 +1316,4 @@ export async function agentCommandFromIngress(
 }
 
 /** @internal – exposed for unit tests only */
-export const _testInternals = { resolveRetryImages } as const;
+export const _testInternals = { resolveRetryImages, buildPartialExecutionSystemContext } as const;
