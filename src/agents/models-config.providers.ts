@@ -688,8 +688,8 @@ const MERLIN_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     return {
       merlin: {
         ...buildMerlinProvider(),
-        // Use a sentinel apiKey so the model registry picks it up.
-        apiKey: email ?? "merlin-refresh-token",
+        // Use a non-secret marker so the model registry picks it up (avoid persisting PII).
+        apiKey: email ? "MERLIN_EMAIL" : "MERLIN_REFRESH_TOKEN",
       },
     };
   },
