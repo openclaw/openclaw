@@ -217,6 +217,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         payloads: [{ text: "Detailed child result, everything finished successfully." }],
       }),
     );
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ skipQueue: true }),
+    );
   });
 
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
@@ -303,5 +306,70 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(false);
+  });
+
+  it("text delivery always bypasses the write-ahead queue", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Daily digest ready." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        payloads: [{ text: "Daily digest ready." }],
+        skipQueue: true,
+      }),
+    );
+  });
+
+  it("structured/thread delivery also bypasses the write-ahead queue", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Report attached." });
+    // Simulate structured content so useDirectDelivery path is taken (no retryTransient)
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ skipQueue: true }),
+    );
+  });
+
+  it("transient retry delivers exactly once with skipQueue on both attempts", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    // First call throws a transient error, second call succeeds.
+    vi.mocked(deliverOutboundPayloads)
+      .mockRejectedValueOnce(new Error("gateway timeout"))
+      .mockResolvedValueOnce([{ ok: true } as never]);
+
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    try {
+      const params = makeBaseParams({ synthesizedText: "Retry test." });
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryAttempted).toBe(true);
+      // Two calls total: first failed transiently, second succeeded.
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+
+      const calls = vi.mocked(deliverOutboundPayloads).mock.calls;
+      expect(calls[0][0]).toEqual(expect.objectContaining({ skipQueue: true }));
+      expect(calls[1][0]).toEqual(expect.objectContaining({ skipQueue: true }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
