@@ -18,6 +18,11 @@ import {
 
 const log = createSubsystemLogger("ollama-stream");
 
+// Ollama sometimes sends done:true with no content and no tool calls when it
+// fails to parse Qwen3 tool-call JSON internally.  Retry up to this many
+// extra times (3 total attempts) before surfacing the error.
+const OLLAMA_STREAM_MAX_RETRIES = 2;
+
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
 
 export function resolveOllamaBaseUrlForRun(params: {
@@ -479,7 +484,7 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
+        let response = await fetch(chatUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
@@ -495,46 +500,122 @@ export function createOllamaStreamFn(
           throw new Error("Ollama API returned empty response body");
         }
 
-        const reader = response.body.getReader();
         let accumulatedContent = "";
         let fallbackContent = "";
         let sawContent = false;
-        const accumulatedToolCalls: OllamaToolCall[] = [];
+        let accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
-        for await (const chunk of parseNdjsonStream(reader)) {
-          if (chunk.message?.content) {
-            sawContent = true;
-            accumulatedContent += chunk.message.content;
-          } else if (!sawContent && chunk.message?.thinking) {
-            fallbackContent += chunk.message.thinking;
-          } else if (!sawContent && chunk.message?.reasoning) {
-            // Backward compatibility for older/native variants that still use reasoning.
-            fallbackContent += chunk.message.reasoning;
+        for (let attempt = 0; attempt <= OLLAMA_STREAM_MAX_RETRIES; attempt++) {
+          // Reset accumulators at the start of each attempt
+          accumulatedContent = "";
+          fallbackContent = "";
+          sawContent = false;
+          accumulatedToolCalls = [];
+          finalResponse = undefined;
+
+          const reader = response.body.getReader();
+
+          for await (const chunk of parseNdjsonStream(reader)) {
+            if (chunk.message?.content) {
+              sawContent = true;
+              accumulatedContent += chunk.message.content;
+            } else if (!sawContent && chunk.message?.thinking) {
+              fallbackContent += chunk.message.thinking;
+            } else if (!sawContent && chunk.message?.reasoning) {
+              // Backward compatibility for older/native variants that still use reasoning.
+              fallbackContent += chunk.message.reasoning;
+            }
+
+            // Ollama sends tool_calls in intermediate (done:false) chunks,
+            // NOT in the final done:true chunk. Collect from all chunks.
+            if (chunk.message?.tool_calls) {
+              accumulatedToolCalls.push(...chunk.message.tool_calls);
+            }
+
+            if (chunk.done) {
+              finalResponse = chunk;
+              break;
+            }
           }
 
-          // Ollama sends tool_calls in intermediate (done:false) chunks,
-          // NOT in the final done:true chunk. Collect from all chunks.
-          if (chunk.message?.tool_calls) {
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
+          // Don't retry if the request was aborted by the caller
+          if (options?.signal?.aborted) {
+            throw new Error("Ollama stream aborted by caller");
           }
 
-          if (chunk.done) {
-            finalResponse = chunk;
-            break;
+          // Check for empty response: done:true but no content and no tool calls.
+          // This happens when Ollama fails to parse Qwen3 tool-call JSON internally.
+          // Also treat whitespace-only fallback content as empty.
+          const effectiveContent = accumulatedContent || fallbackContent.trim();
+          if (finalResponse && effectiveContent.length === 0 && accumulatedToolCalls.length === 0) {
+            if (attempt < OLLAMA_STREAM_MAX_RETRIES) {
+              log.warn(
+                `Ollama returned empty response (attempt ${attempt + 1}/${OLLAMA_STREAM_MAX_RETRIES + 1}), retrying…`,
+              );
+
+              // Re-fetch for the next attempt
+              response = await fetch(chatUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body),
+                signal: options?.signal,
+              });
+              if (!response.ok) {
+                const errorText = await response.text().catch(() => "unknown error");
+                throw new Error(`Ollama API error ${response.status} on retry: ${errorText}`);
+              }
+              if (!response.body) {
+                throw new Error("Ollama API returned empty response body on retry");
+              }
+              continue;
+            }
+            throw new Error(
+              "Ollama returned empty response (done:true with no content and no tool calls) after " +
+                `${OLLAMA_STREAM_MAX_RETRIES + 1} attempts — possible tool-call parse failure`,
+            );
           }
+
+          if (!finalResponse) {
+            if (attempt < OLLAMA_STREAM_MAX_RETRIES) {
+              log.warn(
+                `Ollama stream ended without done:true (attempt ${attempt + 1}/${OLLAMA_STREAM_MAX_RETRIES + 1}), retrying…`,
+              );
+
+              // Re-fetch for the next attempt
+              response = await fetch(chatUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body),
+                signal: options?.signal,
+              });
+              if (!response.ok) {
+                const errorText = await response.text().catch(() => "unknown error");
+                throw new Error(`Ollama API error ${response.status} on retry: ${errorText}`);
+              }
+              if (!response.body) {
+                throw new Error("Ollama API returned empty response body on retry");
+              }
+              continue;
+            }
+            throw new Error(
+              `Ollama API stream ended without a final response after ${OLLAMA_STREAM_MAX_RETRIES + 1} attempts`,
+            );
+          }
+
+          // Success — got a non-empty final response
+          if (attempt > 0) {
+            log.info(`Ollama stream succeeded on attempt ${attempt + 1}`);
+          }
+          break;
         }
 
-        if (!finalResponse) {
-          throw new Error("Ollama API stream ended without a final response");
-        }
-
-        finalResponse.message.content = accumulatedContent || fallbackContent;
+        finalResponse!.message.content = accumulatedContent || fallbackContent;
         if (accumulatedToolCalls.length > 0) {
-          finalResponse.message.tool_calls = accumulatedToolCalls;
+          finalResponse!.message.tool_calls = accumulatedToolCalls;
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
+        const assistantMessage = buildAssistantMessage(finalResponse!, {
           api: model.api,
           provider: model.provider,
           id: model.id,
