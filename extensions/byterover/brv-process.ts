@@ -128,6 +128,9 @@ function runBrv(params: {
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
+      if (stderr.length > maxOutput) {
+        stderr = stderr.slice(0, maxOutput) + "\n[stderr truncated]";
+      }
     });
 
     child.on("error", (err) => {

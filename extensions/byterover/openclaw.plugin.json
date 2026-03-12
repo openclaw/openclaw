@@ -13,7 +13,7 @@
       },
       "queryTimeoutMs": {
         "type": "number",
-        "description": "Timeout in milliseconds for brv query calls. Defaults to 12000."
+        "description": "Timeout in milliseconds for brv query calls. Defaults to 12000. Note: effective assemble deadline is capped at 10000 ms to stay within the agent ready timeout."
       },
       "curateTimeoutMs": {
         "type": "number",
