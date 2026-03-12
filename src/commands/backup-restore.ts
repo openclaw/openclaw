@@ -538,6 +538,24 @@ export async function buildRestoreOperations(params: {
   }
 
   if (params.mode === "full-host") {
+    // Validate that state/config/oauth targets are not dangerously broad paths
+    // (e.g. $HOME or /) that would clobber unrelated user data on restore.
+    const homeDir = resolveHomeDir();
+    const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
+    for (const [label, targetPath] of [
+      ["OPENCLAW_STATE_DIR", stateDir],
+      ["OPENCLAW_CONFIG_PATH", path.dirname(configPath)],
+      ["OPENCLAW_OAUTH_DIR", oauthDir],
+    ] as const) {
+      const resolved = await canonicalizePathForContainment(targetPath);
+      if (isUnsafeRestoreTarget(resolved, canonicalHomeDir)) {
+        throw new Error(
+          `Refusing full-host restore: ${label} resolves to ${resolved}, which is too broad. ` +
+            "Set it to a dedicated directory before restoring.",
+        );
+      }
+    }
+
     if (stateAsset) {
       operations.push({
         kind: "state",
