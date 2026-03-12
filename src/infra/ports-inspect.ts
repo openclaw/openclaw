@@ -248,9 +248,7 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
   return undefined;
 }
 
-async function resolveWindowsCommandLineViaPowerShell(
-  pid: number,
-): Promise<string | undefined> {
+async function resolveWindowsCommandLineViaPowerShell(pid: number): Promise<string | undefined> {
   const res = await runCommandSafe([
     "powershell",
     "-NoProfile",
@@ -282,10 +280,10 @@ async function resolveWindowsCommandLine(pid: number): Promise<string | undefine
         continue;
       }
       const value = line.slice("commandline=".length).trim();
-      if (value) {
-        return value;
-      }
+      return value || undefined;
     }
+    // wmic succeeded but produced no commandline — don't fallback.
+    return undefined;
   }
   // Fallback to PowerShell Get-CimInstance when wmic is unavailable.
   return resolveWindowsCommandLineViaPowerShell(pid);
