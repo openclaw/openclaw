@@ -538,8 +538,6 @@ public struct AgentParams: Codable, Sendable {
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
-    public let spawnedby: String?
-    public let workspacedir: String?
 
     public init(
         message: String,
@@ -566,9 +564,7 @@ public struct AgentParams: Codable, Sendable {
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
-        label: String?,
-        spawnedby: String?,
-        workspacedir: String?)
+        label: String?)
     {
         self.message = message
         self.agentid = agentid
@@ -595,8 +591,6 @@ public struct AgentParams: Codable, Sendable {
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
-        self.spawnedby = spawnedby
-        self.workspacedir = workspacedir
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -625,8 +619,6 @@ public struct AgentParams: Codable, Sendable {
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
-        case spawnedby = "spawnedBy"
-        case workspacedir = "workspaceDir"
     }
 }
 
@@ -950,6 +942,102 @@ public struct NodeEventParams: Codable, Sendable {
     }
 }
 
+public struct NodePendingDrainParams: Codable, Sendable {
+    public let maxitems: Int?
+
+    public init(
+        maxitems: Int?)
+    {
+        self.maxitems = maxitems
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case maxitems = "maxItems"
+    }
+}
+
+public struct NodePendingDrainResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let items: [[String: AnyCodable]]
+    public let hasmore: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        items: [[String: AnyCodable]],
+        hasmore: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.items = items
+        self.hasmore = hasmore
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case items
+        case hasmore = "hasMore"
+    }
+}
+
+public struct NodePendingEnqueueParams: Codable, Sendable {
+    public let nodeid: String
+    public let type: String
+    public let priority: String?
+    public let expiresinms: Int?
+    public let wake: Bool?
+
+    public init(
+        nodeid: String,
+        type: String,
+        priority: String?,
+        expiresinms: Int?,
+        wake: Bool?)
+    {
+        self.nodeid = nodeid
+        self.type = type
+        self.priority = priority
+        self.expiresinms = expiresinms
+        self.wake = wake
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case type
+        case priority
+        case expiresinms = "expiresInMs"
+        case wake
+    }
+}
+
+public struct NodePendingEnqueueResult: Codable, Sendable {
+    public let nodeid: String
+    public let revision: Int
+    public let queued: [String: AnyCodable]
+    public let waketriggered: Bool
+
+    public init(
+        nodeid: String,
+        revision: Int,
+        queued: [String: AnyCodable],
+        waketriggered: Bool)
+    {
+        self.nodeid = nodeid
+        self.revision = revision
+        self.queued = queued
+        self.waketriggered = waketriggered
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case revision
+        case queued
+        case waketriggered = "wakeTriggered"
+    }
+}
+
 public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let id: String
     public let nodeid: String
@@ -1240,7 +1328,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let spawnedworkspacedir: AnyCodable?
     public let spawndepth: AnyCodable?
+    public let subagentrole: AnyCodable?
+    public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1258,7 +1349,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        spawnedworkspacedir: AnyCodable?,
         spawndepth: AnyCodable?,
+        subagentrole: AnyCodable?,
+        subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
@@ -1275,7 +1369,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.spawnedworkspacedir = spawnedworkspacedir
         self.spawndepth = spawndepth
+        self.subagentrole = subagentrole
+        self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1294,7 +1391,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawndepth = "spawnDepth"
+        case subagentrole = "subagentRole"
+        case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -2950,7 +3050,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
-    public let command: String
+    public let command: String?
     public let commandargv: [String]?
     public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
@@ -2971,7 +3071,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 
     public init(
         id: String?,
-        command: String,
+        command: String?,
         commandargv: [String]?,
         systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,
