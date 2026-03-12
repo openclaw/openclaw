@@ -56,6 +56,49 @@ describe("browser control server", () => {
     });
   });
 
+  it("agent contract: extension relay aria snapshot falls back to Playwright role snapshot when CDP attach is blocked", async () => {
+    const base = await startServerAndBase();
+
+    pwMocks.snapshotAriaViaPlaywright.mockRejectedValueOnce(
+      new Error(
+        'browserContext.newCDPSession: Protocol error (Target.attachToBrowserTarget): {"code":-32000,"message":"Not allowed"}',
+      ),
+    );
+    pwMocks.snapshotRoleViaPlaywright.mockImplementationOnce(async () => ({
+      snapshot: '- button "制作图片" [ref=e1]\n- textbox "为 Gemini 输入提示" [ref=e2]',
+      refs: {
+        e1: { role: "button", name: "制作图片" },
+        e2: { role: "textbox", name: "为 Gemini 输入提示" },
+      },
+      stats: { lines: 2, chars: 10, refs: 2, interactive: 2 },
+    }));
+
+    const response = (await realFetch(
+      `${base}/snapshot?profile=chrome&format=aria&targetId=abcd1234`,
+    ).then((r) => r.json())) as {
+      ok: boolean;
+      format?: string;
+      nodes?: Array<{ role: string; name?: string }>;
+    };
+
+    expect(response.ok).toBe(true);
+    expect(response.format).toBe("aria");
+    expect(pwMocks.snapshotAriaViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
+      targetId: "abcd1234",
+      limit: undefined,
+    });
+    expect(pwMocks.snapshotRoleViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/),
+      targetId: "abcd1234",
+      refsMode: "aria",
+    });
+    expect(response.nodes?.[0]).toEqual({
+      role: "text",
+      name: '- button "制作图片" [ref=e1]',
+    });
+  });
+
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
