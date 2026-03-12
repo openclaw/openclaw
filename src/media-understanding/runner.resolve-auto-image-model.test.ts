@@ -30,7 +30,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 describe("resolveAutoImageModel", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("falls back to provider default image model when active model is text-only", async () => {

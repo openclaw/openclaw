@@ -337,12 +337,31 @@ async function resolveGeminiCliEntry(
   };
 }
 
+async function resolveImageModelForCapability(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  requestedModel?: string;
+  catalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
+}): Promise<string | undefined> {
+  const requested = params.requestedModel?.trim();
+  if (!requested) {
+    return DEFAULT_IMAGE_MODELS[params.providerId];
+  }
+  const catalog = params.catalog ?? (await loadModelCatalog({ config: params.cfg }));
+  const entry = findModelInCatalog(catalog, params.providerId, requested);
+  if (entry && !modelSupportsVision(entry)) {
+    return DEFAULT_IMAGE_MODELS[params.providerId];
+  }
+  return requested;
+}
+
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  modelCatalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const { cfg, agentDir, providerRegistry, capability } = params;
   const checkProvider = async (
@@ -370,30 +389,15 @@ async function resolveKeyEntry(params: {
     }
   };
 
-  const resolvePreferredImageModel = async (
-    providerId: string,
-    requestedModel?: string,
-  ): Promise<string | undefined> => {
-    const requested = requestedModel?.trim();
-    if (!requested) {
-      return DEFAULT_IMAGE_MODELS[providerId];
-    }
-
-    const catalog = await loadModelCatalog({ config: cfg });
-    const entry = findModelInCatalog(catalog, providerId, requested);
-    if (entry && !modelSupportsVision(entry)) {
-      return DEFAULT_IMAGE_MODELS[providerId];
-    }
-    return requested;
-  };
-
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeModel = await resolvePreferredImageModel(
-        activeProvider,
-        params.activeModel?.model,
-      );
+      const activeModel = await resolveImageModelForCapability({
+        cfg,
+        providerId: activeProvider,
+        requestedModel: params.activeModel?.model,
+        catalog: params.modelCatalog,
+      });
       const activeEntry = await checkProvider(activeProvider, activeModel);
       if (activeEntry) {
         return activeEntry;
@@ -478,7 +482,12 @@ async function resolveAutoEntries(params: {
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
-  const activeEntry = await resolveActiveModelEntry(params);
+  const sharedImageCatalog =
+    params.capability === "image" ? await loadModelCatalog({ config: params.cfg }) : undefined;
+  const activeEntry = await resolveActiveModelEntry({
+    ...params,
+    modelCatalog: sharedImageCatalog,
+  });
   if (activeEntry) {
     return [activeEntry];
   }
@@ -498,7 +507,10 @@ async function resolveAutoEntries(params: {
   if (gemini) {
     return [gemini];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry({
+    ...params,
+    modelCatalog: sharedImageCatalog,
+  });
   if (keys) {
     return [keys];
   }
@@ -511,6 +523,7 @@ export async function resolveAutoImageModel(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry();
+  const imageCatalog = await loadModelCatalog({ config: params.cfg });
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
@@ -531,6 +544,7 @@ export async function resolveAutoImageModel(params: {
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
+    modelCatalog: imageCatalog,
   });
   const resolvedActive = toActive(activeEntry);
   if (resolvedActive) {
@@ -542,6 +556,7 @@ export async function resolveAutoImageModel(params: {
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
+    modelCatalog: imageCatalog,
   });
   return toActive(keyEntry);
 }
@@ -552,6 +567,7 @@ async function resolveActiveModelEntry(params: {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  modelCatalog?: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const activeProviderRaw = params.activeModel?.provider?.trim();
   if (!activeProviderRaw) {
@@ -576,18 +592,12 @@ async function resolveActiveModelEntry(params: {
   }
   let resolvedModel = params.activeModel?.model;
   if (params.capability === "image") {
-    const requestedModel = params.activeModel?.model?.trim();
-    if (!requestedModel) {
-      resolvedModel = DEFAULT_IMAGE_MODELS[providerId];
-    } else {
-      const catalog = await loadModelCatalog({ config: params.cfg });
-      const entry = findModelInCatalog(catalog, providerId, requestedModel);
-      if (entry && !modelSupportsVision(entry)) {
-        resolvedModel = DEFAULT_IMAGE_MODELS[providerId];
-      } else {
-        resolvedModel = requestedModel;
-      }
-    }
+    resolvedModel = await resolveImageModelForCapability({
+      cfg: params.cfg,
+      providerId,
+      requestedModel: params.activeModel?.model,
+      catalog: params.modelCatalog,
+    });
   }
   try {
     await resolveApiKeyForProvider({
