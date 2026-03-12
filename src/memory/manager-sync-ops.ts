@@ -47,6 +47,7 @@ import {
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "./session-files.js";
+import { shouldSyncSessionsLogic } from "./should-sync-sessions.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
@@ -93,6 +94,8 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
+
+export { shouldSyncSessionsLogic } from "./should-sync-sessions.js";
 
 export abstract class MemoryManagerSyncOps {
   protected abstract readonly cfg: OpenClawConfig;
@@ -674,23 +677,13 @@ export abstract class MemoryManagerSyncOps {
     params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
     needsFullReindex = false,
   ) {
-    if (!this.sources.has("sessions")) {
-      return false;
-    }
-    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-      return true;
-    }
-    if (params?.force) {
-      return true;
-    }
-    const reason = params?.reason;
-    if (reason === "session-start" || reason === "watch") {
-      return false;
-    }
-    if (needsFullReindex) {
-      return true;
-    }
-    return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
+    return shouldSyncSessionsLogic(
+      this.sources.has("sessions"),
+      params,
+      needsFullReindex,
+      this.sessionsDirty,
+      this.sessionsDirtyFiles.size,
+    );
   }
 
   private async syncMemoryFiles(params: {
