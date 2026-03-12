@@ -25,7 +25,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 
-See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details.
+See [Brave Search setup](/brave-search), [Perplexity Search setup](/perplexity), and [Tavily Search setup](/tavily) for provider-specific details.
 
 ## Choosing a search provider
 
@@ -296,21 +296,21 @@ All parameters work for Brave, Tavily, and native Perplexity Search API unless n
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.
 
-| Parameter             | Description                                               |
-| --------------------- | --------------------------------------------------------- |
-| `query`               | Search query (required)                                   |
-| `count`               | Results to return (1-10, default: 5; Tavily max: 20)      |
-| `country`             | 2-letter ISO country code (Brave and Perplexity only)     |
-| `language`            | ISO 639-1 language code (Brave and Perplexity only)       |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`            |
-| `date_after`          | Results after this date (YYYY-MM-DD)                      |
-| `date_before`         | Results before this date (YYYY-MM-DD)                     |
-| `ui_lang`             | UI language code (Brave only)                             |
-| `search_depth`        | Search depth: basic or advanced (Tavily only)             |
-| `include_answer`      | Include AI-generated answer summary (Tavily only)         |
-| `domain_filter`       | Domain allowlist/denylist array (Tavily and Perplexity)   |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only)     |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)      |
+| Parameter             | Description                                             |
+| --------------------- | ------------------------------------------------------- |
+| `query`               | Search query (required)                                 |
+| `count`               | Results to return (1-10, default: 5; Tavily max: 20)    |
+| `country`             | 2-letter ISO country code (Brave and Perplexity only)   |
+| `language`            | ISO 639-1 language code (Brave and Perplexity only)     |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`          |
+| `date_after`          | Results after this date (YYYY-MM-DD)                    |
+| `date_before`         | Results before this date (YYYY-MM-DD)                   |
+| `ui_lang`             | UI language code (Brave only)                           |
+| `search_depth`        | Search depth: basic or advanced (Tavily only)           |
+| `include_answer`      | Include AI-generated answer summary (Tavily only)       |
+| `domain_filter`       | Domain allowlist/denylist array (Tavily and Perplexity) |
+| `max_tokens`          | Total content budget, default 25000 (Perplexity only)   |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)    |
 
 **Examples:**
 
