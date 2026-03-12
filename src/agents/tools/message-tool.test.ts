@@ -116,6 +116,26 @@ describe("message tool agent routing", () => {
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
+
+  it("prefers explicit agentId over session-derived routing", async () => {
+    mockSendResult();
+
+    const tool = createMessageTool({
+      agentId: "lexi",
+      agentSessionKey: "agent:main:main",
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      message: "hi",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.agentId).toBe("lexi");
+    expect(call?.sessionKey).toBe("agent:main:main");
+  });
 });
 
 describe("message tool path passthrough", () => {
