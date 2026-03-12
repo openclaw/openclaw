@@ -138,4 +138,48 @@ describe("onboardCommand", () => {
     expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
   });
+
+  it("rejects non-interactive claude-cli with setup-token guidance", async () => {
+    const runtime = makeRuntime();
+
+    await onboardCommand(
+      {
+        nonInteractive: true,
+        authChoice: "claude-cli",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        'Auth choice "claude-cli" is deprecated.',
+        'Use "--auth-choice token" (Anthropic setup-token).',
+      ].join("\n"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-interactive codex-cli with interactive OpenAI guidance", async () => {
+    const runtime = makeRuntime();
+
+    await onboardCommand(
+      {
+        nonInteractive: true,
+        authChoice: "codex-cli",
+      },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        'Auth choice "codex-cli" is deprecated.',
+        'Run "openclaw onboard" and choose OpenAI device code (Codex CLI) or OpenAI Codex (ChatGPT OAuth).',
+      ].join("\n"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+  });
 });

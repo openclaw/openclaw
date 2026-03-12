@@ -23,15 +23,14 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+type LoginOpenAICodexOAuth = typeof import("./openai-codex-oauth.js").loginOpenAICodexOAuth;
 type PromptAndConfigureOllama = typeof import("./ollama-setup.js").promptAndConfigureOllama;
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
-const loginOpenAICodexOAuth = vi.hoisted(() =>
-  vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
-);
+const loginOpenAICodexOAuth = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>(async () => null));
 vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
