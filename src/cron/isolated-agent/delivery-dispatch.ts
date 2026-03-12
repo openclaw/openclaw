@@ -1,5 +1,5 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -390,12 +390,25 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
         delivered: true,
+        ...params.telemetry,
+      });
+    }
+
+    // If the final text still looks like an interim/status narration,
+    // suppress announce delivery instead of leaking chatty no-data updates.
+    if (isLikelyInterimCronMessage(synthesizedText)) {
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "ok",
+        summary,
+        outputText,
+        deliveryAttempted,
         ...params.telemetry,
       });
     }
