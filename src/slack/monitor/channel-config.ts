@@ -11,7 +11,7 @@ import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from ".
 export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
-  allowBots?: boolean;
+  allowBots?: boolean | "mentions";
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
@@ -23,7 +23,7 @@ export type SlackChannelConfigEntry = {
   enabled?: boolean;
   allow?: boolean;
   requireMention?: boolean;
-  allowBots?: boolean;
+  allowBots?: boolean | "mentions";
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
