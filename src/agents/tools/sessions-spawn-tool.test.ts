@@ -249,6 +249,30 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("marks ACP spawn failures as requiring explicit user-confirmed fallback", async () => {
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "ACP backend unavailable",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-2c", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      backendIntent: "acp_harness",
+      fallbackRequiresUserConfirmation: true,
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("ask the user before using another backend");
+  });
+
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

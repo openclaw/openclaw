@@ -274,6 +274,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
     );
+    expect(prompt).toContain(
+      "If the requested ACP harness fails or is unavailable, report that failure directly and ask the user how to proceed.",
+    );
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -704,6 +707,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Do not ask users to run slash commands or CLI");
     expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
     expect(prompt).toContain("Use `subagents` only for OpenClaw subagents");
+    expect(prompt).toContain(
+      "If the requested ACP harness fails or is unavailable, report that failure to the parent agent and wait for user-confirmed fallback instructions.",
+    );
     expect(prompt).toContain("Subagent results auto-announce back to you");
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",

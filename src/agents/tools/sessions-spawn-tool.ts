@@ -3,7 +3,13 @@ import { isAcpEnabledByPolicy } from "../../acp/policy.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
+import {
+  ACP_SPAWN_MODES,
+  ACP_SPAWN_STREAM_TARGETS,
+  spawnAcpDirect,
+  type SpawnAcpMode,
+  type SpawnAcpResult,
+} from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
@@ -79,6 +85,24 @@ export function createSessionsSpawnTool(
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  function annotateAcpSpawnFailure(result: {
+    status: SpawnAcpResult["status"];
+    error?: string;
+    childSessionKey?: string;
+    runId?: string;
+    mode?: SpawnAcpMode;
+    streamLogPath?: string;
+    note?: string;
+  }) {
+    const failureMessage = result.error?.trim() || "ACP harness session failed to start.";
+    return {
+      ...result,
+      error: `${failureMessage} Requested ACP harness could not be started; report the failure and ask the user before using another backend or ordinary tools instead.`,
+      backendIntent: "acp_harness",
+      fallbackRequiresUserConfirmation: true,
+    };
+  }
+
   return {
     label: "Sessions",
     name: "sessions_spawn",
@@ -181,6 +205,9 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
           },
         );
+        if (result.status !== "accepted") {
+          return jsonResult(annotateAcpSpawnFailure(result));
+        }
         return jsonResult(result);
       }
 
