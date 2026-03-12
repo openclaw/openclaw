@@ -80,6 +80,11 @@ type HookDispatchers = {
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
+export type HookClientIpConfig = Readonly<{
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+}>;
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -352,10 +357,7 @@ export function createHooksRequestHandler(
     bindHost: string;
     port: number;
     logHooks: SubsystemLogger;
-    getClientIpConfig?: () => {
-      trustedProxies?: string[];
-      allowRealIpFallback?: boolean;
-    };
+    getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
