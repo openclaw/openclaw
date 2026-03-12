@@ -266,3 +266,88 @@ describe("resolveToolsBySender", () => {
     });
   });
 });
+
+describe("resolveChannelGroupPolicy - signal groups", () => {
+  it("allows signal group when explicitly configured in groups", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          groupPolicy: "allowlist",
+          groups: {
+            "Oyn+qhsfLfue9n0rgbTrcIreAN4oSD94gxT2cyWnc58=": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "signal",
+      groupId: "Oyn+qhsfLfue9n0rgbTrcIreAN4oSD94gxT2cyWnc58=",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("blocks signal group not in groups config", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          groupPolicy: "allowlist",
+          groups: {
+            "Oyn+qhsfLfue9n0rgbTrcIreAN4oSD94gxT2cyWnc58=": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "signal",
+      groupId: "differentGroupId123=",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(false);
+  });
+
+  it("allows signal group via senderFilterBypass when hasGroupAllowFrom is set without explicit groups", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "signal",
+      groupId: "anyGroupId",
+      hasGroupAllowFrom: true,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("blocks signal group when allowlist with no groups and no groupAllowFrom", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "signal",
+      groupId: "anyGroupId",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(false);
+  });
+});
