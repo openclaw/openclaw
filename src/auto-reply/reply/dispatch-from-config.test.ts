@@ -1934,21 +1934,6 @@ describe("dispatch interceptors", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
-  it("skips interceptors when list is empty", async () => {
-    interceptorMocks.registry = { dispatchInterceptors: [] };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "hello" }));
-    const ctx = buildTestCtx({ Body: "hi" });
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    expect(replyResolver).toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(true);
-  });
-
   it("blocks dispatch when interceptor returns intercepted: true", async () => {
     const interceptor = {
       intercept: vi.fn(

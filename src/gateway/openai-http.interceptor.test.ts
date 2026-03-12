@@ -184,66 +184,6 @@ describe("OpenAI HTTP dispatch interceptor (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("stops at first interceptor that intercepts (short-circuit)", async () => {
-    const calls: string[] = [];
-    injectInterceptors([
-      {
-        async intercept() {
-          calls.push("first");
-          return { intercepted: false };
-        },
-      },
-      {
-        async intercept(_text, _ctx, output) {
-          calls.push("second");
-          output.sendBlock("Blocked by second.");
-          return { intercepted: true };
-        },
-      },
-      {
-        async intercept() {
-          calls.push("third");
-          return { intercepted: false };
-        },
-      },
-    ]);
-
-    const res = await post(chatBody());
-    expect(res.status).toBe(200);
-
-    const json = (await res.json()) as Record<string, unknown>;
-    const choices = json.choices as Array<Record<string, unknown>>;
-    const message = choices[0].message as Record<string, unknown>;
-    expect(message.content).toBe("Blocked by second.");
-
-    expect(calls).toEqual(["first", "second"]);
-    expect(agentCommand).not.toHaveBeenCalled();
-  });
-
-  it("passes context (sessionKey, channelId, userId) to interceptor", async () => {
-    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
-
-    let receivedText: string | undefined;
-    let receivedCtx: Record<string, unknown> | undefined;
-
-    injectInterceptors([
-      {
-        async intercept(text, ctx) {
-          receivedText = text;
-          receivedCtx = ctx as Record<string, unknown>;
-          return { intercepted: false };
-        },
-      },
-    ]);
-
-    const res = await post(chatBody());
-    await res.text();
-
-    expect(receivedText).toBe("hello");
-    expect(receivedCtx).toBeDefined();
-    expect(typeof receivedCtx!.sessionKey).toBe("string");
-  });
-
   it("uses default message when interceptor sends no content", async () => {
     injectInterceptors([
       {

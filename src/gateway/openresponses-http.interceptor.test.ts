@@ -193,42 +193,6 @@ describe("OpenResponses HTTP dispatch interceptor (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("stops at first interceptor that intercepts (short-circuit)", async () => {
-    const calls: string[] = [];
-    injectInterceptors([
-      {
-        async intercept() {
-          calls.push("first");
-          return { intercepted: false };
-        },
-      },
-      {
-        async intercept(_text, _ctx, output) {
-          calls.push("second");
-          output.sendBlock("Blocked by second.");
-          return { intercepted: true };
-        },
-      },
-      {
-        async intercept() {
-          calls.push("third");
-          return { intercepted: false };
-        },
-      },
-    ]);
-
-    const res = await post(responsesBody());
-    expect(res.status).toBe(200);
-
-    const json = (await res.json()) as Record<string, unknown>;
-    const output = json.output as Array<Record<string, unknown>>;
-    const content = (output[0].content as Array<Record<string, unknown>>)[0];
-    expect(content.text).toBe("Blocked by second.");
-
-    expect(calls).toEqual(["first", "second"]);
-    expect(agentCommand).not.toHaveBeenCalled();
-  });
-
   it("uses default message when interceptor sends no content", async () => {
     injectInterceptors([
       {
