@@ -81,6 +81,8 @@ outside the list is rejected.
 - `maxTokens` (number, optional)
 - `timeoutMs` (number, optional)
 
+`thinking` accepts the standard OpenClaw reasoning presets, such as `low` or `medium`.
+
 ## Output
 
 Returns `details.json` containing the parsed JSON (and validates against
