@@ -472,6 +472,59 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("merges channel-configured mediaLocalRoots into outbound delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      cfg: {
+        channels: {
+          telegram: {
+            mediaLocalRoots: ["/tmp/channel-media"],
+          },
+        },
+      },
+      payload: { text: "hi", mediaUrl: "file:///tmp/channel-media/test.png" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining(["/tmp/channel-media"]),
+      }),
+    );
+  });
+
+  it("prefers account-configured mediaLocalRoots for outbound delivery too", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      accountId: "work",
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              work: {
+                mediaLocalRoots: ["/tmp/account-media"],
+              },
+            },
+          },
+        },
+      },
+      payload: { text: "hi", mediaUrl: "file:///tmp/account-media/test.png" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining(["/tmp/account-media"]),
+      }),
+    );
+  });
+
   it("uses signal media maxBytes from config", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = { channels: { signal: { mediaMaxMb: 2 } } };
