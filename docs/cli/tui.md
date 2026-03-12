@@ -27,4 +27,15 @@ openclaw tui --url ws://127.0.0.1:18789 --token <token>
 openclaw tui --session main --deliver
 # when run inside an agent workspace, infers that agent automatically
 openclaw tui --session bugfix
+openclaw tui --theme dracula
 ```
+
+## Theme
+
+Select a color theme with `--theme <name>` or set the `OPENCLAW_THEME` environment variable.
+
+Available themes: `dark` (default), `light`, `dracula`, `catppuccin-mocha`, `solarized-dark`.
+
+Auto-detection: when no theme is specified, the TUI reads the `COLORFGBG` environment variable to detect light vs dark terminals.
+
+Switch at runtime with `/theme <name>` or `/theme` to open a picker.

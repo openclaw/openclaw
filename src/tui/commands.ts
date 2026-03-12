@@ -2,7 +2,9 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { paletteNames } from "./theme/palettes.js";
 
+const THEME_NAMES = paletteNames;
 const VERBOSE_LEVELS = ["on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
@@ -106,6 +108,15 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set group activation",
       getArgumentCompletions: activationCompletions,
     },
+    {
+      name: "theme",
+      description: "Switch color theme",
+      getArgumentCompletions: (prefix) =>
+        THEME_NAMES.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
+          value,
+          label: value,
+        })),
+    },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
@@ -148,6 +159,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    `/theme <${THEME_NAMES.join("|")}>`,
     "/new or /reset",
     "/abort",
     "/settings",

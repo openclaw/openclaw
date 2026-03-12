@@ -16,6 +16,8 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { paletteNames } from "./theme/palettes.js";
+import { getThemeName, setTheme } from "./theme/theme.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -454,6 +456,34 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await loadHistory();
         } catch (err) {
           chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
+      case "theme":
+        if (!args) {
+          const items = paletteNames.map((name) => ({
+            value: name,
+            label: name,
+            description: name === getThemeName() ? "active" : "",
+          }));
+          const selector = createSearchableSelectList(items, 9);
+          selector.onSelect = (item) => {
+            const applied = setTheme(item.value);
+            chatLog.addSystem(`theme set to ${applied}`);
+            closeOverlay();
+            tui.requestRender();
+          };
+          selector.onCancel = () => {
+            closeOverlay();
+            tui.requestRender();
+          };
+          openOverlay(selector);
+        } else {
+          const applied = setTheme(args);
+          chatLog.addSystem(
+            applied === args
+              ? `theme set to ${applied}`
+              : `unknown theme "${args}", fell back to ${applied}`,
+          );
         }
         break;
       case "abort":

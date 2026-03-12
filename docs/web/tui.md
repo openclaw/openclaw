@@ -99,6 +99,10 @@ Session controls:
 - `/activation <mention|always>`
 - `/deliver <on|off>`
 
+Appearance:
+
+- `/theme <name>` (switch color theme, or open picker)
+
 Session lifecycle:
 
 - `/new` or `/reset` (reset the session)
@@ -139,6 +143,20 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - The TUI registers with the Gateway as `mode: "tui"`.
 - Reconnects show a system message; event gaps are surfaced in the log.
 
+## Color themes
+
+The TUI ships with five color themes: `dark` (default), `light`, `dracula`, `catppuccin-mocha`, and `solarized-dark`.
+
+Set a theme:
+
+- CLI flag: `openclaw tui --theme dracula`
+- Environment variable: `export OPENCLAW_THEME=solarized-dark`
+- Runtime: `/theme <name>` or `/theme` (opens a picker)
+
+Priority: `--theme` flag > `OPENCLAW_THEME` env var > `COLORFGBG` auto-detection > `dark`.
+
+The TUI reads the `COLORFGBG` environment variable (set by many terminals) to auto-detect whether you are on a light or dark background. Override with `OPENCLAW_THEME` if the detection is wrong.
+
 ## Options
 
 - `--url <url>`: Gateway WebSocket URL (defaults to config or `ws://127.0.0.1:<port>`)
@@ -148,6 +166,7 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - `--deliver`: Deliver assistant replies to the provider (default off)
 - `--thinking <level>`: Override thinking level for sends
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
+- `--theme <name>`: Color theme (`dark`, `light`, `dracula`, `catppuccin-mocha`, `solarized-dark`)
 
 Note: when you set `--url`, the TUI does not fall back to config or environment credentials.
 Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.

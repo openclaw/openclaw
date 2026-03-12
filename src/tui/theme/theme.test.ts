@@ -7,8 +7,10 @@ const cliHighlightMocks = vi.hoisted(() => ({
 
 vi.mock("cli-highlight", () => cliHighlightMocks);
 
-const { markdownTheme, searchableSelectListTheme, selectListTheme, theme } =
+const { markdownTheme, searchableSelectListTheme, selectListTheme, theme, setTheme, getThemeName } =
   await import("./theme.js");
+
+const { paletteNames } = await import("./palettes.js");
 
 const stripAnsi = (str: string) =>
   str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
@@ -298,5 +300,71 @@ describe("list themes", () => {
     expect(stripAnsi(searchableSelectListTheme.searchPrompt("Search:"))).toBe("Search:");
     expect(stripAnsi(searchableSelectListTheme.searchInput("query"))).toBe("query");
     expect(stripAnsi(searchableSelectListTheme.matchHighlight("match"))).toBe("match");
+  });
+});
+
+describe("theme system", () => {
+  afterEach(() => {
+    setTheme("dark");
+  });
+
+  it("initializes with a valid theme name", () => {
+    const name = getThemeName();
+    expect(paletteNames).toContain(name);
+  });
+
+  it("setTheme switches to a known theme", () => {
+    const result = setTheme("dracula");
+    expect(result).toBe("dracula");
+    expect(getThemeName()).toBe("dracula");
+  });
+
+  it("setTheme falls back to dark for unknown themes", () => {
+    const result = setTheme("nonexistent-theme");
+    expect(result).toBe("dark");
+    expect(getThemeName()).toBe("dark");
+  });
+
+  it("supports all declared palette names", () => {
+    for (const name of paletteNames) {
+      const result = setTheme(name);
+      expect(result).toBe(name);
+      expect(getThemeName()).toBe(name);
+    }
+  });
+
+  it("exports at least 5 themes", () => {
+    expect(paletteNames.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("palette names include dark and light", () => {
+    expect(paletteNames).toContain("dark");
+    expect(paletteNames).toContain("light");
+  });
+
+  it("theme exports produce callable style functions", () => {
+    const styled = theme.fg("hello");
+    expect(styled).toContain("hello");
+    expect(typeof theme.fg).toBe("function");
+    expect(typeof theme.accent).toBe("function");
+    expect(typeof theme.dim).toBe("function");
+  });
+
+  it("switching theme updates the theme object reference", () => {
+    setTheme("dark");
+    const darkTheme = { ...theme };
+    setTheme("dracula");
+    expect(getThemeName()).toBe("dracula");
+    setTheme("dark");
+    expect(getThemeName()).toBe("dark");
+    expect(typeof darkTheme.fg).toBe("function");
+  });
+
+  it("highlightCode works after theme switch", () => {
+    setTheme("light");
+    const result = markdownTheme.highlightCode!("const x = 1;", "javascript");
+    expect(result).toBeInstanceOf(Array);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0]).toContain("const");
   });
 });
