@@ -475,8 +475,12 @@ export async function handleTelegramAction(
   }
 
   if (action === "sendPoll") {
-    if (!isActionEnabled("sendPoll")) {
-      throw new Error("Telegram sendPoll is disabled.");
+    const pollActionState = resolveTelegramPollActionGateState(isActionEnabled);
+    if (!pollActionState.sendMessageEnabled) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    if (!pollActionState.pollEnabled) {
+      throw new Error("Telegram polls are disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "question", { required: true });

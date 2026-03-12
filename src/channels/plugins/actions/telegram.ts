@@ -163,10 +163,14 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "question", { required: true });
       const options =
         readStringArrayParam(params, "pollOption") ?? (params.options as string[] | undefined);
-      const pollMulti = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const pollMulti = readBooleanParam(params, "pollMulti");
       const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
-      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const silent = readBooleanParam(params, "silent");
+      const pollAnonymous = readBooleanParam(params, "pollAnonymous");
+      const pollPublic = readBooleanParam(params, "pollPublic");
       const threadId = readStringOrNumberParam(params, "threadId");
+      const isAnonymous =
+        pollAnonymous != null ? pollAnonymous : pollPublic != null ? !pollPublic : undefined;
       return await handleTelegramAction(
         {
           action: "sendPoll",
@@ -175,7 +179,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           options,
           maxSelections: pollMulti ? (options?.length ?? 10) : undefined,
           durationSeconds: durationSeconds ?? undefined,
-          isAnonymous: typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined,
+          isAnonymous,
           silent,
           messageThreadId: threadId != null ? String(threadId) : undefined,
           accountId: accountId ?? undefined,
