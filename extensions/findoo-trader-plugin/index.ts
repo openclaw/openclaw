@@ -133,7 +133,16 @@ const findooTraderPlugin = {
   kind: "financial" as const,
 
   register(api: OpenClawPluginApi) {
-    const { exchanges, riskConfig } = resolveConfig(api);
+    const { apiKey, exchanges, riskConfig } = resolveConfig(api);
+
+    // ── License Gate: no key → skip all registration ──
+    if (!apiKey) {
+      api.logger.info(
+        "Findoo Trader: license key not configured — plugin inactive. " +
+          "Set FINDOO_TRADER_API_KEY env var or configure in Control UI → Plugins → Findoo Trader.",
+      );
+      return;
+    }
 
     // ── Exchange Registry ──
 

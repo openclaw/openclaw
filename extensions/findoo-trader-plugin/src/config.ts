@@ -2,9 +2,14 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { ExchangeConfig, TradingRiskConfig } from "./types.js";
 
 export type FindooTraderConfig = {
+  /** Findoo Trader license key. Undefined when not configured. */
+  apiKey: string | undefined;
   exchanges: Record<string, ExchangeConfig>;
   riskConfig: TradingRiskConfig;
 };
+
+// Built-in dev key for testing — will be removed before production release.
+const DEV_API_KEY = "ft-d0453f8a-5024-4a4c-b2aa-9dc4f9d45f75";
 
 const DEFAULT_RISK_CONFIG: TradingRiskConfig = {
   enabled: false,
@@ -22,6 +27,13 @@ const DEFAULT_RISK_CONFIG: TradingRiskConfig = {
 export function resolveConfig(api: OpenClawPluginApi): FindooTraderConfig {
   const raw = api.pluginConfig as Record<string, unknown> | undefined;
   const financialConfig = api.config?.financial as Record<string, unknown> | undefined;
+
+  // License key: pluginConfig > env var > built-in dev key (for testing)
+  const apiKey =
+    (typeof raw?.apiKey === "string" && raw.apiKey.trim()) ||
+    process.env.FINDOO_TRADER_API_KEY ||
+    process.env.OPENFINCLAW_TRADER_API_KEY ||
+    DEV_API_KEY;
 
   // Exchanges: pluginConfig > financial config > empty
   const exchanges =
@@ -65,5 +77,5 @@ export function resolveConfig(api: OpenClawPluginApi): FindooTraderConfig {
     };
   }
 
-  return { exchanges, riskConfig };
+  return { apiKey, exchanges, riskConfig };
 }

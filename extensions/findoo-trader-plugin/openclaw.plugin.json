@@ -1,28 +1,27 @@
 {
   "id": "findoo-trader-plugin",
   "name": "Findoo Trader",
-  "description": "Unified trading infrastructure — exchange registry, risk control, paper trading, strategy engine, fund management. Replaces fin-core + fin-trading + fin-paper-trading + fin-strategy-engine + fin-fund-manager.",
+  "description": "Unified trading infrastructure — exchange registry, risk control, paper trading, strategy engine, fund management.",
   "kind": "financial",
   "version": "2026.3.2",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "properties": {
-      "exchanges": {
-        "type": "object",
-        "description": "Exchange configurations keyed by exchange ID"
-      },
-      "trading": {
-        "type": "object",
-        "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "maxAutoTradeUsd": { "type": "number", "default": 100 },
-          "confirmThresholdUsd": { "type": "number", "default": 500 },
-          "maxDailyLossUsd": { "type": "number", "default": 1000 },
-          "maxPositionPct": { "type": "number", "default": 25 },
-          "maxLeverage": { "type": "number", "default": 1 }
-        }
+      "apiKey": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Findoo Trader license key (required). Also accepted via FINDOO_TRADER_API_KEY env var.",
+        "sensitive": true
       }
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "License Key",
+      "help": "Findoo Trader 许可密钥（必填）。交易所凭证和风控参数在 Dashboard → Setting 页面配置。",
+      "sensitive": true,
+      "placeholder": "ft-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     }
   }
 }

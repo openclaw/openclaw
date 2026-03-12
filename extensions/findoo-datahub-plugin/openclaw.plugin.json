@@ -10,7 +10,8 @@
     "properties": {
       "datahubApiKey": {
         "type": "string",
-        "description": "DataHub API key (required).",
+        "minLength": 1,
+        "description": "DataHub API key (required). Also accepted via DATAHUB_API_KEY env var.",
         "sensitive": true
       }
     }
