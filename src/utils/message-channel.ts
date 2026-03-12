@@ -33,7 +33,10 @@ export type InterSessionChannel = typeof INTER_SESSION_CHANNEL;
  * Checked in both plugin install (validatePluginId) and runtime channel
  * registration (registerChannel) to cover all registration paths.
  */
-export const RESERVED_CHANNEL_IDS = new Set([INTER_SESSION_CHANNEL, INTERNAL_MESSAGE_CHANNEL]);
+export const RESERVED_CHANNEL_IDS: Set<string> = new Set([
+  INTER_SESSION_CHANNEL,
+  INTERNAL_MESSAGE_CHANNEL,
+]);
 
 export function isInterSessionChannel(raw?: string | null): boolean {
   // Guard against collision with real deliverable plugin channels: a plugin
