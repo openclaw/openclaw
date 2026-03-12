@@ -1,0 +1,55 @@
+{
+  "id": "insta360",
+  "name": "Insta360 Camera",
+  "description": "Control Insta360 cameras via OSC protocol",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cameraHost": {
+        "type": "string",
+        "default": "http://192.168.42.1"
+      },
+      "downloadPath": {
+        "type": "string"
+      },
+      "lowBatteryThreshold": {
+        "type": "number",
+        "default": 15
+      },
+      "lowStorageMB": {
+        "type": "number",
+        "default": 500
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "default": 30000
+      }
+    }
+  },
+  "uiHints": {
+    "cameraHost": {
+      "label": "Camera Host",
+      "placeholder": "http://192.168.42.1",
+      "help": "Camera OSC API address. Default works when connected to camera WiFi."
+    },
+    "downloadPath": {
+      "label": "Download Path",
+      "placeholder": "~/.openclaw/plugins/insta360/media/",
+      "help": "Local directory for downloaded files."
+    },
+    "lowBatteryThreshold": {
+      "label": "Low Battery Alert (%)",
+      "help": "Alert when battery drops below this percentage during recording."
+    },
+    "lowStorageMB": {
+      "label": "Low Storage Alert (MB)",
+      "help": "Alert when free storage drops below this value during recording."
+    },
+    "pollIntervalMs": {
+      "label": "Poll Interval (ms)",
+      "advanced": true,
+      "help": "Status polling interval during recording. Minimum 5000ms."
+    }
+  }
+}
