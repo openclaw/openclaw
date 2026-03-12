@@ -26,6 +26,7 @@ type AgentRunParams = {
 };
 
 type EmbeddedRunParams = {
+  sessionFile?: string;
   prompt?: string;
   extraSystemPrompt?: string;
   memoryFlushWritePath?: string;
@@ -289,6 +290,39 @@ async function runReplyAgentWithBase(params: {
   });
 }
 
+const makeTranscriptMessageLine = (text: string) =>
+  `${JSON.stringify({
+    type: "message",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+    },
+  })}\n`;
+
+async function withTempSessionFile<T>(
+  seedText: string,
+  fn: (sessionFile: string, seeded: string) => Promise<T>,
+): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-heartbeat-sessionfile-"));
+  const sessionFile = path.join(dir, "session.jsonl");
+  const seeded = makeTranscriptMessageLine(seedText);
+  await fs.writeFile(sessionFile, seeded, "utf-8");
+  try {
+    return await fn(sessionFile, seeded);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
@@ -338,6 +372,183 @@ describe("runReplyAgent heartbeat followup guard", () => {
     } finally {
       persistSpy.mockRestore();
     }
+  });
+});
+
+describe("runReplyAgent heartbeat transcript isolation", () => {
+  it("writes normal run transcript updates to the live session file", async () => {
+    await withTempSessionFile("seed", async (sessionFile) => {
+      const appendedText = "normal transcript write";
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: false },
+        runOverrides: { sessionFile },
+      });
+
+      await run();
+
+      const liveRaw = await fs.readFile(sessionFile, "utf-8");
+      expect(liveRaw).toContain(appendedText);
+
+      const embeddedCall = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+        | EmbeddedRunParams
+        | undefined;
+      expect(embeddedCall?.sessionFile).toBe(sessionFile);
+    });
+  });
+
+  it("routes heartbeat transcript writes into a temporary clone instead of the live session file", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const appendedText = "Read HEARTBEAT.md and process exec completion";
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        runOverrides: { sessionFile },
+      });
+
+      await run();
+
+      const liveRaw = await fs.readFile(sessionFile, "utf-8");
+      expect(liveRaw).toBe(seeded);
+      expect(liveRaw).not.toContain("HEARTBEAT.md");
+
+      const embeddedCall = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+        | EmbeddedRunParams
+        | undefined;
+      expect(embeddedCall?.sessionFile).toBeDefined();
+      expect(embeddedCall?.sessionFile).not.toBe(sessionFile);
+      expect(await pathExists(String(embeddedCall?.sessionFile))).toBe(false);
+    });
+  });
+
+  it("cleans up the temp clone directory when heartbeat session cloning fails", async () => {
+    await withTempSessionFile("seed", async (sessionFile) => {
+      const originalMkdtemp = fs.mkdtemp.bind(fs);
+      const originalRm = fs.rm.bind(fs);
+      const tempDirs: string[] = [];
+      const copyError = Object.assign(new Error("copy denied"), { code: "EPERM" });
+      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+        const tempDir = await originalMkdtemp(...args);
+        tempDirs.push(tempDir);
+        return tempDir;
+      });
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        return await originalRm(...args);
+      });
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockRejectedValueOnce(copyError);
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: { sessionFile },
+        });
+
+        const result = await run();
+        expect(result).toMatchObject({
+          text: expect.stringContaining("copy denied"),
+        });
+        expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+        expect(tempDirs).toHaveLength(1);
+        expect(rmSpy).toHaveBeenCalledWith(tempDirs[0], { recursive: true, force: true });
+        expect(await pathExists(tempDirs[0])).toBe(false);
+      } finally {
+        copyFileSpy.mockRestore();
+        rmSpy.mockRestore();
+        mkdtempSpy.mockRestore();
+      }
+    });
+  });
+
+  it("treats ENOENT during heartbeat session cloning as a missing live transcript", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const appendedText = "heartbeat transcript write after clone miss";
+      const copyFileSpy = vi
+        .spyOn(fs, "copyFile")
+        .mockRejectedValueOnce(Object.assign(new Error("source disappeared"), { code: "ENOENT" }));
+
+      try {
+        state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
+          await fs.appendFile(
+            String(params.sessionFile),
+            makeTranscriptMessageLine(appendedText),
+            "utf-8",
+          );
+          return { payloads: [{ text: "ok" }], meta: {} };
+        });
+
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: { sessionFile },
+        });
+
+        await run();
+
+        const liveRaw = await fs.readFile(sessionFile, "utf-8");
+        expect(liveRaw).toBe(seeded);
+        expect(liveRaw).not.toContain(appendedText);
+
+        const embeddedCall = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+          | EmbeddedRunParams
+          | undefined;
+        expect(embeddedCall?.sessionFile).toBeDefined();
+        expect(embeddedCall?.sessionFile).not.toBe(sessionFile);
+        expect(await pathExists(String(embeddedCall?.sessionFile))).toBe(false);
+      } finally {
+        copyFileSpy.mockRestore();
+      }
+    });
+  });
+
+  it("isolates heartbeat transcript writes for CLI providers too", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const appendedText = "cli heartbeat transcript write";
+      state.runCliAgentMock.mockImplementationOnce(async (params: { sessionFile?: string }) => {
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        runOverrides: {
+          sessionFile,
+          provider: "claude-cli",
+          model: "sonnet",
+        },
+      });
+
+      await run();
+
+      const liveRaw = await fs.readFile(sessionFile, "utf-8");
+      expect(liveRaw).toBe(seeded);
+      expect(liveRaw).not.toContain(appendedText);
+
+      const cliCall = state.runCliAgentMock.mock.calls.at(-1)?.[0] as
+        | { sessionFile?: string }
+        | undefined;
+      expect(cliCall?.sessionFile).toBeDefined();
+      expect(cliCall?.sessionFile).not.toBe(sessionFile);
+      expect(await pathExists(String(cliCall?.sessionFile))).toBe(false);
+    });
   });
 });
 
