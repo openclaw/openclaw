@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -517,6 +518,88 @@ describe("agentCommand", () => {
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
       expect(matching).toHaveLength(1);
+    });
+  });
+
+  it("emits model.usage diagnostics for non-interactive background runs with nonzero usage", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      configSpy.mockReturnValue({
+        diagnostics: { enabled: true },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "usage-aware reply" }],
+        meta: {
+          durationMs: 42,
+          agentMeta: {
+            sessionId: "session-bg-usage",
+            provider: "openai",
+            model: "gpt-5.2",
+            usage: {
+              input: 120,
+              output: 33,
+              cacheRead: 10,
+              cacheWrite: 2,
+              total: 165,
+            },
+            lastCallUsage: {
+              input: 120,
+              output: 33,
+              total: 153,
+            },
+          },
+        },
+      } as never);
+
+      const events: Array<{ type: string; [key: string]: unknown }> = [];
+      resetDiagnosticEventsForTest();
+      const stop = onDiagnosticEvent((evt) => {
+        events.push(evt as { type: string; [key: string]: unknown });
+      });
+
+      try {
+        await agentCommand(
+          {
+            message: "check usage telemetry",
+            sessionKey: "agent:main:subagent:usage-telemetry-test",
+          },
+          runtime,
+        );
+      } finally {
+        stop();
+      }
+
+      expect(events.filter((evt) => evt.type === "model.usage")).toEqual([
+        expect.objectContaining({
+          type: "model.usage",
+          sessionKey: "agent:main:subagent:usage-telemetry-test",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: expect.objectContaining({
+            input: 120,
+            output: 33,
+            cacheRead: 10,
+            cacheWrite: 2,
+            total: 165,
+          }),
+          lastCallUsage: expect.objectContaining({
+            input: 120,
+            output: 33,
+            total: 153,
+          }),
+        }),
+      ]);
+
+      resetDiagnosticEventsForTest();
     });
   });
 
