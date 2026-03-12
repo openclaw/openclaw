@@ -34,6 +34,21 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  // [HARDENED] mode=none disables authentication entirely — flag as dangerous.
+  if (cfg.gateway?.auth?.mode === "none") {
+    enabledFlags.push("gateway.auth.mode=none (authentication fully disabled)");
+  }
+  // [HARDENED] trusted-proxy with an empty allowUsers list accepts ALL proxy users.
+  if (
+    cfg.gateway?.auth?.mode === "trusted-proxy" &&
+    Array.isArray(cfg.gateway?.auth?.trustedProxy?.allowUsers) &&
+    cfg.gateway.auth.trustedProxy.allowUsers.length === 0
+  ) {
+    enabledFlags.push(
+      "gateway.auth.trustedProxy.allowUsers=[] (all proxy-authenticated users accepted)",
+    );
+  }
+
 
   const pluginEntries = cfg.plugins?.entries;
   if (!isRecord(pluginEntries)) {
@@ -77,5 +92,5 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
     }
   }
 
-  return enabledFlags;
+==  return enabledFlags;
 }
