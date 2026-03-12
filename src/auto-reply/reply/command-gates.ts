@@ -1,6 +1,7 @@
 import type { CommandFlagKey } from "../../config/commands.js";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import { logVerbose } from "../../globals.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
@@ -13,7 +14,7 @@ export function rejectUnauthorizedCommand(
     return null;
   }
   logVerbose(
-    `Ignoring ${commandLabel} from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
   return { shouldContinue: false };
 }
@@ -26,7 +27,7 @@ export function rejectNonOwnerCommand(
     return null;
   }
   logVerbose(
-    `Ignoring ${commandLabel} from non-owner sender: ${params.command.senderId || "<unknown>"}`,
+    `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
   return { shouldContinue: false };
 }
