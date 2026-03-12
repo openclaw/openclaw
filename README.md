@@ -18,7 +18,28 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-> **Security Note:** This fork includes proper proxy-aware origin validation for reverse proxy deployments (Tailscale, Nginx, Docker, Cloudflare, etc.). The upstream "security hardening" (GHSA-5wcw-8jjv-m286) only removes a bypass — it does NOT handle X-Forwarded-Host, cross-validation, or trusted proxy gating. Use this fork if you run OpenClaw behind a reverse proxy.
+---
+
+## Why Use This Fork?
+
+**v2026.3.11 of the upstream release contains an incomplete origin validation fix that breaks reverse proxy deployments.**
+
+The upstream "security hardening" (GHSA-5wcw-8jjv-m286) only removes a bypass — it does NOT handle X-Forwarded-Host, cross-validation, or trusted proxy gating. This means:
+
+- Running OpenClaw behind Tailscale, Nginx, Docker, Cloudflare, or any reverse proxy may result in broken connections or insecure configurations
+- The fix claims to handle proxies ("regardless of proxy headers") but provides no actual proxy support
+
+**This fork includes the complete proxy-aware infrastructure (originally PR #35109) to resolve the issue securely:**
+
+- X-Forwarded-Host header parsing with comma-separated chain support
+- Cross-validation between Origin and X-Forwarded-Host
+- Trusted proxy gating (RFC 7239 compliance)
+- IPv6 support with bracket notation handling
+- Port normalization (:443, :80 stripping)
+
+Use this fork if you run OpenClaw behind a reverse proxy.
+
+---
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
