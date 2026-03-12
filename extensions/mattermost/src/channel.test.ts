@@ -355,6 +355,29 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("uses threadId as fallback when replyToId is absent", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+
+      await sendText({
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+        threadId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
   });
 
   describe("config", () => {

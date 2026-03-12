@@ -41,6 +41,12 @@ const acpMocks = vi.hoisted(() => ({
 const sessionBindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
+const sessionStoreMocks = vi.hoisted(() => ({
+  currentEntry: undefined as Record<string, unknown> | undefined,
+  loadSessionStore: vi.fn(() => ({})),
+  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -77,9 +83,16 @@ vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
       channel &&
-      ["telegram", "slack", "discord", "signal", "imessage", "whatsapp", "feishu"].includes(
-        channel,
-      ),
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+        "mattermost",
+      ].includes(channel),
     ),
   routeReply: mocks.routeReply,
 }));
@@ -99,6 +112,11 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+}));
+vi.mock("../../config/sessions.js", () => ({
+  loadSessionStore: sessionStoreMocks.loadSessionStore,
+  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -228,6 +246,10 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.requireAcpRuntimeBackend.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
+    sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionStore.mockClear();
+    sessionStoreMocks.resolveStorePath.mockClear();
+    sessionStoreMocks.resolveSessionStoreEntry.mockClear();
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -289,6 +311,43 @@ describe("dispatchReplyFromConfig", () => {
         threadId: 123,
         isGroup: true,
         groupId: "telegram:999",
+      }),
+    );
+  });
+
+  it("falls back to session deliveryContext threadId when current ctx has no MessageThreadId", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        accountId: "default",
+        threadId: "post-root",
+      },
+      lastThreadId: "post-root",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:mattermost:channel:CHAN1:thread:post-root",
+      AccountId: "default",
+      MessageThreadId: undefined,
+      OriginatingChannel: "mattermost",
+      OriginatingTo: "channel:CHAN1",
+      ExplicitDeliverRoute: true,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        threadId: "post-root",
       }),
     );
   });

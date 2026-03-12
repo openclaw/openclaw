@@ -149,7 +149,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const resolvedReplyToId =
     replyToId ??
-    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+    ((channelId === "slack" || channelId === "mattermost") && threadId != null && threadId !== ""
+      ? String(threadId)
+      : undefined);
   const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
 
   try {
