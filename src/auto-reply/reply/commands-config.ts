@@ -22,7 +22,9 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
@@ -42,6 +44,12 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const unauthorized = rejectUnauthorizedCommand(params, "/config");
   if (unauthorized) {
     return unauthorized;
+  }
+  const allowInternalReadOnlyShow =
+    configCommand.action === "show" && isInternalMessageChannel(params.command.channel);
+  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/config");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/config",
@@ -196,6 +204,10 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
   const unauthorized = rejectUnauthorizedCommand(params, "/debug");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/debug");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/debug",
