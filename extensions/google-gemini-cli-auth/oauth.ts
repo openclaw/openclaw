@@ -153,8 +153,9 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
     const packageRoot = dirname(geminiCliPackageJson);
     candidates.unshift(dirname(dirname(dirname(packageRoot)))); // for sibling dependencies (global npm/pnpm)
     candidates.unshift(packageRoot); // for nested dependencies (prioritize this)
-  } catch {
-    // ignore
+  } catch (err) {
+    // Best-effort discovery step. Node.js native resolution may fail in certain environments.
+    // If it fails, we intentionally ignore the error and fall back to the existing heuristic paths below.
   }
 
   const deduped: string[] = [];
