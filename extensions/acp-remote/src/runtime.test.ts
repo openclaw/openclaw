@@ -17,6 +17,18 @@ type CapturedRequest = {
   request: RpcRequest;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readMetaValue(params: Record<string, unknown> | undefined, key: string): unknown {
+  const meta = params?._meta;
+  if (!isRecord(meta)) {
+    return undefined;
+  }
+  return meta[key];
+}
+
 class MockAcpRemoteGateway {
   private readonly server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -131,7 +143,7 @@ class MockAcpRemoteGateway {
     }
 
     if (request.method === "session/new") {
-      const sessionId = String(request.params?._meta?.openclawSessionId ?? "");
+      const sessionId = String(readMetaValue(request.params, "openclawSessionId") ?? "");
       const cwd =
         typeof request.params?.cwd === "string" && request.params.cwd.trim()
           ? request.params.cwd.trim()
@@ -234,7 +246,9 @@ class MockAcpRemoteGateway {
         Array.isArray(prompt) && prompt[0] && typeof prompt[0] === "object"
           ? String((prompt[0] as { text?: unknown }).text ?? "")
           : "";
-      const requestId = String(request.params?._meta?.openclawRequestId ?? request.id ?? "");
+      const requestId = String(
+        readMetaValue(request.params, "openclawRequestId") ?? request.id ?? "",
+      );
       const attempt = (this.promptAttempts.get(requestId) ?? 0) + 1;
       this.promptAttempts.set(requestId, attempt);
 

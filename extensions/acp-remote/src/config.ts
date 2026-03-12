@@ -47,6 +47,10 @@ function isStringMap(value: unknown): value is Record<string, string> {
   return Object.values(value).every((entry) => typeof entry === "string");
 }
 
+function normalizeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function parseAcpRemotePluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
@@ -94,28 +98,26 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "headers must be an object of string values" };
   }
 
-  const timeoutSeconds = value.timeoutSeconds;
-  if (
-    timeoutSeconds !== undefined &&
-    (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
-  ) {
+  const timeoutSeconds = normalizeFiniteNumber(value.timeoutSeconds);
+  if (value.timeoutSeconds !== undefined && (timeoutSeconds === undefined || timeoutSeconds <= 0)) {
     return { ok: false, message: "timeoutSeconds must be a positive number" };
   }
 
-  const retryDelayMs = value.retryDelayMs;
-  if (
-    retryDelayMs !== undefined &&
-    (typeof retryDelayMs !== "number" || !Number.isFinite(retryDelayMs) || retryDelayMs < 0)
-  ) {
+  const retryDelayMs = normalizeFiniteNumber(value.retryDelayMs);
+  if (value.retryDelayMs !== undefined && (retryDelayMs === undefined || retryDelayMs < 0)) {
     return { ok: false, message: "retryDelayMs must be a non-negative number" };
   }
 
-  const protocolVersion = value.protocolVersion;
-  if (
-    protocolVersion !== undefined &&
-    (!Number.isInteger(protocolVersion) || protocolVersion < 1 || protocolVersion > 65_535)
-  ) {
-    return { ok: false, message: "protocolVersion must be an integer between 1 and 65535" };
+  const protocolVersion = normalizeFiniteNumber(value.protocolVersion);
+  if (value.protocolVersion !== undefined) {
+    if (
+      protocolVersion === undefined ||
+      !Number.isInteger(protocolVersion) ||
+      protocolVersion < 1 ||
+      protocolVersion > 65_535
+    ) {
+      return { ok: false, message: "protocolVersion must be an integer between 1 and 65535" };
+    }
   }
 
   return {
@@ -124,9 +126,9 @@ function parseAcpRemotePluginConfig(value: unknown): ParseResult {
       url,
       defaultCwd,
       headers: headers as Record<string, string> | undefined,
-      timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
-      retryDelayMs: typeof retryDelayMs === "number" ? retryDelayMs : undefined,
-      protocolVersion: typeof protocolVersion === "number" ? protocolVersion : undefined,
+      timeoutSeconds,
+      retryDelayMs,
+      protocolVersion,
     },
   };
 }
