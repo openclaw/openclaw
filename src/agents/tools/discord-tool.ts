@@ -56,10 +56,8 @@ export function createDiscordTool(options?: {
     parameters: DiscordToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = params.action;
-      const { action: _action, ...actionParams } = params;
 
-      if (!action || typeof action !== "string") {
+      if (!params.action || typeof params.action !== "string") {
         return jsonResult({
           ok: false,
           error:
@@ -69,15 +67,15 @@ export function createDiscordTool(options?: {
 
       try {
         // Resolve channel ID if provided as a raw ID
-        if (actionParams.channelId && typeof actionParams.channelId === "string") {
+        if (params.channelId && typeof params.channelId === "string") {
           try {
-            actionParams.channelId = resolveDiscordChannelId(actionParams.channelId);
+            params.channelId = resolveDiscordChannelId(params.channelId);
           } catch {
             // If resolution fails, pass through as-is and let the action handler validate
           }
         }
 
-        const result = await handleDiscordAction(actionParams as Record<string, unknown>, cfg, {
+        const result = await handleDiscordAction(params, cfg, {
           mediaLocalRoots: undefined,
         });
 
