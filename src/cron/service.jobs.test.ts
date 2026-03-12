@@ -70,6 +70,22 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it("clears reuseSession when switching to main session", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-reuse-switch",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+      },
+      { reuseSession: true },
+    );
+
+    expect(() => applyJobPatch(job, switchToMainPatch())).not.toThrow();
+    expect(job.sessionTarget).toBe("main");
+    expect(job.reuseSession).toBeUndefined();
+  });
+
   it("maps legacy payload delivery updates onto delivery", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",

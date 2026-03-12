@@ -573,12 +573,6 @@ export function applyJobPatch(
   opts?: { defaultAgentId?: string },
 ) {
   const nextJob = structuredClone(job);
-  const nextReuseSession =
-    "reuseSession" in patch
-      ? patch.reuseSession === true
-        ? true
-        : undefined
-      : nextJob.reuseSession;
   if ("name" in patch) {
     nextJob.name = normalizeRequiredName(patch.name);
   }
@@ -658,6 +652,14 @@ export function applyJobPatch(
       (patch as { sessionKey?: unknown }).sessionKey,
     );
   }
+  const nextReuseSession =
+    "reuseSession" in patch
+      ? patch.reuseSession === true
+        ? true
+        : undefined
+      : nextJob.sessionTarget === "isolated"
+        ? nextJob.reuseSession
+        : undefined;
   nextJob.reuseSession = nextReuseSession;
   assertSupportedJobSpec(nextJob);
   assertSessionReuseSupport(nextJob);
