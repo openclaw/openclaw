@@ -408,6 +408,10 @@ export async function dispatchReplyFromConfig(params: {
     // isn't left wondering whether their message was received.
     // Only inject the default handler when typing is active and the caller
     // hasn't supplied their own handler.
+    // Track the in-flight notice send so the final-reply loop can await it,
+    // preventing a message-ordering inversion on cross-channel routed flows
+    // when the agent finishes very shortly after the TTL fires.
+    let ttlNoticePromise: Promise<void> | undefined;
     const onTypingTtlExpired =
       !typing.suppressTyping && !params.replyOptions?.onTypingTtlExpired
         ? () => {
@@ -415,7 +419,7 @@ export async function dispatchReplyFromConfig(params: {
               text: "⏳ Still working on it, this might take a little while longer…",
             };
             if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-              void sendPayloadAsync(noticePayload);
+              ttlNoticePromise = sendPayloadAsync(noticePayload);
             } else {
               dispatcher.sendBlockReply(noticePayload);
             }
@@ -514,6 +518,13 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+
+    // Ensure the TTL notice has been delivered before we send the final reply.
+    // This preserves message ordering on cross-channel routed flows where the
+    // notice was fire-and-started (not fire-and-forgotten) above.
+    if (ttlNoticePromise) {
+      await ttlNoticePromise;
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;

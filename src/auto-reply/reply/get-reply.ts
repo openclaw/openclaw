@@ -119,7 +119,7 @@ export async function getReplyFromConfig(
     onCleanup: opts?.onTypingCleanup,
     onTtlExpired: opts?.onTypingTtlExpired
       ? () => {
-          void opts.onTypingTtlExpired?.();
+          void opts.onTypingTtlExpired();
         }
       : undefined,
     typingIntervalSeconds,
