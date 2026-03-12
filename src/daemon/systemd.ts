@@ -20,6 +20,7 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceRestartResult,
 } from "./service-types.js";
 import {
   enableSystemdUserLinger,
@@ -579,7 +580,7 @@ export async function restartSystemdService({
   stdout,
   env,
   signal,
-}: GatewayServiceControlArgs): Promise<void> {
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await runSystemdServiceAction({
     stdout,
     env,
@@ -587,6 +588,7 @@ export async function restartSystemdService({
     action: "restart",
     label: "Restarted systemd service",
   });
+  return { outcome: "completed" };
 }
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {

@@ -21,6 +21,8 @@ export type GatewayServiceControlArgs = {
   signal?: AbortSignal;
 };
 
+export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
+
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
 };
