@@ -127,6 +127,15 @@ describe("resolveConfigDir", () => {
       await fs.promises.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("expands OPENCLAW_STATE_DIR using the provided env", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_STATE_DIR: "~/state",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
+  });
 });
 
 describe("resolveHomeDir", () => {
@@ -212,6 +221,15 @@ describe("resolveUserPath", () => {
     expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
 
     vi.unstubAllEnvs();
+  });
+
+  it("uses the provided env for tilde expansion", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveUserPath("~/openclaw", env)).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
   });
 
   it("keeps blank paths blank", () => {
