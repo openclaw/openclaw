@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
@@ -7,6 +8,7 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+const log = createSubsystemLogger("agent/embedded");
 
 export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
@@ -30,7 +32,10 @@ export function isEmptyAssistantMessageContent(
   });
 }
 
-function normalizeAssistantReplayContent(content: unknown): AssistantMessage["content"] {
+function normalizeAssistantReplayContent(
+  content: unknown,
+  context?: { label?: string },
+): AssistantMessage["content"] {
   if (Array.isArray(content)) {
     return content as AssistantMessage["content"];
   }
@@ -48,6 +53,12 @@ function normalizeAssistantReplayContent(content: unknown): AssistantMessage["co
     if (typeof record.text === "string") {
       return [{ type: "text", text: record.text }] as AssistantMessage["content"];
     }
+    log.warn("dropping unrecognized assistant replay content object during session sanitization", {
+      label: context?.label,
+      contentKeys: Object.keys(record).slice(0, 8),
+      typeType: typeof record.type,
+      textType: typeof record.text,
+    });
   }
   return [] as AssistantMessage["content"];
 }
@@ -119,7 +130,7 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const normalizedContent = normalizeAssistantReplayContent(assistantMsg.content);
+      const normalizedContent = normalizeAssistantReplayContent(assistantMsg.content, { label });
       const normalizedAssistantMsg =
         normalizedContent === assistantMsg.content
           ? assistantMsg

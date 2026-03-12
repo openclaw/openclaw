@@ -306,6 +306,42 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(out[0].content).toEqual([{ type: "text", text: "legacy assistant text" }]);
     }
   });
+  it("normalizes a single assistant object block into an array", async () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: { type: "text", text: "legacy assistant block" },
+        stopReason: "stop",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    if (out[0]?.role === "assistant") {
+      expect(out[0].content).toEqual([{ type: "text", text: "legacy assistant block" }]);
+    }
+  });
+  it("normalizes unrecognized assistant object content to an empty array", async () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: { type: 42, payload: "unexpected" },
+        stopReason: "error",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    if (out[0]?.role === "assistant") {
+      expect(out[0].content).toEqual([]);
+    }
+  });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
