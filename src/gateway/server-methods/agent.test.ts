@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  clearPendingSpawnedWorkspaceOverride,
+  setPendingSpawnedWorkspaceOverride,
+} from "../spawned-workspace-overrides.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -405,22 +409,8 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("only forwards workspaceDir for spawned subagent runs", async () => {
+  it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "normal run",
-        sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/ignored",
-        idempotencyKey: "workspace-ignored",
-      },
-      { reqId: "workspace-ignored-1" },
-    );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const normalCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
-    expect(normalCall.workspaceDir).toBeUndefined();
     mocks.agentCommand.mockClear();
 
     await invokeAgent(
@@ -428,14 +418,39 @@ describe("gateway agent handler", () => {
         message: "spawned run",
         sessionKey: "agent:main:main",
         spawnedBy: "agent:main:subagent:parent",
-        workspaceDir: "/tmp/inherited",
-        idempotencyKey: "workspace-forwarded",
+        workspaceDir: "/tmp/injected",
+        idempotencyKey: "workspace-rejected",
       },
-      { reqId: "workspace-forwarded-1" },
+      { reqId: "workspace-rejected-1" },
     );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
-    expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("only forwards workspaceDir for internally seeded spawned subagent runs", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({ spawnedBy: "agent:main:subagent:parent" });
+    mocks.agentCommand.mockClear();
+    setPendingSpawnedWorkspaceOverride({
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/inherited",
+    });
+
+    try {
+      await invokeAgent(
+        {
+          message: "spawned run",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "workspace-forwarded",
+        },
+        { reqId: "workspace-forwarded-1" },
+      );
+      await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+      expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
+    } finally {
+      clearPendingSpawnedWorkspaceOverride("agent:main:main");
+    }
   });
 
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {

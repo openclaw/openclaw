@@ -109,8 +109,12 @@ describe("sessions_spawn depth + child limits", () => {
     const calls = callGatewayMock.mock.calls.map(
       (call) => call[0] as { method?: string; params?: Record<string, unknown> },
     );
-    const agentCall = calls.find((entry) => entry.method === "agent");
-    expect(agentCall?.params?.spawnedBy).toBe("agent:main:subagent:parent");
+    const spawnedByPatch = calls.find(
+      (entry) =>
+        entry.method === "sessions.patch" &&
+        entry.params?.spawnedBy === "agent:main:subagent:parent",
+    );
+    expect(spawnedByPatch?.params?.key).toMatch(/^agent:main:subagent:/);
 
     const spawnDepthPatch = calls.find(
       (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,

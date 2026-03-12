@@ -4,6 +4,10 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  clearPendingSpawnedWorkspaceOverride,
+  setPendingSpawnedWorkspaceOverride,
+} from "../gateway/spawned-workspace-overrides.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isValidAgentId,
@@ -561,10 +565,29 @@ export async function spawnSubagentDirect(
       explicitWorkspaceDir: toolSpawnMetadata.workspaceDir,
     }),
   });
+  const spawnLineagePatchError = await patchChildSession({
+    spawnedBy: spawnedByKey,
+  });
+  if (spawnLineagePatchError) {
+    return {
+      status: "error",
+      error: spawnLineagePatchError,
+      childSessionKey,
+    };
+  }
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  setPendingSpawnedWorkspaceOverride({
+    sessionKey: childSessionKey,
+    workspaceDir: spawnedMetadata.workspaceDir,
+  });
   try {
+    const {
+      spawnedBy: _spawnedBy,
+      workspaceDir: _workspaceDir,
+      ...publicSpawnedMetadata
+    } = spawnedMetadata;
     const response = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
@@ -581,7 +604,7 @@ export async function spawnSubagentDirect(
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
-        ...spawnedMetadata,
+        ...publicSpawnedMetadata,
       },
       timeoutMs: 10_000,
     });
@@ -589,6 +612,7 @@ export async function spawnSubagentDirect(
       childRunId = response.runId;
     }
   } catch (err) {
+    clearPendingSpawnedWorkspaceOverride(childSessionKey);
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
@@ -646,6 +670,8 @@ export async function spawnSubagentDirect(
       childSessionKey,
       runId: childRunId,
     };
+  } finally {
+    clearPendingSpawnedWorkspaceOverride(childSessionKey);
   }
 
   try {
