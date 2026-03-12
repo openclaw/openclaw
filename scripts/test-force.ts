@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
+import { buildPnpmInvocation, resolvePnpmRunnerOrThrow } from "./package-runner.js";
 
 const DEFAULT_PORT = 18789;
 
@@ -29,12 +30,14 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync("pnpm", ["vitest", "run"], {
+  const invocation = buildPnpmInvocation(resolvePnpmRunnerOrThrow(), ["vitest", "run"]);
+  const result = spawnSync(invocation.command, invocation.args, {
     stdio: "inherit",
     env: {
       ...process.env,
       OPENCLAW_GATEWAY_LOCK: isolatedLock,
     },
+    shell: invocation.shell,
   });
   if (result.error) {
     console.error(`pnpm test failed to start: ${String(result.error)}`);

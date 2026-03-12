@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildPnpmInvocation, resolvePnpmRunnerOrThrow } from "./package-runner.js";
 
 function parseArgs(argv) {
   const args = {
@@ -42,14 +43,20 @@ const reportPath =
   opts.reportPath || path.join(os.tmpdir(), `openclaw-vitest-hotspots-${Date.now()}.json`);
 
 if (!(opts.reportPath && fs.existsSync(reportPath))) {
-  const run = spawnSync(
-    "pnpm",
-    ["vitest", "run", "--config", opts.config, "--reporter=json", "--outputFile", reportPath],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
+  const invocation = buildPnpmInvocation(resolvePnpmRunnerOrThrow(), [
+    "vitest",
+    "run",
+    "--config",
+    opts.config,
+    "--reporter=json",
+    "--outputFile",
+    reportPath,
+  ]);
+  const run = spawnSync(invocation.command, invocation.args, {
+    stdio: "inherit",
+    env: process.env,
+    shell: invocation.shell,
+  });
 
   if (run.status !== 0) {
     process.exit(run.status ?? 1);

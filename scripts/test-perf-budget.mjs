@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildPnpmInvocation, resolvePnpmRunnerOrThrow } from "./package-runner.js";
 
 function readEnvNumber(name) {
   const raw = process.env[name]?.trim();
@@ -60,7 +61,7 @@ function formatMs(ms) {
 
 const opts = parseArgs(process.argv.slice(2));
 const reportPath = path.join(os.tmpdir(), `openclaw-vitest-perf-${Date.now()}.json`);
-const cmd = [
+const invocation = buildPnpmInvocation(resolvePnpmRunnerOrThrow(), [
   "vitest",
   "run",
   "--config",
@@ -68,12 +69,13 @@ const cmd = [
   "--reporter=json",
   "--outputFile",
   reportPath,
-];
+]);
 
 const startedAt = process.hrtime.bigint();
-const run = spawnSync("pnpm", cmd, {
+const run = spawnSync(invocation.command, invocation.args, {
   stdio: "inherit",
   env: process.env,
+  shell: invocation.shell,
 });
 const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
 

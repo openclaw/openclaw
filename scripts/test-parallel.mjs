@@ -1,10 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
-
-// On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
-// (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
-const pnpm = "pnpm";
+import { buildPnpmInvocation, resolvePnpmRunnerOrThrow } from "./package-runner.js";
 
 const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
@@ -94,6 +91,14 @@ const unitIsolatedFilesRaw = [
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
+const pnpmRunner = (() => {
+  try {
+    return resolvePnpmRunnerOrThrow();
+  } catch (err) {
+    console.error(`[test-parallel] ${String(err)}`);
+    process.exit(1);
+  }
+})();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isMacOS = process.platform === "darwin" || process.env.RUNNER_OS === "macOS";
 const isWindows = process.platform === "win32" || process.env.RUNNER_OS === "Windows";
@@ -376,11 +381,12 @@ const runOnce = (entry, extraArgs = []) =>
       ? `${nextNodeOptions} ${heapFlag}`.trim()
       : nextNodeOptions;
     let child;
+    const invocation = buildPnpmInvocation(pnpmRunner, args);
     try {
-      child = spawn(pnpm, args, {
+      child = spawn(invocation.command, invocation.args, {
         stdio: "inherit",
         env: { ...process.env, VITEST_GROUP: entry.name, NODE_OPTIONS: resolvedNodeOptions },
-        shell: isWindows,
+        shell: invocation.shell,
       });
     } catch (err) {
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
@@ -458,13 +464,14 @@ if (passthroughArgs.length > 0) {
     (acc, flag) => (acc.includes(flag) ? acc : `${acc} ${flag}`.trim()),
     nodeOptions,
   );
+  const invocation = buildPnpmInvocation(pnpmRunner, args);
   const code = await new Promise((resolve) => {
     let child;
     try {
-      child = spawn(pnpm, args, {
+      child = spawn(invocation.command, invocation.args, {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: nextNodeOptions },
-        shell: isWindows,
+        shell: invocation.shell,
       });
     } catch (err) {
       console.error(`[test-parallel] spawn failed: ${String(err)}`);
