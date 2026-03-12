@@ -59,6 +59,7 @@ export function buildContextBrokerPrependContext(
 
   if (
     params.intents.includes("data-integrity-investigation") ||
+    params.intents.includes("rewards-provider-incident") ||
     params.intents.includes("postgres-internals") ||
     params.intents.includes("read-consistency-incident")
   ) {
@@ -71,6 +72,19 @@ export function buildContextBrokerPrependContext(
     );
     lines.push(
       "- treat seeded incident docs as priors, not proof; keep multiple plausible hypotheses until live evidence narrows them",
+    );
+  }
+
+  if (params.intents.includes("rewards-provider-incident")) {
+    lines.push("Rewards/provider checks:");
+    lines.push(
+      "- after DB evidence, verify upstream provider/API response, recent artifacts/workflows, and the exact consuming code path before naming root cause",
+    );
+    lines.push(
+      "- separate primary trigger, local amplifier, and stale-data contributor in the answer",
+    );
+    lines.push(
+      "- do not recommend or open a PR until you can name the repo/path that changes the active code path",
     );
   }
 

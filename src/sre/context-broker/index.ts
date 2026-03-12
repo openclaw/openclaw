@@ -576,22 +576,26 @@ export async function runContextBroker(input: ContextBrokerInput): Promise<Conte
   const memoryIntents = new Set<ContextBrokerIntent>([
     "prior-work",
     "data-integrity-investigation",
+    "rewards-provider-incident",
     "postgres-internals",
     "read-consistency-incident",
   ]);
   const dossierIntents = new Set<ContextBrokerIntent>([
     "incident-follow-up",
     "data-integrity-investigation",
+    "rewards-provider-incident",
     "postgres-internals",
     "read-consistency-incident",
   ]);
   const seedKnowledgeIntents = new Set<ContextBrokerIntent>([
     "incident-follow-up",
     "data-integrity-investigation",
+    "rewards-provider-incident",
   ]);
   const relationshipIntents = new Set<ContextBrokerIntent>([
     "incident-follow-up",
     "data-integrity-investigation",
+    "rewards-provider-incident",
     "postgres-internals",
     "repo-deploy-ownership",
     "read-consistency-incident",

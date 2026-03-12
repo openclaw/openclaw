@@ -30,6 +30,36 @@ describe("classifyContextBrokerIntent", () => {
     expect(intents).toContain("postgres-internals");
   });
 
+  it("detects rewards-provider incident prompts", () => {
+    const intents = classifyContextBrokerIntent(
+      "Rewards APR off in blue-api, Merkl campaign TVL looks wrong, inspect the provider data before opening a PR",
+    ).intents;
+    expect(intents).toContain("rewards-provider-incident");
+    expect(intents).toContain("data-integrity-investigation");
+  });
+
+  it("detects rewards-provider via upstream provider wording", () => {
+    const intents = classifyContextBrokerIntent(
+      "upstream provider campaign apr looks wrong for this reward program",
+    ).intents;
+    expect(intents).toContain("rewards-provider-incident");
+  });
+
+  it("detects rewards-provider via domain-specific identifiers", () => {
+    const intents = classifyContextBrokerIntent(
+      "yearly_supply_tokens value looks wrong on campaigns.morpho.org",
+    ).intents;
+    expect(intents).toContain("rewards-provider-incident");
+  });
+
+  it("does not classify generic vault APY regressions as provider incidents", () => {
+    const intents = classifyContextBrokerIntent(
+      "vault apy dropped after db migration, negative apy spike, check pg_stat_activity",
+    ).intents;
+    expect(intents).not.toContain("rewards-provider-incident");
+    expect(intents).toContain("data-integrity-investigation");
+  });
+
   it("detects title-only integrator incident prompts", () => {
     const intents = classifyContextBrokerIntent(
       "spike in APY from API reported by several integrators",

@@ -29,6 +29,9 @@ Runtime model: the container assumes a shared repo root. Start with
   Shared-root path model for the merged container and local dev.
 - `references/db-data-incident-playbook.md`
   DB-first investigation order for stale/wrong-value and replica incidents.
+- `references/rewards-provider-incident-playbook.md`
+  Rewards/APR incidents where upstream provider data, campaign TVL, or consumer
+  code-path fanout may be the trigger.
 - `notion-postmortem-index.md`
   First-party postmortem index from Notion workspace sources.
 - `morpho-infra/docs/operations/incident-response.md`
@@ -96,6 +99,9 @@ investigation.
 - Wrong values / stale values / replica drift:
   Start `references/db-data-incident-playbook.md`, then `morpho-infra/docs/operations/kubernetes-database-ops.md`,
   then relevant incident dossier.
+- Rewards APR / campaign TVL / provider anomalies:
+  Start `references/db-data-incident-playbook.md`, then `references/rewards-provider-incident-playbook.md`,
+  then the relevant rewards incident dossier.
 
 ## Knowledge Gaps To Fill Over Time
 

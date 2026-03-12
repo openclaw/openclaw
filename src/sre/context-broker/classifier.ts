@@ -2,6 +2,7 @@ export const CONTEXT_BROKER_INTENT_VALUES = [
   "prior-work",
   "incident-follow-up",
   "data-integrity-investigation",
+  "rewards-provider-incident",
   "postgres-internals",
   "repo-deploy-ownership",
   "read-consistency-incident",
@@ -46,7 +47,20 @@ const INTENT_RULES: Array<{
       /\bspike\b.*\bapy\b/i,
       /\bapy\b.*\bspike\b/i,
       /\bapy jumps?\b/i,
+      // "off" variants co-trigger data-integrity so these symptoms land in the
+      // classifier-level DB-first path. The standalone rewards-provider intent
+      // also gets DB-first injection via inject.ts.
+      /\b(rewards apr off|reward apr off|vault apy off|vault apr off)\b/i,
       /\b(db table|database row|data row|wrong row|stale row|missing row|query the db|query the database)\b/i,
+    ],
+  },
+  {
+    intent: "rewards-provider-incident",
+    reason: "prompt references rewards, provider campaigns, or upstream APR/TVL anomalies",
+    patterns: [
+      /\b(merkl|reward program|rewards apr|reward apr|reward anomaly|campaign tvl)\b/i,
+      /\b(campaign apr|upstream provider|provider data)\b/i,
+      /\b(yearly_supply_tokens|campaigns\.morpho\.org|campaign blacklist)\b/i,
     ],
   },
   {

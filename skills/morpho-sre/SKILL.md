@@ -10,6 +10,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 - Diagnose first. Never mutate cluster resources automatically.
 - Auto-remediation pull requests are allowed when confidence gate passes (`AUTO_PR_*`) and evidence is attached.
+- Before recommending or opening a PR, prove the target repo/path changes the active code path. If you cannot name the path, do not open the PR.
 - Default scope: `dev-morpho` + `monitoring` namespace.
 - Hard preflight before diagnosis:
   - verify binaries and PATH first: `command -v kubectl aws jq git gh`
@@ -35,6 +36,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `repo-root-model.md`
   - relevant incident dossier / postmortem index
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
+- If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
 - Slack file delivery: when user asks to "send the file/csv directly", emit `MEDIA:<url-or-local-path>` in the reply (keep caption in normal text) instead of saying file upload is unavailable.
 - PR body quality: keep PR descriptions concise and reviewable; never paste raw command output/manifests/log dumps (for example `helm template` full output) into PR body.
 - Linear ticket mutation guardrail (Slack threads):
@@ -77,8 +79,12 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   `change-checklist-argocd-sync-wave.md` before risky infra changes.
 - Use `references/db-data-incident-playbook.md` for stale/wrong-value, replica,
   replay-lag, and read-consistency incidents.
+- Use `references/rewards-provider-incident-playbook.md` for rewards APR /
+  campaign TVL incidents where upstream provider data may be the trigger.
 - Use `incident-dossier-template.md` for new incident capture.
 - Use `incident-dossier-blue-api-db-downsizing-2026-02-04.md` for a concrete known failure pattern.
+- Use `incident-dossier-blue-api-rewards-merkl-apr-2026-03-12.md` for the
+  stacked-cause rewards incident pattern.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `wiz-mcp.sh`
@@ -181,6 +187,25 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - include one PG-internal fact
 - Do not conclude from replay/code inspection alone when the live DB path has
   not been checked yet.
+
+## Rewards / Provider Incidents
+
+- Trigger:
+  - rewards APR off
+  - vault APY off with campaign or provider hints
+  - prompts mentioning `Merkl`, campaign TVL, reward programs, `yearly_supply_tokens`, `campaigns.morpho.org`, or campaign blacklist
+- Mandatory order after the DB-first checks in the section above:
+  1. verify one upstream provider/API response
+  2. verify one recent artifact or workflow output if such a collector exists
+  3. verify the exact consuming code path before naming a root cause or proposing a PR
+- Required answer shape:
+  - `primary trigger`
+  - `local amplifier`
+  - `stale-data contributor` when present
+  - one disproved or partial prior theory if the investigation changed direction
+- Auto-PR gate:
+  - do not open a PR unless the reply names the repo/path that changes the active code path
+  - blacklist/config-only PRs are not valid if the live failing path does not consume that blacklist/config
 
 ## Slack BetterStack Alert Intake
 

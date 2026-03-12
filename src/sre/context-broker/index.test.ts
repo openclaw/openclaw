@@ -79,6 +79,27 @@ describe("runContextBroker", () => {
     expect(result.prependContext).toContain("priors, not proof");
   });
 
+  it("injects rewards-provider guidance for Merkl incidents", async () => {
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+        },
+      },
+      prompt:
+        "Rewards APR off in blue-api. Check Merkl campaign TVL and the exact consuming code path before opening a PR.",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.intents).toContain("data-integrity-investigation");
+    expect(result.intents).toContain("rewards-provider-incident");
+    expect(result.prependContext).toContain("DB-first checks:");
+    expect(result.prependContext).toContain("Rewards/provider checks:");
+    expect(result.prependContext).toContain("upstream provider/API response");
+    expect(result.prependContext).toContain("active code path");
+  });
+
   it("returns empty result for ordinary sessions even when enabled", async () => {
     const result = await runContextBroker({
       config: {
@@ -327,6 +348,49 @@ describe("runContextBroker", () => {
     expect(result.prependContext).toContain("Seeded incident docs:");
     expect(result.prependContext).toContain("read-consistency / replica-routing issue");
     expect(result.prependContext).toContain("Ruled out: price, rewards, APY math");
+  });
+
+  it("prefers rewards-provider seed docs for Merkl prompts", async () => {
+    const root = await createStateRoot();
+    const seededDir = path.join(
+      root,
+      "morpho-infra-helm",
+      "charts",
+      "openclaw-sre",
+      "files",
+      "seed-skills",
+    );
+    await fs.mkdir(seededDir, { recursive: true });
+    const playbookPath = path.join(
+      seededDir,
+      "incident-dossier-blue-api-rewards-merkl-apr-2026-03-12.md",
+    );
+    await fs.writeFile(
+      playbookPath,
+      [
+        "# rewards APR off, Merkl campaign TVL suspicious",
+        "",
+        "- Check Merkl API/artifact and consuming code path before calling DB pressure the root cause",
+        "- Separate upstream trigger from local amplifier",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runContextBroker({
+      config: {
+        sre: {
+          contextBroker: { enabled: true },
+          incidentDossier: { enabled: true },
+          repoBootstrap: { rootDir: root },
+        },
+      },
+      prompt: "Rewards APR off, Merkl campaign TVL suspicious",
+      agentId: "sre-runtime",
+    });
+
+    expect(result.intents).toContain("rewards-provider-incident");
+    expect(result.prependContext).toContain(playbookPath);
+    expect(result.prependContext).toContain("Separate upstream trigger from local amplifier");
   });
 
   it("finds seeded incident docs when repo root points at the openclaw-sre checkout", async () => {
