@@ -135,6 +135,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       payload,
       cfg: params.cfg,
       channel: params.ttsChannel,
+      accountId: params.ctx.AccountId,
       kind,
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,
