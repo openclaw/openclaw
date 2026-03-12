@@ -433,6 +433,165 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+const KIMI_FUNCTION_CALLS_BLOCK_RE = /<function_calls\b[^>]*>[\s\S]*?<\/function_calls>/i;
+const KIMI_INVOKE_BLOCK_RE =
+  /<invoke\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/invoke>/i;
+const KIMI_PARAMETER_BLOCK_RE =
+  /<parameter\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/i;
+
+function parseKimiXmlToolCallsFromBlock(block: string): Array<{
+  name: string;
+  arguments: Record<string, string>;
+}> {
+  const invokeRe = new RegExp(KIMI_INVOKE_BLOCK_RE.source, "gi");
+  const parameterRe = new RegExp(KIMI_PARAMETER_BLOCK_RE.source, "gi");
+  const calls: Array<{ name: string; arguments: Record<string, string> }> = [];
+  for (const invokeMatch of block.matchAll(invokeRe)) {
+    const name = decodeHtmlEntities(String(invokeMatch[1] ?? "")).trim();
+    if (!name) {
+      continue;
+    }
+    const args: Record<string, string> = {};
+    const body = String(invokeMatch[2] ?? "");
+    for (const parameterMatch of body.matchAll(parameterRe)) {
+      const key = decodeHtmlEntities(String(parameterMatch[1] ?? "")).trim();
+      if (!key) {
+        continue;
+      }
+      args[key] = decodeHtmlEntities(String(parameterMatch[2] ?? "").trim());
+    }
+    calls.push({ name, arguments: args });
+  }
+  return calls;
+}
+
+function extractKimiXmlToolCallsFromText(text: string):
+  | {
+      textWithoutCalls: string;
+      toolCalls: Array<{ name: string; arguments: Record<string, string> }>;
+    }
+  | undefined {
+  if (!KIMI_FUNCTION_CALLS_BLOCK_RE.test(text) || !KIMI_INVOKE_BLOCK_RE.test(text)) {
+    return undefined;
+  }
+
+  const blockRe = new RegExp(KIMI_FUNCTION_CALLS_BLOCK_RE.source, "gi");
+  const parsedCalls: Array<{ name: string; arguments: Record<string, string> }> = [];
+  let converted = false;
+  const textWithoutCalls = text
+    .replace(blockRe, (match) => {
+      const calls = parseKimiXmlToolCallsFromBlock(match);
+      if (calls.length === 0) {
+        return match;
+      }
+      parsedCalls.push(...calls);
+      converted = true;
+      return "";
+    })
+    .trim();
+
+  if (!converted || parsedCalls.length === 0) {
+    return undefined;
+  }
+  return { textWithoutCalls, toolCalls: parsedCalls };
+}
+
+function normalizeKimiXmlToolCallsInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  let changed = false;
+  const normalizedContent: unknown[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      normalizedContent.push(block);
+      continue;
+    }
+    const textBlock = block as { type?: unknown; text?: unknown };
+    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      normalizedContent.push(block);
+      continue;
+    }
+
+    const parsed = extractKimiXmlToolCallsFromText(textBlock.text);
+    if (!parsed) {
+      normalizedContent.push(block);
+      continue;
+    }
+
+    changed = true;
+    if (parsed.textWithoutCalls) {
+      normalizedContent.push({
+        ...(block as Record<string, unknown>),
+        text: parsed.textWithoutCalls,
+      });
+    }
+    for (const toolCall of parsed.toolCalls) {
+      normalizedContent.push({
+        type: "toolCall",
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      });
+    }
+  }
+
+  if (changed) {
+    (message as { content?: unknown }).content = normalizedContent;
+  }
+}
+
+function wrapStreamNormalizeKimiXmlToolCalls(
+  stream: ReturnType<typeof streamSimple>,
+): ReturnType<typeof streamSimple> {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    normalizeKimiXmlToolCallsInMessage(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { partial?: unknown; message?: unknown };
+            normalizeKimiXmlToolCallsInMessage(event.partial);
+            normalizeKimiXmlToolCallsInMessage(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+  return stream;
+}
+
+export function wrapStreamFnNormalizeKimiXmlToolCalls(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamNormalizeKimiXmlToolCalls(stream),
+      );
+    }
+    return wrapStreamNormalizeKimiXmlToolCalls(maybeStream);
+  };
+}
+
 // ---------------------------------------------------------------------------
 // xAI / Grok: decode HTML entities in tool call arguments
 // ---------------------------------------------------------------------------
@@ -535,6 +694,30 @@ function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
     }
     return wrapStreamDecodeXaiToolCallArguments(maybeStream);
   };
+}
+
+function shouldNormalizeKimiXmlToolCalls(model: {
+  api?: string;
+  provider?: string;
+  baseUrl?: string;
+}): boolean {
+  if (model.api !== "anthropic-messages") {
+    return false;
+  }
+  if (typeof model.provider === "string" && normalizeProviderId(model.provider) === "kimi-coding") {
+    return true;
+  }
+  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(model.baseUrl);
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+    return host.endsWith("kimi.com") && pathname.startsWith("/coding");
+  } catch {
+    return model.baseUrl.toLowerCase().includes("kimi.com/coding");
+  }
 }
 
 export async function resolvePromptBuildHookResult(params: {
@@ -1363,6 +1546,12 @@ export async function runEmbeddedAttempt(
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
+      }
+
+      if (shouldNormalizeKimiXmlToolCalls(params.model)) {
+        activeSession.agent.streamFn = wrapStreamFnNormalizeKimiXmlToolCalls(
+          activeSession.agent.streamFn,
+        );
       }
 
       // Some models emit tool names with surrounding whitespace (e.g. " read ").

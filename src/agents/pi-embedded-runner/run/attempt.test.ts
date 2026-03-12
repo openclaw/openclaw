@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnNormalizeKimiXmlToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -421,6 +422,140 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
+  });
+});
+
+describe("wrapStreamFnNormalizeKimiXmlToolCalls", () => {
+  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
+    result: () => Promise<unknown>;
+    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+  } {
+    return {
+      async result() {
+        return params.resultMessage;
+      },
+      [Symbol.asyncIterator]() {
+        return (async function* () {
+          for (const event of params.events) {
+            yield event;
+          }
+        })();
+      },
+    };
+  }
+
+  async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
+    const wrappedFn = wrapStreamFnNormalizeKimiXmlToolCalls(baseFn as never);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  it("converts kimi XML function_calls text blocks into toolCall blocks", async () => {
+    const xml = `<function_calls>
+  <invoke name="exec">
+    <parameter name="command">cat ~/.openclaw/logs/cron.log</parameter>
+  </invoke>
+</function_calls>`;
+    const event = {
+      partial: { role: "assistant", content: [{ type: "text", text: xml }] },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `I will run this now.\n${xml}\nDone.` }],
+      },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: xml }],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [event],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect((event.partial.content as unknown[])[0]).toEqual({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "cat ~/.openclaw/logs/cron.log" },
+    });
+    expect(event.message.content as unknown[]).toEqual([
+      { type: "text", text: "I will run this now.\n\nDone." },
+      {
+        type: "toolCall",
+        name: "exec",
+        arguments: { command: "cat ~/.openclaw/logs/cron.log" },
+      },
+    ]);
+    expect((result as { content: unknown[] }).content).toEqual([
+      {
+        type: "toolCall",
+        name: "exec",
+        arguments: { command: "cat ~/.openclaw/logs/cron.log" },
+      },
+    ]);
+    expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles multiple invokes and decodes escaped parameter values", async () => {
+    const xml = `<function_calls>
+  <invoke name="exec">
+    <parameter name="command">echo &lt;ok&gt;</parameter>
+  </invoke>
+  <invoke name="read">
+    <parameter name="path">/tmp/a.txt</parameter>
+  </invoke>
+</function_calls>`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: xml }],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    const result = await stream.result();
+
+    expect((result as { content: unknown[] }).content).toEqual([
+      {
+        type: "toolCall",
+        name: "exec",
+        arguments: { command: "echo <ok>" },
+      },
+      {
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/a.txt" },
+      },
+    ]);
+  });
+
+  it("keeps invoke snippets that are not wrapped in function_calls", async () => {
+    const text = `<invoke name="exec"><parameter name="command">ls</parameter></invoke>`;
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    const result = await stream.result();
+
+    expect((result as { content: unknown[] }).content).toEqual([{ type: "text", text }]);
   });
 });
 
