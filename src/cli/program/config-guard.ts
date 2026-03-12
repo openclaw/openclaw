@@ -12,6 +12,7 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "status",
   "probe",
   "health",
+  "diagnostics",
   "discover",
   "call",
   "install",
