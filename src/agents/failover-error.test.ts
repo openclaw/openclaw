@@ -316,12 +316,29 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
+  it("infers overloaded from pretty-printed server_error payloads", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'Codex error: {\n  "type": "error",\n  "error": {\n    "type": "server_error",\n    "message": "An error occurred while processing your request."\n  }\n}',
+      }),
+    ).toBe("overloaded");
+  });
+
   it("infers overloaded from server_error keyword in error messages", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "LLM error server_error: something went wrong",
       }),
     ).toBe("overloaded");
+  });
+
+  it("does not infer overloaded from unrelated server_error mentions", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM error: invalid parameter: server_error mode is not supported",
+      }),
+    ).toBeNull();
   });
 
   it("infers overloaded from OpenAI WebSocket response.failed server_error payloads", () => {

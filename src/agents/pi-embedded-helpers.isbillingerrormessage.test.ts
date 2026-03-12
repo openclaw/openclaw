@@ -829,9 +829,20 @@ describe("classifyFailoverReason", () => {
     ).toBe("overloaded");
     expect(
       classifyFailoverReason(
+        'Codex error: {\n  "type": "error",\n  "error": {\n    "type": "server_error",\n    "message": "An error occurred while processing your request."\n  }\n}',
+      ),
+    ).toBe("overloaded");
+    expect(
+      classifyFailoverReason(
         'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
       ),
     ).toBe("overloaded");
+    expect(classifyFailoverReason("LLM error server_error: something went wrong")).toBe(
+      "overloaded",
+    );
+    expect(
+      classifyFailoverReason("LLM error: invalid parameter: server_error mode is not supported"),
+    ).toBeNull();
   });
   it("keeps oauth refresh failures in auth lane even when payload includes server_error", () => {
     expect(

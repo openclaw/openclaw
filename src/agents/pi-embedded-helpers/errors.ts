@@ -820,6 +820,9 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
+const STREAMING_PROVIDER_SERVER_ERROR_JSON_RE = /"(?:type|code)"\s*:\s*"server_error"/;
+const STREAMING_PROVIDER_SERVER_ERROR_PREFIX_RE =
+  /^(?:llm error|http \d{3}|codex error|openai websocket response failed)(?::)?\s+server_error\b/;
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
@@ -850,11 +853,12 @@ function isStreamingProviderServerError(raw: string): boolean {
     return false;
   }
   const value = raw.toLowerCase();
-  if (value.includes('"type":"server_error"') || value.includes('"code":"server_error"')) {
+  if (STREAMING_PROVIDER_SERVER_ERROR_JSON_RE.test(value)) {
     return true;
   }
-  // Some providers surface the type as flattened text instead of a structured payload.
-  return /\bserver_error\b/.test(value);
+  // Accept the flattened prefix forms we emit ourselves without treating arbitrary
+  // mentions of `server_error` as provider overload signals.
+  return STREAMING_PROVIDER_SERVER_ERROR_PREFIX_RE.test(value);
 }
 
 export function parseImageDimensionError(raw: string): {
