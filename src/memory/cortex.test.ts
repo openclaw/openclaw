@@ -81,6 +81,24 @@ describe("cortex bridge", () => {
     expect(preview.context).toBe("## Cortex Context\n- Python");
   });
 
+  it("reuses a pre-resolved Cortex status for preview without re-probing", async () => {
+    const status = {
+      available: true,
+      workspaceDir: "/tmp/workspace",
+      graphPath: "/tmp/workspace/.cortex/context.json",
+      graphExists: true,
+    } as const;
+    runExec.mockResolvedValueOnce({ stdout: "## Cortex Context\n- Python\n", stderr: "" });
+
+    const preview = await previewCortexContext({
+      workspaceDir: status.workspaceDir,
+      status,
+    });
+
+    expect(preview.context).toBe("## Cortex Context\n- Python");
+    expect(runExec).toHaveBeenCalledTimes(1);
+  });
+
   it("fails preview when graph is missing", async () => {
     runExec.mockResolvedValueOnce({ stdout: "", stderr: "" });
 
@@ -191,6 +209,8 @@ describe("cortex bridge", () => {
   it("ingests high-signal text into the Cortex graph with merge", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-ingest-"));
     const graphPath = path.join(tmpDir, ".cortex", "context.json");
+    await fs.mkdir(path.dirname(graphPath), { recursive: true });
+    await fs.writeFile(graphPath, "{}", "utf8");
     runExec
       .mockResolvedValueOnce({ stdout: "", stderr: "" })
       .mockResolvedValueOnce({ stdout: "", stderr: "" });
@@ -216,5 +236,19 @@ describe("cortex bridge", () => {
       expect.arrayContaining(["extract", "-o", graphPath, "--merge", graphPath]),
       expect.any(Object),
     );
+  });
+
+  it("fails ingest when the Cortex graph is missing", async () => {
+    runExec.mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    await expect(
+      ingestCortexMemoryFromText({
+        workspaceDir: "/tmp/workspace",
+        event: {
+          actor: "user",
+          text: "I prefer concise answers.",
+        },
+      }),
+    ).rejects.toThrow("Cortex graph not found");
   });
 });
