@@ -209,4 +209,152 @@ describe("models-config runtime source snapshot", () => {
       }
     });
   });
+
+  it("keeps source markers when runtime projection is skipped for incompatible top-level shape", async () => {
+    await withTempHome(async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const incompatibleCandidate: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(incompatibleCandidate);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("keeps source header markers when runtime projection is skipped for incompatible top-level shape", async () => {
+    await withTempHome(async () => {
+      const sourceConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions" as const,
+              headers: {
+                Authorization: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+                },
+                "X-Tenant-Token": {
+                  source: "file",
+                  provider: "vault",
+                  id: "/providers/openai/tenantToken",
+                },
+              },
+              models: [],
+            },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const runtimeConfig: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions" as const,
+              headers: {
+                Authorization: "Bearer runtime-openai-token",
+                "X-Tenant-Token": "runtime-tenant-token",
+              },
+              models: [],
+            },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+          },
+        },
+      };
+      const incompatibleCandidate: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions" as const,
+              headers: {
+                Authorization: "Bearer runtime-openai-token",
+                "X-Tenant-Token": "runtime-tenant-token",
+              },
+              models: [],
+            },
+          },
+        },
+      };
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(incompatibleCandidate);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { headers?: Record<string, string> }>;
+        }>();
+        expect(parsed.providers.openai?.headers?.Authorization).toBe(
+          "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+        );
+        expect(parsed.providers.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
 });
