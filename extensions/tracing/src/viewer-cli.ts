@@ -272,7 +272,7 @@ export function renderWaterfall(spans: TraceSpan[]): string[] {
 
   const minStart = Math.min(...spans.map((s) => s.startMs));
   const maxEnd = Math.max(...spans.map((s) => s.endMs ?? s.startMs));
-  const totalDuration = maxEnd - minStart;
+  const totalDuration = maxEnd - minStart || 1;
 
   // Sort by startMs, then by kind priority
   const kindOrder: Record<string, number> = { session: 0, llm_call: 1, tool_call: 2, subagent: 1 };

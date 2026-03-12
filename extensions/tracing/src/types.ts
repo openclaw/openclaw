@@ -19,9 +19,3 @@ export type TraceSpan = {
   tokensIn?: number;
   tokensOut?: number;
 };
-
-export type TracingConfig = {
-  enabled?: boolean;
-  retentionDays?: number;
-  redactToolParams?: boolean;
-};

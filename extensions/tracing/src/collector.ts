@@ -407,5 +407,13 @@ export class TraceCollector {
 
     this.emit(span);
     this.activeSubagents.delete(childKey);
+
+    // Prune parentTraceIds entry for this child to prevent unbounded growth
+    for (const [prefix] of this.parentTraceIds) {
+      if (childKey.startsWith(prefix)) {
+        this.parentTraceIds.delete(prefix);
+        break;
+      }
+    }
   }
 }

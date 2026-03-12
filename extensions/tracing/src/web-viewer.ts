@@ -259,7 +259,6 @@ function toggleGroup(id, header) {
 
 // Call Tree
 function renderCallTree() {
-  const byId = new Map(spans.map(s => [s.spanId, s]));
   const children = new Map();
   for (const s of spans) {
     if (!s.parentSpanId) continue;
@@ -599,8 +598,8 @@ function initGraph(containerId, nodes, links) {
         html += '<div class="tt-row">LLM calls: ' + n.data.llmCalls + '</div>';
         html += '<div class="tt-row">Tool calls: ' + n.data.toolCalls + '</div>';
         html += '<div class="tt-row">Tokens: ' + n.data.tokensIn + ' → ' + n.data.tokensOut + '</div>';
-        if (n.data.models.size) html += '<div class="tt-row">Models: ' + [...n.data.models].join(', ') + '</div>';
-        if (n.data.tools.size) html += '<div class="tt-row">Tools: ' + [...n.data.tools].join(', ') + '</div>';
+        if (n.data.models.size) html += '<div class="tt-row">Models: ' + [...n.data.models].map(esc).join(', ') + '</div>';
+        if (n.data.tools.size) html += '<div class="tt-row">Tools: ' + [...n.data.tools].map(esc).join(', ') + '</div>';
         if (n.data.durationMs) html += '<div class="tt-row">Duration: ' + fmtDur(n.data.durationMs) + '</div>';
       }
       tip.innerHTML = html;
