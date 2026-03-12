@@ -75,4 +75,31 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not flag already-canonical payload kinds", () => {
+    const jobs = [
+      {
+        id: "canonical-agent-turn",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+        },
+      },
+      {
+        id: "canonical-system-event",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "systemEvent",
+          text: "ping",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect((jobs[0]?.payload as Record<string, unknown> | undefined)?.kind).toBe("agentTurn");
+    expect((jobs[1]?.payload as Record<string, unknown> | undefined)?.kind).toBe("systemEvent");
+  });
 });
