@@ -5,6 +5,7 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created]
+  # zizmor: ignore[dangerous-triggers] Uses pull_request_target only for metadata/API operations with pinned actions and no PR head checkout/execution.
   pull_request_target:
     types: [labeled]
 

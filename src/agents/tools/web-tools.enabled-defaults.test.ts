@@ -207,7 +207,7 @@ describe("web_search country and language parameters", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
   });
 
   afterEach(() => {
@@ -333,7 +333,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("uses Perplexity Search API when PERPLEXITY_API_KEY is set", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch();
     const tool = createPerplexitySearchTool();
     const result = await tool?.execute?.("call-1", { query: "test" });
@@ -357,7 +357,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("passes country parameter to Perplexity Search API", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     await tool?.execute?.("call-1", { query: "test", country: "DE" });
@@ -369,18 +369,18 @@ describe("web_search perplexity Search API", () => {
 
   it("uses config API key when provided", async () => {
     const mockFetch = installPerplexitySearchApiFetch([]);
-    const tool = createPerplexitySearchTool({ apiKey: "pplx-config" });
+    const tool = createPerplexitySearchTool({ apiKey: "pplx-config" }); // pragma: allowlist secret
     await tool?.execute?.("call-1", { query: "test" });
 
     expect(mockFetch).toHaveBeenCalled();
     const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
       | Record<string, string>
       | undefined;
-    expect(headers?.Authorization).toBe("Bearer pplx-config");
+    expect(headers?.Authorization).toBe("Bearer pplx-config"); // pragma: allowlist secret
   });
 
   it("passes freshness filter to Perplexity Search API", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     await tool?.execute?.("call-1", { query: "test", freshness: "week" });
@@ -391,7 +391,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("accepts all valid freshness values for Perplexity", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const tool = createPerplexitySearchTool();
 
     for (const freshness of ["day", "week", "month", "year"]) {
@@ -404,7 +404,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("rejects invalid freshness values", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     const result = await tool?.execute?.("call-1", { query: "test", freshness: "yesterday" });
@@ -414,7 +414,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("passes domain filter to Perplexity Search API", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     await tool?.execute?.("call-1", {
@@ -428,7 +428,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("passes language to Perplexity Search API as search_language_filter array", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     await tool?.execute?.("call-1", { query: "test", language: "en" });
@@ -439,7 +439,7 @@ describe("web_search perplexity Search API", () => {
   });
 
   it("passes multiple filters together to Perplexity Search API", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool();
     await tool?.execute?.("call-1", {
@@ -470,7 +470,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
   });
 
   it("routes OPENROUTER_API_KEY through chat completions", async () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "");
+    vi.stubEnv("PERPLEXITY_API_KEY", ""); // pragma: allowlist secret
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const mockFetch = installPerplexityChatFetch();
     const tool = createPerplexitySearchTool();
@@ -613,7 +613,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
   });
 
   it("keeps structured schema params on the native Search API path", () => {
-    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
+    vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test"); // pragma: allowlist secret
     const tool = createPerplexitySearchTool();
     const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
       ?.properties;
@@ -693,8 +693,8 @@ describe("web_search kimi provider", () => {
   });
 
   it("returns a setup hint when Kimi key is missing", async () => {
-    vi.stubEnv("KIMI_API_KEY", "");
-    vi.stubEnv("MOONSHOT_API_KEY", "");
+    vi.stubEnv("KIMI_API_KEY", ""); // pragma: allowlist secret
+    vi.stubEnv("MOONSHOT_API_KEY", ""); // pragma: allowlist secret
     const tool = createKimiSearchTool();
     const result = await tool?.execute?.("call-1", { query: "test" });
     expect(result?.details).toMatchObject({ error: "missing_kimi_api_key" });
@@ -828,7 +828,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("wraps Brave result descriptions", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com",
@@ -852,7 +852,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("uses Brave llm-context endpoint when mode is configured", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     const mockFetch = installBraveLlmContextFetch({
       title: "Context title",
       url: "https://example.com/ctx",
@@ -906,7 +906,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("rejects freshness in Brave llm-context mode", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
       url: "https://example.com",
@@ -953,7 +953,7 @@ describe("web_search external content wrapping", () => {
       "unsupported_ui_lang",
     ],
   ])("%s", async (_name, input, expectedError) => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     const mockFetch = installBraveLlmContextFetch({
       title: "unused",
       url: "https://example.com",
@@ -982,7 +982,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave result urls (raw for tool chaining)", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     const url = "https://example.com/some-page";
     installBraveResultsFetch({
       title: "Example",
@@ -998,7 +998,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave site names", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com/some/path",
@@ -1012,7 +1012,7 @@ describe("web_search external content wrapping", () => {
   });
 
   it("does not wrap Brave published ages", async () => {
-    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    vi.stubEnv("BRAVE_API_KEY", "test-key"); // pragma: allowlist secret
     installBraveResultsFetch({
       title: "Example",
       url: "https://example.com",
