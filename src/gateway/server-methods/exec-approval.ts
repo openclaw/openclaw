@@ -1,3 +1,4 @@
+import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -125,8 +126,11 @@ export function createExecApprovalHandlers(
         return;
       }
       const request = {
-        command: effectiveCommandText,
-        commandPreview: host === "node" ? undefined : approvalContext.commandPreview,
+        command: sanitizeExecApprovalDisplayText(effectiveCommandText),
+        commandPreview:
+          host === "node" || !approvalContext.commandPreview
+            ? undefined
+            : sanitizeExecApprovalDisplayText(approvalContext.commandPreview),
         commandArgv: host === "node" ? undefined : effectiveCommandArgv,
         envKeys: systemRunBinding?.envKeys?.length ? systemRunBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
