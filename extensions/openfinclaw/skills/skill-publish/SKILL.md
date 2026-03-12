@@ -14,20 +14,46 @@ When the user talks about **publishing a strategy**, **submitting a skill**, **c
 - User asks: 回测状态、发布状态、回测结果、回测报告
 - User wants: 发布到服务器、查看发布结果
 
+## Visibility Warning (IMPORTANT)
+
+Before publishing, **always check** `identity.visibility` in the strategy's `fep.yaml`:
+
+| Visibility | Behavior |
+|------------|----------|
+| `public` | Strategy will be uploaded to **https://hub.openfinclaw.ai** and made **publicly visible**. Community members can view, fork, and evolve the strategy. |
+| `private` | Strategy is stored privately; only the owner can access it. |
+| `unlisted` | Strategy is accessible via direct link but not listed in public galleries. |
+
+**If `visibility: public` is detected:**
+
+1. **Warn the user** before proceeding:
+   > ⚠️ 该策略将上传到 **https://hub.openfinclaw.ai** 并设为**公开**。社区成员可以查看、fork 和进化您的策略。如果您希望保持私有，请将 `fep.yaml` 中的 `identity.visibility` 改为 `private`。
+
+2. **Wait for user confirmation** before zipping/publishing.
+
+3. If user wants private: instruct them to update `fep.yaml`:
+   ```yaml
+   identity:
+     visibility: private  # change from public to private
+   ```
+
 ## Recommended flow
 
 1. **Validate first**: For a **directory** (not yet zipped), use `skill_validate` with `dirPath` first. Only proceed when `valid: true`.
-2. **Create ZIP**: Zip the directory (e.g. `zip -r ../skill.zip fep.yaml scripts/`). The ZIP must contain `fep.yaml` at root.
-3. **Publish**: Use `skill_publish` with the ZIP `filePath`. The server will:
+2. **Check visibility**: Before zipping, read the `fep.yaml` and check `identity.visibility`:
+   - If `visibility: public`: **MUST warn user** that the strategy will be uploaded to **https://hub.openfinclaw.ai** and made **publicly visible** for community evolution/forking. Ask if they want to change to `visibility: private` instead.
+   - If `visibility: private` or `unlisted`: Proceed without warning.
+3. **Create ZIP**: Zip the directory (e.g. `zip -r ../skill.zip fep.yaml scripts/`). The ZIP must contain `fep.yaml` at root.
+4. **Publish**: Use `skill_publish` with the ZIP `filePath`. The server will:
    - Parse `fep.yaml`
    - Auto-increment version if exists
    - Run automatic backtest
    - Return `submissionId` and `backtestTaskId`
-4. **Poll verify**: Use `skill_publish_verify` with `submissionId` or `backtestTaskId`. Repeat until `backtestStatus` is:
+5. **Poll verify**: Use `skill_publish_verify` with `submissionId` or `backtestTaskId`. Repeat until `backtestStatus` is:
    - `completed` — Success, `backtestReport` contains full results
    - `failed` — Backtest failed
    - `rejected` — Strategy rejected
-5. **Get report**: When `backtestStatus === "completed"`, the response includes full `backtestReport` with performance, equity_curve, trade_journal.
+6. **Get report**: When `backtestStatus === "completed"`, the response includes full `backtestReport` with performance, equity_curve, trade_journal.
 
 ## Tools
 
