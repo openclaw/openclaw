@@ -704,6 +704,7 @@ export async function spawnAcpDirect(
   // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
   const useInlineDelivery =
     hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
+  const dispatchThreadId = useInlineDelivery ? deliveryThreadId : undefined;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
@@ -726,7 +727,7 @@ export async function spawnAcpDirect(
         sessionStore,
         storePath,
         sessionAgentId: targetAgentId,
-        threadId: boundThreadId ?? undefined,
+        threadId: dispatchThreadId,
         sessionCwd: resolveAcpSessionCwd(initializedMeta) ?? params.cwd ?? process.cwd(),
         inputProvenance: taskInputProvenance,
       });
@@ -757,7 +758,7 @@ export async function spawnAcpDirect(
         channel: useInlineDelivery ? requesterOrigin?.channel : undefined,
         to: useInlineDelivery ? inferredDeliveryTo : undefined,
         accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
-        threadId: useInlineDelivery ? deliveryThreadId : undefined,
+        threadId: dispatchThreadId,
         idempotencyKey: childIdem,
         deliver: useInlineDelivery,
         label: params.label || undefined,
