@@ -155,7 +155,7 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
+    apiKey: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
