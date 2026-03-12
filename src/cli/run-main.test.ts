@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
+  shouldBootstrapCliRuntimeState,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
@@ -124,5 +125,32 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "acp", "-v"])).toBe(true);
+  });
+});
+
+describe("shouldBootstrapCliRuntimeState", () => {
+  it("skips bootstrap for help/version and empty invocations", () => {
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "--help"])).toBe(false);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "-V"])).toBe(false);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw"])).toBe(false);
+  });
+
+  it("skips bootstrap for fast read-only routes", () => {
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "status"])).toBe(false);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "health", "--json"])).toBe(false);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "sessions", "--json"])).toBe(false);
+    expect(
+      shouldBootstrapCliRuntimeState(["node", "openclaw", "config", "get", "gateway.mode"]),
+    ).toBe(false);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "storage", "verify"])).toBe(false);
+  });
+
+  it("keeps bootstrap for commands that may read runtime auth or subagent state", () => {
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "models", "list"])).toBe(true);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "models", "status"])).toBe(true);
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "agent", "--message", "hi"])).toBe(
+      true,
+    );
+    expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "agents", "list"])).toBe(true);
   });
 });

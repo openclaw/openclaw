@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import * as configModule from "../../config/config.js";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { getRuntimePostgresPersistencePolicySync } from "../../persistence/postgres-client.js";
+import { hasBootstrappedPostgresAuthRuntimeState } from "../../persistence/runtime.js";
+import {
+  loadAuthProfileStoreSnapshotsFromPostgres,
+  persistAuthProfileStoreToPostgres,
+} from "../../persistence/service.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
@@ -19,6 +26,7 @@ type LoadAuthProfileStoreOptions = {
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
+const authStoreQueues = new Map<string, Promise<void>>();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
   return resolveAuthStorePath(agentDir);
@@ -26,6 +34,11 @@ function resolveRuntimeStoreKey(agentDir?: string): string {
 
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
+}
+
+function resolveRuntimeAuthProfileStoreSnapshot(agentDir?: string): AuthProfileStore | null {
+  const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir));
+  return store ? cloneAuthProfileStore(store) : null;
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
@@ -77,10 +90,173 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthStoreSnapshots.clear();
 }
 
+function maybeUpdateRuntimeAuthProfileStoreSnapshot(
+  agentDir: string | undefined,
+  store: AuthProfileStore,
+) {
+  if (runtimeAuthStoreSnapshots.size === 0 && !isPostgresAuthPersistenceEnabled()) {
+    return;
+  }
+  runtimeAuthStoreSnapshots.set(resolveRuntimeStoreKey(agentDir), cloneAuthProfileStore(store));
+}
+
+function runWithAuthStoreQueue<T>(
+  agentDir: string | undefined,
+  task: () => Promise<T>,
+): Promise<T> {
+  const key = resolveRuntimeStoreKey(agentDir);
+  const previous = authStoreQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const barrier = previous.catch(() => undefined).then(() => gate);
+  authStoreQueues.set(key, barrier);
+  return previous
+    .catch(() => undefined)
+    .then(task)
+    .finally(() => {
+      release();
+      if (authStoreQueues.get(key) === barrier) {
+        authStoreQueues.delete(key);
+      }
+    });
+}
+
+function isPostgresAuthPersistenceEnabled(): boolean {
+  return getRuntimePostgresPersistencePolicySync().enabled;
+}
+
+function resolveCurrentConfigSnapshot() {
+  const runtimeGetter =
+    "getRuntimeConfigSnapshot" in configModule &&
+    typeof configModule.getRuntimeConfigSnapshot === "function"
+      ? configModule.getRuntimeConfigSnapshot
+      : null;
+  const loadConfig =
+    "loadConfig" in configModule && typeof configModule.loadConfig === "function"
+      ? configModule.loadConfig
+      : null;
+  if (runtimeGetter) {
+    try {
+      const runtime = runtimeGetter();
+      if (runtime) {
+        return runtime;
+      }
+    } catch {
+      // Ignore mocked/misconfigured runtime config loaders and fall through.
+    }
+  }
+  if (!loadConfig) {
+    return null;
+  }
+  try {
+    return loadConfig();
+  } catch {
+    return null;
+  }
+}
+
+function assertPostgresAuthRuntimeLoaded(): void {
+  if (!isPostgresAuthPersistenceEnabled()) {
+    return;
+  }
+  const config = resolveCurrentConfigSnapshot();
+  if (config && hasBootstrappedPostgresAuthRuntimeState(config)) {
+    return;
+  }
+  throw new Error(
+    "Postgres auth runtime state is not loaded. Run storage migrate, then bootstrap auth runtime before reading auth profiles.",
+  );
+}
+
+function buildAuthProfileStorePayload(store: AuthProfileStore): AuthProfileStore {
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).map(([profileId, credential]) => {
+      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
+        const sanitized = { ...credential } as Record<string, unknown>;
+        delete sanitized.key;
+        return [profileId, sanitized];
+      }
+      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
+        const sanitized = { ...credential } as Record<string, unknown>;
+        delete sanitized.token;
+        return [profileId, sanitized];
+      }
+      return [profileId, credential];
+    }),
+  ) as AuthProfileStore["profiles"];
+  return {
+    version: AUTH_STORE_VERSION,
+    profiles,
+    order: store.order ?? undefined,
+    lastGood: store.lastGood ?? undefined,
+    usageStats: store.usageStats ?? undefined,
+  };
+}
+
+function exportAuthProfileStoreCompatibility(store: AuthProfileStore, agentDir?: string): void {
+  saveJsonFile(resolveAuthStorePath(agentDir), buildAuthProfileStorePayload(store));
+}
+
+export async function refreshRuntimeAuthProfileStoreSnapshotsFromPostgres(): Promise<void> {
+  const stores = await loadAuthProfileStoreSnapshotsFromPostgres({
+    lookupMode: "runtime",
+  });
+  if (stores.length > 0) {
+    replaceRuntimeAuthProfileStoreSnapshots(stores);
+    return;
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
+}
+
+export async function saveAuthProfileStoreAsync(
+  store: AuthProfileStore,
+  agentDir?: string,
+): Promise<void> {
+  if (!isPostgresAuthPersistenceEnabled()) {
+    exportAuthProfileStoreCompatibility(store, agentDir);
+    maybeUpdateRuntimeAuthProfileStoreSnapshot(agentDir, store);
+    return;
+  }
+
+  await persistAuthProfileStoreToPostgres(
+    {
+      store: cloneAuthProfileStore(store),
+      agentDir,
+    },
+    { lookupMode: "runtime" },
+  );
+  maybeUpdateRuntimeAuthProfileStoreSnapshot(agentDir, store);
+  if (getRuntimePostgresPersistencePolicySync().exportCompatibility) {
+    exportAuthProfileStoreCompatibility(store, agentDir);
+  }
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
+  if (isPostgresAuthPersistenceEnabled()) {
+    const authPath = resolveAuthStorePath(params.agentDir);
+    try {
+      return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+        return await runWithAuthStoreQueue(params.agentDir, async () => {
+          await refreshRuntimeAuthProfileStoreSnapshotsFromPostgres();
+          const store = ensureAuthProfileStore(params.agentDir);
+          const nextStore = cloneAuthProfileStore(store);
+          const shouldSave = params.updater(nextStore);
+          if (shouldSave) {
+            await saveAuthProfileStoreAsync(nextStore, params.agentDir);
+          }
+          return nextStore;
+        });
+      });
+    } catch {
+      return null;
+    }
+  }
+
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
@@ -344,6 +520,9 @@ function loadCoercedStore(authPath: string): AuthProfileStore | null {
 }
 
 export function loadAuthProfileStore(): AuthProfileStore {
+  if (isPostgresAuthPersistenceEnabled()) {
+    return ensureAuthProfileStore();
+  }
   const authPath = resolveAuthStorePath();
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
@@ -375,6 +554,16 @@ function loadAuthProfileStoreForAgent(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
+  if (isPostgresAuthPersistenceEnabled()) {
+    assertPostgresAuthRuntimeLoaded();
+    return (
+      resolveRuntimeAuthProfileStoreSnapshot(agentDir) ?? {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      }
+    );
+  }
+
   const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStore(authPath);
@@ -444,6 +633,9 @@ export function loadAuthProfileStoreForRuntime(
   agentDir?: string,
   options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
+  if (isPostgresAuthPersistenceEnabled()) {
+    return ensureAuthProfileStore(agentDir, options);
+  }
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
@@ -463,6 +655,9 @@ export function ensureAuthProfileStore(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
+  if (isPostgresAuthPersistenceEnabled()) {
+    assertPostgresAuthRuntimeLoaded();
+  }
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
     return runtimeStore;
@@ -482,28 +677,11 @@ export function ensureAuthProfileStore(
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
-  const authPath = resolveAuthStorePath(agentDir);
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).map(([profileId, credential]) => {
-      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.key;
-        return [profileId, sanitized];
-      }
-      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
-        const sanitized = { ...credential } as Record<string, unknown>;
-        delete sanitized.token;
-        return [profileId, sanitized];
-      }
-      return [profileId, credential];
-    }),
-  ) as AuthProfileStore["profiles"];
-  const payload = {
-    version: AUTH_STORE_VERSION,
-    profiles,
-    order: store.order ?? undefined,
-    lastGood: store.lastGood ?? undefined,
-    usageStats: store.usageStats ?? undefined,
-  } satisfies AuthProfileStore;
-  saveJsonFile(authPath, payload);
+  if (isPostgresAuthPersistenceEnabled()) {
+    throw new Error(
+      "saveAuthProfileStore() is not available in Postgres mode. Use saveAuthProfileStoreAsync().",
+    );
+  }
+  exportAuthProfileStoreCompatibility(store, agentDir);
+  maybeUpdateRuntimeAuthProfileStoreSnapshot(agentDir, store);
 }

@@ -12,6 +12,7 @@ import {
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
+import { PersistenceConfigSchema } from "./zod-schema.persistence.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -389,6 +390,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    persistence: PersistenceConfigSchema,
     secrets: SecretsConfigSchema,
     auth: z
       .object({

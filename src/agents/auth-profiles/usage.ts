@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import { saveAuthProfileStoreAsync, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -270,7 +270,7 @@ export async function markAuthProfileUsed(params: {
   updateUsageStatsEntry(store, profileId, (existing) =>
     resetUsageStats(existing, { lastUsed: Date.now() }),
   );
-  saveAuthProfileStore(store, agentDir);
+  await saveAuthProfileStoreAsync(store, agentDir);
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
@@ -539,7 +539,7 @@ export async function markAuthProfileFailure(params: {
   });
   nextStats = computed;
   updateUsageStatsEntry(store, profileId, () => computed);
-  saveAuthProfileStore(store, agentDir);
+  await saveAuthProfileStoreAsync(store, agentDir);
   logAuthProfileFailureStateChange({
     runId,
     profileId,
@@ -601,5 +601,5 @@ export async function clearAuthProfileCooldown(params: {
   }
 
   updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
-  saveAuthProfileStore(store, agentDir);
+  await saveAuthProfileStoreAsync(store, agentDir);
 }

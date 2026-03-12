@@ -76,6 +76,18 @@ const fallbackManager = vi.hoisted(() => ({
 const fallbackSearch = fallbackManager.search;
 const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
+const readMemoryDocumentFromPostgresMock = vi.hoisted(() =>
+  vi.fn<() => Promise<string | null>>(async () => null),
+);
+const reconcileMemoryDocumentFromFilesystemToPostgresMock = vi.hoisted(() =>
+  vi.fn<() => Promise<boolean>>(async () => true),
+);
+const reconcileWorkspaceMemoryDocumentsToPostgresMock = vi.hoisted(() =>
+  vi.fn<() => Promise<{ upserted: number; deleted: number }>>(async () => ({
+    upserted: 0,
+    deleted: 0,
+  })),
+);
 
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
@@ -88,6 +100,13 @@ vi.mock("./manager-runtime.js", () => ({
     get: mockMemoryIndexGet,
   },
   closeAllMemoryIndexManagers: mockCloseAllMemoryIndexManagers,
+}));
+
+vi.mock("../persistence/service.js", () => ({
+  readMemoryDocumentFromPostgres: readMemoryDocumentFromPostgresMock,
+  reconcileMemoryDocumentFromFilesystemToPostgres:
+    reconcileMemoryDocumentFromFilesystemToPostgresMock,
+  reconcileWorkspaceMemoryDocumentsToPostgres: reconcileWorkspaceMemoryDocumentsToPostgresMock,
 }));
 
 import { QmdMemoryManager } from "./qmd-manager.js";
@@ -140,6 +159,12 @@ beforeEach(async () => {
   mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
   createQmdManagerMock.mockClear();
+  readMemoryDocumentFromPostgresMock.mockClear();
+  readMemoryDocumentFromPostgresMock.mockResolvedValue(null);
+  reconcileMemoryDocumentFromFilesystemToPostgresMock.mockClear();
+  reconcileMemoryDocumentFromFilesystemToPostgresMock.mockResolvedValue(true);
+  reconcileWorkspaceMemoryDocumentsToPostgresMock.mockClear();
+  reconcileWorkspaceMemoryDocumentsToPostgresMock.mockResolvedValue({ upserted: 0, deleted: 0 });
 });
 
 describe("getMemorySearchManager caching", () => {
@@ -275,5 +300,80 @@ describe("getMemorySearchManager caching", () => {
     await closeAllMemorySearchManagers();
 
     expect(mockCloseAllMemoryIndexManagers).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers postgres-backed memory documents for readFile when configured", async () => {
+    const cfg = {
+      ...createQmdCfg("postgres-memory"),
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+        },
+      },
+    };
+    readMemoryDocumentFromPostgresMock.mockResolvedValue("line 1\nline 2\nline 3");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "postgres-memory" });
+    const manager = requireManager(result);
+    const read = await manager.readFile({ relPath: "MEMORY.md", from: 2, lines: 1 });
+
+    expect(read).toEqual({ text: "line 2", path: "MEMORY.md" });
+    expect(reconcileMemoryDocumentFromFilesystemToPostgresMock).not.toHaveBeenCalled();
+    expect(readMemoryDocumentFromPostgresMock).toHaveBeenCalledWith({
+      config: cfg,
+      lookupMode: "runtime",
+      workspaceRoot: "/tmp/workspace",
+      logicalPath: "MEMORY.md",
+    });
+    expect(mockPrimary.readFile).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when postgres has no memory document", async () => {
+    const cfg = {
+      ...createQmdCfg("postgres-fallback"),
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+        },
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "postgres-fallback" });
+    const manager = requireManager(result);
+    await expect(manager.readFile({ relPath: "MEMORY.md" })).rejects.toThrow(
+      "Memory document is unavailable in Postgres for MEMORY.md.",
+    );
+    expect(reconcileMemoryDocumentFromFilesystemToPostgresMock).not.toHaveBeenCalled();
+    expect(mockPrimary.readFile).not.toHaveBeenCalled();
+  });
+
+  it("reconciles workspace memory documents after sync when postgres is configured", async () => {
+    const cfg = {
+      ...createQmdCfg("postgres-sync"),
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+        },
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "postgres-sync" });
+    const manager = requireManager(result);
+    await manager.sync?.({ reason: "watch", force: true });
+
+    expect(mockPrimary.sync).toHaveBeenCalledWith({ reason: "watch", force: true });
+    expect(reconcileWorkspaceMemoryDocumentsToPostgresMock).toHaveBeenCalledWith(
+      {
+        workspaceRoot: "/tmp/workspace",
+        agentId: "postgres-sync",
+      },
+      {
+        config: cfg,
+        lookupMode: "runtime",
+      },
+    );
   });
 });

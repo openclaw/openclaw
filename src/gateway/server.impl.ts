@@ -45,6 +45,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { bootstrapPostgresRuntimeState } from "../persistence/runtime.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -446,6 +447,16 @@ export async function startGatewayServer(
       activate: true,
     })
   ).config;
+  try {
+    await bootstrapPostgresRuntimeState({
+      config: cfgAtStart,
+      env: process.env,
+      auth: true,
+      subagents: true,
+    });
+  } catch (error) {
+    log.warn(`gateway: failed to load persisted subagent state from postgres: ${String(error)}`);
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
@@ -462,7 +473,7 @@ export async function startGatewayServer(
     log,
   });
 
-  initSubagentRegistry();
+  await initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();

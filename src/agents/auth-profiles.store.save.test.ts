@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveAuthStorePath } from "./auth-profiles/paths.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  replaceRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 describe("saveAuthProfileStore", () => {
+  afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
+  });
+
   it("strips plaintext when keyRef/tokenRef are present", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
     try {
@@ -57,6 +66,43 @@ describe("saveAuthProfileStore", () => {
       });
 
       expect(parsed.profiles["anthropic:default"]?.key).toBe("sk-anthropic-plain");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the active runtime snapshot after saving", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-runtime-save-"));
+    try {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {},
+          },
+        },
+      ]);
+
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-runtime-updated",
+            },
+          },
+        },
+        agentDir,
+      );
+
+      expect(ensureAuthProfileStore(agentDir).profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-runtime-updated",
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

@@ -65,8 +65,12 @@ describe("resolveProviderAuths key normalization", () => {
     }
   }
 
-  async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
-    const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+  async function writeAuthProfiles(
+    home: string,
+    profiles: Record<string, unknown>,
+    agentId = "main",
+  ) {
+    const agentDir = path.join(home, ".openclaw", "agents", agentId, "agent");
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(
       path.join(agentDir, "auth-profiles.json"),
@@ -185,6 +189,33 @@ describe("resolveProviderAuths key normalization", () => {
       {
         MINIMAX_API_KEY: undefined,
         MINIMAX_CODE_PLAN_KEY: undefined,
+        XIAOMI_API_KEY: undefined,
+      },
+    );
+  });
+
+  it("prefers agent-scoped custom provider credentials when agentDir is provided", async () => {
+    await withSuiteHome(
+      async (home) => {
+        await writeAuthProfiles(home, {
+          "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "main-key" },
+        });
+        await writeAuthProfiles(
+          home,
+          {
+            "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "agent-key" },
+          },
+          "ops",
+        );
+
+        const auths = await resolveProviderAuths({
+          providers: ["xiaomi"],
+          agentDir: path.join(home, ".openclaw", "agents", "ops", "agent"),
+        });
+
+        expect(auths).toEqual([{ provider: "xiaomi", token: "agent-key" }]);
+      },
+      {
         XIAOMI_API_KEY: undefined,
       },
     );

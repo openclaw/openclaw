@@ -140,7 +140,7 @@ describe("announce loop guard (#18264)", () => {
         lastAnnounceRetryAt: now - 30_000,
       }),
     },
-  ])("$name", ({ createEntry }) => {
+  ])("$name", async ({ createEntry }) => {
     announceFn.mockClear();
     registry.resetSubagentRegistryForTests();
 
@@ -148,7 +148,7 @@ describe("announce loop guard (#18264)", () => {
     loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization attempts resume once, then gives up for exhausted entries.
-    registry.initSubagentRegistry();
+    await registry.initSubagentRegistry();
 
     expect(announceFn).not.toHaveBeenCalled();
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
@@ -184,7 +184,7 @@ describe("announce loop guard (#18264)", () => {
       ]),
     );
 
-    registry.initSubagentRegistry();
+    await registry.initSubagentRegistry();
     await Promise.resolve();
     await Promise.resolve();
 
@@ -218,7 +218,7 @@ describe("announce loop guard (#18264)", () => {
       ]),
     );
 
-    registry.initSubagentRegistry();
+    await registry.initSubagentRegistry();
     await Promise.resolve();
     await Promise.resolve();
 

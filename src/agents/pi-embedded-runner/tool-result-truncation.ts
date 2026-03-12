@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { syncSessionManagerToPostgres } from "../../persistence/service.js";
 import { log } from "./logger.js";
 
 /**
@@ -322,6 +323,11 @@ export async function truncateOversizedToolResultsInSession(params: {
         `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
     );
 
+    await syncSessionManagerToPostgres({
+      sessionManager,
+      transcriptPath: sessionFile,
+      sessionId: params.sessionId,
+    });
     return { truncated: true, truncatedCount };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

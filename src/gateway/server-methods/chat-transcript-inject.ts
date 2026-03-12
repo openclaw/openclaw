@@ -1,4 +1,5 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { scheduleSessionManagerTailSyncToPostgres } from "../../persistence/service.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -68,6 +69,10 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
     const sessionManager = SessionManager.open(params.transcriptPath);
     const messageId = sessionManager.appendMessage(messageBody);
+    scheduleSessionManagerTailSyncToPostgres({
+      sessionManager,
+      transcriptPath: params.transcriptPath,
+    });
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

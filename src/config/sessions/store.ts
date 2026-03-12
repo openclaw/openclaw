@@ -8,6 +8,8 @@ import {
 } from "../../gateway/session-utils.fs.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getRuntimePostgresPersistencePolicySync } from "../../persistence/postgres-client.js";
+import { persistSessionStoreSnapshot } from "../../persistence/service.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -64,6 +66,15 @@ function getSessionStoreTtl(): number {
 
 function isSessionStoreCacheEnabled(): boolean {
   return isCacheEnabled(getSessionStoreTtl());
+}
+
+function assertSupportedRuntimeSessionStorePersistence(storePath: string): void {
+  const persistence = getRuntimePostgresPersistencePolicySync();
+  if (persistence.enabled && !persistence.exportCompatibility) {
+    throw new Error(
+      `persistence.postgres.exportCompatibility must remain enabled while session store reads still use compatibility files: ${storePath}`,
+    );
+  }
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -196,6 +207,8 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  assertSupportedRuntimeSessionStorePersistence(storePath);
+
   // Check cache first if enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
@@ -600,6 +613,16 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
+  const persistence = getRuntimePostgresPersistencePolicySync();
+  assertSupportedRuntimeSessionStorePersistence(params.storePath);
+
+  if (persistence.enabled) {
+    await persistSessionStoreSnapshot({
+      storePath: params.storePath,
+      store: params.store,
+    });
+  }
+
   await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,

@@ -157,7 +157,7 @@ describe("subagent registry persistence", () => {
 
   const restartRegistryAndFlush = async () => {
     resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+    await initSubagentRegistry();
     await flushQueuedRegistryWork();
   };
 
@@ -209,7 +209,7 @@ describe("subagent registry persistence", () => {
     // Simulate a process restart: module re-import should load persisted runs
     // and trigger the announce flow once the run resolves.
     resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+    await initSubagentRegistry();
 
     // allow queued async wait/cleanup to execute
     await flushQueuedRegistryWork();
@@ -266,7 +266,7 @@ describe("subagent registry persistence", () => {
     });
 
     resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+    await initSubagentRegistry();
 
     await flushQueuedRegistryWork();
 

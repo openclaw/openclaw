@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { loadAuthProfileStoreSnapshotsFromPostgres } from "../persistence/service.js";
 import { resolveUserPath } from "../utils.js";
 import {
   collectCommandSecretAssignmentsFromSnapshot,
@@ -117,10 +118,24 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     context,
   });
 
-  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+  const defaultLoadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
     : collectCandidateAgentDirs(resolvedConfig);
+  const postgresStores =
+    !params.loadAuthStore && resolvedConfig.persistence?.backend === "postgres"
+      ? await loadAuthProfileStoreSnapshotsFromPostgres({
+          config: resolvedConfig,
+          env: params.env,
+          lookupMode: "runtime",
+        })
+      : [];
+  const postgresStoresByAgentDir = new Map(
+    postgresStores.map((entry) => [resolveUserPath(entry.agentDir), structuredClone(entry.store)]),
+  );
+  const loadAuthStore = (agentDir?: string) =>
+    postgresStoresByAgentDir.get(resolveUserPath(agentDir ?? resolveOpenClawAgentDir())) ??
+    defaultLoadAuthStore(agentDir);
 
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   for (const agentDir of candidateDirs) {

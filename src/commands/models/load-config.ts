@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { primePostgresAuthRuntimeState } from "../../persistence/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export type LoadedModelsConfig = {
@@ -43,6 +44,10 @@ export async function loadModelsConfigWithSource(params: {
     }
   }
   setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+  await primePostgresAuthRuntimeState({
+    config: resolvedConfig,
+    env: process.env,
+  });
   return {
     sourceConfig,
     resolvedConfig,

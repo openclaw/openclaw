@@ -929,6 +929,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
   "ui.assistant.avatar":
     "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
+  persistence:
+    "Persistence backend controls for switching canonical state between the default filesystem mode and the optional PostgreSQL mode. Keep filesystem as the baseline unless you intentionally enable database-backed state.",
+  "persistence.backend":
+    'Canonical persistence backend: "filesystem" keeps the current file-backed behavior, while "postgres" enables PostgreSQL-backed state for opted-in installs.',
+  "persistence.postgres":
+    "PostgreSQL connection and compatibility settings used when persistence.backend=postgres. Keep this unset in normal filesystem deployments.",
+  "persistence.postgres.url":
+    "PostgreSQL connection URL for the optional database-backed persistence backend. Prefer secret-backed values over inline plaintext.",
+  "persistence.postgres.schema":
+    "PostgreSQL schema name used for OpenClaw persistence tables. Keep a dedicated schema per deployment to simplify isolation and cleanup.",
+  "persistence.postgres.maxConnections":
+    "Maximum PostgreSQL pool size used by the persistence backend. Keep this small unless you have measured concurrent write pressure.",
+  "persistence.postgres.encryptionKey":
+    "Application-level encryption key used to protect persisted credential blobs stored in PostgreSQL. Treat this as a required secret whenever encrypted auth storage is enabled.",
+  "persistence.postgres.exportCompatibility":
+    "When true, PostgreSQL-backed installs keep compatibility files such as sessions.json and transcript JSONL in sync for the current filesystem-based read path. Leave this enabled until the remaining synchronous readers move behind async repositories.",
   plugins:
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":

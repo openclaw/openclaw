@@ -1,10 +1,26 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  scheduleSessionManagerSyncToPostgres,
+  scheduleSessionManagerTailSyncToPostgres,
+} from "../persistence/service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+
+const TRANSCRIPT_MUTATOR_NAMES = [
+  "appendCustomMessageEntry",
+  "appendCompaction",
+  "appendCustomEntry",
+  "appendLabelChange",
+  "appendMessage",
+  "appendModelChange",
+  "appendSessionInfo",
+  "appendThinkingLevelChange",
+  "branchWithSummary",
+] as const;
 
 export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
@@ -72,5 +88,49 @@ export function guardSessionManager(
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
+  installTranscriptPersistenceMirror(sessionManager, opts?.agentId);
   return sessionManager as GuardedSessionManager;
+}
+
+function installTranscriptPersistenceMirror(
+  sessionManager: SessionManager,
+  agentId?: string,
+): void {
+  const guarded = sessionManager as SessionManager & {
+    __openclawTranscriptPersistenceWrapped?: boolean;
+    getSessionFile?: () => string;
+  };
+  if (guarded.__openclawTranscriptPersistenceWrapped) {
+    return;
+  }
+  const sessionFile =
+    typeof guarded.getSessionFile === "function" ? guarded.getSessionFile() : undefined;
+  if (!sessionFile) {
+    return;
+  }
+
+  scheduleSessionManagerSyncToPostgres({
+    sessionManager,
+    transcriptPath: sessionFile,
+    agentId,
+  });
+
+  for (const methodName of TRANSCRIPT_MUTATOR_NAMES) {
+    const sessionManagerRecord = sessionManager as unknown as Record<string, unknown>;
+    const original = sessionManagerRecord[methodName];
+    if (typeof original !== "function") {
+      continue;
+    }
+    sessionManagerRecord[methodName] = (...args: unknown[]) => {
+      const result = (original as (...innerArgs: unknown[]) => unknown).apply(sessionManager, args);
+      scheduleSessionManagerTailSyncToPostgres({
+        sessionManager,
+        transcriptPath: sessionFile,
+        agentId,
+      });
+      return result;
+    };
+  }
+
+  guarded.__openclawTranscriptPersistenceWrapped = true;
 }

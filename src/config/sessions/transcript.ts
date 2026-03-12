@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { syncSessionManagerToPostgres } from "../../persistence/service.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
@@ -204,6 +205,12 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     timestamp: Date.now(),
   });
 
+  await syncSessionManagerToPostgres({
+    sessionManager,
+    transcriptPath: sessionFile,
+    agentId: params.agentId,
+    sessionId: entry.sessionId,
+  });
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };
 }

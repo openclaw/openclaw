@@ -56,11 +56,13 @@ export type ApplyPatchSummary = {
 
 export type ApplyPatchResult = {
   summary: ApplyPatchSummary;
+  affectedPaths: string[];
   text: string;
 };
 
 export type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
+  affectedPaths: string[];
 };
 
 type SandboxApplyPatchConfig = {
@@ -71,6 +73,7 @@ type SandboxApplyPatchConfig = {
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
+  operations?: PatchFileOps;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
@@ -83,7 +86,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    operations?: PatchFileOps;
+    workspaceOnly?: boolean;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -110,13 +118,17 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandbox,
+        operations: options.operations,
         workspaceOnly,
         signal,
       });
 
       return {
         content: [{ type: "text", text: result.text }],
-        details: { summary: result.summary },
+        details: {
+          summary: result.summary,
+          affectedPaths: result.affectedPaths,
+        },
       };
     },
   };
@@ -136,11 +148,13 @@ export async function applyPatch(
     modified: [],
     deleted: [],
   };
+  const affectedPaths: string[] = [];
   const seen = {
     added: new Set<string>(),
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
+  const touched = new Set<string>();
   const fileOps = resolvePatchFileOps(options);
 
   for (const hunk of parsed.hunks) {
@@ -155,6 +169,7 @@ export async function applyPatch(
       await ensureDir(target.resolved, fileOps);
       await fileOps.writeFile(target.resolved, hunk.contents);
       recordSummary(summary, seen, "added", target.display);
+      recordAffectedPath(affectedPaths, touched, target.display);
       continue;
     }
 
@@ -162,6 +177,7 @@ export async function applyPatch(
       const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
+      recordAffectedPath(affectedPaths, touched, target.display);
       continue;
     }
 
@@ -169,6 +185,7 @@ export async function applyPatch(
     const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
       readFile: (path) => fileOps.readFile(path),
     });
+    recordAffectedPath(affectedPaths, touched, target.display);
 
     if (hunk.movePath) {
       const moveTarget = await resolvePatchPath(hunk.movePath, options);
@@ -176,6 +193,7 @@ export async function applyPatch(
       await fileOps.writeFile(moveTarget.resolved, applied);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "modified", moveTarget.display);
+      recordAffectedPath(affectedPaths, touched, moveTarget.display);
     } else {
       await fileOps.writeFile(target.resolved, applied);
       recordSummary(summary, seen, "modified", target.display);
@@ -184,6 +202,7 @@ export async function applyPatch(
 
   return {
     summary,
+    affectedPaths,
     text: formatSummary(summary),
   };
 }
@@ -203,6 +222,14 @@ function recordSummary(
   }
   seen[bucket].add(value);
   summary[bucket].push(value);
+}
+
+function recordAffectedPath(affectedPaths: string[], seen: Set<string>, value: string) {
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  affectedPaths.push(value);
 }
 
 function formatSummary(summary: ApplyPatchSummary): string {
@@ -227,6 +254,9 @@ type PatchFileOps = {
 };
 
 function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
+  if (options.operations) {
+    return options.operations;
+  }
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return {

@@ -166,6 +166,9 @@ importers:
       playwright-core:
         specifier: 1.58.2
         version: 1.58.2
+      postgres:
+        specifier: 3.4.8
+        version: 3.4.8
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0

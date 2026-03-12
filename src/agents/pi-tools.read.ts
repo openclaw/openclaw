@@ -12,6 +12,16 @@ import {
 } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import {
+  normalizeMemoryDocumentPath,
+  resolvePathRelativeToRoot,
+} from "../persistence/path-keys.js";
+import { getRuntimePostgresPersistencePolicySync } from "../persistence/postgres-client.js";
+import {
+  persistMemoryDocumentCanonical,
+  readMemoryDocumentFromPostgres,
+  scheduleMemoryDocumentSyncToPostgres,
+} from "../persistence/service.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { wrapHostEditToolWithPostWriteRecovery } from "./pi-tools.host-edit.js";
@@ -621,19 +631,98 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function scheduleMemoryDocumentSyncForWorkspacePath(params: {
+  root: string;
+  agentId?: string;
+  filePath: string;
+  containerWorkdir?: string;
+}): void {
+  if (!params.filePath.trim()) {
+    return;
+  }
+  const absolutePath = resolveToolPathAgainstWorkspaceRoot({
+    filePath: params.filePath,
+    root: params.root,
+    containerWorkdir: params.containerWorkdir,
+  });
+  const relativePath = resolvePathRelativeToRoot(params.root, absolutePath);
+  const logicalPath = relativePath ? normalizeMemoryDocumentPath(relativePath) : undefined;
+  if (!logicalPath) {
+    return;
+  }
+  scheduleMemoryDocumentSyncToPostgres({
+    workspaceRoot: params.root,
+    absolutePath,
+    logicalPath,
+    agentId: params.agentId,
+  });
+}
+
+function syncMemoryDocumentAfterHostMutation(params: {
+  root: string;
+  agentId?: string;
+  args: unknown;
+}): void {
+  const normalized = normalizeToolParams(params.args);
+  const record =
+    normalized ??
+    (params.args && typeof params.args === "object"
+      ? (params.args as Record<string, unknown>)
+      : undefined);
+  const filePath = typeof record?.path === "string" ? record.path : undefined;
+  if (!filePath?.trim()) {
+    return;
+  }
+  scheduleMemoryDocumentSyncForWorkspacePath({
+    root: params.root,
+    agentId: params.agentId,
+    filePath,
+  });
+}
+
+function wrapToolMemoryDocumentSync(
+  tool: AnyAgentTool,
+  options: { root: string; agentId?: string },
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      syncMemoryDocumentAfterHostMutation({
+        root: options.root,
+        agentId: options.agentId,
+        args,
+      });
+      return result;
+    },
+  };
+}
+
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; agentId?: string },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapToolParamNormalization(
+    wrapToolMemoryDocumentSync(base, { root, agentId: options?.agentId }),
+    CLAUDE_PARAM_GROUPS.write,
+  );
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; agentId?: string },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
-  return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
+  return wrapToolParamNormalization(
+    wrapToolMemoryDocumentSync(withRecovery, { root, agentId: options?.agentId }),
+    CLAUDE_PARAM_GROUPS.edit,
+  );
 }
 
 export function createOpenClawReadTool(
@@ -718,7 +807,87 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function isCanonicalMemoryPersistenceEnabled(): boolean {
+  return getRuntimePostgresPersistencePolicySync().enabled;
+}
+
+function resolveCanonicalMemoryTarget(root: string, absolutePath: string) {
+  if (!isCanonicalMemoryPersistenceEnabled()) {
+    return null;
+  }
+  const relativePath = resolvePathRelativeToRoot(root, absolutePath);
+  const logicalPath = relativePath ? normalizeMemoryDocumentPath(relativePath) : undefined;
+  if (!logicalPath) {
+    return null;
+  }
+  return {
+    workspaceRoot: root,
+    absolutePath,
+    logicalPath,
+  };
+}
+
+async function readCanonicalMemoryDocument(
+  root: string,
+  absolutePath: string,
+): Promise<{ matched: boolean; text: string | null }> {
+  const target = resolveCanonicalMemoryTarget(root, absolutePath);
+  if (!target) {
+    return { matched: false, text: null };
+  }
+  return {
+    matched: true,
+    text: await readMemoryDocumentFromPostgres({
+      workspaceRoot: target.workspaceRoot,
+      logicalPath: target.logicalPath,
+      lookupMode: "runtime",
+    }),
+  };
+}
+
+async function writeCanonicalMemoryDocument(params: {
+  root: string;
+  absolutePath: string;
+  content: string;
+  agentId?: string;
+}): Promise<boolean> {
+  const target = resolveCanonicalMemoryTarget(params.root, params.absolutePath);
+  if (!target) {
+    return false;
+  }
+  await persistMemoryDocumentCanonical({
+    workspaceRoot: target.workspaceRoot,
+    absolutePath: target.absolutePath,
+    logicalPath: target.logicalPath,
+    body: params.content,
+    agentId: params.agentId,
+  });
+  return true;
+}
+
+async function deleteCanonicalMemoryDocument(params: {
+  root: string;
+  absolutePath: string;
+  agentId?: string;
+}): Promise<boolean> {
+  const target = resolveCanonicalMemoryTarget(params.root, params.absolutePath);
+  if (!target) {
+    return false;
+  }
+  await persistMemoryDocumentCanonical({
+    workspaceRoot: target.workspaceRoot,
+    absolutePath: target.absolutePath,
+    logicalPath: target.logicalPath,
+    body: undefined,
+    agentId: params.agentId,
+  });
+  return true;
+}
+
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; agentId?: string },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
@@ -728,7 +897,19 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         const resolved = path.resolve(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        if (
+          await writeCanonicalMemoryDocument({
+            root,
+            absolutePath,
+            content,
+            agentId: options?.agentId,
+          })
+        ) {
+          return;
+        }
+        await writeHostFile(absolutePath, content);
+      },
     } as const;
   }
 
@@ -741,6 +922,16 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await fs.mkdir(resolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
+      if (
+        await writeCanonicalMemoryDocument({
+          root,
+          absolutePath,
+          content,
+          agentId: options?.agentId,
+        })
+      ) {
+        return;
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
@@ -752,18 +943,47 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; agentId?: string },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
+        const canonical = await readCanonicalMemoryDocument(root, absolutePath);
+        if (canonical.matched) {
+          if (canonical.text === null) {
+            throw createFsAccessError("ENOENT", absolutePath);
+          }
+          return Buffer.from(canonical.text, "utf8");
+        }
         const resolved = path.resolve(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        if (
+          await writeCanonicalMemoryDocument({
+            root,
+            absolutePath,
+            content,
+            agentId: options?.agentId,
+          })
+        ) {
+          return;
+        }
+        await writeHostFile(absolutePath, content);
+      },
       access: async (absolutePath: string) => {
+        const canonical = await readCanonicalMemoryDocument(root, absolutePath);
+        if (canonical.matched) {
+          if (canonical.text === null) {
+            throw createFsAccessError("ENOENT", absolutePath);
+          }
+          return;
+        }
         const resolved = path.resolve(absolutePath);
         await fs.access(resolved);
       },
@@ -773,6 +993,13 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
+      const canonical = await readCanonicalMemoryDocument(root, absolutePath);
+      if (canonical.matched) {
+        if (canonical.text === null) {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        return Buffer.from(canonical.text, "utf8");
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       const safeRead = await readFileWithinRoot({
         rootDir: root,
@@ -781,6 +1008,16 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
+      if (
+        await writeCanonicalMemoryDocument({
+          root,
+          absolutePath,
+          content,
+          agentId: options?.agentId,
+        })
+      ) {
+        return;
+      }
       const relative = toRelativeWorkspacePath(root, absolutePath);
       await writeFileWithinRoot({
         rootDir: root,
@@ -790,6 +1027,13 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
+      const canonical = await readCanonicalMemoryDocument(root, absolutePath);
+      if (canonical.matched) {
+        if (canonical.text === null) {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        return;
+      }
       let relative: string;
       try {
         relative = toRelativeWorkspacePath(root, absolutePath);
@@ -819,6 +1063,32 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         throw error;
       }
     },
+  } as const;
+}
+
+export function createHostApplyPatchOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; agentId?: string },
+) {
+  const writeOps = createHostWriteOperations(root, options);
+  const editOps = createHostEditOperations(root, options);
+  return {
+    readFile: async (absolutePath: string) =>
+      (await editOps.readFile(absolutePath)).toString("utf8"),
+    writeFile: writeOps.writeFile,
+    remove: async (absolutePath: string) => {
+      if (
+        await deleteCanonicalMemoryDocument({
+          root,
+          absolutePath,
+          agentId: options?.agentId,
+        })
+      ) {
+        return;
+      }
+      await fs.rm(absolutePath);
+    },
+    mkdirp: writeOps.mkdir,
   } as const;
 }
 

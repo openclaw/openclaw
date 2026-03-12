@@ -27,6 +27,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import {
+  createHostApplyPatchOperations,
   assertRequiredParams,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -36,6 +37,7 @@ import {
   createSandboxedWriteTool,
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
+  scheduleMemoryDocumentSyncForWorkspacePath,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -194,6 +196,43 @@ export const __testing = {
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
+
+function collectApplyPatchAffectedPaths(result: unknown): string[] {
+  if (!result || typeof result !== "object") {
+    return [];
+  }
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return [];
+  }
+  const affectedPaths = (details as { affectedPaths?: unknown }).affectedPaths;
+  if (!Array.isArray(affectedPaths)) {
+    return [];
+  }
+  return affectedPaths.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+function wrapApplyPatchToolWithMemoryDocumentSync(
+  tool: AnyAgentTool,
+  options: { root: string; agentId?: string },
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      for (const filePath of collectApplyPatchAffectedPaths(result)) {
+        scheduleMemoryDocumentSyncForWorkspacePath({
+          root: options.root,
+          agentId: options.agentId,
+          filePath,
+        });
+      }
+      return result;
+    },
+  };
+}
 
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
@@ -392,14 +431,14 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly, agentId });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly, agentId });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -447,14 +486,27 @@ export function createOpenClawCodingTools(options?: {
   const applyPatchTool =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
-      : createApplyPatchTool({
-          cwd: sandboxRoot ?? workspaceRoot,
-          sandbox:
-            sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
-              : undefined,
-          workspaceOnly: applyPatchWorkspaceOnly,
-        });
+      : wrapApplyPatchToolWithMemoryDocumentSync(
+          createApplyPatchTool({
+            cwd: sandboxRoot ?? workspaceRoot,
+            sandbox:
+              sandboxRoot && allowWorkspaceWrites
+                ? { root: sandboxRoot, bridge: sandboxFsBridge! }
+                : undefined,
+            operations:
+              sandboxRoot || !workspaceRoot
+                ? undefined
+                : createHostApplyPatchOperations(workspaceRoot, {
+                    workspaceOnly: applyPatchWorkspaceOnly,
+                    agentId: options?.agentId,
+                  }),
+            workspaceOnly: applyPatchWorkspaceOnly,
+          }) as unknown as AnyAgentTool,
+          {
+            root: workspaceRoot,
+            agentId: options?.agentId,
+          },
+        );
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot

@@ -12,6 +12,8 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { primePostgresAuthRuntimeState } from "../persistence/runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -34,22 +36,23 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
   return null;
 }
 
-function resolveZaiApiKey(): string | undefined {
+function resolveZaiApiKey(params: { cfg: OpenClawConfig; agentDir?: string }): string | undefined {
   const envDirect =
     normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
   if (envDirect) {
     return envDirect;
   }
 
-  const cfg = loadConfig();
   const key =
-    resolveUsableCustomProviderApiKey({ cfg, provider: "zai" })?.apiKey ??
-    resolveUsableCustomProviderApiKey({ cfg, provider: "z-ai" })?.apiKey;
+    resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider: "zai" })?.apiKey ??
+    resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider: "z-ai" })?.apiKey;
   if (key) {
     return key;
   }
 
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const apiProfile = [
     ...listProfilesForProvider(store, "zai"),
     ...listProfilesForProvider(store, "z-ai"),
@@ -81,21 +84,33 @@ function resolveZaiApiKey(): string | undefined {
   }
 }
 
-function resolveMinimaxApiKey(): string | undefined {
+function resolveMinimaxApiKey(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
     providerId: "minimax",
     envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
   });
 }
 
-function resolveXiaomiApiKey(): string | undefined {
+function resolveXiaomiApiKey(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): string | undefined {
   return resolveProviderApiKeyFromConfigAndStore({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
     providerId: "xiaomi",
     envDirect: [process.env.XIAOMI_API_KEY],
   });
 }
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
   providerId: UsageProviderId;
   envDirect: Array<string | undefined>;
 }): string | undefined {
@@ -104,16 +119,17 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     return envDirect;
   }
 
-  const cfg = loadConfig();
   const key = resolveUsableCustomProviderApiKey({
-    cfg,
+    cfg: params.cfg,
     provider: params.providerId,
   })?.apiKey;
   if (key) {
     return key;
   }
 
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const cred = listProfilesForProvider(store, params.providerId)
     .map((id) => store.profiles[id])
     .find(
@@ -144,13 +160,13 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
+  cfg: OpenClawConfig;
 }): Promise<ProviderAuth | null> {
-  const cfg = loadConfig();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
   const order = resolveAuthProfileOrder({
-    cfg,
+    cfg: params.cfg,
     store,
     provider: params.provider,
   });
@@ -193,11 +209,13 @@ async function resolveOAuthToken(params: {
   return null;
 }
 
-function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
-  const store = ensureAuthProfileStore(agentDir, {
+function resolveOAuthProviders(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+}): UsageProviderId[] {
+  const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
-  const cfg = loadConfig();
   const providers = [
     "anthropic",
     "github-copilot",
@@ -214,7 +232,7 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
       return true;
     }
     const normalized = normalizeProviderId(provider);
-    const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
+    const configuredProfiles = Object.entries(params.cfg.auth?.profiles ?? {})
       .filter(([, profile]) => normalizeProviderId(profile.provider) === normalized)
       .map(([id]) => id)
       .filter(isOAuthLikeCredential);
@@ -231,26 +249,43 @@ export async function resolveProviderAuths(params: {
     return params.auth;
   }
 
-  const oauthProviders = resolveOAuthProviders(params.agentDir);
+  const cfg = loadConfig();
+  await primePostgresAuthRuntimeState({
+    config: cfg,
+    env: process.env,
+  });
+  const oauthProviders = resolveOAuthProviders({
+    cfg,
+    agentDir: params.agentDir,
+  });
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
     if (provider === "zai") {
-      const apiKey = resolveZaiApiKey();
+      const apiKey = resolveZaiApiKey({
+        cfg,
+        agentDir: params.agentDir,
+      });
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
       continue;
     }
     if (provider === "minimax") {
-      const apiKey = resolveMinimaxApiKey();
+      const apiKey = resolveMinimaxApiKey({
+        cfg,
+        agentDir: params.agentDir,
+      });
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
       continue;
     }
     if (provider === "xiaomi") {
-      const apiKey = resolveXiaomiApiKey();
+      const apiKey = resolveXiaomiApiKey({
+        cfg,
+        agentDir: params.agentDir,
+      });
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }
@@ -261,6 +296,7 @@ export async function resolveProviderAuths(params: {
       continue;
     }
     const auth = await resolveOAuthToken({
+      cfg,
       provider,
       agentDir: params.agentDir,
     });

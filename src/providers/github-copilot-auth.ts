@@ -158,7 +158,7 @@ export async function githubCopilotLoginCommand(
   });
   polling.stop("GitHub access token acquired");
 
-  upsertAuthProfile({
+  await upsertAuthProfile({
     profileId,
     credential: {
       type: "token",

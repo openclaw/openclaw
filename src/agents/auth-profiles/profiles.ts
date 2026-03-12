@@ -3,7 +3,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeProviderId, normalizeProviderIdForAuth } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
-  saveAuthProfileStore,
+  saveAuthProfileStoreAsync,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
@@ -42,11 +42,11 @@ export async function setAuthProfileOrder(params: {
   });
 }
 
-export function upsertAuthProfile(params: {
+export async function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const credential =
     params.credential.type === "api_key"
       ? {
@@ -58,9 +58,20 @@ export function upsertAuthProfile(params: {
       : params.credential.type === "token"
         ? { ...params.credential, token: normalizeSecretInput(params.credential.token) }
         : params.credential;
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      store.profiles[params.profileId] = credential;
+      return true;
+    },
+  });
+  if (updated) {
+    return;
+  }
+
   const store = ensureAuthProfileStore(params.agentDir);
   store.profiles[params.profileId] = credential;
-  saveAuthProfileStore(store, params.agentDir);
+  await saveAuthProfileStoreAsync(store, params.agentDir);
 }
 
 export async function upsertAuthProfileWithLock(params: {
@@ -111,5 +122,5 @@ export async function markAuthProfileGood(params: {
     return;
   }
   store.lastGood = { ...store.lastGood, [provider]: profileId };
-  saveAuthProfileStore(store, agentDir);
+  await saveAuthProfileStoreAsync(store, agentDir);
 }

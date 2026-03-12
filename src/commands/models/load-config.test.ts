@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getModelsCommandSecretTargetIds: vi.fn(),
+  primePostgresAuthRuntimeState: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -20,6 +21,10 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
+}));
+
+vi.mock("../../persistence/runtime.js", () => ({
+  primePostgresAuthRuntimeState: mocks.primePostgresAuthRuntimeState,
 }));
 
 import { loadModelsConfig, loadModelsConfigWithSource } from "./load-config.js";
@@ -67,6 +72,10 @@ describe("models load-config", () => {
       targetIds,
     });
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+    expect(mocks.primePostgresAuthRuntimeState).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      env: process.env,
+    });
     expect(runtime.log).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
     expect(runtime.log).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
     expect(result).toEqual({
@@ -99,5 +108,9 @@ describe("models load-config", () => {
 
     await expect(loadModelsConfig({ commandName: "models list" })).resolves.toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+    expect(mocks.primePostgresAuthRuntimeState).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      env: process.env,
+    });
   });
 });

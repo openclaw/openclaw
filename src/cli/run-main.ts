@@ -1,5 +1,6 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
@@ -71,6 +72,35 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
   return true;
 }
 
+export function shouldBootstrapCliRuntimeState(argv: string[]): boolean {
+  if (hasHelpOrVersion(argv)) {
+    return false;
+  }
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  if (!primary) {
+    return false;
+  }
+  if (primary === "status" || primary === "health" || primary === "sessions") {
+    return false;
+  }
+  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+    return false;
+  }
+  if (primary === "storage") {
+    return false;
+  }
+  return true;
+}
+
+async function clearCliPostgresRuntimeState(): Promise<void> {
+  try {
+    const { clearPostgresRuntimeState } = await import("../persistence/runtime.js");
+    clearPostgresRuntimeState();
+  } catch {
+    // Best-effort teardown for short-lived CLI processes.
+  }
+}
+
 export async function runCli(argv: string[] = process.argv) {
   let normalizedArgv = normalizeWindowsArgv(argv);
   const parsedProfile = parseCliProfileArgs(normalizedArgv);
@@ -91,7 +121,30 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
+  let validatedConfigPromise: Promise<OpenClawConfig | null> | null = null;
+  const loadValidatedCliConfig = async (): Promise<OpenClawConfig | null> => {
+    validatedConfigPromise ??= (async () => {
+      const { loadValidatedConfigForPluginRegistration } =
+        await import("./program/register.subclis.js");
+      return await loadValidatedConfigForPluginRegistration();
+    })();
+    return await validatedConfigPromise;
+  };
+
+  let shouldClearPostgresRuntimeState = false;
   try {
+    if (shouldBootstrapCliRuntimeState(normalizedArgv)) {
+      const config = await loadValidatedCliConfig();
+      if (config) {
+        shouldClearPostgresRuntimeState = true;
+        const { bootstrapPostgresRuntimeState } = await import("../persistence/runtime.js");
+        await bootstrapPostgresRuntimeState({
+          config,
+          env: process.env,
+        });
+      }
+    }
+
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
@@ -136,9 +189,7 @@ export async function runCli(argv: string[] = process.argv) {
     if (!shouldSkipPluginRegistration) {
       // Register plugin CLI commands before parsing
       const { registerPluginCliCommands } = await import("../plugins/cli.js");
-      const { loadValidatedConfigForPluginRegistration } =
-        await import("./program/register.subclis.js");
-      const config = await loadValidatedConfigForPluginRegistration();
+      const config = await loadValidatedCliConfig();
       if (config) {
         registerPluginCliCommands(program, config);
       }
@@ -146,6 +197,9 @@ export async function runCli(argv: string[] = process.argv) {
 
     await program.parseAsync(parseArgv);
   } finally {
+    if (shouldClearPostgresRuntimeState) {
+      await clearCliPostgresRuntimeState();
+    }
     await closeCliMemoryManagers();
   }
 }

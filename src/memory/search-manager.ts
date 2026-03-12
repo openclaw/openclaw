@@ -1,5 +1,10 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  readMemoryDocumentFromPostgres,
+  reconcileWorkspaceMemoryDocumentsToPostgres,
+} from "../persistence/service.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
@@ -48,22 +53,35 @@ export async function getMemorySearchManager(params: {
       });
       if (primary) {
         if (statusOnly) {
-          return { manager: primary };
+          return {
+            manager: wrapManagerWithPostgresMemoryReads({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              manager: primary,
+            }),
+          };
         }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await loadManagerRuntime();
-              return await MemoryIndexManager.get(params);
+        const wrapper = wrapManagerWithPostgresMemoryReads({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          manager: new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await loadManagerRuntime();
+                return await MemoryIndexManager.get(params);
+              },
             },
-          },
-          () => {
-            if (cacheKey) {
-              QMD_MANAGER_CACHE.delete(cacheKey);
-            }
-          },
-        );
+            () => {
+              if (cacheKey) {
+                QMD_MANAGER_CACHE.delete(cacheKey);
+              }
+            },
+          ),
+        });
+        if (!wrapper) {
+          return { manager: null, error: "memory search unavailable" };
+        }
         if (cacheKey) {
           QMD_MANAGER_CACHE.set(cacheKey, wrapper);
         }
@@ -78,7 +96,13 @@ export async function getMemorySearchManager(params: {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
-    return { manager };
+    return {
+      manager: wrapManagerWithPostgresMemoryReads({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        manager,
+      }),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
@@ -242,6 +266,112 @@ class FallbackMemoryManager implements MemorySearchManager {
     }
     this.cacheEvicted = true;
     this.onClose?.();
+  }
+}
+
+function isSupportedMemoryReadPath(relPath: string): boolean {
+  return relPath === "MEMORY.md" || relPath === "memory.md" || relPath.startsWith("memory/");
+}
+
+function sliceMemoryDocumentText(text: string, params: { from?: number; lines?: number }): string {
+  if (params.from === undefined && params.lines === undefined) {
+    return text;
+  }
+  const lines = text.split("\n");
+  const start = Math.max(1, params.from ?? 1);
+  const count = Math.max(1, params.lines ?? lines.length);
+  return lines.slice(start - 1, start - 1 + count).join("\n");
+}
+
+function wrapManagerWithPostgresMemoryReads(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  manager: MemorySearchManager | null;
+}): MemorySearchManager | null {
+  if (!params.manager || params.cfg.persistence?.backend !== "postgres") {
+    return params.manager;
+  }
+  const workspaceRoot = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  if (!workspaceRoot) {
+    return params.manager;
+  }
+  return new PostgresReadThroughMemoryManager({
+    manager: params.manager,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    workspaceRoot,
+  });
+}
+
+class PostgresReadThroughMemoryManager implements MemorySearchManager {
+  constructor(
+    private readonly deps: {
+      manager: MemorySearchManager;
+      cfg: OpenClawConfig;
+      agentId: string;
+      workspaceRoot: string;
+    },
+  ) {}
+
+  async search(
+    query: string,
+    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+  ) {
+    return await this.deps.manager.search(query, opts);
+  }
+
+  async readFile(params: { relPath: string; from?: number; lines?: number }) {
+    const relPath = params.relPath?.trim();
+    if (relPath && isSupportedMemoryReadPath(relPath)) {
+      const postgresText = await readMemoryDocumentFromPostgres({
+        config: this.deps.cfg,
+        lookupMode: "runtime",
+        workspaceRoot: this.deps.workspaceRoot,
+        logicalPath: relPath,
+      });
+      if (postgresText === null) {
+        throw new Error(`Memory document is unavailable in Postgres for ${relPath}.`);
+      }
+      return {
+        text: sliceMemoryDocumentText(postgresText, params),
+        path: relPath,
+      };
+    }
+    return await this.deps.manager.readFile(params);
+  }
+
+  status() {
+    return this.deps.manager.status();
+  }
+
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+    await this.deps.manager.sync?.(params);
+    await reconcileWorkspaceMemoryDocumentsToPostgres(
+      {
+        workspaceRoot: this.deps.workspaceRoot,
+        agentId: this.deps.agentId,
+      },
+      {
+        config: this.deps.cfg,
+        lookupMode: "runtime",
+      },
+    );
+  }
+
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    return await this.deps.manager.probeEmbeddingAvailability();
+  }
+
+  async probeVectorAvailability() {
+    return await this.deps.manager.probeVectorAvailability();
+  }
+
+  async close() {
+    await this.deps.manager.close?.();
   }
 }
 

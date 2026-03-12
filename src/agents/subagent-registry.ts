@@ -52,6 +52,7 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import {
+  clearRuntimeSubagentRunsSnapshot,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk,
@@ -645,13 +646,13 @@ function resumeSubagentRun(runId: string) {
   resumedRuns.add(runId);
 }
 
-function restoreSubagentRunsOnce() {
+async function restoreSubagentRunsOnce() {
   if (restoreAttempted) {
     return;
   }
   restoreAttempted = true;
   try {
-    const restoredCount = restoreSubagentRunsFromDisk({
+    const restoredCount = await restoreSubagentRunsFromDisk({
       runs: subagentRuns,
       mergeOnly: true,
     });
@@ -1273,6 +1274,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
+  clearRuntimeSubagentRunsSnapshot();
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
@@ -1468,6 +1470,6 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
   );
 }
 
-export function initSubagentRegistry() {
-  restoreSubagentRunsOnce();
+export async function initSubagentRegistry() {
+  await restoreSubagentRunsOnce();
 }

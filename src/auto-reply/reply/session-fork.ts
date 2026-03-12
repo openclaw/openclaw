@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions.js";
+import { syncTranscriptFileToPostgres } from "../../persistence/service.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
@@ -40,6 +41,11 @@ export function forkSessionFromParent(params: {
       const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
       const sessionId = manager.getSessionId();
       if (sessionFile && sessionId) {
+        void syncTranscriptFileToPostgres({
+          transcriptPath: sessionFile,
+          agentId: params.agentId,
+          sessionId,
+        }).catch(() => undefined);
         return { sessionId, sessionFile };
       }
     }
@@ -56,6 +62,11 @@ export function forkSessionFromParent(params: {
       parentSession: parentSessionFile,
     };
     fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+    void syncTranscriptFileToPostgres({
+      transcriptPath: sessionFile,
+      agentId: params.agentId,
+      sessionId,
+    }).catch(() => undefined);
     return { sessionId, sessionFile };
   } catch {
     return null;

@@ -81,6 +81,7 @@ import {
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { syncSessionManagerToPostgres } from "../persistence/service.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
@@ -313,6 +314,12 @@ async function persistAcpTurnTranscript(params: {
     });
   }
 
+  await syncSessionManagerToPostgres({
+    sessionManager,
+    transcriptPath: sessionFile,
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId,
+  });
   emitSessionTranscriptUpdate(sessionFile);
   return sessionEntry;
 }

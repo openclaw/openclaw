@@ -153,10 +153,19 @@ const coreEntries: CoreCliEntry[] = [
         description: "Search and reindex memory files",
         hasSubcommands: true,
       },
+      {
+        name: "storage",
+        description: "Migrate and verify persistence backends",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
+      const [memoryMod, storageMod] = await Promise.all([
+        import("../memory-cli.js"),
+        import("../storage-cli.js"),
+      ]);
+      memoryMod.registerMemoryCli(program);
+      storageMod.registerStorageCli(program);
     },
   },
   {

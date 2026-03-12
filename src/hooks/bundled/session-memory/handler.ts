@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { persistMemoryDocumentCanonical } from "../../../persistence/service.js";
 import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -343,13 +344,23 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
-    await writeFileWithinRoot({
-      rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
-      encoding: "utf-8",
-    });
+    // In Postgres mode, the database is canonical and Markdown is a compatibility export.
+    if (cfg?.persistence?.backend === "postgres") {
+      await persistMemoryDocumentCanonical({
+        workspaceRoot: workspaceDir,
+        logicalPath: path.posix.join("memory", filename),
+        body: entry,
+        agentId,
+      });
+    } else {
+      // Write under memory root with alias-safe file validation.
+      await writeFileWithinRoot({
+        rootDir: memoryDir,
+        relativePath: filename,
+        data: entry,
+        encoding: "utf-8",
+      });
+    }
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

@@ -7,11 +7,19 @@ import { clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } fro
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
-vi.mock("../config.js", () => ({
-  loadConfig: vi.fn().mockReturnValue({}),
-}));
-const { loadConfig } = await import("../config.js");
+vi.mock(import("../config.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config.js")>();
+  return {
+    ...actual,
+    getRuntimeConfigSnapshot: vi.fn().mockReturnValue(null),
+    loadConfig: vi.fn().mockReturnValue({}),
+  };
+});
+const { getRuntimeConfigSnapshot, loadConfig } = await import("../config.js");
 const mockLoadConfig = vi.mocked(loadConfig) as ReturnType<typeof vi.fn>;
+const mockGetRuntimeConfigSnapshot = vi.mocked(getRuntimeConfigSnapshot) as ReturnType<
+  typeof vi.fn
+>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -83,6 +91,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
     mockLoadConfig.mockClear();
+    mockGetRuntimeConfigSnapshot.mockClear();
+    mockGetRuntimeConfigSnapshot.mockReturnValue(null);
   });
 
   afterEach(() => {
