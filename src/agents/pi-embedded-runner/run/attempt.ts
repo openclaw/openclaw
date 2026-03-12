@@ -8,6 +8,8 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { browserCloseTab } from "../../../browser/client.js";
+import { untrackSessionBrowserTab } from "../../../browser/session-tab-registry.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -848,9 +850,19 @@ export async function runEmbeddedAttempt(
     });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    // Track browser tabs opened during this run for automatic cleanup.
+    // Maps targetId → { baseUrl, profile } so we close against the correct
+    // endpoint (host vs sandbox browser) and browser profile.
+    // Node-proxy tabs store undefined baseUrl — their sandbox process is
+    // torn down independently, so cleanup is best-effort.
+    const openedBrowserTabs = new Map<
+      string,
+      { baseUrl: string | undefined; profile: string | undefined }
+    >();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
+          openedBrowserTabTracker: openedBrowserTabs,
           agentId: sessionAgentId,
           exec: {
             ...params.execOverrides,
@@ -2014,6 +2026,30 @@ export async function runEmbeddedAttempt(
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
+
+        // Close browser tabs opened during this run to prevent leaked headless tabs.
+        // Each entry maps targetId → { baseUrl, profile } so we close against the
+        // correct endpoint (host vs sandbox) and browser profile.
+        if (openedBrowserTabs.size > 0) {
+          log.debug(
+            `closing ${openedBrowserTabs.size} browser tab(s) opened during run: runId=${params.runId}`,
+          );
+          for (const [targetId, { baseUrl, profile }] of openedBrowserTabs) {
+            browserCloseTab(baseUrl, targetId, { profile: profile ?? undefined }).catch((err) => {
+              log.debug(`failed to close browser tab ${targetId}: ${String(err)}`);
+            });
+            // Also remove from the session-level tab registry so that
+            // closeTrackedBrowserTabsForSessions won't retry these stale IDs
+            // on session reset/delete.
+            untrackSessionBrowserTab({
+              sessionKey: params.sessionKey,
+              targetId,
+              baseUrl,
+              profile,
+            });
+          }
+          openedBrowserTabs.clear();
+        }
       }
 
       const lastAssistant = messagesSnapshot

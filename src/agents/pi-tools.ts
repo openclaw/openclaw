@@ -267,6 +267,13 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** When provided, browser tabs opened during the run are tracked here for cleanup.
+   *  Maps targetId → { baseUrl, profile } so cleanup can close against the correct
+   *  endpoint and browser profile. */
+  openedBrowserTabTracker?: Map<
+    string,
+    { baseUrl: string | undefined; profile: string | undefined }
+  >;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -530,6 +537,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
+      openedBrowserTabTracker: options?.openedBrowserTabTracker,
     }),
   ];
   const toolsForMemoryFlush =
