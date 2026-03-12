@@ -1081,7 +1081,7 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(true);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
   it("lets runtime options override OpenAI default transport", () => {
