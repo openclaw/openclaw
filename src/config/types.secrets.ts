@@ -185,6 +185,7 @@ export type FileSecretProviderConfig = {
   source: "file";
   path: string;
   mode?: FileSecretProviderMode;
+  allowInsecurePath?: boolean;
   timeoutMs?: number;
   maxBytes?: number;
 };

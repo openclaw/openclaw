@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { loadLazyLocaleTranslation, resolveNavigatorLocale } from "../lib/registry.ts";
 import { i18n, t } from "../lib/translate.ts";
 
 describe("i18n", () => {
@@ -41,16 +42,40 @@ describe("i18n", () => {
     expect(t("common.health")).toBe("健康状况");
   });
 
-  it("loads saved non-English locale on startup", async () => {
-    localStorage.setItem("openclaw.i18n.locale", "zh-CN");
-    vi.resetModules();
-    const fresh = await import("../lib/translate.ts");
+  it("lazy loads Turkish translations", async () => {
+    const translation = await loadLazyLocaleTranslation("tr");
 
-    for (let index = 0; index < 5 && fresh.i18n.getLocale() !== "zh-CN"; index += 1) {
-      await Promise.resolve();
+    expect(translation).not.toBeNull();
+    expect((translation as { common: { health: string } }).common.health).toBe("Durum");
+  });
+
+  it("loads saved Turkish locale on startup", async () => {
+    const internal = i18n as unknown as {
+      locale: string;
+      translations: Record<string, unknown>;
+      loadLocale: () => void;
+    };
+
+    localStorage.setItem("openclaw.i18n.locale", "tr");
+    internal.locale = "en";
+    delete internal.translations.tr;
+    internal.loadLocale();
+
+    for (let index = 0; index < 20 && i18n.getLocale() !== "tr"; index += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
-    expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    expect(fresh.t("common.health")).toBe("健康状况");
+    expect(i18n.getLocale()).toBe("tr");
+    expect(t("common.health")).toBe("Durum");
+  });
+
+  it("resolves Turkish navigator locales", () => {
+    expect(resolveNavigatorLocale("tr-TR")).toBe("tr");
+  });
+
+  it("resolves the Turkish language label used by the picker", async () => {
+    await i18n.setLocale("tr");
+
+    expect(t("languages.tr")).toBe("Türkçe");
   });
 });
