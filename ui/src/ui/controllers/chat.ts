@@ -149,6 +149,71 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+/**
+ * Send a message while an agent run is active. The server-side steer
+ * mechanism injects it into the running agent context without resetting
+ * the current run state (chatRunId, chatStream, etc.).
+ */
+export async function steerChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return false;
+  }
+
+  const now = Date.now();
+
+  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  if (msg) {
+    contentBlocks.push({ type: "text", text: msg });
+  }
+  if (hasAttachments) {
+    for (const att of attachments) {
+      contentBlocks.push({
+        type: "image",
+        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+      });
+    }
+  }
+
+  state.chatMessages = [
+    ...state.chatMessages,
+    { role: "user", content: contentBlocks, timestamp: now },
+  ];
+
+  const apiAttachments = hasAttachments
+    ? attachments
+        .map((att) => {
+          const parsed = dataUrlToBase64(att.dataUrl);
+          if (!parsed) {
+            return null;
+          }
+          return { type: "image", mimeType: parsed.mimeType, content: parsed.content };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+
+  try {
+    await state.client.request("chat.send", {
+      sessionKey: state.sessionKey,
+      message: msg,
+      deliver: false,
+      idempotencyKey: generateUUID(),
+      attachments: apiAttachments,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,

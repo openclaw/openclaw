@@ -3,12 +3,17 @@ import { scheduleChatScroll } from "./app-scroll.ts";
 import { setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
-import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import {
+  abortChatRun,
+  loadChatHistory,
+  sendChatMessage,
+  steerChatMessage,
+  type ChatState,
+} from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
-import { generateUUID } from "./uuid.ts";
 
 export type ChatHost = {
   connected: boolean;
@@ -66,29 +71,6 @@ export async function handleAbortChat(host: ChatHost) {
   }
   host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
-}
-
-function enqueueChatMessage(
-  host: ChatHost,
-  text: string,
-  attachments?: ChatAttachment[],
-  refreshSessions?: boolean,
-) {
-  const trimmed = text.trim();
-  const hasAttachments = Boolean(attachments && attachments.length > 0);
-  if (!trimmed && !hasAttachments) {
-    return;
-  }
-  host.chatQueue = [
-    ...host.chatQueue,
-    {
-      id: generateUUID(),
-      text: trimmed,
-      createdAt: Date.now(),
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
-      refreshSessions,
-    },
-  ];
 }
 
 async function sendChatMessageNow(
@@ -188,7 +170,14 @@ export async function handleSendChat(
   }
 
   if (isChatBusy(host)) {
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    // Send to server — the server-side steer mechanism injects
+    // the message into the active agent run if possible.
+    await steerChatMessage(
+      host as unknown as ChatState,
+      message,
+      hasAttachments ? attachmentsToSend : undefined,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
   }
 
