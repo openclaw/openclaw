@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { extractDeliveryInfo, resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { createConfigIO } from "../../config/io.js";
+import { extractDeliveryInfo, resolveMainSessionKey } from "../../config/sessions.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -38,14 +39,18 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+async function resolveGatewayLifecycleContext(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
   const serviceEnv = command?.environment ?? undefined;
   const mergedEnv = {
     ...(process.env as Record<string, string | undefined>),
     ...(serviceEnv ?? undefined),
   } as NodeJS.ProcessEnv;
+  return { command, mergedEnv };
+}
 
+async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
+  const { command, mergedEnv } = await resolveGatewayLifecycleContext(service);
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
@@ -256,8 +261,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   };
 
   if (shouldNotify) {
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
-    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
+    const { mergedEnv } = await resolveGatewayLifecycleContext(service);
+    const daemonCfg = createConfigIO({ env: mergedEnv }).loadConfig();
+    const mainSessionKey = resolveMainSessionKey(daemonCfg);
+    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey, { cfg: daemonCfg });
     const hasRoute = Boolean(deliveryContext?.channel && deliveryContext?.to);
     if (!hasRoute) {
       if (!json) {

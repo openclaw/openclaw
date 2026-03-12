@@ -37,19 +37,23 @@ const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"])
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.fn(() => 18789);
 const findGatewayPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
-const probeGateway = vi.fn<
-  (opts: {
-    url: string;
-    auth?: { token?: string; password?: string };
-    timeoutMs: number;
-  }) => Promise<{
-    ok: boolean;
-    configSnapshot: unknown;
-  }>
->();
+const probeGateway =
+  vi.fn<
+    (opts: {
+      url: string;
+      auth?: { token?: string; password?: string };
+      timeoutMs: number;
+    }) => Promise<{
+      ok: boolean;
+      configSnapshot: unknown;
+    }>
+  >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
-const resolveMainSessionKeyFromConfig = vi.fn(() => "agent:main:main");
+const createConfigIO = vi.fn(() => ({
+  loadConfig: () => loadConfig(),
+}));
+const resolveMainSessionKey = vi.fn(() => "agent:main:main");
 const extractDeliveryInfo = vi.fn(() => ({
   deliveryContext: { channel: "telegram", to: "7174833131" },
   threadId: undefined,
@@ -68,7 +72,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
-  resolveMainSessionKeyFromConfig,
+  resolveMainSessionKey,
   extractDeliveryInfo,
 }));
 
@@ -82,6 +86,10 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort,
+}));
+
+vi.mock("../../config/io.js", () => ({
+  createConfigIO: (...args: unknown[]) => createConfigIO(...args),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -148,12 +156,20 @@ describe("runDaemonRestart health checks", () => {
     mockSpawnSync.mockReset();
     writeRestartSentinel.mockReset();
     transitionRestartSentinelStatus.mockReset();
+    createConfigIO.mockClear();
+    resolveMainSessionKey.mockClear();
+    extractDeliveryInfo.mockClear();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     service.restart.mockResolvedValue({ outcome: "completed" });
+    resolveMainSessionKey.mockReturnValue("agent:main:main");
+    extractDeliveryInfo.mockReturnValue({
+      deliveryContext: { channel: "telegram", to: "7174833131" },
+      threadId: undefined,
+    });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -285,6 +301,43 @@ describe("runDaemonRestart health checks", () => {
     const finalizeOrder = transitionRestartSentinelStatus.mock.invocationCallOrder[1];
     expect(finalizeOrder).toBeGreaterThan(restartOrder);
   });
+
+  it("resolves --notify session context from service environment", async () => {
+    const daemonCfg = { session: { scope: "agent", mainKey: "daemon-main" } };
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
+      environment: { OPENCLAW_STATE_DIR: "/tmp/daemon-state" },
+    });
+    createConfigIO.mockReturnValue({
+      loadConfig: () => daemonCfg,
+    });
+    resolveMainSessionKey.mockReturnValue("agent:daemon:daemon-main");
+    extractDeliveryInfo.mockReturnValue({
+      deliveryContext: { channel: "telegram", to: "7174833131" },
+      threadId: undefined,
+    });
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    const result = await runDaemonRestart({ json: true, notify: true });
+
+    expect(result).toBe(true);
+    expect(createConfigIO).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/daemon-state" }),
+      }),
+    );
+    expect(resolveMainSessionKey).toHaveBeenCalledWith(daemonCfg);
+    expect(extractDeliveryInfo).toHaveBeenCalledWith("agent:daemon:daemon-main", {
+      cfg: daemonCfg,
+    });
+  });
+
   it("does not finalize restart sentinel when restart action never begins", async () => {
     let sentinelStatus: "pending" | "in-progress" | "ok" = "pending";
     writeRestartSentinel.mockImplementation(async () => {
