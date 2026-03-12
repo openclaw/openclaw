@@ -12,10 +12,12 @@ export function maybeBlockOversizedModelSwitch(params: {
   targetProvider: string;
   targetModel: string;
 }): string | undefined {
-  if (
-    params.currentProvider?.trim() === params.targetProvider &&
-    params.currentModel?.trim() === params.targetModel
-  ) {
+  const currentProvider = params.currentProvider?.trim();
+  const currentModel = params.currentModel?.trim();
+  const targetProvider = params.targetProvider.trim();
+  const targetModel = params.targetModel.trim();
+
+  if (currentProvider === targetProvider && currentModel === targetModel) {
     return undefined;
   }
 
@@ -26,8 +28,8 @@ export function maybeBlockOversizedModelSwitch(params: {
 
   const contextWindowTokens = resolveContextTokensForModel({
     cfg: params.cfg,
-    provider: params.targetProvider,
-    model: params.targetModel,
+    provider: targetProvider,
+    model: targetModel,
   });
   if (
     typeof contextWindowTokens !== "number" ||
@@ -49,7 +51,7 @@ export function maybeBlockOversizedModelSwitch(params: {
   }
 
   return [
-    `Can't switch to ${params.targetProvider}/${params.targetModel} yet.`,
+    `Can't switch to ${targetProvider}/${targetModel} yet.`,
     "",
     `Recorded session context: ${formatTokenCount(recordedTokens)} tokens.`,
     `Target model budget: about ${formatTokenCount(safeBudgetTokens)}/${formatTokenCount(contextWindowTokens)} tokens (reserve ${formatTokenCount(reserveTokens)}).`,
