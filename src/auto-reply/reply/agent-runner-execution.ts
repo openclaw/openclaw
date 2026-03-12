@@ -94,6 +94,22 @@ async function createEphemeralSessionFileClone(sessionFile: string): Promise<{
   };
 }
 
+type EphemeralSessionFileClone = Awaited<ReturnType<typeof createEphemeralSessionFileClone>>;
+
+async function cleanupEphemeralSessionFileClone(params: {
+  sessionClone: EphemeralSessionFileClone | null;
+  label: "cli" | "embedded";
+}): Promise<void> {
+  if (!params.sessionClone) {
+    return;
+  }
+  try {
+    await params.sessionClone.cleanup();
+  } catch (err) {
+    logVerbose(`heartbeat session clone cleanup failed (${params.label}): ${String(err)}`);
+  }
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -244,8 +260,7 @@ export async function runAgentTurnWithFallback(params: {
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
-              let sessionClone: Awaited<ReturnType<typeof createEphemeralSessionFileClone>> | null =
-                null;
+              let sessionClone: EphemeralSessionFileClone | null = null;
               let lifecycleTerminalEmitted = false;
               try {
                 sessionClone = params.isHeartbeat
@@ -331,7 +346,10 @@ export async function runAgentTurnWithFallback(params: {
                     },
                   });
                 }
-                await sessionClone?.cleanup();
+                await cleanupEphemeralSessionFileClone({
+                  sessionClone,
+                  label: "cli",
+                });
               }
             })();
           }
@@ -501,7 +519,10 @@ export async function runAgentTurnWithFallback(params: {
               );
               return result;
             } finally {
-              await sessionClone?.cleanup();
+              await cleanupEphemeralSessionFileClone({
+                sessionClone,
+                label: "embedded",
+              });
             }
           })();
         },

@@ -473,6 +473,88 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     });
   });
 
+  it("does not fail a successful embedded heartbeat run when clone cleanup fails", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const realRm = fs.rm.bind(fs);
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (String(target).includes("openclaw-heartbeat-session-")) {
+          throw new Error("cleanup failed");
+        }
+        return await realRm(target, options);
+      });
+      const globals = await import("../../globals.js");
+      const logVerboseSpy = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: { sessionFile },
+        });
+
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
+
+        expect(payload?.text).toBe("ok");
+        expect(await fs.readFile(sessionFile, "utf-8")).toBe(seeded);
+        expect(logVerboseSpy).toHaveBeenCalledWith(
+          expect.stringContaining("heartbeat session clone cleanup failed (embedded)"),
+        );
+      } finally {
+        logVerboseSpy.mockRestore();
+        rmSpy.mockRestore();
+      }
+    });
+  });
+
+  it("does not fail a successful CLI heartbeat run when clone cleanup fails", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const realRm = fs.rm.bind(fs);
+      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (String(target).includes("openclaw-heartbeat-session-")) {
+          throw new Error("cleanup failed");
+        }
+        return await realRm(target, options);
+      });
+      const globals = await import("../../globals.js");
+      const logVerboseSpy = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: {
+            sessionFile,
+            provider: "claude-cli",
+            model: "sonnet",
+          },
+        });
+
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
+
+        expect(payload?.text).toBe("ok");
+        expect(await fs.readFile(sessionFile, "utf-8")).toBe(seeded);
+        expect(logVerboseSpy).toHaveBeenCalledWith(
+          expect.stringContaining("heartbeat session clone cleanup failed (cli)"),
+        );
+      } finally {
+        logVerboseSpy.mockRestore();
+        rmSpy.mockRestore();
+      }
+    });
+  });
+
   it("emits a terminal lifecycle error when CLI heartbeat clone creation fails", async () => {
     await withTempSessionFile("seed", async (sessionFile) => {
       const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(new Error("mkdtemp failed"));
