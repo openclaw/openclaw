@@ -75,11 +75,35 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
+/**
+ * Returns true if the request Content-Type is acceptable for JSON endpoints.
+ * Accepts `application/json` (with optional charset/boundary params) and
+ * missing Content-Type (for backwards compat with curl/scripts that omit it).
+ */
+function isJsonContentType(req: IncomingMessage): boolean {
+  const ct = req.headers["content-type"];
+  if (!ct) {
+    return true; // allow missing for CLI/script compat
+  }
+  // Extract media type before any parameters (charset, boundary, etc.)
+  const mediaType = ct.split(";")[0]?.trim().toLowerCase();
+  return mediaType === "application/json";
+}
+
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
   maxBytes: number,
 ): Promise<unknown> {
+  if (!isJsonContentType(req)) {
+    sendJson(res, 415, {
+      error: {
+        message: "Unsupported Media Type. Expected application/json.",
+        type: "invalid_request_error",
+      },
+    });
+    return undefined;
+  }
   const body = await readJsonBody(req, maxBytes);
   if (!body.ok) {
     if (body.error === "payload too large") {
