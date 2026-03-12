@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
+const loadCombinedSessionStoreForGatewayMock = vi.fn();
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -41,6 +42,15 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+
+vi.mock("../gateway/session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGateway: (cfg: unknown) =>
+      loadCombinedSessionStoreForGatewayMock(cfg),
+  };
+});
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -95,7 +105,12 @@ function resetSessionStore(store: Record<string, unknown>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
+  loadCombinedSessionStoreForGatewayMock.mockClear();
   loadSessionStoreMock.mockReturnValue(store);
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store,
+  });
   callGatewayMock.mockResolvedValue({});
   mockConfig = createMockConfig();
 }
@@ -159,6 +174,30 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("resolves duplicate sessionId inputs deterministically", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "current",
+        updatedAt: 10,
+      },
+      "agent:main:other": {
+        sessionId: "run-dup",
+        updatedAt: 999,
+      },
+      "agent:main:acp:run-dup": {
+        sessionId: "run-dup",
+        updatedAt: 100,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    const result = await tool.execute("call-dup", { sessionKey: "run-dup" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:acp:run-dup");
   });
 
   it("uses non-standard session keys without sessionId resolution", async () => {

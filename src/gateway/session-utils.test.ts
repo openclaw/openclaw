@@ -829,7 +829,8 @@ describe("listSessionsFromStore search", () => {
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
     await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
-      const agentsDir = path.join(stateDir, "agents");
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
       const mainDir = path.join(agentsDir, "main", "sessions");
       const codexDir = path.join(agentsDir, "codex", "sessions");
       fs.mkdirSync(mainDir, { recursive: true });
@@ -854,7 +855,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const cfg = {
         session: {
           mainKey: "main",
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
         },
         agents: {
           list: [{ id: "main", default: true }],
