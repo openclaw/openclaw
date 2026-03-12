@@ -13,6 +13,13 @@ vi.mock("./bot.js", () => ({
 
 import { handleFeishuMessage } from "./bot.js";
 
+function getLastMessageText(): string {
+  const mock = handleFeishuMessage as ReturnType<typeof vi.fn>;
+  const lastCall = mock.mock.calls.at(-1);
+  if (!lastCall) throw new Error("handleFeishuMessage was not called");
+  return JSON.parse(lastCall[0].event.message.content).text;
+}
+
 describe("Feishu Card Action Handler", () => {
   const cfg = {} as any; // Minimal mock
   const runtime = { log: vi.fn(), error: vi.fn() } as any;
@@ -47,12 +54,7 @@ describe("Feishu Card Action Handler", () => {
       context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
     };
     await handleFeishuCardAction({ cfg, event, runtime });
-    const parsed = JSON.parse(
-      JSON.parse(
-        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
-          .content,
-      ).text,
-    );
+    const parsed = JSON.parse(getLastMessageText());
     expect(parsed).toMatchObject({ action: "input", input_value: "hello", name: "q1" });
   });
 
@@ -69,12 +71,7 @@ describe("Feishu Card Action Handler", () => {
       context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
     };
     await handleFeishuCardAction({ cfg, event, runtime });
-    const parsed = JSON.parse(
-      JSON.parse(
-        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
-          .content,
-      ).text,
-    );
+    const parsed = JSON.parse(getLastMessageText());
     expect(parsed).toMatchObject({
       action: "form",
       form_value: { field1: "val1", field2: "val2" },
@@ -90,12 +87,7 @@ describe("Feishu Card Action Handler", () => {
       context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
     };
     await handleFeishuCardAction({ cfg, event, runtime });
-    const parsed = JSON.parse(
-      JSON.parse(
-        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
-          .content,
-      ).text,
-    );
+    const parsed = JSON.parse(getLastMessageText());
     expect(parsed).toMatchObject({ action: "select_static", option: "opt_a", name: "dropdown1" });
   });
 
@@ -107,11 +99,8 @@ describe("Feishu Card Action Handler", () => {
       context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
     };
     await handleFeishuCardAction({ cfg, event, runtime });
-    const text = JSON.parse(
-      (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message.content,
-    ).text;
     // name-only should NOT trigger structured payload — preserves plain command extraction
-    expect(text).toBe("/help");
+    expect(getLastMessageText()).toBe("/help");
   });
 
   it("handles card action with JSON object payload", async () => {
