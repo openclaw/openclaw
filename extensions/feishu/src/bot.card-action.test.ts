@@ -99,21 +99,19 @@ describe("Feishu Card Action Handler", () => {
     expect(parsed).toMatchObject({ action: "select_static", option: "opt_a", name: "dropdown1" });
   });
 
-  it("handles card action with name-only (triggers form branch)", async () => {
+  it("handles card action with name-only as plain button (preserves command extraction)", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u1", user_id: "uid1", union_id: "un1" },
       token: "tok6",
-      action: { value: { key: "val" }, tag: "button", name: "btn1" },
+      action: { value: { command: "/help" }, tag: "button", name: "btn1" },
       context: { open_id: "u1", user_id: "uid1", chat_id: "chat1" },
     };
     await handleFeishuCardAction({ cfg, event, runtime });
-    const parsed = JSON.parse(
-      JSON.parse(
-        (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message
-          .content,
-      ).text,
-    );
-    expect(parsed).toMatchObject({ action: "button", name: "btn1", value: { key: "val" } });
+    const text = JSON.parse(
+      (handleFeishuMessage as ReturnType<typeof vi.fn>).mock.calls.at(-1)[0].event.message.content,
+    ).text;
+    // name-only should NOT trigger structured payload — preserves plain command extraction
+    expect(text).toBe("/help");
   });
 
   it("handles card action with JSON object payload", async () => {

@@ -41,7 +41,6 @@ export async function handleFeishuCardAction(params: {
   const hasFormData =
     action.form_value !== undefined ||
     action.input_value !== undefined ||
-    action.name !== undefined ||
     action.option !== undefined ||
     action.options !== undefined;
 
