@@ -429,7 +429,7 @@ export const OpenClawSchema = z
         backend: z.string().optional(),
         defaultAgent: z.string().optional(),
         allowedAgents: z.array(z.string()).optional(),
-        defaultChannels: z.array(z.string()).optional(),
+        defaultChannels: z.array(z.enum(["discord", "telegram", "feishu", "qqbot"])).optional(),
         maxConcurrentSessions: z.number().int().positive().optional(),
         stream: z
           .object({

@@ -423,6 +423,22 @@ export function resolveConfiguredAcpBindingRecord(params: {
   if (defaultChannels.includes(channel)) {
     const bindingChannel = normalizeBindingChannel(channel);
     if (bindingChannel) {
+      // Telegram requires topic normalization so the session key hash stays
+      // consistent with explicit binding paths.
+      let effectiveConversationId = conversationId;
+      let effectiveParentConversationId = parentConversationId;
+      if (bindingChannel === "telegram") {
+        const parsed = parseTelegramTopicConversation({
+          conversationId,
+          parentConversationId,
+        });
+        if (!parsed || !parsed.chatId.startsWith("-")) {
+          return null;
+        }
+        effectiveConversationId = parsed.canonicalConversationId;
+        effectiveParentConversationId = parsed.chatId;
+      }
+
       const agentId = pickFirstExistingAgentId(params.cfg, "main");
       const runtimeDefaults = resolveAgentRuntimeAcpDefaults({
         cfg: params.cfg,
@@ -431,8 +447,8 @@ export function resolveConfiguredAcpBindingRecord(params: {
       const spec: ConfiguredAcpBindingSpec = {
         channel: bindingChannel,
         accountId,
-        conversationId,
-        parentConversationId,
+        conversationId: effectiveConversationId,
+        parentConversationId: effectiveParentConversationId,
         agentId,
         acpAgentId: normalizeText(runtimeDefaults.acpAgentId),
         mode: normalizeMode(runtimeDefaults.mode),

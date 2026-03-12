@@ -176,6 +176,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
   "acp.allowedAgents":
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
+  "acp.defaultChannels":
+    'Channels that implicitly use ACP for all conversations when no explicit binding matches. Supported: "discord", "telegram", "feishu", "qqbot". Each conversation gets its own ACP session using the defaultAgent.',
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
   "acp.stream":

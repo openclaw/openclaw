@@ -688,6 +688,41 @@ describe("acp.defaultChannels implicit binding", () => {
     expect(resolved?.spec.acpAgentId).toBe("claude");
     expect(resolved?.spec.backend).toBe("acpx");
   });
+
+  it("normalizes telegram topic conversationId when synthesizing via defaultChannels", () => {
+    const cfg = {
+      ...baseCfg,
+      acp: { defaultChannels: ["telegram"] },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "telegram",
+      accountId: "main",
+      conversationId: "-1001234567890:topic:42",
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.spec.channel).toBe("telegram");
+    expect(resolved?.spec.conversationId).toBe("-1001234567890:topic:42");
+    expect(resolved?.spec.parentConversationId).toBe("-1001234567890");
+  });
+
+  it("returns null for telegram DMs even when telegram is in defaultChannels", () => {
+    const cfg = {
+      ...baseCfg,
+      acp: { defaultChannels: ["telegram"] },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "telegram",
+      accountId: "main",
+      conversationId: "123456789",
+    });
+
+    expect(resolved).toBeNull();
+  });
 });
 
 describe("buildConfiguredAcpSessionKey", () => {
