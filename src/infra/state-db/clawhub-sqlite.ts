@@ -324,6 +324,33 @@ export function getAllLockEntriesFromDb(
   }
 }
 
+/** Upsert a lock entry. */
+export function upsertLockEntryInDb(
+  workspacePath: string,
+  slug: string,
+  version: string | null,
+  lockDataJson: string,
+  lockedAt: number,
+): void {
+  const db = resolveDb();
+  const wsId = deriveWorkspaceId(workspacePath);
+  try {
+    db.prepare(
+      `INSERT INTO op1_clawhub_locks
+         (workspace_id, skill_slug, lock_version, lock_data_json, locked_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (workspace_id, skill_slug) DO UPDATE SET
+         lock_version = excluded.lock_version,
+         lock_data_json = excluded.lock_data_json`,
+    ).run(wsId, slug, version, lockDataJson, lockedAt);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("no such table")) {
+      return;
+    }
+    throw err;
+  }
+}
+
 /** Delete a lock entry. */
 export function deleteLockEntryFromDb(workspacePath: string, slug: string): boolean {
   const db = resolveDb();
