@@ -332,7 +332,7 @@ describe("launchd install", () => {
 
   it("restarts LaunchAgent with kickstart and no bootout", async () => {
     const env = createDefaultLaunchdEnv();
-    await restartLaunchAgent({
+    const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
     });
@@ -340,6 +340,7 @@ describe("launchd install", () => {
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const serviceId = `${domain}/${label}`;
+    expect(result).toEqual({ outcome: "completed" });
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
@@ -350,7 +351,7 @@ describe("launchd install", () => {
     state.kickstartError = "Could not find service";
     state.kickstartFailuresRemaining = 1;
 
-    await restartLaunchAgent({
+    const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
     });
@@ -369,24 +370,43 @@ describe("launchd install", () => {
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
 
+    expect(result).toEqual({ outcome: "completed" });
     expect(kickstartCalls).toHaveLength(2);
     expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
   });
 
+  it("surfaces the original kickstart failure when the service is still loaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
+  });
+
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
     launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
 
-    await restartLaunchAgent({
+    const result = await restartLaunchAgent({
       env,
       stdout: new PassThrough(),
     });
 
+    expect(result).toEqual({ outcome: "scheduled" });
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
       env,
       mode: "kickstart",
+      waitForPid: process.pid,
     });
     expect(state.launchctlCalls).toEqual([]);
   });

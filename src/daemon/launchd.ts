@@ -27,6 +27,7 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceRestartResult,
 } from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
@@ -447,7 +448,7 @@ export async function installLaunchAgent({
 export async function restartLaunchAgent({
   stdout,
   env,
-}: GatewayServiceControlArgs): Promise<void> {
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
@@ -461,6 +462,7 @@ export async function restartLaunchAgent({
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: "kickstart",
+      waitForPid: process.pid,
     });
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
@@ -472,7 +474,7 @@ export async function restartLaunchAgent({
         throw err;
       }
     }
-    return;
+    return { outcome: "scheduled" };
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
@@ -484,7 +486,11 @@ export async function restartLaunchAgent({
         throw err;
       }
     }
-    return;
+    return { outcome: "completed" };
+  }
+
+  if (!isLaunchctlNotLoaded(start)) {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
   // If the service was previously booted out, re-register the plist and retry.
@@ -517,4 +523,5 @@ export async function restartLaunchAgent({
       throw err;
     }
   }
+  return { outcome: "completed" };
 }
