@@ -18,6 +18,7 @@ describe("session files", () => {
 
   it("lists live and archived session transcripts from the agent sessions root", async () => {
     vi.stubEnv("OPENCLAW_HOME", tmpDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
     const sessionsDir = path.join(tmpDir, ".openclaw", "agents", "coder", "sessions");
     await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
 
