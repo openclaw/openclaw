@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -54,7 +55,10 @@ export async function buildNodeInstallPlan(params: {
     title: "Node daemon runtime",
   });
 
-  const environment = buildNodeServiceEnvironment({ env: params.env });
+  const environment = buildNodeServiceEnvironment({
+    env: params.env,
+    extraPathDirs: nodePath && path.isAbsolute(nodePath) ? [path.dirname(nodePath)] : undefined,
+  });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });

@@ -1934,9 +1934,16 @@ install_openclaw_from_git() {
 
     ensure_user_local_bin_on_path
 
+    local resolved_node_path=""
+    resolved_node_path="$(command -v node 2>/dev/null || true)"
+
     cat > "$HOME/.local/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+resolved_node="${resolved_node_path}"
+if [[ -n "\$resolved_node" && -x "\$resolved_node" ]]; then
+    exec "\$resolved_node" "${repo_dir}/dist/entry.js" "\$@"
+fi
 exec node "${repo_dir}/dist/entry.js" "\$@"
 EOF
     chmod +x "$HOME/.local/bin/openclaw"

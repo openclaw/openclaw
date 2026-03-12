@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -51,6 +52,7 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
+    extraPathDirs: nodePath && path.isAbsolute(nodePath) ? [path.dirname(nodePath)] : undefined,
     launchdLabel:
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)

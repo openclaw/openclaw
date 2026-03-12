@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildMinimalServicePath,
@@ -10,8 +11,12 @@ import {
   getMinimalServicePathPartsFromEnv,
 } from "./service-env.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("getMinimalServicePathParts - Linux user directories", () => {
-  it("includes user bin directories when HOME is set on Linux", () => {
+  it("includes stable user bin directories when HOME is set on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
@@ -21,12 +26,12 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.local/bin");
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
-    expect(result).toContain("/home/testuser/.nvm/current/bin");
-    expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
+    expect(result).not.toContain("/home/testuser/.nvm/current/bin");
+    expect(result).not.toContain("/home/testuser/.fnm/current/bin");
   });
 
   it("excludes user bin directories when HOME is undefined on Linux", () => {
@@ -73,7 +78,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(extraDirIndex).toBeLessThan(userDirIndex);
   });
 
-  it("includes env-configured bin roots when HOME is set on Linux", () => {
+  it("includes env-configured stable bin roots when HOME is set on Linux", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "linux",
       env: {
@@ -83,8 +88,8 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
         BUN_INSTALL: "/opt/bun",
         VOLTA_HOME: "/opt/volta",
         ASDF_DATA_DIR: "/opt/asdf",
-        NVM_DIR: "/opt/nvm",
-        FNM_DIR: "/opt/fnm",
+        NVM_DIR: "/__openclaw_missing__/nvm",
+        FNM_DIR: "/__openclaw_missing__/fnm",
       },
     });
 
@@ -93,8 +98,34 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/asdf/shims");
-    expect(result).toContain("/opt/nvm/current/bin");
-    expect(result).toContain("/opt/fnm/current/bin");
+    expect(result).not.toContain("/__openclaw_missing__/nvm/current/bin");
+    expect(result).not.toContain("/__openclaw_missing__/fnm/current/bin");
+  });
+
+  it("includes current/bin directories only when they exist", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      const target = typeof candidate === "string" ? candidate : candidate.toString();
+      return (
+        target === "/__openclaw_exists__/nvm/current/bin" ||
+        target === "/__openclaw_exists__/fnm/current/bin" ||
+        target === "/home/testuser/.nvm/current/bin" ||
+        target === "/home/testuser/.fnm/current/bin"
+      );
+    });
+
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NVM_DIR: "/__openclaw_exists__/nvm",
+        FNM_DIR: "/__openclaw_exists__/fnm",
+      },
+    });
+
+    expect(result).toContain("/__openclaw_exists__/nvm/current/bin");
+    expect(result).toContain("/__openclaw_exists__/fnm/current/bin");
+    expect(result).toContain("/home/testuser/.nvm/current/bin");
+    expect(result).toContain("/home/testuser/.fnm/current/bin");
   });
 
   it("includes version manager directories on macOS when HOME is set", () => {
@@ -203,7 +234,7 @@ describe("buildMinimalServicePath", () => {
     // Verify user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
-    expect(parts).toContain("/home/alice/.nvm/current/bin");
+    expect(parts).not.toContain("/home/alice/.nvm/current/bin");
 
     // Verify system directories are also included
     expect(parts).toContain("/usr/local/bin");
@@ -344,6 +375,17 @@ describe("buildServiceEnvironment", () => {
     expect(env).not.toHaveProperty("PATH");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
   });
+
+  it("prepends extra runtime node directories to the service PATH", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      extraPathDirs: ["/custom/node/bin"],
+      platform: "linux",
+    });
+
+    expect(env.PATH?.split(":").at(0)).toBe("/custom/node/bin");
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -415,6 +457,16 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
+  it("prepends extra runtime node directories to node service PATH", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      extraPathDirs: ["/custom/node/bin"],
+      platform: "linux",
+    });
+
+    expect(env.PATH?.split(":").at(0)).toBe("/custom/node/bin");
   });
 });
 

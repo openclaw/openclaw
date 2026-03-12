@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -67,6 +68,12 @@ function readServiceProxyEnvironment(
 
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   if (dir) {
+    dirs.push(dir);
+  }
+}
+
+function addExistingDir(dirs: string[], dir: string | undefined): void {
+  if (dir && fs.existsSync(dir)) {
     dirs.push(dir);
   }
 }
@@ -168,15 +175,15 @@ export function resolveLinuxUserBinDirs(
 
   // Env-configured bin roots (override defaults when present).
   addCommonEnvConfiguredBinDirs(dirs, env);
-  addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
+  addExistingDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  addExistingDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home);
 
   // Node version managers
-  dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
-  dirs.push(`${home}/.fnm/current/bin`); // fnm
+  addExistingDir(dirs, `${home}/.nvm/current/bin`); // nvm with current symlink
+  addExistingDir(dirs, `${home}/.fnm/current/bin`); // fnm
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
 
   return dirs;
@@ -246,11 +253,12 @@ export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
   launchdLabel?: string;
+  extraPathDirs?: string[];
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env, port, launchdLabel } = params;
+  const { env, port, launchdLabel, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
@@ -270,11 +278,12 @@ export function buildServiceEnvironment(params: {
 
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
+  extraPathDirs?: string[];
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env } = params;
+  const { env, extraPathDirs } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, extraPathDirs);
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
@@ -313,6 +322,7 @@ function buildCommonServiceEnvironment(
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  extraPathDirs?: string[],
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -331,7 +341,10 @@ function resolveSharedServiceEnvironmentFields(
     tmpDir,
     // On Windows, Scheduled Tasks should inherit the current task PATH instead of
     // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
-    minimalPath: platform === "win32" ? undefined : buildMinimalServicePath({ env, platform }),
+    minimalPath:
+      platform === "win32"
+        ? undefined
+        : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
     proxyEnv,
     nodeCaCerts,
     nodeUseSystemCa,
