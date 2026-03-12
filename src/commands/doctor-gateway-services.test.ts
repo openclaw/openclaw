@@ -279,6 +279,77 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
+  it("does not flag entrypoint mismatch when realpath fails but normalized absolute paths match", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/opt/openclaw/../openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/opt/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("still flags entrypoint mismatch when canonicalized paths differ", async () => {
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/.nvm/versions/node/v22.0.0/lib/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
   it("treats SecretRef-managed gateway token as non-persisted service state", async () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
