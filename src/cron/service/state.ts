@@ -103,6 +103,11 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  runRescueWatchdogJob?: (params: {
+    job: CronJob;
+    monitoredProfile: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronRunOutcome & CronRunTelemetry>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;

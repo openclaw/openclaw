@@ -146,6 +146,28 @@ describe("normalizeCronJobCreate", () => {
     expect("sessionKey" in cleared).toBe(false);
   });
 
+  it("infers isolated sessionTarget for rescue watchdog payloads", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "rescue",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      wakeMode: "now",
+      payload: {
+        kind: "rescueWatchdog",
+        monitoredProfile: " work ",
+        timeoutSeconds: 120.9,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.delivery).toBeUndefined();
+    expect(normalized.payload).toEqual({
+      kind: "rescueWatchdog",
+      monitoredProfile: "work",
+      timeoutSeconds: 120,
+    });
+  });
+
   it("canonicalizes payload.channel casing", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "legacy provider",

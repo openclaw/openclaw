@@ -87,6 +87,8 @@ function coercePayload(payload: UnknownRecord) {
   const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
+  } else if (kindRaw === "rescuewatchdog") {
+    next.kind = "rescueWatchdog";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
   } else if (kindRaw) {
@@ -150,6 +152,18 @@ function coercePayload(payload: UnknownRecord) {
       next.timeoutSeconds = Math.max(0, Math.floor(next.timeoutSeconds));
     } else {
       delete next.timeoutSeconds;
+    }
+  }
+  if ("monitoredProfile" in next) {
+    if (typeof next.monitoredProfile === "string") {
+      const trimmed = next.monitoredProfile.trim();
+      if (trimmed) {
+        next.monitoredProfile = trimmed;
+      } else {
+        delete next.monitoredProfile;
+      }
+    } else {
+      delete next.monitoredProfile;
     }
   }
   if (
@@ -434,7 +448,7 @@ export function normalizeCronJobInput(
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       }
-      if (kind === "agentTurn") {
+      if (kind === "agentTurn" || kind === "rescueWatchdog") {
         next.sessionTarget = "isolated";
       }
     }
