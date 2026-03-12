@@ -261,6 +261,8 @@ importers:
         specifier: 0.1.16
         version: 0.1.16(zod@4.3.6)
 
+  extensions/adaptive-thinking: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:
