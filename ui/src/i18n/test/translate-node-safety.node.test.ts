@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, afterAll } from "vitest";
 
 describe("i18n node-mode safety", () => {
   const origLocalStorage = globalThis.localStorage;
   const origNavigator = globalThis.navigator;
 
   afterAll(() => {
-    Object.defineProperty(globalThis, "localStorage", { value: origLocalStorage, configurable: true });
+    Object.defineProperty(globalThis, "localStorage", {
+      value: origLocalStorage,
+      configurable: true,
+    });
     Object.defineProperty(globalThis, "navigator", { value: origNavigator, configurable: true });
   });
 
