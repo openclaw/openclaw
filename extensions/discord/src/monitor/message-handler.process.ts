@@ -43,7 +43,11 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  resolveDiscordAutoThreadContext,
+  resolveDiscordAutoThreadReplyPlan,
+  resolveDiscordThreadStarter,
+} from "./threading.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -109,6 +113,33 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
+  // Resolve the session key using the same chain as normal message routing so
+  // that drain-captured entries replay into the correct session after restart.
+  // threadKeys and autoThreadContext are computed synchronously here; since
+  // autoThreadContext requires an async Discord API call (thread creation) that
+  // we cannot make during drain, it evaluates to null and its SessionKey slot
+  // falls through to threadKeys.sessionKey ?? baseSessionKey.
+  const drainParentSessionKey = threadParentId
+    ? buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: route.channel,
+        peer: { kind: "channel", id: threadParentId },
+      })
+    : undefined;
+  const drainThreadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: threadChannel ? messageChannelId : undefined,
+    parentSessionKey: drainParentSessionKey,
+    useSuffix: false,
+  });
+  const drainAutoThreadContext = resolveDiscordAutoThreadContext({
+    agentId: route.agentId,
+    channel: route.channel,
+    messageChannelId,
+    // No createdThreadId at drain time — thread creation is skipped during drain.
+    createdThreadId: undefined,
+  });
+
   // Drain guard: persist authorized messages for replay after restart.
   // Auth was already verified in the preflight step (message-handler.preflight.ts) —
   // unauthorized messages return null from preflight and never reach this function.
@@ -130,7 +161,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         isDirect: isDirectMessage,
       },
       capturedAt: Date.now(),
-      sessionKey: boundSessionKey ?? baseSessionKey,
+      sessionKey:
+        boundSessionKey ??
+        drainAutoThreadContext?.SessionKey ??
+        drainThreadKeys.sessionKey ??
+        baseSessionKey,
     });
     return;
   }
