@@ -661,7 +661,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.provider":
     'Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "tavily"). Auto-detected from available API keys if omitted.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
-  "tools.web.search.maxResults": "Number of results to return (1-10).",
+  "tools.web.search.maxResults": "Number of results to return (1-10; Tavily supports up to 20).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
   "tools.web.search.brave.mode":
@@ -676,8 +676,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.kimi.baseUrl":
     'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
   "tools.web.search.kimi.model": 'Kimi model override (default: "moonshot-v1-128k").',
-  "tools.web.search.tavily.apiKey":
-    "Tavily API key (fallback: TAVILY_API_KEY env var).", // pragma: allowlist secret
+  "tools.web.search.tavily.apiKey": "Tavily API key (fallback: TAVILY_API_KEY env var).", // pragma: allowlist secret
   "tools.web.search.tavily.baseUrl":
     'Tavily base URL override (default: "https://api.tavily.com").',
   "tools.web.search.perplexity.apiKey":

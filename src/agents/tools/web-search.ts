@@ -6,6 +6,7 @@ import { logVerbose } from "../../globals.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
@@ -46,13 +47,7 @@ const KIMI_WEB_SEARCH_TOOL = {
 
 const TAVILY_DEFAULT_BASE_URL = "https://api.tavily.com";
 const TAVILY_MAX_RESULTS = 20;
-// Tavily time_range values match the normalized freshness values (day/week/month/year).
-const TAVILY_FRESHNESS_MAP: Record<string, string> = {
-  day: "day",
-  week: "week",
-  month: "month",
-  year: "year",
-};
+// Tavily time_range field accepts the same values as normalized freshness (day/week/month/year).
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -292,12 +287,10 @@ function createWebSearchSchema(params: {
       freshness: filterSchema.freshness,
       date_after: filterSchema.date_after,
       date_before: filterSchema.date_before,
-      search_depth: Type.Optional(
-        Type.String({
-          description:
-            "Search depth: 'basic' (default, faster) or 'advanced' (more thorough, higher cost).",
-        }),
-      ),
+      search_depth: optionalStringEnum(["basic", "advanced"], {
+        description:
+          "Search depth: 'basic' (default, faster) or 'advanced' (more thorough, higher cost).",
+      }),
       include_answer: Type.Optional(
         Type.Boolean({
           description: "Include an AI-generated answer summary in the response (default: false).",
@@ -1951,7 +1944,7 @@ async function runWebSearch(params: {
       timeoutSeconds: params.timeoutSeconds,
       searchDepth: params.tavilySearchDepth || undefined,
       includeAnswer: params.tavilyIncludeAnswer,
-      timeRange: params.freshness ? TAVILY_FRESHNESS_MAP[params.freshness] : undefined,
+      timeRange: params.freshness || undefined,
       startDate: params.dateAfter,
       endDate: params.dateBefore,
       includeDomains: includeDomains.length > 0 ? includeDomains : undefined,
