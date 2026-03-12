@@ -18,7 +18,6 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "uninstall",
   "start",
   "stop",
-  "restart",
 ]);
 let didRunDoctorConfigFlow = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =

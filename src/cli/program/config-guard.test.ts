@@ -105,13 +105,22 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("does not exit for invalid config on allowlisted commands", async () => {
+  it("does not exit for invalid config on allowlisted read-only commands", async () => {
     setInvalidSnapshot();
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("exits for invalid config on gateway restart", async () => {
+    setInvalidSnapshot();
+    const runtime = await runEnsureConfigReady(["gateway", "restart"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("runs doctor migration flow only once per module instance", async () => {
