@@ -362,9 +362,6 @@ export function isTransientHttpError(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (isCloudflareOrHtmlErrorPage(trimmed)) {
-    return true;
-  }
   const status = extractLeadingHttpStatus(trimmed);
   if (!status) {
     return false;
@@ -990,6 +987,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isOverloadedErrorMessage(raw)) {
     return "overloaded";
+  }
+  if (isCloudflareOrHtmlErrorPage(raw) && !extractLeadingHttpStatus(raw.trim())) {
+    return "timeout";
   }
   if (isTransientHttpError(raw)) {
     // 529 is always overloaded, even without explicit overload keywords in the body.

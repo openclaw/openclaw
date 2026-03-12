@@ -51,7 +51,6 @@ import {
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
-  isTransientHttpError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
@@ -1365,9 +1364,9 @@ export async function runEmbeddedPiAgent(
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
           const rawAssistantError = lastAssistant?.errorMessage?.trim() ?? "";
           const standaloneHtmlTransientError =
-            rawAssistantError.length > 0 && isCloudflareOrHtmlErrorPage(rawAssistantError);
-          const transientHttpTransportError =
-            rawAssistantError.length > 0 && isTransientHttpError(rawAssistantError);
+            rawAssistantError.length > 0 &&
+            isCloudflareOrHtmlErrorPage(rawAssistantError) &&
+            !/^\s*(?:http\s*)?\d{3}\b/i.test(rawAssistantError);
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
@@ -1397,7 +1396,7 @@ export async function runEmbeddedPiAgent(
           if (
             !aborted &&
             assistantFailoverReason === "timeout" &&
-            (standaloneHtmlTransientError || transientHttpTransportError) &&
+            standaloneHtmlTransientError &&
             transientTransportRetryAttempts < MAX_TRANSIENT_TRANSPORT_RETRIES
           ) {
             transientTransportRetryAttempts += 1;
@@ -1409,7 +1408,16 @@ export async function runEmbeddedPiAgent(
               `transient provider transport failure for ${provider}/${modelId}; retrying same profile/model ` +
                 `attempt=${transientTransportRetryAttempts}/${MAX_TRANSIENT_TRANSPORT_RETRIES} delayMs=${delayMs}`,
             );
-            await sleepWithAbort(delayMs, params.abortSignal);
+            try {
+              await sleepWithAbort(delayMs, params.abortSignal);
+            } catch (err) {
+              if (params.abortSignal?.aborted) {
+                const abortError = new Error("Operation aborted", { cause: err });
+                abortError.name = "AbortError";
+                throw abortError;
+              }
+              throw err;
+            }
             continue;
           }
           if (imageDimensionError && lastProfileId) {

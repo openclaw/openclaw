@@ -969,6 +969,56 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
   });
 
+  it("rethrows AbortError when standalone HTML retry backoff is aborted", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      await fs.writeFile(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+          },
+          usageStats: {},
+        }),
+      );
+
+      const controller = new AbortController();
+      runEmbeddedAttemptMock.mockClear();
+      mockStandaloneHtmlErrorOnlyAttempts(1);
+      sleepWithAbortMock.mockImplementationOnce(async () => {
+        controller.abort();
+        throw new Error("aborted");
+      });
+
+      await expect(
+        runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:standalone-html-abort",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileId: "openai:p1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:standalone-html-abort",
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        message: "Operation aborted",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not rotate for compaction timeouts", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

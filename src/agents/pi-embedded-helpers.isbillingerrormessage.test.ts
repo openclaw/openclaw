@@ -487,7 +487,8 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("529 Overloaded")).toBe(true);
   });
 
-  it("returns true for standalone OpenAI/Cloudflare HTML error pages", () => {
+  it("returns false for non-retryable or non-http text", () => {
+    expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     const htmlError = `<!DOCTYPE html>
 <html>
   <head><title>Unable to load site</title></head>
@@ -497,12 +498,7 @@ describe("isTransientHttpError", () => {
     <span>Ray ID: 9db04bc5cf66e92d</span>
   </body>
 </html>`;
-
-    expect(isTransientHttpError(htmlError)).toBe(true);
-  });
-
-  it("returns false for non-retryable or non-http text", () => {
-    expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
+    expect(isTransientHttpError(htmlError)).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
   });
 });
@@ -801,6 +797,17 @@ describe("classifyFailoverReason", () => {
     // Raw 529 text without explicit overload keywords still classifies as overloaded.
     expect(classifyFailoverReason("529 API is busy")).toBe("overloaded");
     expect(classifyFailoverReason("529 Please try again")).toBe("overloaded");
+    expect(
+      classifyFailoverReason(`<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+  </body>
+</html>`),
+    ).toBe("timeout");
   });
   it("classifies zhipuai Weekly/Monthly Limit Exhausted as rate_limit (#33785)", () => {
     expect(
