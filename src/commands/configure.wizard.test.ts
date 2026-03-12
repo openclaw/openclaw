@@ -111,6 +111,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
+    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
 
     const selectQueue = ["local", "__continue"];
     mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
@@ -135,6 +136,51 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  it("configures Cortex memory through the wizard sections flow", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+
+    const selectQueue = ["local", "technical"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    const confirmQueue = [true, true];
+    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+    mocks.clackText.mockResolvedValue("2048");
+
+    await runConfigureWizard(
+      { command: "configure", sections: ["memory"] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            cortex: expect.objectContaining({
+              enabled: true,
+              mode: "technical",
+              maxChars: 2048,
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("exits with code 1 when configure wizard is cancelled", async () => {
     const runtime = {
       log: vi.fn(),
@@ -152,6 +198,7 @@ describe("runConfigureWizard", () => {
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
     mocks.createClackPrompter.mockReturnValue({});
+    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
     mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());
 
     await runConfigureWizard({ command: "configure" }, runtime);
