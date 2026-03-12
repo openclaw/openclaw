@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export function resolveBundledPluginsDir(): string | undefined {
-  const override = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
+export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
     return override;
   }

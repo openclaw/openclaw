@@ -69,10 +69,11 @@ function buildDiscoveryCacheKey(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
 }): string {
   const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  const configExtensionsRoot = path.join(resolveConfigDir(), "extensions");
-  const bundledRoot = resolveBundledPluginsDir() ?? "";
+  const configExtensionsRoot = path.join(resolveConfigDir(params.env), "extensions");
+  const bundledRoot = resolveBundledPluginsDir(params.env) ?? "";
   const normalizedExtraPaths = (params.extraPaths ?? [])
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
@@ -628,6 +629,7 @@ export function discoverOpenClawPlugins(params: {
     workspaceDir: params.workspaceDir,
     extraPaths: params.extraPaths,
     ownershipUid: params.ownershipUid,
+    env,
   });
   if (cacheEnabled) {
     const cached = discoveryCache.get(cacheKey);
@@ -676,7 +678,7 @@ export function discoverOpenClawPlugins(params: {
     }
   }
 
-  const bundledDir = resolveBundledPluginsDir();
+  const bundledDir = resolveBundledPluginsDir(env);
   if (bundledDir) {
     discoverInDirectory({
       dir: bundledDir,
@@ -690,7 +692,7 @@ export function discoverOpenClawPlugins(params: {
 
   // Keep auto-discovered global extensions behind bundled plugins.
   // Users can still intentionally override via plugins.load.paths (origin=config).
-  const globalDir = path.join(resolveConfigDir(), "extensions");
+  const globalDir = path.join(resolveConfigDir(env), "extensions");
   discoverInDirectory({
     dir: globalDir,
     origin: "global",
