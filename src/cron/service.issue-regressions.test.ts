@@ -1792,6 +1792,51 @@ describe("Cron issue regressions", () => {
     expect(job.state.lastDeliveryError).toBeUndefined();
   });
 
+  it("#41764: clears lastError even when result includes a soft-error string on success", () => {
+    const startedAt = Date.parse("2026-03-08T10:05:00.000Z");
+    const endedAt = startedAt + 50;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-41764-soft-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "soft-error-41764",
+      name: "soft error on success",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt - 60_000 },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {
+        nextRunAtMs: startedAt - 1_000,
+        lastError: "previous run 429 rate limit exceeded",
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    });
+
+    // Simulate a successful run that still carries a soft-error/warning string.
+    // Before the fix, the old code (`lastError = result.error`) would have stored
+    // this string even though status is "ok".
+    const shouldDelete = applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      error: "soft warning: something minor happened",
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.lastStatus).toBe("ok");
+    // Fix ensures error is NOT propagated to lastError when status === "ok"
+    expect(job.state.lastError).toBeUndefined();
+    expect(job.state.lastErrorReason).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(0);
+  });
+
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
     const nowMs = Date.now();
     const everyMs = 24 * 60 * 60 * 1_000;

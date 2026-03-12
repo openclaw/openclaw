@@ -322,8 +322,10 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
-  // Clear lastError on success/skip so stale errors don't persist after delivery (#41764).
-  job.state.lastError = result.status === "error" ? result.error : undefined;
+  // Clear lastError on success so stale errors don't persist after delivery (#41764).
+  // Preserve lastError for "error" and "skipped" statuses since skip reasons
+  // (e.g. "main job requires...") are persisted via result.error.
+  job.state.lastError = result.status === "ok" ? undefined : result.error;
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
