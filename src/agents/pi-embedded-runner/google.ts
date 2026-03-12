@@ -371,6 +371,31 @@ export function sanitizeToolsForGoogle<
   });
 }
 
+/**
+ * Bedrock Converse API requires tool names to match `[a-zA-Z0-9_-]+`.
+ * Any character outside this set (spaces, dots, colons, slashes, etc.) causes a
+ * validation error at `messages[N].content[M].toolUse.name`. This sanitizer
+ * replaces disallowed characters with underscores and truncates to 64 chars.
+ */
+export function sanitizeToolNamesForBedrock<
+  TSchemaType extends TSchema = TSchema,
+  TResult = unknown,
+>(params: {
+  tools: AgentTool<TSchemaType, TResult>[];
+  provider: string;
+}): AgentTool<TSchemaType, TResult>[] {
+  if (!params.provider.startsWith("amazon-bedrock")) {
+    return params.tools;
+  }
+  return params.tools.map((tool) => {
+    const sanitized = tool.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+    if (sanitized === tool.name) {
+      return tool;
+    }
+    return { ...tool, name: sanitized };
+  });
+}
+
 export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
   if (params.provider !== "google-gemini-cli") {
     return;
