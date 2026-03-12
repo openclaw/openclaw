@@ -91,11 +91,14 @@ export function shouldSkipBackendSelfPairing(params: {
     return false;
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // When auth is disabled entirely (mode="none"), there is no shared secret to verify, but a
+  // local client with no browser origin and the correct gateway-client/backend identity is still
+  // a trusted internal connection. Allow attestation in that case too.
+  const authIsDisabled = params.authMethod === "none";
   return (
     params.isLocalClient &&
     !params.hasBrowserOriginHeader &&
-    params.sharedAuthOk &&
-    usesSharedSecretAuth
+    ((params.sharedAuthOk && usesSharedSecretAuth) || authIsDisabled)
   );
 }
 
