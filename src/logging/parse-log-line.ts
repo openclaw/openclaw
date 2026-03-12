@@ -26,14 +26,24 @@ function extractIndexedValues(
 
 function extractMessage(
   entries: Array<{ key: number; value: unknown }>,
-  options?: { skipIndex?: number },
+  options?: { stripActivityIndex?: number },
 ): string {
   const parts: string[] = [];
   for (const entry of entries) {
-    if (options?.skipIndex != null && entry.key === options.skipIndex) {
+    const item = entry.value;
+    if (
+      options?.stripActivityIndex != null &&
+      entry.key === options.stripActivityIndex &&
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item)
+    ) {
+      const { activity: _activity, ...rest } = item as Record<string, unknown>;
+      if (Object.keys(rest).length > 0) {
+        parts.push(JSON.stringify(rest));
+      }
       continue;
     }
-    const item = entry.value;
     if (typeof item === "string") {
       parts.push(item);
     } else if (item != null) {
@@ -84,7 +94,7 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
       subsystem: nameMeta.subsystem,
       module: nameMeta.module,
       message: extractMessage(indexed, {
-        skipIndex: topLevelActivity ? undefined : indexedActivity?.index,
+        stripActivityIndex: topLevelActivity ? undefined : indexedActivity?.index,
       }),
       activity,
       raw,

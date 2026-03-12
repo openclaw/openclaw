@@ -73,6 +73,41 @@ describe("parseLogLine", () => {
     expect(parsed?.message).not.toContain('"activity"');
   });
 
+  it("preserves sibling metadata when activity is nested in an indexed object", () => {
+    const line = JSON.stringify({
+      time: "2026-01-09T02:10:00.000Z",
+      0: '{"subsystem":"agent/embedded"}',
+      1: {
+        activity: {
+          kind: "run",
+          summary: "agent start",
+          sessionKey: "session-1",
+          status: "ok",
+        },
+        event: "agent-start",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      },
+      _meta: {
+        name: '{"subsystem":"agent/embedded"}',
+        logLevelName: "INFO",
+      },
+    });
+
+    const parsed = parseLogLine(line);
+
+    expect(parsed?.activity).toMatchObject({
+      kind: "run",
+      summary: "agent start",
+      sessionKey: "session-1",
+      status: "ok",
+    });
+    expect(parsed?.message).toContain('"event":"agent-start"');
+    expect(parsed?.message).toContain('"provider":"anthropic"');
+    expect(parsed?.message).toContain('"model":"claude-sonnet-4-5"');
+    expect(parsed?.message).not.toContain('"activity"');
+  });
+
   it("returns null for invalid JSON", () => {
     expect(parseLogLine("not-json")).toBeNull();
   });
