@@ -61,6 +61,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "env",
+    description: "Manage persistent gateway environment variables (~/.openclaw/.env)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../env-cli.js");
+      mod.registerEnvCli(program);
+    },
+  },
+  {
     name: "daemon",
     description: "Gateway service (legacy alias)",
     hasSubcommands: true,
