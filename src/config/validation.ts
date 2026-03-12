@@ -267,6 +267,13 @@ export function validateConfigObjectRaw(
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
   }
+
+  // Validate memorySearch provider configuration (includes per-agent configs)
+  const memorySearchIssues = validateMemorySearchProviderConfig(validated.data as OpenClawConfig);
+  if (memorySearchIssues.length > 0) {
+    return { ok: false, issues: memorySearchIssues };
+  }
+
   return {
     ok: true,
     config: validated.data as OpenClawConfig,
