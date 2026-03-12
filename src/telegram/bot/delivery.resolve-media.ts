@@ -1,9 +1,10 @@
 import { GrammyError } from "grammy";
-import { logVerbose, warn } from "../../globals.js";
+import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { withTimeout } from "../../utils/with-timeout.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -61,11 +62,15 @@ function resolveTelegramFileName(msg: TelegramContext["message"]): string | unde
   );
 }
 
+const GET_FILE_TIMEOUT_MS = 45_000;
+const DOWNLOAD_TIMEOUT_MS = 180_000;
+const DOWNLOAD_ATTEMPTS = 2;
+
 async function resolveTelegramFileWithRetry(
   ctx: TelegramContext,
 ): Promise<{ file_path?: string } | null> {
   try {
-    return await retryAsync(() => ctx.getFile(), {
+    return await retryAsync(() => withTimeout(ctx.getFile(), GET_FILE_TIMEOUT_MS), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,
@@ -76,40 +81,23 @@ async function resolveTelegramFileWithRetry(
         logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
     });
   } catch (err) {
-    // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit
+    // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit.
+    // Throw explicit size-limit error so caller can notify user.
     if (isFileTooBigError(err)) {
-      logVerbose(
-        warn(
-          "telegram: getFile failed - file exceeds Telegram Bot API 20MB limit; skipping attachment",
-        ),
-      );
-      return null;
+      throw new Error("Telegram file exceeds 20MB limit", { cause: err });
     }
-    // All retries exhausted — return null so the message still reaches the agent
-    // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
-    logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
-    return null;
+    // Surface fetch failures so caller can send a clear retry/error message.
+    throw new Error(`telegram getFile failed: ${String(err)}`, { cause: err });
   }
 }
 
-function resolveRequiredFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
-  const resolved = fetchImpl ?? globalThis.fetch;
-  if (!resolved) {
+function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
+  const fetchImpl = proxyFetch ?? globalThis.fetch;
+  if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  return resolved;
+  return fetchImpl;
 }
-
-function resolveOptionalFetchImpl(fetchImpl?: typeof fetch): typeof fetch | null {
-  try {
-    return resolveRequiredFetchImpl(fetchImpl);
-  } catch {
-    return null;
-  }
-}
-
-/** Default idle timeout for Telegram media downloads (30 seconds). */
-const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
@@ -124,7 +112,6 @@ async function downloadAndSaveTelegramFile(params: {
     fetchImpl: params.fetchImpl,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
-    readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
@@ -142,7 +129,7 @@ async function resolveStickerMedia(params: {
   ctx: TelegramContext;
   maxBytes: number;
   token: string;
-  fetchImpl?: typeof fetch;
+  proxyFetch?: typeof fetch;
 }): Promise<
   | {
       path: string;
@@ -153,7 +140,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, fetchImpl } = params;
+  const { msg, ctx, maxBytes, token, proxyFetch } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -173,15 +160,15 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const resolvedFetchImpl = resolveOptionalFetchImpl(fetchImpl);
-    if (!resolvedFetchImpl) {
+    const fetchImpl = proxyFetch ?? globalThis.fetch;
+    if (!fetchImpl) {
       logVerbose("telegram: fetch not available for sticker download");
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      fetchImpl: resolvedFetchImpl,
+      fetchImpl,
       maxBytes,
     });
 
@@ -237,7 +224,7 @@ export async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
   token: string,
-  fetchImpl?: typeof fetch,
+  proxyFetch?: typeof fetch,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -250,7 +237,7 @@ export async function resolveMedia(
     ctx,
     maxBytes,
     token,
-    fetchImpl,
+    proxyFetch,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -268,13 +255,32 @@ export async function resolveMedia(
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
-  const saved = await downloadAndSaveTelegramFile({
-    filePath: file.file_path,
-    token,
-    fetchImpl: resolveRequiredFetchImpl(fetchImpl),
-    maxBytes,
-    telegramFileName: resolveTelegramFileName(msg),
-  });
+  const filePath = file.file_path;
+  const fetchImpl = resolveRequiredFetchImpl(proxyFetch);
+  const saved = await retryAsync(
+    () =>
+      withTimeout(
+        downloadAndSaveTelegramFile({
+          filePath,
+          token,
+          fetchImpl,
+          maxBytes,
+          telegramFileName: resolveTelegramFileName(msg),
+        }),
+        DOWNLOAD_TIMEOUT_MS,
+      ),
+    {
+      attempts: DOWNLOAD_ATTEMPTS,
+      minDelayMs: 1500,
+      maxDelayMs: 5000,
+      jitter: 0.2,
+      label: "telegram:download-file",
+      shouldRetry: (err) =>
+        !/exceeds maxBytes|too large|content-length/i.test(formatErrorMessage(err)),
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: file download retry ${attempt}/${maxAttempts}`),
+    },
+  );
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
