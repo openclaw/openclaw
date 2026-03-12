@@ -85,8 +85,9 @@ function parseRetryAfterFromError(raw: string): number | undefined {
   }
 
   // Pattern: "retry after Xs" or "retry after X seconds"
+  // Note: unit suffix is required to avoid false positives like "retry after 3 attempts"
   const retryAfterSecondsMatch = raw.match(
-    /retry\s+(?:after|in)\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)?/i,
+    /retry\s+(?:after|in)\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?!\w)/i,
   );
   if (retryAfterSecondsMatch) {
     return Math.round(Number.parseFloat(retryAfterSecondsMatch[1]) * 1000);
@@ -99,16 +100,18 @@ function parseRetryAfterFromError(raw: string): number | undefined {
   }
 
   // Pattern: "rate limit reset in X minutes" (check minutes first!)
+  // Note: "in" is required to avoid matching time-of-day like "resets 12:00 UTC"
   const resetInMinutesMatch = raw.match(
-    /(?:rate\s+)?limit\s+(?:reset|resets)\s+(?:in\s+)?(\d+(?:\.\d+)?)\s*(?:min|minutes?)/i,
+    /(?:rate\s+)?limit\s+(?:reset|resets)\s+in\s+(\d+(?:\.\d+)?)\s*(?:min|minutes?)/i,
   );
   if (resetInMinutesMatch) {
     return Math.round(Number.parseFloat(resetInMinutesMatch[1]) * 60 * 1000);
   }
 
   // Pattern: "rate limit reset in Xs" or "limit resets in X seconds"
+  // Note: "in" is required and unit suffix is required to avoid false positives
   const resetInSecondsMatch = raw.match(
-    /(?:rate\s+)?limit\s+(?:reset|resets)\s+(?:in\s+)?(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)?/i,
+    /(?:rate\s+)?limit\s+(?:reset|resets)\s+in\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?!\w)/i,
   );
   if (resetInSecondsMatch) {
     return Math.round(Number.parseFloat(resetInSecondsMatch[1]) * 1000);
