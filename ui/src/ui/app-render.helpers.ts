@@ -172,8 +172,62 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+  // Determine selected agent
+  const agents = state.agentsList?.agents ?? [];
+  const selectedAgentId = state.chatSelectedAgentId
+    ?? state.settings.chatSelectedAgentId
+    ?? agents[0]?.id
+    ?? null;
+
+  // Build agent options
+  const agentOptions = agents.map(agent => ({
+    id: agent.id,
+    name: agent.name || agent.id,
+  }));
+
   return html`
     <div class="chat-controls">
+      <!-- Agent selector -->
+      <label class="field chat-controls__session">
+        <select
+          .value=${selectedAgentId ?? ""}
+          ?disabled=${!state.connected}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.chatSelectedAgentId = next;
+            // Persist to settings
+            state.applySettings({
+              ...state.settings,
+              chatSelectedAgentId: next,
+            });
+            // Switch to main session for selected agent
+            const targetKey = `agent:${next}:main`;
+            state.sessionKey = targetKey;
+            state.chatMessage = "";
+            state.chatStream = null;
+            state.chatRunId = null;
+            state.resetToolStream();
+            state.resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: targetKey,
+              lastActiveSessionKey: targetKey,
+            });
+            void state.loadAssistantIdentity();
+            syncUrlWithSessionKey(state as any, targetKey, true);
+            void loadChatHistory(state as unknown as ChatState);
+            void refreshChat(state as any);
+          }}
+        >
+          <option value="">Select Agent</option>
+          ${agentOptions.map(agent => html`
+            <option value=${agent.id}>${agent.name}</option>
+          `)}
+        </select>
+      </label>
+
+      <span>Sessions</span>
+      <!-- Session selector (filtered by agent) -->
       <label class="field chat-controls__session">
         <select
           .value=${state.sessionKey}
@@ -436,6 +490,7 @@ function resolveSessionOptions(
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
+  filterAgentId?: string | null,
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -465,6 +520,14 @@ function resolveSessionOptions(
   // Add sessions from the result, optionally filtering out cron sessions.
   if (sessions?.sessions) {
     for (const s of sessions.sessions) {
+      // Filter by agent if specified
+      if (filterAgentId) {
+        const prefix = `agent:${filterAgentId}:`;
+        if (!s.key.startsWith(prefix)) {
+          continue;
+        }
+      }
+
       if (!seen.has(s.key) && !(hideCron && isCronSessionKey(s.key))) {
         seen.add(s.key);
         options.push({

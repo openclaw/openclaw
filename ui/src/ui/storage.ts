@@ -20,6 +20,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
+  chatSelectedAgentId?: string | null;
 };
 
 function getSessionStorage(): Storage | null {
@@ -112,6 +113,7 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    chatSelectedAgentId: null,
   };
 
   try {
@@ -163,6 +165,10 @@ export function loadSettings(): UiSettings {
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      chatSelectedAgentId:
+        typeof parsed.chatSelectedAgentId === "string" || parsed.chatSelectedAgentId === null
+          ? parsed.chatSelectedAgentId
+          : defaults.chatSelectedAgentId,
     };
     if ("token" in parsed) {
       persistSettings(settings);
