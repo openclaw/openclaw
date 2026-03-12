@@ -1364,6 +1364,43 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+/**
+ * Roles that are internal agent plumbing and should never appear in the chat window.
+ * Pi stores tool results as `role: "toolResult"`, the Anthropic API uses user messages
+ * with `tool_result` content blocks (normalizeMessage reclassifies those as "toolResult"),
+ * and some providers use `role: "tool"` or `role: "function"`.
+ */
+const TOOL_ROLES = new Set(["toolresult", "tool_result", "tool", "function"]);
+
+const TOOL_CALL_CONTENT_TYPES = new Set(["tool_use", "tooluse", "toolcall", "tool_call"]);
+
+function shouldFilterToolMessage(normalizedRole: string, raw: Record<string, unknown>): boolean {
+  // Filter any message whose role marks it as a tool result / tool / function.
+  if (TOOL_ROLES.has(normalizedRole.toLowerCase())) {
+    return true;
+  }
+
+  // Filter assistant messages that contain ONLY tool-call content blocks (no text).
+  // These are intermediate tool invocation turns the user doesn't need to see.
+  if (normalizedRole === "assistant" && Array.isArray(raw.content)) {
+    const hasText = (raw.content as Array<Record<string, unknown>>).some((block) => {
+      const type = typeof block?.type === "string" ? block.type.toLowerCase() : "";
+      return type === "text" && typeof block.text === "string" && block.text.trim().length > 0;
+    });
+    if (!hasText) {
+      const hasToolCall = (raw.content as Array<Record<string, unknown>>).some((block) => {
+        const type = typeof block?.type === "string" ? block.type.toLowerCase() : "";
+        return TOOL_CALL_CONTENT_TYPES.has(type);
+      });
+      if (hasToolCall) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
@@ -1398,7 +1435,11 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    // Always filter tool-related messages from the chat history.
+    // Tool results (Pi's "toolResult" role, or user messages reclassified as toolResult
+    // due to tool_result content blocks) must never render raw text in the chat window.
+    // Messages with role "tool" or "function" are also internal agent plumbing.
+    if (shouldFilterToolMessage(normalized.role, raw)) {
       continue;
     }
 
