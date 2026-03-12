@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package openclaw.sandbox.v1;
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/openclaw/sandbox/v1;sandboxv1";
+
+// ExecService provides command execution inside sandboxes with bidirectional streaming.
+service ExecService {
+  // Execute a command in a sandbox with bidirectional streaming.
+  // Client sends: initial ExecRequest with command, then optional stdin chunks.
+  // Server sends: stdout/stderr chunks, then final exit code.
+  rpc Exec(stream ExecRequest) returns (stream ExecResponse);
+}
+
+message ExecRequest {
+  oneof payload {
+    StartExec start = 1;
+    bytes stdin_data = 2;
+    bool close_stdin = 3;
+  }
+}
+
+message StartExec {
+  string sandbox_id = 1;
+  repeated string command = 2;
+  string working_dir = 3;
+  map<string, string> env = 4;
+  uint32 timeout_ms = 5;
+}
+
+message ExecResponse {
+  oneof payload {
+    bytes stdout_data = 1;
+    bytes stderr_data = 2;
+    ExecExit exit = 3;
+  }
+}
+
+message ExecExit {
+  int32 exit_code = 1;
+  string error = 2;
+}
