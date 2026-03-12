@@ -34,6 +34,45 @@ export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID };
 export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
+export const SCNET_BASE_URL = "https://api.scnet.cn/api/llm/v1";
+export const SCNET_DEFAULT_MODEL_ID = "DeepSeek-R1";
+export const SCNET_DEFAULT_MODEL_REF = `scnet/${SCNET_DEFAULT_MODEL_ID}`;
+export const SCNET_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const SCNET_MODEL_CATALOG = {
+  "DeepSeek-R1": { name: "DeepSeek-R1", reasoning: true },
+  Qwen3: { name: "Qwen3", reasoning: true },
+  "MiniMax-M2.5": { name: "MiniMax-M2.5", reasoning: true },
+} as const;
+
+type ScnetCatalogId = keyof typeof SCNET_MODEL_CATALOG;
+
+export function buildScnetModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  cost?: ModelDefinitionConfig["cost"];
+  contextWindow?: number;
+  maxTokens?: number;
+}): ModelDefinitionConfig {
+  const catalog = SCNET_MODEL_CATALOG[params.id as ScnetCatalogId];
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? params.id,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? false,
+    input: (params.input as ("text" | "image")[]) ?? ["text"],
+    cost: params.cost ?? SCNET_DEFAULT_COST,
+    contextWindow: params.contextWindow ?? 262144,
+    maxTokens: params.maxTokens ?? 65536,
+  };
+}
+
 export const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 export const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";

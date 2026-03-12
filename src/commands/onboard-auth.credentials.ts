@@ -19,6 +19,7 @@ export {
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   MODELSTUDIO_DEFAULT_MODEL_REF,
+  SCNET_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
 export { KILOCODE_DEFAULT_MODEL_REF };
 
@@ -491,6 +492,18 @@ export function setQianfanApiKey(
   upsertAuthProfile({
     profileId: "qianfan:default",
     credential: buildApiKeyCredential("qianfan", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export function setScnetApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "scnet:default",
+    credential: buildApiKeyCredential("scnet", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

@@ -428,6 +428,13 @@ describe("applyAuthChoice", () => {
         provider: "litellm",
         expectedModelPrefix: "litellm/",
       },
+      {
+        tokenProvider: "  ScNeT ",
+        token: "sk-scnet-token-provider-test",
+        profileId: "scnet:default",
+        provider: "scnet",
+        expectedModelPrefix: "scnet/",
+      },
     ];
     for (const scenario of scenarios) {
       await setupTempState();
@@ -537,6 +544,13 @@ describe("applyAuthChoice", () => {
       profileId: "qianfan:default",
       provider: "qianfan",
       modelPrefix: "qianfan/",
+    },
+    {
+      authChoice: "scnet-api-key",
+      tokenProvider: "scnet",
+      profileId: "scnet:default",
+      provider: "scnet",
+      modelPrefix: "scnet/",
     },
     {
       authChoice: "synthetic-api-key",

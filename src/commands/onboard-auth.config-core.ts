@@ -36,6 +36,7 @@ import {
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  SCNET_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -64,12 +65,15 @@ import {
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
+  buildScnetModelDefinition,
   buildXaiModelDefinition,
   buildModelStudioModelDefinition,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  SCNET_BASE_URL,
+  SCNET_DEFAULT_MODEL_ID,
   KIMI_CODING_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
@@ -576,6 +580,32 @@ export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyScnetProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[SCNET_DEFAULT_MODEL_REF] = {
+    ...models[SCNET_DEFAULT_MODEL_REF],
+    alias: models[SCNET_DEFAULT_MODEL_REF]?.alias ?? "SCNet",
+  };
+
+  return applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: models,
+    providerId: "scnet",
+    api: "openai-completions",
+    baseUrl: SCNET_BASE_URL,
+    defaultModels: [
+      buildScnetModelDefinition({ id: "DeepSeek-R1" }),
+      buildScnetModelDefinition({ id: "Qwen3" }),
+      buildScnetModelDefinition({ id: "MiniMax-M2.5" }),
+    ],
+    defaultModelId: SCNET_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyScnetConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyScnetProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, SCNET_DEFAULT_MODEL_REF);
 }
 
 // Alibaba Cloud Model Studio Coding Plan

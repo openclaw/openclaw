@@ -126,6 +126,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["qianfan-api-key"],
   },
   {
+    value: "scnet",
+    label: "SCNet",
+    hint: "API key",
+    choices: ["scnet-api-key"],
+  },
+  {
     value: "modelstudio",
     label: "Alibaba Cloud Model Studio",
     hint: "Coding Plan API key (CN / Global)",
