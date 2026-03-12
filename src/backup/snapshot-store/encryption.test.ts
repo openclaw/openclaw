@@ -69,4 +69,30 @@ describe("snapshot backup encryption", () => {
     await expect(fs.access(restoredPath)).rejects.toThrow();
     await expect(fs.access(`${restoredPath}.${process.pid}.tmp`)).rejects.toThrow();
   });
+
+  it("uses envelope key-derivation parameters when deriving the restore key", async () => {
+    const tempDir = await createTempDir("openclaw-snapshot-encryption-kdf-");
+    const archivePath = path.join(tempDir, "archive.tar.gz");
+    const payloadPath = path.join(tempDir, "payload.bin");
+    const restoredPath = path.join(tempDir, "restored.tar.gz");
+    await fs.writeFile(archivePath, "backup archive test\n", "utf8");
+
+    const encrypted = await encryptArchiveToPayload({
+      archivePath,
+      payloadPath,
+      secret: "test-secret", // pragma: allowlist secret
+    });
+    encrypted.archive.archiveRoot = "fake-root";
+    encrypted.archive.createdAt = "2026-03-09T00:00:00.000Z";
+    encrypted.encryption.keyDerivation.cost = encrypted.encryption.keyDerivation.cost + 1;
+
+    await expect(
+      decryptPayloadToArchive({
+        payloadPath,
+        archivePath: restoredPath,
+        secret: "test-secret", // pragma: allowlist secret
+        envelope: encrypted,
+      }),
+    ).rejects.toThrow();
+  });
 });

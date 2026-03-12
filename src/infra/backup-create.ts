@@ -293,6 +293,18 @@ async function assertPathTreeHasNoSymlinks(rootPath: string): Promise<void> {
       }
       if (entry.isDirectory()) {
         pending.push(entryPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        // Some filesystems return DT_UNKNOWN for dirent types; re-check via lstat.
+        const entryStat = await fs.lstat(entryPath);
+        if (entryStat.isSymbolicLink()) {
+          throw new Error(`Backup source contains symbolic links: ${entryPath}`);
+        }
+        if (entryStat.isDirectory()) {
+          pending.push(entryPath);
+        }
       }
     }
   }

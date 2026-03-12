@@ -10,6 +10,12 @@ const SCRYPT_PARALLELIZATION = 1;
 const SCRYPT_MAX_MEMORY_BYTES = 128 * 1024 * 1024;
 const NONCE_BYTES = 12;
 const KEY_BYTES = 32;
+type ScryptOptions = {
+  cost: number;
+  blockSize: number;
+  parallelization: number;
+  maxMemoryBytes: number;
+};
 
 class HashPassthrough extends Transform {
   private readonly hash = crypto.createHash("sha256");
@@ -40,16 +46,29 @@ function base64UrlDecode(value: string): Buffer {
 }
 
 async function deriveKey(secret: string, salt: Buffer): Promise<Buffer> {
+  return await deriveKeyWithOptions(secret, salt, {
+    cost: SCRYPT_COST,
+    blockSize: SCRYPT_BLOCK_SIZE,
+    parallelization: SCRYPT_PARALLELIZATION,
+    maxMemoryBytes: SCRYPT_MAX_MEMORY_BYTES,
+  });
+}
+
+async function deriveKeyWithOptions(
+  secret: string,
+  salt: Buffer,
+  options: ScryptOptions,
+): Promise<Buffer> {
   return await new Promise((resolve, reject) => {
     crypto.scrypt(
       secret,
       salt,
       KEY_BYTES,
       {
-        N: SCRYPT_COST,
-        r: SCRYPT_BLOCK_SIZE,
-        p: SCRYPT_PARALLELIZATION,
-        maxmem: SCRYPT_MAX_MEMORY_BYTES,
+        N: options.cost,
+        r: options.blockSize,
+        p: options.parallelization,
+        maxmem: options.maxMemoryBytes,
       },
       (error, derivedKey) => {
         if (error) {
@@ -122,7 +141,12 @@ export async function decryptPayloadToArchive(params: {
   const salt = base64UrlDecode(params.envelope.encryption.keyDerivation.saltBase64Url);
   const nonce = base64UrlDecode(params.envelope.encryption.nonceBase64Url);
   const authTag = base64UrlDecode(params.envelope.encryption.authTagBase64Url);
-  const key = await deriveKey(params.secret, salt);
+  const key = await deriveKeyWithOptions(params.secret, salt, {
+    cost: params.envelope.encryption.keyDerivation.cost,
+    blockSize: params.envelope.encryption.keyDerivation.blockSize,
+    parallelization: params.envelope.encryption.keyDerivation.parallelization,
+    maxMemoryBytes: params.envelope.encryption.keyDerivation.maxMemoryBytes,
+  });
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, nonce);
   decipher.setAuthTag(authTag);
   const ciphertextDigest = new HashPassthrough();
