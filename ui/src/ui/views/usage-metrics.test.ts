@@ -33,8 +33,24 @@ describe("buildAggregatesFromSessions", () => {
         cacheWriteCost: 0,
         missingCostEntries: 0,
         dailyMessageCounts: [
-          { date: "2026-03-01", total: 7, toolCalls: 2, errors: 1 },
-          { date: "2026-03-02", total: 5, toolCalls: 1, errors: 0 },
+          {
+            date: "2026-03-01",
+            total: 7,
+            user: 0,
+            assistant: 0,
+            toolCalls: 2,
+            toolResults: 0,
+            errors: 1,
+          },
+          {
+            date: "2026-03-02",
+            total: 5,
+            user: 0,
+            assistant: 0,
+            toolCalls: 1,
+            toolResults: 0,
+            errors: 0,
+          },
         ],
       }),
     ]);
@@ -66,7 +82,17 @@ describe("buildAggregatesFromSessions", () => {
           toolResults: 3,
           errors: 1,
         },
-        dailyMessageCounts: [{ date: "2026-03-01", total: 9, toolCalls: 5, errors: 4 }],
+        dailyMessageCounts: [
+          {
+            date: "2026-03-01",
+            total: 9,
+            user: 0,
+            assistant: 0,
+            toolCalls: 5,
+            toolResults: 0,
+            errors: 4,
+          },
+        ],
       }),
     ]);
 
