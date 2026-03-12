@@ -29,8 +29,10 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  RESERVED_CHANNEL_IDS,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
+  isInterSessionChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
@@ -231,7 +233,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const isKnownGatewayChannel = (raw: string): boolean => {
+      // Capture as a plain string before any type-guard narrowing, since
+      // GatewayMessageChannel includes (string & {}) and TypeScript would
+      // otherwise narrow the remainder to never after the type guard.
+      const lower: string = String(raw).toLowerCase();
+      return isGatewayMessageChannel(raw) || RESERVED_CHANNEL_IDS.has(lower);
+    };
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -549,8 +557,14 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
+    // Allow internal sentinels (e.g. INTER_SESSION_CHANNEL) to propagate as
+    // the turn source so resolveLastChannelRaw can handle them correctly.
+    // External callers cannot reach this path with a sentinel: the channel hint
+    // validation above rejects any unknown channel that is not in RESERVED_CHANNEL_IDS,
+    // and RESERVED_CHANNEL_IDS are not in listGatewayMessageChannels().
     const turnSourceMessageChannel =
-      normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
+      normalizedTurnSource &&
+      (isGatewayMessageChannel(normalizedTurnSource) || isInterSessionChannel(normalizedTurnSource))
         ? normalizedTurnSource
         : undefined;
     const originMessageChannel =
