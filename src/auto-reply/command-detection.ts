@@ -38,6 +38,10 @@ export function hasControlCommand(
       if (command.acceptsArgs && lowered.startsWith(normalized)) {
         const nextChar = normalizedBody.charAt(normalized.length);
         if (nextChar && /\s/.test(nextChar)) {
+          // One-shot think: /think <level> <body> is not a control command.
+          if (isOneShotThinkMessage(trimmed, options)) {
+            return false;
+          }
           return true;
         }
       }
@@ -80,10 +84,6 @@ export function isControlCommandMessage(
     return false;
   }
   if (hasControlCommand(trimmed, cfg, options)) {
-    // One-shot think: /think <level> <body> routes to AI reply path, not command path.
-    if (isOneShotThinkMessage(trimmed, options)) {
-      return false;
-    }
     return true;
   }
   const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();

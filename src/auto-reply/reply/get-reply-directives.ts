@@ -5,6 +5,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isOneShotThinkMessage } from "../command-detection.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -244,11 +245,13 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
-        // Preserve think level as one-shot when clearing directives due to body text.
-        // This enables `/think <level> <body>` to apply the level for one message only.
-        const oneShotThinkLevel = parsedDirectives.hasThinkDirective
-          ? parsedDirectives.thinkLevel
-          : undefined;
+        // Preserve think level as one-shot only when the message starts with a leading
+        // /think command (e.g., `/think high <body>`). Mid-text occurrences like
+        // "compare /think high vs /think low" should NOT trigger one-shot activation.
+        const oneShotThinkLevel =
+          parsedDirectives.hasThinkDirective && isOneShotThinkMessage(commandText)
+            ? parsedDirectives.thinkLevel
+            : undefined;
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
         parsedDirectives = allowInlineStatus

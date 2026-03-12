@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isControlCommandMessage, isOneShotThinkMessage } from "./command-detection.js";
+import {
+  hasControlCommand,
+  isControlCommandMessage,
+  isOneShotThinkMessage,
+} from "./command-detection.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
@@ -40,9 +44,26 @@ describe("isOneShotThinkMessage", () => {
     expect(isOneShotThinkMessage("plain text")).toBe(false);
   });
 
+  it("rejects mid-text /think (not leading command)", () => {
+    expect(isOneShotThinkMessage("compare /think high vs /think low")).toBe(false);
+    expect(isOneShotThinkMessage("hey /think high tell me")).toBe(false);
+  });
+
   it("handles level aliases (ultra, max, etc.)", () => {
     expect(isOneShotThinkMessage("/think ultra write me a poem")).toBe(true);
     expect(isOneShotThinkMessage("/think max write me a poem")).toBe(true);
+  });
+});
+
+describe("hasControlCommand with one-shot think", () => {
+  it("returns false for /think <level> <body> (one-shot)", () => {
+    expect(hasControlCommand("/think high write me a poem")).toBe(false);
+    expect(hasControlCommand("/t medium explain this")).toBe(false);
+  });
+
+  it("returns true for bare /think <level>", () => {
+    expect(hasControlCommand("/think high")).toBe(true);
+    expect(hasControlCommand("/think medium")).toBe(true);
   });
 });
 
