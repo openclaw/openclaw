@@ -541,6 +541,41 @@ describe("runEmbeddedPiAgent tool-result payload preservation", () => {
       ]);
     });
   });
+
+  it("preserves singular mediaUrl tool-result payloads", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              mediaUrl: "https://example.com/generated.png",
+            },
+          ],
+          timedOut: true,
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-mediaurl",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-mediaurl",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          mediaUrl: "https://example.com/generated.png",
+        },
+      ]);
+    });
+  });
 });
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {

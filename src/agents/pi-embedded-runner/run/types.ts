@@ -47,6 +47,7 @@ export type EmbeddedRunAttemptResult = {
   toolMetas: Array<{ toolName: string; meta?: string }>;
   toolResultPayloads: Array<{
     text?: string;
+    mediaUrl?: string;
     mediaUrls?: string[];
   }>;
   lastAssistant: AssistantMessage | undefined;

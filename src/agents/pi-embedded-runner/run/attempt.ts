@@ -2184,7 +2184,8 @@ export async function runEmbeddedAttempt(
         });
       };
 
-      const toolResultPayloads: Array<{ text?: string; mediaUrls?: string[] }> = [];
+      const toolResultPayloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }> =
+        [];
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -2196,14 +2197,23 @@ export async function runEmbeddedAttempt(
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: (payload) => {
-          toolResultPayloads.push({
-            ...(typeof payload.text === "string" && payload.text.trim()
-              ? { text: payload.text }
-              : {}),
-            ...(Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0
-              ? { mediaUrls: payload.mediaUrls }
-              : {}),
-          });
+          const entry: { text?: string; mediaUrl?: string; mediaUrls?: string[] } = {};
+          if (typeof payload.text === "string" && payload.text.trim()) {
+            entry.text = payload.text;
+          }
+          if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()) {
+            entry.mediaUrl = payload.mediaUrl;
+          }
+          if (Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0) {
+            entry.mediaUrls = payload.mediaUrls;
+          }
+          if (
+            entry.text !== undefined ||
+            entry.mediaUrl !== undefined ||
+            entry.mediaUrls !== undefined
+          ) {
+            toolResultPayloads.push(entry);
+          }
           return params.onToolResult?.(payload);
         },
         onReasoningStream: params.onReasoningStream,
