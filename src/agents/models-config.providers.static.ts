@@ -430,7 +430,7 @@ export function buildOpenrouterProvider(): ProviderConfig {
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "hunter-alpha",
+        id: "openrouter/hunter-alpha",
         name: "Hunter Alpha",
         reasoning: true,
         input: ["text"],
@@ -439,7 +439,7 @@ export function buildOpenrouterProvider(): ProviderConfig {
         maxTokens: 65536,
       },
       {
-        id: "healer-alpha",
+        id: "openrouter/healer-alpha",
         name: "Healer Alpha",
         reasoning: true,
         input: ["text", "image"],
