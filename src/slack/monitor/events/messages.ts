@@ -23,6 +23,9 @@ export function registerSlackMessageEvents(params: {
       const message = event as SlackMessageEvent;
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
+        if (subtypeHandler.eventKind === "message_changed") {
+          return;
+        }
         const channelId = subtypeHandler.resolveChannelId(message);
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,

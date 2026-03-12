@@ -103,9 +103,9 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 describe("registerSlackMessageEvents", () => {
   const cases: Array<{ name: string; input: MessageCase; calls: number }> = [
     {
-      name: "enqueues message_changed system events when dmPolicy is open",
+      name: "ignores message_changed system events when dmPolicy is open",
       input: { overrides: { dmPolicy: "open" }, event: makeChangedEvent() },
-      calls: 1,
+      calls: 0,
     },
     {
       name: "blocks message_changed system events when dmPolicy is disabled",
@@ -205,7 +205,7 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("applies subtype system-event handling for channel messages", async () => {
+  it("ignores message_changed subtype events for channel messages", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
     const { handler, handleSlackMessage } = createMessageHandlers({
@@ -226,7 +226,7 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
-    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
   it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
