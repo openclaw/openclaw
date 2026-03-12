@@ -156,6 +156,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - xAI: `xai` (`XAI_API_KEY`)
+- SambaNova: `sambanova` (`SAMBANOVA_API_KEY`)
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
 - CLI: `openclaw onboard --auth-choice mistral-api-key`

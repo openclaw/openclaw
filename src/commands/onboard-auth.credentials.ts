@@ -336,6 +336,7 @@ export async function setVeniceApiKey(
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+export const SAMBANOVA_DEFAULT_MODEL_REF = "sambanova/Meta-Llama-3.1-8B-Instruct";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
@@ -424,6 +425,18 @@ export async function setVercelAiGatewayApiKey(
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",
     credential: buildApiKeyCredential("vercel-ai-gateway", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setSambanovaApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "sambanova:default",
+    credential: buildApiKeyCredential("sambanova", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

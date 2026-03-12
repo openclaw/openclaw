@@ -102,6 +102,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "sambanova",
+    label: "SambaNova",
+    hint: "Fast inference (Llama/GPT/Deepseek/Qwen)",
+    choices: ["sambanova-api-key"],
+  },
+  {
     value: "kilocode",
     label: "Kilo Gateway",
     hint: "API key (OpenRouter-compatible)",
