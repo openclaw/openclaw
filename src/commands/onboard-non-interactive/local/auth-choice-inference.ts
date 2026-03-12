@@ -27,6 +27,7 @@ type AuthChoiceFlagOptions = Pick<
   | "xiaomiApiKey"
   | "minimaxApiKey"
   | "opencodeZenApiKey"
+  | "opencodeGoApiKey"
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"

@@ -48,6 +48,34 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it("trims leading whitespace before sending text and captions", async () => {
+    await sendMessageWhatsApp("+1555", "\n \thello", { verbose: false });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);
+
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "\n \tcaption", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/jpeg");
+  });
+
+  it("skips whitespace-only text sends without media", async () => {
+    const result = await sendMessageWhatsApp("+1555", "\n \t", { verbose: false });
+
+    expect(result).toEqual({
+      messageId: "",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(sendComposingTo).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("throws a helpful error when no active listener exists", async () => {
     setActiveWebListener(null);
     await expect(
