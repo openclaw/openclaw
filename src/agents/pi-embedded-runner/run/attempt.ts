@@ -1502,6 +1502,10 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+          spawnWorkspaceDir:
+            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
