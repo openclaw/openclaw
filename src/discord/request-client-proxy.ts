@@ -31,11 +31,12 @@ function buildRequestUrl(
   path: string,
   query?: QueuedRequest["query"],
 ) {
-  const queryString = query
-    ? `?${Object.entries(query)
-        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-        .join("&")}`
-    : "";
+  const queryString =
+    query && Object.keys(query).length > 0
+      ? `?${Object.entries(query)
+          .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+          .join("&")}`
+      : "";
   return `${rest.options.baseUrl}${path}${queryString}`;
 }
 
@@ -71,20 +72,21 @@ function buildRequestBody(params: { headers: Headers; data?: RequestData }): Bod
     payload.files?.forEach((file, index) => {
       formData.append(`files[${index}]`, file.data, file.name);
     });
-    if (payload.attachments == null) {
-      payload.attachments = [];
-    }
+    const attachments = [...(payload.attachments ?? [])];
     payload.files?.forEach((file, index) => {
-      payload.attachments?.push({
-        id: index,
-        filename: file.name,
-        description: file.description,
-      });
+      if (!attachments.some((attachment) => attachment.id === index)) {
+        attachments.push({
+          id: index,
+          filename: file.name,
+          description: file.description,
+        });
+      }
     });
     formData.append(
       "payload_json",
       JSON.stringify({
         ...payload,
+        attachments,
         files: undefined,
       }),
     );
@@ -217,9 +219,8 @@ export function applyDiscordProxyToRequestClient(
   }
 
   const proxyFetch = makeProxyFetch(proxy);
-  const token = readToken(rest);
   internal.executeRequest = (request: QueuedRequest) =>
-    executeRequestWithProxy(internal, token, proxyFetch, request);
+    executeRequestWithProxy(internal, readToken(rest), proxyFetch, request);
 
   Object.defineProperty(internal, DISCORD_REQUEST_CLIENT_PROXY_URL, {
     value: proxy,
