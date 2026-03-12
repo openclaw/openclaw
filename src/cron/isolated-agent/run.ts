@@ -799,13 +799,23 @@ export async function runCronIsolatedAgentTurn(params: {
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
-  const embeddedRunError = hasFatalErrorPayload
-    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+  // The runner can signal failure through two independent channels:
+  // (a) error payloads (isError: true) and (b) meta.error (run-level error
+  // from the model/context layer).  Previous code only checked (a), causing
+  // cron to report "ok" when the model was unreachable but no error payload
+  // was emitted (e.g. empty payloads on provider outage).  See #43604.
+  const hasRunLevelError = Boolean(runLevelError);
+  const hasFatalError = hasFatalErrorPayload || hasRunLevelError;
+  const embeddedRunError = hasFatalError
+    ? (lastErrorPayloadText ??
+      (hasRunLevelError
+        ? `cron isolated run failed: ${typeof runLevelError === "object" && runLevelError !== null && "message" in runLevelError ? String((runLevelError as { message?: unknown }).message) : String(runLevelError)}`
+        : "cron isolated run returned an error payload"))
     : undefined;
   const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
-      ...(hasFatalErrorPayload
+      status: hasFatalError ? "error" : "ok",
+      ...(hasFatalError
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
       summary,
@@ -862,7 +872,7 @@ export async function runCronIsolatedAgentTurn(params: {
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
     };
-    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
+    if (!hasFatalError || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
     return resolveRunOutcome({
