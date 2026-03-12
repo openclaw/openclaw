@@ -179,6 +179,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const threadIsolation = cfg.session?.threadIsolation !== false;
+  if (!threadIsolation) {
+    warn(
+      "session.threadIsolation=false: Slack threads share the parent session. " +
+        "Thread context is still injected per-thread, but conversation history may leak across threads.",
+    );
+  }
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
