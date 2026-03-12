@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
+  classifyFailoverReasonFromHttpStatus,
+  extractObservedOverflowTokenCount,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -31,7 +33,7 @@ const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
 // Issue-backed Anthropic/OpenAI-compatible insufficient_quota payload under HTTP 400:
 // https://github.com/openclaw/openclaw/issues/23440
 const INSUFFICIENT_QUOTA_PAYLOAD =
-  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
+  '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}'; // pragma: allowlist secret
 // Together AI error code examples: https://docs.together.ai/docs/error-codes
 const TOGETHER_PAYMENT_REQUIRED_MESSAGE =
   "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
@@ -41,7 +43,7 @@ const TOGETHER_ENGINE_OVERLOADED_MESSAGE =
 const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
-  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+  "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance."; // pragma: allowlist secret
 
 describe("isAuthPermanentErrorMessage", () => {
   it("matches permanent auth failure patterns", () => {
@@ -105,6 +107,9 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      // Venice returns "Insufficient USD or Diem balance" which has extra words
+      // between "insufficient" and "balance"
+      "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -147,6 +152,11 @@ describe("isBillingErrorMessage", () => {
       "Let me know if you need more details on any of these topics!";
     expect(longResponse.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longResponse)).toBe(false);
+  });
+  it("does not false-positive on short non-billing text that mentions insufficient and balance", () => {
+    const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
   });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
@@ -415,10 +425,17 @@ describe("isLikelyContextOverflowError", () => {
       "exceeded your current quota",
       "This request would exceed your account's rate limit",
       "429 Too Many Requests: request exceeds rate limit",
+      "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+
+  it("keeps too-many-tokens-per-request context overflow errors out of the rate-limit lane", () => {
+    const sample = "Context window exceeded: too many tokens per request.";
+    expect(isLikelyContextOverflowError(sample)).toBe(true);
+    expect(classifyFailoverReason(sample)).toBeNull();
   });
 
   it("excludes reasoning-required invalid-request errors", () => {
@@ -431,10 +448,46 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes billing errors even when text matches context overflow patterns", () => {
+    const samples = [
+      "402 Payment Required: request token limit exceeded for this billing plan",
+      "insufficient credits: request size exceeds your current plan limits",
+      "Your credit balance is too low. Maximum request token limit exceeded.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+});
+
+describe("extractObservedOverflowTokenCount", () => {
+  it("extracts provider-reported prompt token counts", () => {
+    expect(
+      extractObservedOverflowTokenCount(
+        '400 {"type":"error","error":{"message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
+      ),
+    ).toBe(277403);
+    expect(
+      extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens"),
+    ).toBe(12000);
+    expect(
+      extractObservedOverflowTokenCount(
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",
+      ),
+    ).toBe(145000);
+  });
+
+  it("returns undefined when overflow counts are not present", () => {
+    expect(extractObservedOverflowTokenCount("Prompt too large for this model")).toBeUndefined();
+    expect(extractObservedOverflowTokenCount("rate limit exceeded")).toBeUndefined();
+  });
 });
 
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
+    expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
@@ -446,6 +499,19 @@ describe("isTransientHttpError", () => {
   it("returns false for non-retryable or non-http text", () => {
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
+  });
+});
+
+describe("classifyFailoverReasonFromHttpStatus", () => {
+  it("treats HTTP 499 as transient for structured errors", () => {
+    expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        499,
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe("overloaded");
   });
 });
 
@@ -479,6 +545,43 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+
+  it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
+    const samples = [
+      "Unhandled stop reason: MALFORMED_RESPONSE",
+      "Unhandled stop reason: malformed_response",
+      "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("matches network errno codes in serialized error messages", () => {
+    const samples = [
+      "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+      "Error: connect EHOSTUNREACH 10.0.0.1:443",
+      "Error: connect ENETUNREACH 10.0.0.1:443",
+      "Error: write EPIPE",
+      "Error: read ENETRESET",
+      "Error: connect EHOSTDOWN 192.168.1.1:443",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -505,6 +608,87 @@ describe("image dimension errors", () => {
   });
 });
 
+describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {
+  it("reclassifies periodic usage limits as rate_limit", () => {
+    const samples = [
+      "Monthly spend limit reached.",
+      "Weekly usage limit exhausted.",
+      "Daily limit reached, resets tomorrow.",
+    ];
+    for (const sample of samples) {
+      expect(classifyFailoverReasonFromHttpStatus(402, sample)).toBe("rate_limit");
+    }
+  });
+
+  it("reclassifies org/workspace spend limits as rate_limit", () => {
+    const samples = [
+      "Organization spending limit exceeded.",
+      "Workspace spend limit reached.",
+      "Organization limit exceeded for this billing period.",
+    ];
+    for (const sample of samples) {
+      expect(classifyFailoverReasonFromHttpStatus(402, sample)).toBe("rate_limit");
+    }
+  });
+
+  it("keeps 402 as billing when explicit billing signals are present", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Your credit balance is too low. Monthly limit exceeded.",
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Insufficient credits. Organization limit reached.",
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "The account associated with this API key has reached its maximum allowed monthly spending limit.",
+      ),
+    ).toBe("billing");
+  });
+
+  it("keeps long 402 payloads with explicit billing text as billing", () => {
+    const longBillingPayload = `${"x".repeat(520)} insufficient credits. Monthly spend limit reached.`;
+    expect(classifyFailoverReasonFromHttpStatus(402, longBillingPayload)).toBe("billing");
+  });
+
+  it("keeps 402 as billing without message or with generic message", () => {
+    expect(classifyFailoverReasonFromHttpStatus(402, undefined)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "")).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "Payment required")).toBe("billing");
+  });
+
+  it("matches raw 402 wrappers and status-split payloads for the same message", () => {
+    const transientMessage = "Monthly spend limit reached. Please visit your billing settings.";
+    expect(classifyFailoverReason(`402 Payment Required: ${transientMessage}`)).toBe("rate_limit");
+    expect(classifyFailoverReasonFromHttpStatus(402, transientMessage)).toBe("rate_limit");
+
+    const billingMessage =
+      "The account associated with this API key has reached its maximum allowed monthly spending limit.";
+    expect(classifyFailoverReason(`402 Payment Required: ${billingMessage}`)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
+  });
+
+  it("keeps explicit 402 rate-limit messages in the rate_limit lane", () => {
+    const transientMessage = "rate limit exceeded";
+    expect(classifyFailoverReason(`HTTP 402 Payment Required: ${transientMessage}`)).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, transientMessage)).toBe("rate_limit");
+  });
+
+  it("keeps plan-upgrade 402 limit messages in billing", () => {
+    const billingMessage = "Your usage limit has been reached. Please upgrade your plan.";
+    expect(classifyFailoverReason(`HTTP 402 Payment Required: ${billingMessage}`)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
+  });
+});
+
 describe("classifyFailoverReason", () => {
   it("classifies documented provider error messages", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
@@ -515,6 +699,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
+    // Venice 402 billing error with extra words between "insufficient" and "balance"
+    expect(
+      classifyFailoverReason(
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
@@ -543,6 +733,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
       "billing",
     );
+    // Poe returns 402 without "payment required"; must be recognized for fallback
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
@@ -571,6 +767,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies AWS Bedrock too-many-tokens-per-day errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason("AWS Bedrock: Too many tokens per day. Please try again tomorrow."),
+    ).toBe("rate_limit");
   });
   it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
     expect(

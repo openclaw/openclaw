@@ -6,6 +6,7 @@ enum HostEnvSanitizer {
     private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys
     private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes
     private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys
+    private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes
     private static let shellWrapperAllowedOverrideKeys: Set<String> = [
         "TERM",
         "LANG",
@@ -20,6 +21,11 @@ enum HostEnvSanitizer {
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
         return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
+    }
+
+    private static func isBlockedOverride(_ upperKey: String) -> Bool {
+        if self.blockedOverrideKeys.contains(upperKey) { return true }
+        return self.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func filterOverridesForShellWrapper(_ overrides: [String: String]?) -> [String: String]? {
@@ -57,7 +63,7 @@ enum HostEnvSanitizer {
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
             if upper == "PATH" { continue }
-            if self.blockedOverrideKeys.contains(upper) { continue }
+            if self.isBlockedOverride(upper) { continue }
             if self.isBlocked(upper) { continue }
             merged[key] = value
         }

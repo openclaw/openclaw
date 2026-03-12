@@ -442,7 +442,7 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   );
 
-  it("stores the detected env alias as keyRef for opencode ref mode", async () => {
+  it("stores the detected env alias as keyRef for both OpenCode runtime providers", async () => {
     await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
       await withEnvAsync(
         {
@@ -457,15 +457,17 @@ describe("onboard (non-interactive): provider auth", () => {
           });
 
           const store = ensureAuthProfileStore();
-          const profile = store.profiles["opencode:default"];
-          expect(profile?.type).toBe("api_key");
-          if (profile?.type === "api_key") {
-            expect(profile.key).toBeUndefined();
-            expect(profile.keyRef).toEqual({
-              source: "env",
-              provider: "default",
-              id: "OPENCODE_ZEN_API_KEY",
-            });
+          for (const profileId of ["opencode:default", "opencode-go:default"]) {
+            const profile = store.profiles[profileId];
+            expect(profile?.type).toBe("api_key");
+            if (profile?.type === "api_key") {
+              expect(profile.key).toBeUndefined();
+              expect(profile.keyRef).toEqual({
+                source: "env",
+                provider: "default",
+                id: "OPENCODE_ZEN_API_KEY",
+              });
+            }
           }
         },
       );
@@ -570,6 +572,26 @@ describe("onboard (non-interactive): provider auth", () => {
         profileId: "qianfan:default",
         provider: "qianfan",
         key: "qianfan-test-key",
+      });
+    });
+  });
+
+  it("infers Model Studio auth choice from --modelstudio-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-modelstudio-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["modelstudio:default"]?.provider).toBe("modelstudio");
+      expect(cfg.auth?.profiles?.["modelstudio:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.modelstudio?.baseUrl).toBe(
+        "https://coding-intl.dashscope.aliyuncs.com/v1",
+      );
+      expect(cfg.agents?.defaults?.model?.primary).toBe("modelstudio/qwen3.5-plus");
+      await expectApiKeyProfile({
+        profileId: "modelstudio:default",
+        provider: "modelstudio",
+        key: "modelstudio-test-key",
       });
     });
   });

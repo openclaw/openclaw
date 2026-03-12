@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
-import { resolveDefaultMattermostAccountId } from "./accounts.js";
+import {
+  resolveDefaultMattermostAccountId,
+  resolveMattermostAccount,
+  resolveMattermostReplyToMode,
+} from "./accounts.js";
 
 describe("resolveDefaultMattermostAccountId", () => {
   it("prefers channels.mattermost.defaultAccount when it matches a configured account", () => {
@@ -48,5 +52,39 @@ describe("resolveDefaultMattermostAccountId", () => {
     };
 
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
+  });
+});
+
+describe("resolveMattermostReplyToMode", () => {
+  it("uses the configured mode for channel and group messages", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "all",
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
+    expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
+  });
+
+  it("keeps direct messages off even when replyToMode is enabled", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "all",
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "direct")).toBe("off");
+  });
+
+  it("defaults to off when replyToMode is unset", () => {
+    const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
 });
