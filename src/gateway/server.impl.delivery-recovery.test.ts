@@ -53,10 +53,24 @@ function createChannelManager(snapshots: RuntimeSnapshot[]): ChannelManager {
   return { getRuntimeSnapshot } as unknown as ChannelManager;
 }
 
-function createTestLog(): { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } {
+type RecoveryPreflightLog = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+};
+
+type TestLog = RecoveryPreflightLog & {
+  infoMock: ReturnType<typeof vi.fn<(msg: string) => void>>;
+  warnMock: ReturnType<typeof vi.fn<(msg: string) => void>>;
+};
+
+function createTestLog(): TestLog {
+  const infoMock = vi.fn<(msg: string) => void>();
+  const warnMock = vi.fn<(msg: string) => void>();
   return {
-    info: vi.fn(),
-    warn: vi.fn(),
+    info: infoMock,
+    warn: warnMock,
+    infoMock,
+    warnMock,
   };
 }
 
@@ -173,8 +187,8 @@ describe("waitForPendingDeliveryChannelReadiness", () => {
       pollMs: 50,
     });
 
-    expect(log.warn).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
+    expect(log.warnMock).not.toHaveBeenCalled();
+    expect(log.infoMock).toHaveBeenCalledWith(
       expect.stringContaining("Recovery preflight complete: runtime ready"),
     );
   });
@@ -197,7 +211,9 @@ describe("waitForPendingDeliveryChannelReadiness", () => {
       pollMs: 50,
     });
 
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Recovery preflight timeout"));
+    expect(log.warnMock).toHaveBeenCalledWith(
+      expect.stringContaining("Recovery preflight timeout"),
+    );
   });
 
   it("aborts promptly when shutdown signal is triggered", async () => {
@@ -242,7 +258,7 @@ describe("waitForPendingDeliveryChannelReadiness", () => {
       pollMs: 50,
     });
 
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.warnMock).not.toHaveBeenCalled();
   });
 
   it("does not require connected=true for non-WhatsApp channels", async () => {
@@ -263,8 +279,8 @@ describe("waitForPendingDeliveryChannelReadiness", () => {
       pollMs: 50,
     });
 
-    expect(log.warn).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
+    expect(log.warnMock).not.toHaveBeenCalled();
+    expect(log.infoMock).toHaveBeenCalledWith(
       expect.stringContaining("Recovery preflight complete: runtime ready"),
     );
   });
