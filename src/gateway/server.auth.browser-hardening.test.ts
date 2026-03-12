@@ -12,6 +12,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
+  connectOk,
   installGatewayTestHooks,
   readConnectChallengeNonce,
   testState,
@@ -27,6 +28,7 @@ const TEST_OPERATOR_CLIENT = {
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.TEST,
 };
+const ALLOWED_BROWSER_ORIGIN = "https://control.example.com";
 
 const originForPort = (port: number) => `http://127.0.0.1:${port}`;
 
@@ -73,6 +75,127 @@ async function createSignedDevice(params: {
 }
 
 describe("gateway auth browser hardening", () => {
+  test("rejects trusted-proxy browser connects from origins outside the allowlist", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+        },
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "https://evil.example",
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "operator@example.com",
+      });
+      try {
+        const res = await connectReq(ws, {
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("accepts trusted-proxy browser connects from allowed origins", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+        },
+      },
+    });
+
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: ALLOWED_BROWSER_ORIGIN,
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "operator@example.com",
+      });
+      try {
+        const payload = await connectOk(ws, {
+          client: TEST_OPERATOR_CLIENT,
+          device: null,
+        });
+        expect(payload.type).toBe("hello-ok");
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test.each([
+    {
+      name: "rejects disallowed origins",
+      origin: "https://evil.example",
+      ok: false,
+      expectedMessage: "origin not allowed",
+    },
+    {
+      name: "accepts allowed origins",
+      origin: ALLOWED_BROWSER_ORIGIN,
+      ok: true,
+    },
+  ])(
+    "keeps non-proxy browser-origin behavior unchanged: $name",
+    async ({ origin, ok, expectedMessage }) => {
+      const { writeConfigFile } = await import("../config/config.js");
+      testState.gatewayAuth = { mode: "token", token: "secret" };
+      await writeConfigFile({
+        gateway: {
+          controlUi: {
+            allowedOrigins: [ALLOWED_BROWSER_ORIGIN],
+          },
+        },
+      });
+
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin });
+        try {
+          const res = await connectReq(ws, {
+            token: "secret",
+            client: TEST_OPERATOR_CLIENT,
+            device: null,
+          });
+          expect(res.ok).toBe(ok);
+          if (ok) {
+            expect((res.payload as { type?: string } | undefined)?.type).toBe("hello-ok");
+          } else {
+            expect(res.error?.message ?? "").toContain(expectedMessage ?? "");
+          }
+        } finally {
+          ws.close();
+        }
+      });
+    },
+  );
+
   test("rejects non-local browser origins for non-control-ui clients", async () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
