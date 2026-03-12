@@ -1,3 +1,5 @@
+import type { EmbeddingInput } from "./embedding-inputs.js";
+
 // Helpers for enforcing embedding model input size limits.
 //
 // We use UTF-8 byte length as a conservative upper bound for tokenizer output.
@@ -9,6 +11,22 @@ export function estimateUtf8Bytes(text: string): number {
     return 0;
   }
   return Buffer.byteLength(text, "utf8");
+}
+
+export function estimateStructuredEmbeddingInputBytes(input: EmbeddingInput): number {
+  if (!input.parts?.length) {
+    return estimateUtf8Bytes(input.text);
+  }
+  let total = 0;
+  for (const part of input.parts) {
+    if (part.type === "text") {
+      total += estimateUtf8Bytes(part.text);
+      continue;
+    }
+    total += estimateUtf8Bytes(part.mimeType);
+    total += estimateUtf8Bytes(part.data);
+  }
+  return total;
 }
 
 export function splitTextToUtf8ByteLimit(text: string, maxUtf8Bytes: number): string[] {
