@@ -391,6 +391,10 @@ Success:
 [gateway] listening on ws://0.0.0.0:18789
 ```
 
+This output reflects the resolved listener host for bind mode `lan`. Configure the
+gateway with bind modes (for example `gateway.bind: "lan"`), not host aliases like
+`gateway.bind: "0.0.0.0"`.
+
 ---
 
 ## 13) Access from your laptop
