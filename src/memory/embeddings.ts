@@ -65,6 +65,7 @@ export type EmbeddingProviderOptions = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    encodingFormat?: "float" | "base64";
   };
   model: string;
   fallback: EmbeddingProviderFallback;

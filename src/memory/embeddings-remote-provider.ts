@@ -11,6 +11,7 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  encodingFormat?: "float" | "base64";
 };
 
 export function createRemoteEmbeddingProvider(params: {
@@ -26,11 +27,16 @@ export function createRemoteEmbeddingProvider(params: {
     if (input.length === 0) {
       return [];
     }
+    const body: Record<string, unknown> = { model: client.model, input };
+    // Only send encoding_format if explicitly configured
+    if (client.encodingFormat) {
+      body.encoding_format = client.encodingFormat;
+    }
     return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      body: { model: client.model, input },
+      body,
       errorPrefix: params.errorPrefix,
     });
   };
@@ -59,5 +65,11 @@ export async function resolveRemoteEmbeddingClient(params: {
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return {
+    baseUrl,
+    headers,
+    ssrfPolicy,
+    model,
+    encodingFormat: params.options.remote?.encodingFormat,
+  };
 }
