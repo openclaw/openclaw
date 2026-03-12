@@ -393,5 +393,48 @@ describe("ws connect policy", () => {
         authMethod: "token",
       }),
     ).toBe(false);
+
+    // auth.mode="none": local backend client with no browser origin is trusted even without a
+    // shared secret, because there is no secret to verify.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+
+    // auth.mode="none" with remote client is still rejected (isLocalClient=false).
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(false);
+
+    // auth.mode="none" with browser origin header is still rejected (hasBrowserOriginHeader=true).
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(false);
   });
 });
