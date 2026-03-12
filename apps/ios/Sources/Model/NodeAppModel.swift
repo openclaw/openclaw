@@ -12,6 +12,12 @@ import UserNotifications
 private struct NotificationCallError: Error, Sendable {
     let message: String
 }
+
+private struct GatewayRelayIdentityResponse: Decodable {
+    let deviceId: String
+    let publicKey: String
+}
+
 // Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -140,6 +146,7 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
     var gatewaySession: GatewayNodeSession { self.nodeGateway }
     var operatorSession: GatewayNodeSession { self.operatorGateway }
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
@@ -528,13 +535,6 @@ final class NodeAppModel {
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
     private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
     private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
-    private static var apnsEnvironment: String {
-#if DEBUG
-        "sandbox"
-#else
-        "production"
-#endif
-    }
 
     private func refreshBrandingFromGateway() async {
         do {
@@ -1189,7 +1189,15 @@ final class NodeAppModel {
             _ = try await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
         }
 
-        return await self.notificationAuthorizationStatus()
+        let updatedStatus = await self.notificationAuthorizationStatus()
+        if Self.isNotificationAuthorizationAllowed(updatedStatus) {
+            // Refresh APNs registration immediately after the first permission grant so the
+            // gateway can receive a push registration without requiring an app relaunch.
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+        return updatedStatus
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -1201,6 +1209,17 @@ final class NodeAppModel {
             return status
         case .failure:
             return .denied
+        }
+    }
+
+    private static func isNotificationAuthorizationAllowed(
+        _ status: NotificationAuthorizationStatus
+    ) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
         }
     }
 
@@ -1834,6 +1853,7 @@ private extension NodeAppModel {
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
+                            await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
                             await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
@@ -2479,7 +2499,8 @@ extension NodeAppModel {
         else {
             return
         }
-        if token == self.apnsLastRegisteredTokenHex {
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        if !usesRelayTransport && token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2488,23 +2509,38 @@ extension NodeAppModel {
             return
         }
 
-        struct PushRegistrationPayload: Codable {
-            var token: String
-            var topic: String
-            var environment: String
-        }
-
-        let payload = PushRegistrationPayload(
-            token: token,
-            topic: topic,
-            environment: Self.apnsEnvironment)
         do {
-            let json = try Self.encodePayload(payload)
-            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: json)
+            let gatewayIdentity: PushRelayGatewayIdentity?
+            if usesRelayTransport {
+                guard self.operatorConnected else { return }
+                gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+            } else {
+                gatewayIdentity = nil
+            }
+            let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
+                apnsTokenHex: token,
+                topic: topic,
+                gatewayIdentity: gatewayIdentity)
+            await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
         } catch {
-            // Best-effort only.
+            self.pushWakeLogger.error(
+                "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func fetchPushRelayGatewayIdentity() async throws -> PushRelayGatewayIdentity {
+        let response = try await self.operatorGateway.request(
+            method: "gateway.identity.get",
+            paramsJSON: "{}",
+            timeoutSeconds: 8)
+        let decoded = try JSONDecoder().decode(GatewayRelayIdentityResponse.self, from: response)
+        let deviceId = decoded.deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let publicKey = decoded.publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deviceId.isEmpty, !publicKey.isEmpty else {
+            throw PushRelayError.relayMisconfigured("Gateway identity response missing required fields")
+        }
+        return PushRelayGatewayIdentity(deviceId: deviceId, publicKey: publicKey)
     }
 
     private static func isSilentPushPayload(_ userInfo: [AnyHashable: Any]) -> Bool {
