@@ -1,0 +1,161 @@
+/**
+ * OpenClaw Configuration Template
+ * Claude-based Persistent Memory Workflows
+ *
+ * This configuration enables persistent memory across Claude sessions,
+ * supporting long-running projects, context retention, and knowledge accumulation.
+ *
+ * Usage:
+ *   1. Copy this file to ~/.openclaw/openclaw.json
+ *   2. Adjust paths and settings for your environment
+ *   3. Run `openclaw setup` to initialize the workspace
+ */
+{
+  // Agent configuration
+  agents: {
+    defaults: {
+      // Workspace directory for agent files and context
+      workspace: "~/.openclaw/workspace",
+
+      // Default model (provider/model format)
+      model: "anthropic/claude-sonnet-4-20250514",
+
+      // Models available for dynamic selection
+      models: [
+        "anthropic/claude-sonnet-4-20250514",
+        "anthropic/claude-opus-4-20250514",
+        "anthropic/claude-haiku-3-5-20241022"
+      ],
+
+      // Default thinking level for responses
+      thinking: "low",
+
+      // Queue mode for handling concurrent messages
+      queueMode: "steer",
+
+      // Block streaming (send completed blocks immediately)
+      blockStreamingDefault: "off",
+
+      // Subagent configuration
+      maxSubagentDepth: 3,
+      subagentThinking: "low",
+      subagentTimeout: 300
+    }
+  },
+
+  // Memory system configuration
+  memory: {
+    // Use QMD backend for vector search capabilities
+    backend: "qmd",
+
+    qmd: {
+      // Paths to index for memory search
+      paths: [
+        {
+          path: "~/.openclaw/workspace",
+          patterns: ["**/*.md", "**/*.txt", "**/*.json"],
+          ignore: ["node_modules/**", ".git/**"]
+        },
+        {
+          path: "~/.openclaw/knowledge",
+          patterns: ["**/*"]
+        }
+      ],
+
+      // mcporter integration for faster queries
+      mcporter: {
+        enabled: true,
+        serverName: "qmd",
+        startDaemon: true
+      },
+
+      // Session export for persistent context
+      sessions: {
+        exportDir: "~/.openclaw/memory-exports",
+        exportOnSessionEnd: true
+      },
+
+      // Embedding configuration
+      embeddings: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: 1536
+      }
+    },
+
+    // Memory retrieval settings
+    retrieval: {
+      // Default number of results
+      defaultLimit: 10,
+
+      // Use MMR for diverse results
+      useMmr: true,
+      mmrLambda: 0.5,
+
+      // Temporal decay (recent memories weighted higher)
+      temporalDecay: {
+        enabled: true,
+        halfLifeDays: 30
+      }
+    }
+  },
+
+  // Gateway configuration
+  gateway: {
+    // Bind to loopback only (secure default)
+    bind: "loopback",
+    port: 18789,
+
+    // Enable HTTP API for MCP integration
+    api: {
+      enabled: true
+    }
+  },
+
+  // Tool configuration
+  tools: {
+    policy: {
+      // Auto-approve safe read operations
+      autoApprove: [
+        "read",
+        "search",
+        "glob",
+        "grep",
+        "memory_search",
+        "web_search"
+      ],
+
+      // Require confirmation for modifications
+      requireConfirmation: [
+        "write",
+        "edit",
+        "exec",
+        "memory_add"
+      ]
+    },
+
+    exec: {
+      // Enable apply_patch for code modifications
+      applyPatch: true
+    }
+  },
+
+  // Skills configuration
+  skills: {
+    // Load bundled skills
+    bundled: true,
+
+    // Additional skill directories
+    directories: [
+      "~/.openclaw/skills"
+    ],
+
+    // Skill-specific settings
+    settings: {
+      // mcporter skill for MCP tool routing
+      mcporter: {
+        autoStart: true
+      }
+    }
+  }
+}
