@@ -381,6 +381,18 @@ export function createExecTool(
           })
         : mergedEnv;
 
+      // ---- OPENCLAW-TOOL RPC INJECTION ----
+      if (defaults?.sessionKey) {
+        env.OPENCLAW_INTERNAL_SESSION = defaults.sessionKey;
+        // In a real scenario, this port would be dynamically assigned by the RPC Daemon.
+        // For prototyping, we use a fixed port 34567 or pass it through process.env.
+        env.OPENCLAW_RPC_PORT = process.env.OPENCLAW_RPC_PORT || "34567";
+        // Prepend the local bin directory to PATH so `openclaw-tool` resolves.
+        const rpcBinDir = path.resolve(process.cwd(), ".openclaw/bin");
+        env.PATH = env.PATH ? `${rpcBinDir}:${env.PATH}` : rpcBinDir;
+      }
+      // -------------------------------------
+
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
