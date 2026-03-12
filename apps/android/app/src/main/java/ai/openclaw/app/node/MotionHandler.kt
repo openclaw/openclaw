@@ -153,7 +153,7 @@ private object SystemMotionDataSource : MotionDataSource {
                 val value = event?.values?.firstOrNull()
                 if (!resumed.compareAndSet(false, true)) return
                 sensorManager.unregisterListener(this)
-                cont.resume(value, null)
+                cont.resume(value) { _, _, _ -> }
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -161,7 +161,7 @@ private object SystemMotionDataSource : MotionDataSource {
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
             sensorManager.unregisterListener(listener)
-            cont.resume(null, null)
+            cont.resume(null) { _, _, _ -> }
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
@@ -200,7 +200,7 @@ private object SystemMotionDataSource : MotionDataSource {
                     averageDelta = sumDelta / count,
                   )
                   sensorManager.unregisterListener(this)
-                  cont.resume(result, null)
+                  cont.resume(result) { _, _, _ -> }
                 }
               }
 
@@ -208,7 +208,7 @@ private object SystemMotionDataSource : MotionDataSource {
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
-            cont.resume(null, null)
+            cont.resume(null) { _, _, _ -> }
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
