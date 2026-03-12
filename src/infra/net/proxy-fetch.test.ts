@@ -101,6 +101,14 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).not.toHaveBeenCalled();
   });
 
+  it("returns undefined for whitespace-delimited no_proxy entries", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "10.0.0.0/8 example.internal");
+
+    expect(resolveProxyFetchFromEnv("http://example.internal:9001/v1/models")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("uses lowercase no_proxy in preference to NO_PROXY", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", "example.internal");
@@ -162,6 +170,22 @@ describe("resolveProxyFetchFromEnv", () => {
   it("returns undefined for no_proxy suffix host:port matches", () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
     vi.stubEnv("NO_PROXY", ".example.internal:8443");
+
+    expect(resolveProxyFetchFromEnv("http://api.example.internal:8443/health")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for leading-dot no_proxy entries on the exact host", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", ".example.internal:8443");
+
+    expect(resolveProxyFetchFromEnv("http://example.internal:8443/health")).toBeUndefined();
+    expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for wildcard-suffix no_proxy entries", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "*.example.internal:8443");
 
     expect(resolveProxyFetchFromEnv("http://api.example.internal:8443/health")).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();

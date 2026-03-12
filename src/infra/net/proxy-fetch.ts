@@ -12,6 +12,10 @@ type NoProxyEntry = {
   port?: string;
 };
 
+function normalizeNoProxyPattern(pattern: string): string {
+  return pattern.replace(/^\*?\./, "");
+}
+
 function normalizeNoProxyEntry(entry: string): NoProxyEntry | null {
   const value = entry.trim().toLowerCase();
   if (!value) {
@@ -37,13 +41,14 @@ function normalizeNoProxyEntry(entry: string): NoProxyEntry | null {
   const colonCount = value.split(":").length - 1;
   if (colonCount === 1) {
     const lastColon = value.lastIndexOf(":");
-    const pattern = value.slice(0, lastColon);
+    const pattern = normalizeNoProxyPattern(value.slice(0, lastColon));
     const port = value.slice(lastColon + 1);
     if (pattern && /^\d+$/.test(port)) {
       return { pattern, port };
     }
   }
-  return { pattern: value };
+  const pattern = normalizeNoProxyPattern(value);
+  return pattern ? { pattern } : null;
 }
 
 function resolveNoProxyValue(env: NodeJS.ProcessEnv): string {
@@ -58,7 +63,7 @@ function resolveNoProxyValue(env: NodeJS.ProcessEnv): string {
 
 function getNoProxyEntries(env: NodeJS.ProcessEnv): NoProxyEntry[] {
   return resolveNoProxyValue(env)
-    .split(",")
+    .split(/[\s,]+/)
     .map(normalizeNoProxyEntry)
     .filter((entry): entry is NoProxyEntry => Boolean(entry));
 }
@@ -147,9 +152,6 @@ function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
     // deployments even though undici's EnvHttpProxyAgent does not reliably do so.
     if (entry.pattern.includes("/")) {
       return isIP(hostname) === 4 && matchesIpv4Cidr(hostname, entry.pattern);
-    }
-    if (entry.pattern.startsWith(".")) {
-      return hostname.endsWith(entry.pattern);
     }
     return hostname === entry.pattern || hostname.endsWith(`.${entry.pattern}`);
   });
