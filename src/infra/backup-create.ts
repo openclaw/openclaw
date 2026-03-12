@@ -5,10 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import {
+  buildExcludeFilter,
+  resolveExcludePatterns,
+  type ExcludeSpec,
+} from "../commands/backup-exclude.js";
+import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
   type BackupAsset,
+  type ExcludedEntry,
+  type ExcludedStats,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
@@ -23,6 +30,12 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  // Exclude options
+  smartExclude?: boolean;
+  exclude?: string[];
+  excludeFile?: string;
+  includeAll?: boolean;
+  allowExcludeProtected?: boolean;
 };
 
 type BackupManifestAsset = {
@@ -41,6 +54,7 @@ type BackupManifest = {
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
+    smartExclude?: boolean;
   };
   paths: {
     stateDir: string;
@@ -55,6 +69,8 @@ type BackupManifest = {
     reason: string;
     coveredBy?: string;
   }>;
+  excluded?: ExcludedEntry[];
+  excludedStats?: ExcludedStats;
 };
 
 export type BackupCreateResult = {
@@ -73,6 +89,8 @@ export type BackupCreateResult = {
     reason: string;
     coveredBy?: string;
   }>;
+  excluded?: ExcludedEntry[];
+  excludedStats?: ExcludedStats;
 };
 
 async function resolveOutputPath(params: {
@@ -192,14 +210,17 @@ function buildManifest(params: {
   archiveRoot: string;
   includeWorkspace: boolean;
   onlyConfig: boolean;
+  smartExclude: boolean;
   assets: BackupAsset[];
   skipped: BackupCreateResult["skipped"];
   stateDir: string;
   configPath: string;
   oauthDir: string;
   workspaceDirs: string[];
+  excluded?: ExcludedEntry[];
+  excludedStats?: ExcludedStats;
 }): BackupManifest {
-  return {
+  const manifest: BackupManifest = {
     schemaVersion: 1,
     createdAt: params.createdAt,
     archiveRoot: params.archiveRoot,
@@ -209,6 +230,7 @@ function buildManifest(params: {
     options: {
       includeWorkspace: params.includeWorkspace,
       onlyConfig: params.onlyConfig,
+      ...(params.smartExclude ? { smartExclude: true } : {}),
     },
     paths: {
       stateDir: params.stateDir,
@@ -228,6 +250,13 @@ function buildManifest(params: {
       coveredBy: entry.coveredBy,
     })),
   };
+  if (params.excluded && params.excluded.length > 0) {
+    manifest.excluded = params.excluded;
+  }
+  if (params.excludedStats) {
+    manifest.excludedStats = params.excludedStats;
+  }
+  return manifest;
 }
 
 export function formatBackupCreateSummary(result: BackupCreateResult): string[] {
@@ -244,6 +273,23 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       } else {
         lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason})`);
       }
+    }
+  }
+  if (result.excluded && result.excluded.length > 0) {
+    lines.push(
+      `Excluded ${result.excluded.length} path${result.excluded.length === 1 ? "" : "s"}:`,
+    );
+    const displayLimit = 20;
+    const toShow = result.excluded.slice(0, displayLimit);
+    for (const entry of toShow) {
+      lines.push(`- ${entry.path} (${entry.pattern}, ${entry.source})`);
+    }
+    if (result.excluded.length > displayLimit) {
+      lines.push(`  … and ${result.excluded.length - displayLimit} more`);
+    }
+    if (result.excludedStats) {
+      const mb = (result.excludedStats.totalBytes / (1024 * 1024)).toFixed(1);
+      lines.push(`Excluded ${result.excludedStats.totalFiles} files (${mb} MB)`);
     }
   }
   if (result.dryRun) {
@@ -269,6 +315,31 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function buildExcludedStats(excluded: readonly ExcludedEntry[]): ExcludedStats {
+  const byPatternMap = new Map<string, { files: number; bytes: number; source: string }>();
+  for (const entry of excluded) {
+    const existing = byPatternMap.get(entry.pattern);
+    if (existing) {
+      existing.files += 1;
+      existing.bytes += entry.bytes;
+    } else {
+      byPatternMap.set(entry.pattern, {
+        files: 1,
+        bytes: entry.bytes,
+        source: entry.source,
+      });
+    }
+  }
+  return {
+    totalFiles: excluded.length,
+    totalBytes: excluded.reduce((sum, e) => sum + e.bytes, 0),
+    byPattern: [...byPatternMap.entries()].map(([pattern, stats]) => ({
+      pattern,
+      ...stats,
+    })),
+  };
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -276,6 +347,7 @@ export async function createBackupArchive(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
+  const smartExclude = Boolean(opts.smartExclude);
   const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
   const outputPath = await resolveOutputPath({
     output: opts.output,
@@ -302,6 +374,27 @@ export async function createBackupArchive(
     );
   }
 
+  // Pre-flight: resolve exclude patterns BEFORE any archive I/O.
+  const excludeSpec: ExcludeSpec = {
+    exclude: opts.exclude ?? [],
+    excludeFile: opts.excludeFile,
+    includeAll: Boolean(opts.includeAll),
+    smartExclude,
+    allowExcludeProtected: Boolean(opts.allowExcludeProtected),
+    nonInteractive: false,
+  };
+  const { patterns: excludePatterns, sources: patternSources } = resolveExcludePatterns(
+    excludeSpec,
+    plan.stateDir,
+  );
+
+  // Build the filter once (pre-compiled, outside the hot path).
+  const { filter: excludeFilter, getExcluded } = buildExcludeFilter(
+    excludePatterns,
+    patternSources,
+    plan.stateDir,
+  );
+
   if (!opts.dryRun) {
     await assertOutputPathReady(outputPath);
   }
@@ -320,6 +413,20 @@ export async function createBackupArchive(
   };
 
   if (opts.dryRun) {
+    // For dry-run, populate excluded info if patterns are active.
+    if (excludePatterns.length > 0) {
+      result.excluded = [];
+      result.excludedStats = {
+        totalFiles: 0,
+        totalBytes: 0,
+        byPattern: excludePatterns.map((p) => ({
+          pattern: p,
+          files: 0,
+          bytes: 0,
+          source: patternSources.get(p) ?? "cli",
+        })),
+      };
+    }
     return result;
   }
 
@@ -328,11 +435,17 @@ export async function createBackupArchive(
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {
+    const hasExcludes = excludePatterns.length > 0;
+
+    // Write manifest. The excluded[] field is populated after tar completes
+    // via the filter side-effect. The in-archive manifest records options
+    // but not the runtime excluded list (which is on the result object).
     const manifest = buildManifest({
       createdAt,
       archiveRoot,
       includeWorkspace,
       onlyConfig,
+      smartExclude,
       assets: result.assets,
       skipped: result.skipped,
       stateDir: plan.stateDir,
@@ -342,22 +455,45 @@ export async function createBackupArchive(
     });
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-    await tar.c(
-      {
-        file: tempArchivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
-            manifestPath,
-            archiveRoot,
-          });
-        },
+    const tarFilter = hasExcludes
+      ? (entryPath: string, stat: { size?: number }) => {
+          // Never filter out the manifest file itself.
+          if (path.resolve(entryPath) === manifestPath) {
+            return true;
+          }
+          return excludeFilter(entryPath, stat);
+        }
+      : undefined;
+
+    const tarOpts: tar.TarOptionsWithAliasesAsyncFile = {
+      file: tempArchivePath,
+      gzip: true,
+      portable: true,
+      preservePaths: true,
+      follow: false, // SECURITY: never follow symlinks
+      onWriteEntry: (entry) => {
+        entry.path = remapArchiveEntryPath({
+          entryPath: entry.path,
+          manifestPath,
+          archiveRoot,
+        });
       },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-    );
+    };
+    if (tarFilter) {
+      tarOpts.filter = tarFilter;
+    }
+
+    await tar.c(tarOpts, [manifestPath, ...result.assets.map((asset) => asset.sourcePath)]);
+
+    // Populate result with excluded entries from filter side-effect.
+    if (hasExcludes) {
+      const excluded = getExcluded();
+      if (excluded.length > 0) {
+        result.excluded = [...excluded];
+        result.excludedStats = buildExcludedStats(excluded);
+      }
+    }
+
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);

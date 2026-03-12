@@ -127,6 +127,9 @@ importers:
       https-proxy-agent:
         specifier: ^8.0.0
         version: 8.0.0
+      ignore:
+        specifier: ^7.0.5
+        version: 7.0.5
       ipaddr.js:
         specifier: ^2.3.0
         version: 2.3.0
@@ -163,6 +166,9 @@ importers:
       pdfjs-dist:
         specifier: ^5.5.207
         version: 5.5.207
+      picomatch:
+        specifier: ^4.0.3
+        version: 4.0.3
       playwright-core:
         specifier: 1.58.2
         version: 1.58.2
@@ -212,6 +218,9 @@ importers:
       '@types/node':
         specifier: ^25.4.0
         version: 25.4.0
+      '@types/picomatch':
+        specifier: ^4.0.2
+        version: 4.0.2
       '@types/qrcode-terminal':
         specifier: ^0.12.2
         version: 0.12.2
@@ -3465,6 +3474,9 @@ packages:
 
   '@types/node@25.4.0':
     resolution: {integrity: sha512-9wLpoeWuBlcbBpOY3XmzSTG3oscB6xjBEEtn+pYXTfhyXhIxC5FsBer2KTopBlvKEiW9l13po9fq+SJY/5lkhw==}
+
+  '@types/picomatch@4.0.2':
+    resolution: {integrity: sha512-qHHxQ+P9PysNEGbALT8f8YOSHW0KJu6l2xU8DYY0fu/EmGxXdVnuTLvFUvBgPJMSqXq29SYHveejeAha+4AYgA==}
 
   '@types/qrcode-terminal@0.12.2':
     resolution: {integrity: sha512-v+RcIEJ+Uhd6ygSQ0u5YYY7ZM+la7GgPbs0V/7l/kFs2uO4S8BcIUEMoP7za4DNIqNnUD5npf0A/7kBhrCKG5Q==}
@@ -10574,6 +10586,8 @@ snapshots:
   '@types/node@25.4.0':
     dependencies:
       undici-types: 7.18.2
+
+  '@types/picomatch@4.0.2': {}
 
   '@types/qrcode-terminal@0.12.2': {}
 

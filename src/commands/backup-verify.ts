@@ -11,6 +11,13 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
+type BackupManifestExcludedEntry = {
+  path: string;
+  pattern: string;
+  source: string;
+  bytes: number;
+};
+
 type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
@@ -20,6 +27,7 @@ type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    smartExclude?: boolean;
   };
   paths?: {
     stateDir?: string;
@@ -34,6 +42,8 @@ type BackupManifest = {
     reason?: string;
     coveredBy?: string;
   }>;
+  /** Optional field added in the exclude patterns feature. Absent in v1 archives. */
+  excluded?: BackupManifestExcludedEntry[];
 };
 
 export type BackupVerifyOptions = {
@@ -139,6 +149,22 @@ function parseManifest(raw: string): BackupManifest {
     });
   }
 
+  // Tolerant reader: parse excluded[] if present (absent in v1 archives — safe default).
+  let excluded: BackupManifestExcludedEntry[] | undefined;
+  if (Array.isArray(parsed.excluded)) {
+    excluded = [];
+    for (const entry of parsed.excluded) {
+      if (isRecord(entry) && typeof entry.path === "string") {
+        excluded.push({
+          path: entry.path,
+          pattern: typeof entry.pattern === "string" ? entry.pattern : "",
+          source: typeof entry.source === "string" ? entry.source : "cli",
+          bytes: typeof entry.bytes === "number" ? entry.bytes : 0,
+        });
+      }
+    }
+  }
+
   return {
     schemaVersion: 1,
     archiveRoot: parsed.archiveRoot,
@@ -150,7 +176,10 @@ function parseManifest(raw: string): BackupManifest {
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     options: isRecord(parsed.options)
-      ? { includeWorkspace: parsed.options.includeWorkspace as boolean | undefined }
+      ? {
+          includeWorkspace: parsed.options.includeWorkspace as boolean | undefined,
+          smartExclude: parsed.options.smartExclude as boolean | undefined,
+        }
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
@@ -167,6 +196,7 @@ function parseManifest(raw: string): BackupManifest {
       : undefined,
     assets,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
+    excluded,
   };
 }
 
