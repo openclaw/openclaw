@@ -1,3 +1,4 @@
+import type { CircuitBreakerConfig } from "../agents/circuit-breaker/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
@@ -87,6 +88,8 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Per-agent circuit breaker overrides. */
+  circuitBreaker?: CircuitBreakerConfig;
 };
 
 export type AgentsConfig = {

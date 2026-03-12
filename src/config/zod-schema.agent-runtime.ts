@@ -12,6 +12,24 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+const CircuitBreakerActionSchema = z.union([
+  z.literal("pause"),
+  z.literal("reset"),
+  z.literal("alert"),
+]);
+
+export const CircuitBreakerSchema = z
+  .object({
+    consecutiveErrors: z.number().int().positive().optional(),
+    action: z.union([CircuitBreakerActionSchema, z.array(CircuitBreakerActionSchema)]).optional(),
+    alertChannel: z.string().optional(),
+    alertTo: z.string().optional(),
+    alertAccountId: z.string().optional(),
+    cooldownMinutes: z.number().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -759,6 +777,7 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    circuitBreaker: CircuitBreakerSchema,
   })
   .strict();
 
