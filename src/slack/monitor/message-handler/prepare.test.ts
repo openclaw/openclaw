@@ -503,6 +503,33 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  // ── tripwire: default config unchanged ────────────────────────────
+  it("default config: thread reply session key contains :thread: suffix", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "900.000" }],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: makeTmpStorePath().storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "thread reply",
+      ts: "901.000",
+      thread_ts: "900.000",
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.SessionKey).toContain(":thread:");
+  });
+
   // ── threadIsolation: false ─────────────────────────────────────────
   // When session.threadIsolation is false, threads reuse the parent session
   // key but still get per-thread history/starter context via threadTs.
