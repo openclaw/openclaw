@@ -352,6 +352,45 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("does not resurrect a cleared route thread from origin metadata", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    sessionStoreMocks.currentEntry = {
+      deliveryContext: {
+        channel: "mattermost",
+        to: "channel:CHAN1",
+        accountId: "default",
+      },
+      origin: {
+        threadId: "stale-root",
+      },
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:mattermost:channel:CHAN1",
+      AccountId: "default",
+      MessageThreadId: undefined,
+      OriginatingChannel: "mattermost",
+      OriginatingTo: "channel:CHAN1",
+      ExplicitDeliverRoute: true,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+      | { channel?: string; to?: string; threadId?: string | number }
+      | undefined;
+    expect(routeCall).toMatchObject({
+      channel: "mattermost",
+      to: "channel:CHAN1",
+    });
+    expect(routeCall?.threadId).toBeUndefined();
+  });
+
   it("forces suppressTyping when routing to a different originating channel", async () => {
     setNoAbort();
     const cfg = emptyConfig;

@@ -25,7 +25,6 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -173,8 +172,10 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  const routeThreadId =
-    ctx.MessageThreadId ?? deliveryContextFromSession(sessionStoreEntry.entry)?.threadId;
+  // Preserve cleared route threads; `origin.threadId` can outlive the active delivery route.
+  const persistedRouteThreadId =
+    sessionStoreEntry.entry?.deliveryContext?.threadId ?? sessionStoreEntry.entry?.lastThreadId;
+  const routeThreadId = ctx.MessageThreadId ?? persistedRouteThreadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
