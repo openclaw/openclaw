@@ -1975,17 +1975,15 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           prompt: effectivePrompt,
         });
-        if (memoryRecall.error) {
+        if (memoryRecall.error && memoryRecall.error !== "empty_prompt") {
           if (memoryRecall.enforced) {
             throw new Error(
               `memory recall enforcement failed before response generation: ${memoryRecall.error}`,
             );
           }
-          if (memoryRecall.error !== "empty_prompt") {
-            log.warn(
-              `memory recall skipped (advisory mode): agent=${sessionAgentId} run=${params.runId} reason=${memoryRecall.error}`,
-            );
-          }
+          log.warn(
+            `memory recall skipped (advisory mode): agent=${sessionAgentId} run=${params.runId} reason=${memoryRecall.error}`,
+          );
         }
         if (memoryRecall.systemPromptAddition) {
           systemPromptText = prependSystemPromptAddition({

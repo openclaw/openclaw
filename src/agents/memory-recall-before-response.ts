@@ -73,9 +73,8 @@ export async function buildMemoryRecallBeforeResponse(params: {
     return {
       enabled: true,
       enforced: recall.mode === "enforce",
-      checked: false,
+      checked: true,
       injected: false,
-      error: "empty_prompt",
     };
   }
 

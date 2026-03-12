@@ -156,6 +156,38 @@ describe("memory recall before response", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("treats empty prompt as a no-op recall check (no error)", async () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            provider: "openai",
+            recallBeforeResponse: {
+              enabled: true,
+              mode: "enforce",
+            },
+          },
+        },
+      },
+    });
+
+    const result = await buildMemoryRecallBeforeResponse({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "main",
+      prompt: "   ",
+    });
+
+    expect(result).toEqual({
+      enabled: true,
+      enforced: true,
+      checked: true,
+      injected: false,
+    });
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
   it("truncates long recall additions to maxChars budget", () => {
     const out = buildRecallSystemPromptAddition({
       maxChars: 220,
