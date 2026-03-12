@@ -251,7 +251,7 @@ describe("resolveSystemNodeInfo", () => {
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("below the required Node 22+");
+    expect(warning).toContain("below the required Node 22.16+");
     expect(warning).toContain(darwinNode);
   });
 });
