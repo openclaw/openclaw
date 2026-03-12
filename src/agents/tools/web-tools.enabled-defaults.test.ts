@@ -847,6 +847,20 @@ describe("web_search tavily provider", () => {
     expect(result?.details).toMatchObject({ error: "missing_tavily_api_key" });
   });
 
+  it("exposes count up to 20 in the Tavily schema", () => {
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const countSchema = (
+      tool?.parameters as
+        | {
+            properties?: Record<string, { maximum?: number; description?: string }>;
+          }
+        | undefined
+    )?.properties?.count;
+
+    expect(countSchema?.maximum).toBe(20);
+    expect(countSchema?.description).toContain("1-20");
+  });
+
   it("runs a basic Tavily search and returns structured results", async () => {
     const mockFetch = installTavilyFetch({
       query: "openclaw release",
@@ -892,6 +906,16 @@ describe("web_search tavily provider", () => {
     expect(details.results?.[0]?.title).toContain("OpenClaw Release Notes");
     expect(details.results?.[0]?.snippet).toContain("Latest release notes");
     expect(details.externalContent).toMatchObject({ untrusted: true, wrapped: true });
+  });
+
+  it("allows Tavily to request up to 20 results", async () => {
+    const mockFetch = installTavilyFetch({ query: "openclaw release", results: [] });
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+
+    await tool?.execute?.("call-1", { query: "openclaw release", count: 20 });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.max_results).toBe(20);
   });
 
   it("includes AI answer when include_answer is true", async () => {

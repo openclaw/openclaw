@@ -164,13 +164,14 @@ function createWebSearchSchema(params: {
   provider: (typeof SEARCH_PROVIDERS)[number];
   perplexityTransport?: PerplexityTransport;
 }) {
+  const maxSearchCount = getMaxSearchCount(params.provider);
   const querySchema = {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
       Type.Number({
-        description: "Number of results to return (1-10).",
+        description: `Number of results to return (1-${maxSearchCount}).`,
         minimum: 1,
-        maximum: MAX_SEARCH_COUNT,
+        maximum: maxSearchCount,
       }),
     ),
   } as const;
@@ -1109,9 +1110,17 @@ async function runGeminiSearch(params: {
   );
 }
 
-function resolveSearchCount(value: unknown, fallback: number): number {
+function getMaxSearchCount(provider: (typeof SEARCH_PROVIDERS)[number]): number {
+  return provider === "tavily" ? TAVILY_MAX_RESULTS : MAX_SEARCH_COUNT;
+}
+
+function resolveSearchCount(
+  value: unknown,
+  fallback: number,
+  provider: (typeof SEARCH_PROVIDERS)[number],
+): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(1, Math.min(MAX_SEARCH_COUNT, Math.floor(parsed)));
+  const clamped = Math.max(1, Math.min(getMaxSearchCount(provider), Math.floor(parsed)));
   return clamped;
 }
 
@@ -2412,7 +2421,7 @@ export function createWebSearchTool(options?: {
 
       const result = await runWebSearch({
         query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT, provider),
         apiKey,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
