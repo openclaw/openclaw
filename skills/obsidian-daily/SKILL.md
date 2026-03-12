@@ -1,29 +1,26 @@
-﻿---
+---
 name: obsidian-daily
-description: Create and manage Obsidian daily notes. Use when asked to write daily notes, record today's work, log session activities, or create daily summaries. Triggers on keywords like "daily note", "today's log", "write daily", "daily summary".
+description: "Create and manage Obsidian daily notes with session activity summaries. Use when writing daily notes, recording today's work, logging session activities, creating daily summaries, or reviewing what was done today. Triggers: 'daily note', '데일리 노트', 'Obsidian 일지', '오늘 일지', 'today log', 'write daily', 'daily summary', '오늘 뭐 했는지 정리', '일일 노트'. NOT for: project-specific docs (use obsidian skill), weekly/monthly reviews, general Obsidian vault operations."
 ---
 
 # Obsidian Daily Note
 
-## Configuration
+Create daily notes summarizing session activities in the Obsidian vault.
 
-Set these to match your vault:
+## Quick Reference
 
-- **Base path**: path to your `DAILY` folder inside the vault
-- **Sync**: adjust if using OneDrive / iCloud / Obsidian Sync
+- **Location**: `00.DAILY/` folder in vault
+- **Filename**: `YYYY-MM-DD_short-summary.md`
+- **Encoding**: UTF-8 via `[System.IO.File]::WriteAllText()` (never `Set-Content`)
+- **Write method**: Use `exec` + PowerShell (vault is outside MAIBOT workspace)
 
-## File Naming
+## Workflow
 
-```
-YYYY-MM-DD_short-summary.md
-```
-
-Examples:
-
-- `2026-02-18_fix-env-gsudo-chrome.md`
-- `2026-02-19_maibotalks-app-submit.md`
-
-The title should briefly summarize the day's main activities.
+1. Collect today's activities from session context
+2. Group by category (🔧 Dev, 📱 Mobile, 🚀 Deploy, 🔗 Integration, 📝 Docs, 💡 Ideas, 📋 Planning)
+3. Generate filename: `YYYY-MM-DD_descriptive-slug.md`
+4. Write using UTF-8 encoding (see references for Windows encoding details)
+5. Include tomorrow's action items from pending tasks
 
 ## Template
 
@@ -32,7 +29,7 @@ The title should briefly summarize the day's main activities.
 
 ## Completed Today
 
-### [Category]
+### [Category Emoji] Category
 
 - **Task** → Result
   - Details
@@ -43,30 +40,14 @@ The title should briefly summarize the day's main activities.
 - [ ] Action 2
 ```
 
-Category emoji prefixes: 🔧 Dev, 📱 Mobile, 🚀 Deploy, 🔗 Integration, 📝 Docs, 💡 Ideas, 📋 Planning
-
-## Encoding
-
-**CRITICAL on Windows**: Never use `Set-Content`. Always use:
+## Critical: Windows Encoding
 
 ```powershell
+# ALWAYS use this — never Set-Content
 [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8)
 ```
 
-## Workflow
+## References
 
-1. Collect today's activities from session context
-2. Group by category
-3. Generate filename with descriptive title
-4. Write using UTF-8 encoding
-5. Include tomorrow's action items from pending tasks
-
-## Vault Structure (PARA)
-
-- `00.DAILY/` — daily notes
-- `01.PROJECT/` — project dashboards and kanban
-- `02.AREA/` — ongoing areas of interest
-- `03.RESOURCES/` — reference material
-- `04.ARCHIVE/` — archived notes
-
-Project docs live in `PROJECT_ROOT/docs/` with A/D/I/T prefixes (Analysis / Design / Implementation / Test).
+- `references/vault-structure.md` — PARA vault structure and project doc conventions
+- `references/daily-examples.md` — filename and content examples

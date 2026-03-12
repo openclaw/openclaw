@@ -1,128 +1,68 @@
 ---
 name: local-booking
-description: 현재 위치 기반으로 근처 로컬 서비스(사진관, 병원, 식당, 미용실, 마사지 등)를 검색하고 현지 언어로 예약을 도와주는 스킬. 사용 시점: 사용자가 근처 서비스 검색, 예약, 현지어 메시지 생성, AI 전화 예약을 요청할 때. "근처 사진관 찾아줘", "병원 예약해줘", "마사지 예약", "식당 예약" 등의 요청에 트리거.
+description: >-
+  Location-based local service search and booking assistant with native language support.
+  Searches nearby services (photo studios, clinics, restaurants, salons, massage/spa, etc.)
+  and helps book in the local language via message templates, AI phone call (Vapi), or phone scripts.
+  Triggers: "근처 사진관 찾아줘", "병원 예약해줘", "마사지 예약", "식당 예약", "book nearby",
+  "find restaurant near me", "예약 도와줘", "로컬 예약", "local booking".
+  NOT for: online-only service subscriptions, flight/hotel booking (use dedicated travel tools),
+  or e-commerce product orders.
 ---
 
-# 로컬 서비스 예약 스킬
+# Local Service Booking
 
-## 위치 확인 (자동 + 수동 하이브리드)
+## 1. Location Detection (Auto → Manual fallback)
 
-**항상 자동 GPS를 먼저 시도.** 실패 시에만 수동 전환.
+1. **Auto GPS first:** `nodes → location_get (desiredAccuracy: "balanced")`
+   - Success → show "📍 현재 위치: {city}, {district} (오차 ±{accuracy}m)"
+   - Accuracy > 500m → ask user to confirm or specify manually
+2. **Manual fallback:** if GPS unavailable, ask for city/address/landmark
+   - Convert to coords: `web_search → "{address} GPS coordinates"`
+3. User can switch modes anytime ("현재 위치로 다시 찾아줘" / "위치를 바꿀게")
 
-### 자동 모드 (GPS)
+## 2. Country/Language Detection
 
-```
-nodes → location_get (desiredAccuracy: "balanced")
-```
+Determine country from coords/city → apply local language + cultural norms.
+See [references/country-profiles.md](references/country-profiles.md) for per-country details (language, tipping, preferred messenger, etiquette).
 
-성공 시:
-
-- 위도/경도 + 오차범위(accuracy) 표시
-- "📍 현재 위치: Ho Chi Minh City, District 1 (오차 ±50m)" 형태로 안내
-- 오차범위 > 500m → 사용자에게 "위치가 부정확할 수 있습니다. 정확한 위치를 지정하시겠어요?" 확인
-
-GPS 사용 불가 (기기 미페어링, 권한 없음 등):
-
-- "GPS 연결이 안 됩니다. 위치를 직접 알려주세요" → 수동 모드 전환
-- **향후 해결:** iOS/Android 앱 페어링 시 자동 GPS 활성화
-
-### 수동 모드 (직접 지정)
-
-사용자가 위치를 직접 지정할 때:
-
-- 도시명: "호치민", "방콕", "도쿄"
-- 상세 주소: "호치민 1군 레탄톤 거리"
-- 랜드마크: "벤탄시장 근처", "시부야역 앞"
-
-`web_search`로 좌표 변환:
+## 3. Search Nearby Services
 
 ```
-web_search → "{입력 주소} GPS coordinates"
+web_search → "{service} near {location}" (count: 5)
 ```
 
-### 모드 전환
+- Use local-language search queries in parallel for better coverage (e.g., "tiệm massage gần Quận 1")
+- **Note:** Brave Search has limited SEA country code support → include city/country name in query
+- Supplement with `web_fetch` for hours, pricing, reviews
+- Collect: name, address, phone, hours, price range, rating, distance
 
-사용자가 언제든 모드 전환 가능:
+## 4. Present Results
 
-- "현재 위치로 다시 찾아줘" → 자동 GPS 재시도
-- "위치를 바꿀게" / "다른 곳에서 찾아줘" → 수동 모드
+Table format, minimum 3 options with ⭐ top recommendation and brief reasoning.
 
-## 국가/언어 판별
+## 5. Booking Options
 
-위치(좌표 또는 도시명)에서 국가 코드를 판별:
+| Option | Method                               | Details                                                                         |
+| ------ | ------------------------------------ | ------------------------------------------------------------------------------- |
+| **A**  | Native language message (copy-paste) | Templates in [references/booking-templates.md](references/booking-templates.md) |
+| **B**  | AI phone call (Vapi)                 | Setup & API in [references/vapi-integration.md](references/vapi-integration.md) |
+| **C**  | Phone script + pronunciation guide   | Romanized script for self-calling                                               |
 
-| 국가          | 언어         | 예약 문화                     | 주요 메신저   |
-| ------------- | ------------ | ----------------------------- | ------------- |
-| 🇻🇳 베트남     | 베트남어     | 가격 흥정 일반적, 현금 선호   | Zalo          |
-| 🇹🇭 태국       | 태국어       | 와이(합장인사), 팁 10-20%     | LINE          |
-| 🇯🇵 일본       | 일본어       | 시간 엄수, 경어 필수, 팁 금지 | 전화 선호     |
-| 🇨🇳 중국       | 중국어       | 선결제 일반적                 | WeChat        |
-| 🇮🇩 인도네시아 | 인도네시아어 | 유연한 시간                   | WhatsApp      |
-| 🇰🇷 한국       | 한국어       | 정시 예약                     | 네이버/카카오 |
-| 기타          | 영어         | 범용                          | WhatsApp/SMS  |
+Variables: `{service}`, `{date}`, `{time}`, `{guests}`, `{requests}`
 
-## 업체 검색
+## 6. Post-Booking Support
 
-```
-web_search → "{서비스} near {위치}" (count: 5)
-```
+1. **Directions:** `https://www.google.com/maps/dir/?api=1&destination={lat},{lng}`
+2. **On-arrival phrases:** greeting, confirm booking, receipt, payment, thanks (local language + romanized)
+3. **Cultural tips:** country-specific etiquette
 
-> ⚠️ Brave Search API는 VN, TH 등 동남아 country 코드 미지원. 검색 쿼리에 도시명/국가명을 직접 포함하여 정확도 확보.
+## Tools
 
-현지어 검색어 병행 (정확도 향상):
-
-- 🇻🇳 `"tiệm massage gần Quận 1 Hồ Chí Minh"`
-- 🇯🇵 `"マッサージ 新宿駅 近く"`
-- 🇹🇭 `"ร้านนวด ใกล้ สุขุมวิท"`
-
-`web_fetch`로 상세 정보 보충 (영업시간, 가격, 리뷰).
-
-**수집 항목:** 이름, 주소, 전화번호, 영업시간, 가격대, 리뷰 평점, 현재 위치에서 거리
-
-## 결과 제시
-
-표 형태로 최소 3곳 비교:
-
-```
-| # | 업체명 | 평점 | 거리 | 가격대 | 전화 |
-|---|--------|------|------|--------|------|
-| ⭐1 | 추천업체 | 4.8 | 500m | $$  | 0xx-xxx |
-| 2 | 업체B   | 4.5 | 1.2km | $  | 0xx-xxx |
-| 3 | 업체C   | 4.3 | 2.0km | $$$ | 0xx-xxx |
-```
-
-추천 이유를 간략히 설명 (평점+거리+가격 종합).
-
-## 예약 방법
-
-### 옵션 A: 현지어 예약 메시지 (복붙용)
-
-- Zalo / LINE / WhatsApp / 카카오톡 등에 바로 붙여넣기
-- 참조: [booking-templates.md](references/booking-templates.md)
-- 변수: {서비스}, {날짜}, {시간}, {인원수}, {요청사항}
-
-### 옵션 B: AI 전화 예약 (Vapi)
-
-- 참조: [vapi-integration.md](references/vapi-integration.md)
-- `VAPI_API_KEY` + `VAPI_PHONE_NUMBER_ID` 필요
-- 미설정 시 → 설정 안내 후 옵션 A/C 제공
-
-### 옵션 C: 전화 스크립트
-
-- 직접 전화할 때 읽을 현지어 스크립트 + 발음 가이드(로마자)
-
-## 예약 후 지원
-
-1. **길찾기 링크:** `https://www.google.com/maps/dir/?api=1&destination={위도},{경도}`
-2. **도착 후 현지어 대화 스크립트:** 인사, 예약 확인, 영수증 요청, 결제 문의, 감사 (현지어+발음)
-3. **문화 팁:** 국가별 에티켓 안내
-
-## 도구 요약
-
-| 도구                   | 용도                  |
-| ---------------------- | --------------------- |
-| `nodes` (location_get) | GPS 자동 위치         |
-| `web_search`           | 업체 검색 + 좌표 변환 |
-| `web_fetch`            | 업체 상세 정보        |
-| `message` (send)       | 예약 결과 전달        |
-| `exec` (Vapi curl)     | AI 전화 예약          |
+| Tool                   | Purpose                    |
+| ---------------------- | -------------------------- |
+| `nodes` (location_get) | Auto GPS                   |
+| `web_search`           | Service search + geocoding |
+| `web_fetch`            | Venue details              |
+| `message` (send)       | Deliver results            |
+| `exec` (curl)          | Vapi AI phone call         |

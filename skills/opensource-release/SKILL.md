@@ -1,104 +1,56 @@
-﻿---
+---
 name: opensource-release
-description: Convert a private repository to public open-source. Use when making a repo public, sanitizing personal info from code/docs/git history, or preparing a project for open-source release. Triggers on "open source", "make public", "public release", "sanitize repo".
+description: "Convert a private repository to public open-source. Use when making a repo public, sanitizing personal info from code/docs/git history, or preparing a project for open-source release. Triggers on 'open source', 'make public', 'public release', 'sanitize repo', '오픈소스 공개', '레포 공개'. NOT for: existing public repo maintenance, license-only changes, or general git operations."
 ---
 
 # Open Source Release
 
 Safely convert a private repo to public by sanitizing personal data and cleaning history.
 
+## Workflow
+
+1. **Scan** — find hardcoded paths, usernames, API keys, secrets in code + docs
+2. **Fix** — replace with env vars / placeholders; ensure `.gitignore` covers caches
+3. **History** — choose strategy: clean push (orphan branch) or BFG/filter-repo
+4. **Publish** — `gh repo edit --visibility public`
+5. **Verify** — final scan, check remote URL has no token
+
 ## Pre-flight Checklist
 
-1. **Scan source code** — search for:
-   - Absolute paths: `C:\Users\`, home directory references
-   - Usernames: OS-specific account names
-   - Internal hostnames / port names
-   - API keys / tokens: `.env`, hardcoded secrets
-   - Email / phone numbers in commit author config
+- [ ] Source code: no absolute paths, usernames, API keys, tokens
+- [ ] Docs: no personal paths (use `$VAULT_PATH`, `~/vault`, etc.)
+- [ ] `.gitignore`: covers `.env`, `__pycache__/`, `node_modules/`, binary caches
+- [ ] Git remote URL: no embedded tokens
+- [ ] Commit author config: no private email/phone
 
-2. **Check cached artifacts** — ensure `.gitignore` covers:
-   - Binary caches (`.pkl`, `.db`, `checksums.json`)
-   - `__pycache__/`, `node_modules/`, `.env`, `*.egg-info/`
-   - Project-specific cache directories
+## History Strategy Decision
 
-## Sanitization Steps
+| Condition                           | Strategy                           |
+| ----------------------------------- | ---------------------------------- |
+| < 50 commits, cache only in history | Clean push (orphan branch)         |
+| Large history with sensitive data   | BFG Repo Cleaner / git filter-repo |
+| History is fine, just old paths     | Leave as-is                        |
 
-### Step 1: Code Scan
+## Quick Commands
 
 ```powershell
-# Find hardcoded paths and usernames
-Get-ChildItem -Recurse -Include "*.py","*.ps1","*.js","*.ts" |
-  Select-String -Pattern "C:\\Users|/home/|your-username" -SimpleMatch |
+# Scan for sensitive strings
+Get-ChildItem -Recurse -Include "*.py","*.ps1","*.js","*.ts","*.md" |
+  Select-String -Pattern "C:\\Users|/home/" -SimpleMatch |
   Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git" }
-```
 
-Fix: replace with environment variables (`os.environ.get` / `process.env`) and add a `.env.example`.
-
-### Step 2: Docs Scan
-
-```powershell
-Get-ChildItem -Recurse -Include "*.md","*.txt","*.yaml","*.yml" |
-  Select-String -Pattern "C:\\Users|/home/|your-username" -SimpleMatch |
-  Where-Object { $_.Path -notmatch "node_modules|\.git" }
-```
-
-Replace personal paths with generic placeholders (`$VAULT_PATH`, `~/vault`, etc.).
-
-### Step 3: Git History Analysis
-
-```powershell
-git log --all -p | Select-String -Pattern "SENSITIVE_TERM" | Select-Object -First 50
-git log --all --diff-filter=A -- "cache/*"
-```
-
-Choose a strategy:
-
-- **< 50 commits + cache only in history** → Option B (clean push)
-- **Large history with sensitive data** → Option A (BFG Repo Cleaner / git filter-repo)
-- **History is fine, just old paths** → Option C (leave as-is)
-
-### Step 4: Clean Push (Option B)
-
-```powershell
+# Clean push (orphan branch)
 git checkout --orphan clean-main
 git add -A
 git commit -m "feat: initial public release"
-git remote set-url origin https://github.com/{owner}/{repo}.git  # verify no token in URL!
 git branch -M main
 git push origin main --force
-git push origin --delete {old-branch}
+
+# Make public
+gh repo edit {owner}/{repo} --visibility public --accept-visibility-change-consequences
 ```
 
-### Step 5: Make Public
+## References
 
-```powershell
-gh repo edit {owner}/{repo} --visibility public --accept-visibility-change-consequences --description "Short description"
-```
-
-### Step 6: Verify
-
-```powershell
-# Final scan for sensitive strings
-Get-ChildItem -Recurse -Include "*.py","*.md","*.yaml","*.js","*.ts" |
-  Select-String -Pattern "SENSITIVE_TERM" -SimpleMatch |
-  Where-Object { $_.Path -notmatch "__pycache__|node_modules|\.git" }
-
-# Confirm remote URL has no token
-git remote -v
-
-# Confirm visibility
-gh repo view {owner}/{repo} --json visibility
-```
-
-### Step 7: Post-Release Housekeeping (Optional)
-
-- Add issue tracking to HEARTBEAT.md
-- Update memory/{project}.md with release notes
-
-## Gotchas
-
-- **Never include tokens in git remote URLs** — always verify before push
-- **Binary caches** not covered by `.gitignore` may already be in history — check carefully
-- **Encoding issues on Windows** — use UTF-8 explicitly in PowerShell/Python
-- Your GitHub username is already public — that is fine to leave as-is
-- Never commit `.env` files — add to `.gitignore` if not already there
+- `references/sanitization-guide.md` — detailed scan commands, fix patterns, verification steps
+- `references/gotchas.md` — common pitfalls (tokens in URLs, binary caches, encoding)

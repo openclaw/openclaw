@@ -1,6 +1,6 @@
 ---
 name: maibot-migration
-description: Migrate MAIBOT (OpenClaw AI Assistant) to a new PC or cloud environment. Use when moving the entire MAIBOT setup — including OpenClaw gateway, workspace, all MAI projects, GPU pipeline, and credentials — to a different machine. Also use for environment recovery (Chrome debug reconnection, gsudo reinstall, dev tool repair). Handles environment detection, dependency installation, repo cloning, credential setup, productivity tools, Obsidian symlinks, cron jobs, and validation.
+description: "Migrate MAIBOT (OpenClaw AI Assistant) to a new PC or cloud environment. Use when moving the entire MAIBOT setup — including OpenClaw gateway, workspace, all MAI projects, GPU pipeline, and credentials — to a different machine. Also use for environment recovery (Chrome debug reconnection, gsudo reinstall, dev tool repair). Triggers: 'MAIBOT 이전', '새 PC 세팅', 'PC 마이그레이션', 'migration', 'new PC setup', 'environment setup', '환경 복구', 'Chrome debug', 'gsudo', 'dev tool repair'. NOT for: individual project setup (use mai-project-init), OpenClaw upstream updates (use upstream-sync), regular dev tasks (use hybrid-coding)."
 ---
 
 # MAIBOT Migration Skill
@@ -9,261 +9,62 @@ Migrate the complete MAIBOT environment to a new machine in one shot.
 
 ## What Gets Migrated
 
-| Component           | Source                 | Method                               |
-| ------------------- | ---------------------- | ------------------------------------ |
-| OpenClaw Gateway    | npm registry           | `npm i -g openclaw`                  |
-| pnpm                | npm registry           | `npm i -g pnpm@10`                   |
-| EAS CLI             | npm registry           | `npm i -g eas-cli`                   |
-| MAIBOT workspace    | GitHub `jini92/MAIBOT` | `git clone` → `C:\MAIBOT`            |
-| MAI projects (16개) | GitHub `jini92/*`      | `git clone` → `C:\TEST\*`            |
-| Claude Code CLI     | npm registry           | `npm i -g @anthropic-ai/claude-code` |
-| OpenClaw config     | `~/.openclaw/`         | Export → import                      |
-| Obsidian vault      | OneDrive sync          | symlinks for project docs            |
-| GPU pipeline        | Python venvs + vendor  | Conditional (if GPU)                 |
-| Credentials         | `.env` files           | Interactive or secure copy           |
-| Cron jobs           | OpenClaw gateway       | Re-register 21 jobs                  |
-| Python envs         | pip / venv             | M.AI.UPbit + MAISECONDBRAIN          |
+| Component           | Method                                    |
+| ------------------- | ----------------------------------------- |
+| OpenClaw Gateway    | `npm i -g openclaw`                       |
+| pnpm, EAS CLI       | `npm i -g pnpm@10 eas-cli`                |
+| MAIBOT workspace    | `git clone` → `C:\MAIBOT`                 |
+| MAI projects (16개) | `git clone` → `C:\TEST\*`                 |
+| Claude Code CLI     | `npm i -g @anthropic-ai/claude-code`      |
+| OpenClaw config     | `openclaw setup` or manual config         |
+| Obsidian vault      | OneDrive sync + symlinks for docs         |
+| GPU pipeline        | Conditional (if NVIDIA GPU)               |
+| Credentials         | `.env` files — interactive or secure copy |
+| Cron jobs           | Re-register 21 jobs                       |
+| Python envs         | M.AI.UPbit + MAISECONDBRAIN               |
 
-## Migration Steps
+## Two-Phase Migration
 
-### Step 1: Detect Target Environment
-
-Check: OS, Node.js ≥22, Python ≥3.10, GPU (nvidia-smi), Git, disk space.
-
-### Step 2: Install Dependencies
+### Phase 1: 지니 Manual (~10 min, before MAIBOT exists)
 
 ```powershell
-# Node.js (if missing) — https://nodejs.org (v22+)
-# Package managers & tools
-npm i -g openclaw pnpm@10 eas-cli
-
-# Verify
-openclaw --version; pnpm --version; eas --version
-```
-
-### Step 3: Clone All Repositories
-
-```powershell
-# MAIBOT workspace
-git clone https://github.com/jini92/MAIBOT.git C:\MAIBOT
-
-# MAI projects (C:\TEST\)
-$projects = @("MAIBEAUTY","MAIOSS","MAISTAR7","MAICON","MAITUTOR","MAIBOTALKS","MAITOK","MAIAX","MAISECONDBRAIN","MAIPatent","MAITalkCart","MAITHINK","MAITCAD","MAITB","MAIPnID","M.AI.UPbit")
-foreach ($p in $projects) {
-    git clone "https://github.com/jini92/$p.git" "C:\TEST\$p"
-}
-# Auxiliary repos
-git clone "https://github.com/jini92/botalks-web.git" "C:\TEST\botalks-web"
-```
-
-Note: Some repos may be TBD — skip if `git clone` fails (not yet created on GitHub).
-
-### Step 3b: Install Claude Code CLI
-
-```powershell
-npm i -g @anthropic-ai/claude-code
-claude login   # Claude Max account: jini92.lee@gmail.com
-claude --version
-```
-
-### Step 3c: Python Environments
-
-```powershell
-# M.AI.UPbit (crypto analysis)
-cd C:\TEST\M.AI.UPbit
-pip install -e .
-
-# MAISECONDBRAIN / Mnemo (knowledge graph)
-cd C:\TEST\MAISECONDBRAIN
-pip install -r requirements.txt
-```
-
-### Step 4: Configure OpenClaw
-
-```powershell
-openclaw setup
-# Or manually:
-openclaw config set anthropic.apiKey <key>
-openclaw config set discord.token <token>
-openclaw config set gateway.mode local
-```
-
-#### Exec Auto-Approval
-
-Set in `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "tools": {
-    "exec": {
-      "security": "full",
-      "ask": "off"
-    }
-  }
-}
-```
-
-### Step 5: Set Up Credentials
-
-Create `MAIBEAUTY/.env` with required keys. Copy from source machine or use interactive prompt.
-
-### Step 6: GPU Pipeline (Optional)
-
-Only if NVIDIA GPU available:
-
-1. Python 3.10+ venvs: `.venv-tts`, `.venv-avatar`
-2. SadTalker in `vendor/SadTalker`
-3. ffmpeg in `vendor/ffmpeg`
-4. edge-tts, boto3
-
-### Step 7: Productivity Tools
-
-#### gsudo (UAC-free Admin)
-
-```powershell
-winget install gerardog.gsudo --accept-package-agreements --accept-source-agreements
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-gsudo --version
-```
-
-Enables MAIBOT to run Admin commands remotely without UAC popup.
-
-#### Chrome Remote Debugging (Browser Relay)
-
-```powershell
-$p = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk"
-$ws = New-Object -ComObject WScript.Shell
-$sc = $ws.CreateShortcut($p)
-$sc.Arguments = "--remote-debugging-port=18792"
-$sc.Save()
-```
-
-- Port `18792` = OpenClaw default `cdpPort`
-- Chrome must be restarted once after setup
-- Survives Chrome updates (shortcut-based)
-
-### Step 8: Obsidian Symlinks
-
-Link project `docs/` folders into Obsidian vault for iPad access:
-
-```powershell
-$obsBase = "C:\Users\jini9\OneDrive\Documents\JINI_SYNC\01.PROJECT"
-$links = @{
-    "00.MAIBOT"     = "C:\MAIBOT\docs"
-    "07.MAIBEAUTY"  = "C:\TEST\MAIBEAUTY\docs"
-    "04.MAIOSS"     = "C:\TEST\MAIOSS\docs"
-    "08.MAISTAR7"   = "C:\TEST\MAISTAR7\docs"
-    "09.MAICON"     = "C:\TEST\MAICON\docs"
-    "10.MAITUTOR"   = "C:\TEST\MAITUTOR\docs"
-    "11.MAIBOTALKS" = "C:\TEST\MAIBOTALKS\docs"
-    "12.MAITOK"     = "C:\TEST\MAITOK\docs"
-}
-foreach ($k in $links.Keys) {
-    $target = "$obsBase\$k\docs"
-    if (-not (Test-Path $target)) {
-        gsudo cmd /c mklink /D "$target" $links[$k]
-    }
-}
-```
-
-### Step 9: Restore Cron Jobs
-
-Re-register 21 cron jobs via OpenClaw. Key jobs:
-
-| Job                      | Schedule        | Type               |
-| ------------------------ | --------------- | ------------------ |
-| AI 수익화 브리핑         | 03:00 KST daily | isolated agentTurn |
-| AI 기술 브리핑           | 03:05 KST daily | isolated agentTurn |
-| MAIBOT 업데이트 체크     | 03:10 KST daily | isolated agentTurn |
-| 테크 인텔리전스          | 04:00 KST daily | isolated agentTurn |
-| 사업화 인텔리전스        | 04:30 KST daily | isolated agentTurn |
-| Mnemo 볼트 보강          | 05:00 KST daily | isolated agentTurn |
-| 💊 약 리마인더           | 05:30 KST daily | main systemEvent   |
-| M.AI.UPbit 시장 모니터링 | 05:30 KST daily | isolated agentTurn |
-| 모닝 브리핑              | 06:00 KST daily | isolated agentTurn |
-| M.AI.UPbit 일일 분석     | 06:30 KST daily | isolated agentTurn |
-| M.AI.UPbit 퀀트 시즌     | 06:35 KST daily | isolated agentTurn |
-| M.AI.UPbit 오전 자동매매 | 07:00 KST daily | isolated agentTurn |
-| M.AI.UPbit 매매 평가     | 07:30 KST daily | isolated agentTurn |
-| 오후 순찰                | 12:00 KST daily | isolated agentTurn |
-| M.AI.UPbit 오후 자동매매 | 19:00 KST daily | isolated agentTurn |
-| 주간 리뷰                | Mon 07:00 KST   | isolated agentTurn |
-| 퀀트 모멘텀 리포트       | Mon 07:00 KST   | isolated agentTurn |
-| 주간 기회 리뷰           | Mon 07:30 KST   | isolated agentTurn |
-| M.AI.UPbit 주간 성과     | Mon 08:00 KST   | isolated agentTurn |
-| Dependency Health        | Wed 10:00 KST   | isolated agentTurn |
-| Friday Documentation     | Fri 10:00 KST   | isolated agentTurn |
-| Monthly Full Check       | 1st Mon 09:00   | isolated agentTurn |
-
-All isolated jobs deliver to `channel:1466624220632059934` (Discord DM).
-Full schedule definitions in `HEARTBEAT.md`.
-
-### Step 10: Validate
-
-Verify:
-
-- [ ] OpenClaw gateway starts
-- [ ] All git repos accessible
-- [ ] `gsudo --version` works
-- [ ] Chrome debug port open (browse `http://127.0.0.1:18792/json`)
-- [ ] Obsidian symlinks resolve
-- [ ] API connectivity (Anthropic, Discord)
-- [ ] Cron jobs listed (`openclaw cron list`)
-- [ ] `pnpm test` passes in MAIBOT
-
-## How to Use
-
-### Phase 1: 지니님 수동 (MAIBOT 없이 — 약 10분)
-
-새 PC에서 MAIBOT이 아직 없으므로 직접 실행:
-
-```powershell
-# 1. Node.js 22+ 설치 (https://nodejs.org)
-# 2. Git 설치 (https://git-scm.com)
-
-# 3. OpenClaw + pnpm 설치
+# 1. Install Node.js 22+ (https://nodejs.org) and Git
+# 2. Install OpenClaw + pnpm
 npm i -g openclaw pnpm@10
-
-# 4. MAIBOT 클론
+# 3. Clone MAIBOT
 git clone https://github.com/jini92/MAIBOT.git C:\MAIBOT
-
-# 5. OpenClaw 설정 (API 키, Discord 토큰 입력)
+# 4. Configure OpenClaw (API keys, Discord token)
 openclaw setup
-
-# 6. Gateway 시작
+# 5. Start gateway
 openclaw gateway start
 ```
 
-✅ 여기서 MAIBOT이 살아납니다! Discord에서 대화 가능.
+✅ MAIBOT is alive! Discord chat available.
 
-### Phase 2: MAIBOT 자동 (Discord에서 "나머지 세팅해줘")
+### Phase 2: MAIBOT Auto (Discord: "나머지 세팅해줘")
 
-MAIBOT이 자동으로 처리:
+MAIBOT handles automatically:
 
-- MAI 프로젝트 16개 클론 (`C:\TEST\*`)
-- gsudo 설치 (Admin 원격 실행, Windows only)
-- Claude Code CLI 설치 (3-Layer 멀티에이전트)
-- Chrome 디버그 모드 설정
-- EAS CLI 설치/업데이트
-- Python 환경 구성 (M.AI.UPbit, MAISECONDBRAIN)
-- Obsidian 심볼릭 링크 연결
-- Cron jobs 21개 복원
-- Exec 자동승인 설정
-- 전체 검증
+- Clone 16 MAI projects (`C:\TEST\*`)
+- Install gsudo, Claude Code CLI, EAS CLI
+- Chrome debug mode setup (port 18792)
+- Python environments (M.AI.UPbit, MAISECONDBRAIN)
+- Obsidian symlinks
+- Restore 21 cron jobs
+- Exec auto-approval config
+- Full validation
 
-## Cloud Deployment Notes
+## Environment Recovery
 
-- **Railway/Fly.io**: No GPU — chat + API only
-- **RunPod/Lambda**: GPU available but costly
-- **VPS (Hetzner/OVH)**: GPU servers at lower cost
-- Headless: `openclaw gateway start --bind 0.0.0.0`
+For partial fixes (Chrome debug, gsudo, dev tools), follow the relevant section in `references/migration-steps.md`.
 
-## Encoding Warning
+## References
 
-**CRITICAL (Windows)**: Never use `Set-Content` for Korean text files. Always use:
+- `references/migration-steps.md` — Detailed 10-step migration procedure
+- `references/env-template.md` — Environment variable templates
+- `references/gpu-setup.md` — GPU pipeline setup (SadTalker, TTS, ffmpeg)
+- `scripts/migrate.py` — Migration automation script
 
-```powershell
-[System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8)
-```
+---
 
-PowerShell 5 `Set-Content` defaults to CP949 → irreversible Korean character corruption.
+_Skill version: v2.0 — Refactored 2026-03-13_

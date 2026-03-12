@@ -1,108 +1,61 @@
 ---
 name: maiupbit-newsletter
-description: "M.AI.UPbit AI Quant Letter 뉴스레터 발행 관리 스킬. 주간 퀀트 데이터 생성, 뉴스레터 초안 확인, Substack 발행 안내, n8n 자동화 파이프라인 상태 확인 및 수정에 사용. 트리거: 뉴스레터 발행, 퀀트 레터, AI Quant Letter, Substack 발행, n8n 뉴스레터, newsletter publish, 주간 레터 초안, 발행 파이프라인 확인."
+description: "M.AI.UPbit AI Quant Letter newsletter publishing and pipeline management. Use when: generating weekly quant data, checking/publishing newsletter drafts, Substack publishing guidance, n8n automation pipeline status/repair, cookie renewal. Triggers: '뉴스레터 발행', '퀀트 레터', 'AI Quant Letter', 'Substack 발행', 'n8n 뉴스레터', 'newsletter publish', '주간 레터 초안', '발행 파이프라인 확인', 'Substack 쿠키 갱신', 'n8n 상태'. NOT for: M.AI.UPbit trading/analysis (use maiupbit memory), general crypto data, Substack account setup."
 ---
 
-# M.AI.UPbit AI Quant Letter 뉴스레터 스킬
+# M.AI.UPbit AI Quant Letter 🦞
 
-## 핵심 정보
+Weekly crypto quant newsletter published on Substack.
 
-| 항목 | 값 |
-|------|-----|
-| **Substack** | https://jinilee.substack.com |
-| **GitHub repo** | https://github.com/jini92/M.AI.UPbit |
-| **초안 폴더** | `C:\TEST\M.AI.UPbit\blog\drafts\` |
-| **n8n Cloud** | https://mai-n8n.app.n8n.cloud |
-| **n8n 워크플로우 ID** | `tcqab8TejqOgwxMt` (M.AI.UPbit Weekly Newsletter) |
-| **n8n 스케줄** | 매주 월요일 00:00 UTC (= 07:00 KST) |
-| **GitHub Actions** | `.github/workflows/weekly-report.yml` |
-
-## 파이프라인 구조
+## Pipeline Flow
 
 ```
-n8n 스케줄 (월요일 07:00 KST)
-    → GitHub Actions workflow_dispatch 트리거
-        → 퀀트 데이터 생성 (ci_weekly_report.py)
-        → 뉴스레터 초안 생성 (generate_newsletter.py)
-        → README 배지 업데이트 (update_readme_badges.py)
-        → git push (blog/drafts/ 저장)
-        → Discord DM 알림 ("초안 준비됨 → Publish 눌러주세요")
-    → 지니님: Substack에서 Publish 클릭 1번
+n8n Schedule (Mon 07:00 KST)
+  → GitHub Actions (workflow_dispatch)
+    → Quant data generation (ci_weekly_report.py)
+    → Newsletter draft (generate_newsletter.py)
+    → README badge update
+    → git push (blog/drafts/)
+    → Discord DM notification
+  → 지니: Click "Publish" on Substack (1 click)
 ```
 
-## 주요 태스크별 절차
-
-### 1. 수동으로 뉴스레터 지금 발행하기
+## Quick Commands
 
 ```powershell
-# 퀀트 데이터 생성
+# Generate draft manually
 cd C:\TEST\M.AI.UPbit
-python scripts/ci_weekly_report.py > /tmp/report.json
-
-# 뉴스레터 초안 생성
+python scripts/ci_weekly_report.py
 python scripts/generate_newsletter.py
 
-# 초안 확인
-Get-ChildItem blog\drafts\ | Sort-Object LastWriteTime -Descending | Select-Object -First 3
-```
-
-초안 파일 확인 후 → https://jinilee.substack.com/publish/posts 에서 발행
-
-### 2. GitHub Actions 수동 트리거
-
-```powershell
+# Trigger GitHub Actions
 gh workflow run weekly-report.yml -R jini92/M.AI.UPbit
+
+# Check recent runs
 gh run list -R jini92/M.AI.UPbit --limit 3
 ```
 
-### 3. n8n 워크플로우 상태 확인/수정
+## Key Info
 
-n8n API Key (MAIBOT, 만료: 2026-04-09):
-`memory/2026-03-10.md` 에서 키 조회
+| Item                   | Value                              |
+| ---------------------- | ---------------------------------- |
+| Substack               | https://jinilee.substack.com       |
+| Draft folder           | `C:\TEST\M.AI.UPbit\blog\drafts\`  |
+| n8n workflow           | `tcqab8TejqOgwxMt` (Mon 00:00 UTC) |
+| n8n API key expiry     | 2026-04-09                         |
+| SUBSTACK_COOKIE expiry | ~30 days (re-extract from browser) |
 
-```powershell
-$key = "<n8n API key>"
-# 상태 확인
-Invoke-RestMethod -Uri "https://mai-n8n.app.n8n.cloud/api/v1/workflows/tcqab8TejqOgwxMt" `
-  -Headers @{"X-N8N-API-KEY"=$key} | Select-Object name, active
+## Cookie Renewal (When Substack publish fails)
 
-# 활성화
-Invoke-RestMethod -Uri "https://mai-n8n.app.n8n.cloud/api/v1/workflows/tcqab8TejqOgwxMt/activate" `
-  -Headers @{"X-N8N-API-KEY"=$key; "Content-Type"="application/json"} `
-  -Method POST -Body "null"
-```
+1. Log in to jinilee.substack.com in Chrome
+2. DevTools (F12) → Application → Cookies → copy `substack.lli`
+3. `gh secret set SUBSTACK_COOKIE --body "substack.lli=<value>" -R jini92/M.AI.UPbit`
 
-### 4. Discord 알림 수동 전송
+## References
 
-```powershell
-$token = "<DISCORD_BOT_TOKEN>"
-$msg = "📬 AI Quant Letter 초안 준비됨! https://jinilee.substack.com/publish/posts"
-Invoke-RestMethod -Uri "https://discord.com/api/v10/channels/1466624220632059934/messages" `
-  -Headers @{"Authorization"="Bot $token"; "Content-Type"="application/json"} `
-  -Method POST -Body (ConvertTo-Json @{content=$msg})
-```
+- `references/operations.md` — Detailed commands, secrets, n8n API, Discord notification
+- `references/pipeline.md` — Pipeline architecture, file structure, troubleshooting, monetization plans
 
-## GitHub Secrets (jini92/M.AI.UPbit)
+---
 
-| Secret | 설명 | 상태 |
-|--------|------|------|
-| `SUBSTACK_SID` | Substack 세션 ID | ✅ |
-| `SUBSTACK_URL` | https://jinilee.substack.com | ✅ |
-| `SUBSTACK_COOKIE` | substack.lli JWT (브라우저에서 추출) | ✅ |
-| `DISCORD_BOT_TOKEN` | MAIBOT Discord Bot Token | ✅ |
-| `UPBIT_ACCESS_KEY` | UPbit API 키 (선택) | 미설정 |
-
-## 알려진 제약사항
-
-- **Substack 공식 API 없음** — 비공식 `/api/v1/posts` API는 GitHub Actions에서 403 차단
-- **SUBSTACK_COOKIE 만료** — `substack.lli` JWT는 약 30일 만료. 만료 시 브라우저 로그인 후 재추출 필요
-- **n8n API Key 만료** — 2026-04-09. 만료 전 `Settings → API → Create an API Key` 에서 재발급
-
-## SUBSTACK_COOKIE 갱신 방법
-
-Substack 쿠키 만료 시:
-1. Chrome으로 jinilee.substack.com 로그인
-2. DevTools(F12) → Application → Cookies → `substack.lli` 값 복사
-3. `gh secret set SUBSTACK_COOKIE --body "substack.lli=<값>" -R jini92/M.AI.UPbit`
-
-자세한 파이프라인 설계: `references/pipeline.md` 참조
+_Skill version: v2.0 — Refactored 2026-03-13_
