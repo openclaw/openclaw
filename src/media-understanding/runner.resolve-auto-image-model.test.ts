@@ -48,6 +48,20 @@ describe("resolveAutoImageModel", () => {
     expect(resolved).toEqual({ provider: "minimax-portal", model: "MiniMax-VL-01" });
   });
 
+  it("keeps active model when catalog confirms it supports vision", async () => {
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "minimax-portal", id: "MiniMax-VL-01", input: ["text", "image"] },
+    ]);
+
+    const { resolveAutoImageModel } = await import("./runner.js");
+    const resolved = await resolveAutoImageModel({
+      cfg: {} as never,
+      activeModel: { provider: "minimax-portal", model: "MiniMax-VL-01" },
+    });
+
+    expect(resolved).toEqual({ provider: "minimax-portal", model: "MiniMax-VL-01" });
+  });
+
   it("keeps active model when catalog has no model metadata", async () => {
     loadModelCatalogMock.mockResolvedValue([]);
 

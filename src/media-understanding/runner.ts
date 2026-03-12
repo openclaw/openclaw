@@ -393,9 +393,10 @@ async function resolveKeyEntry(params: {
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
+      const normalizedActiveProvider = normalizeMediaProviderId(activeProvider);
       const activeModel = await resolveImageModelForCapability({
         cfg,
-        providerId: activeProvider,
+        providerId: normalizedActiveProvider,
         requestedModel: params.activeModel?.model,
         catalog: params.modelCatalog,
       });
