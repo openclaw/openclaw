@@ -84,8 +84,15 @@ async function createEphemeralSessionFileClone(sessionFile: string): Promise<{
   const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-session-"));
   try {
     const clonedSessionFile = path.join(tempDir, path.basename(sessionFile) || "session.jsonl");
-    if (fs.existsSync(sessionFile)) {
+    try {
       await fsPromises.copyFile(sessionFile, clonedSessionFile);
+    } catch (err) {
+      // Heartbeats can race with transcript rotation/reset. If the source
+      // session file disappears before the clone copy starts, continue with
+      // an empty clone instead of failing the run.
+      if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
+        throw err;
+      }
     }
     return {
       sessionFile: clonedSessionFile,

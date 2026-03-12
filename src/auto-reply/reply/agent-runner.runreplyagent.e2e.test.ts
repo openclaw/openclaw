@@ -437,6 +437,57 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     });
   });
 
+  it("treats a missing source transcript during clone copy as a non-fatal heartbeat race", async () => {
+    await withTempSessionFile("seed", async (sessionFile, seeded) => {
+      const realMkdtemp = fs.mkdtemp.bind(fs);
+      const createdDirs: string[] = [];
+      const appendedText = "heartbeat write after missing source transcript";
+      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
+        const dir = await realMkdtemp(prefix);
+        createdDirs.push(dir);
+        return dir;
+      });
+      const copyErr = Object.assign(new Error("source transcript disappeared"), { code: "ENOENT" });
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockRejectedValueOnce(copyErr);
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
+        return { payloads: [{ text: "ok" }], meta: {} };
+      });
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: { sessionFile },
+        });
+
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
+
+        expect(payload?.text).toBe("ok");
+        const liveRaw = await fs.readFile(sessionFile, "utf-8");
+        expect(liveRaw).toBe(seeded);
+        expect(liveRaw).not.toContain(appendedText);
+
+        const embeddedCall = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+          | EmbeddedRunParams
+          | undefined;
+        expect(embeddedCall?.sessionFile).toBeDefined();
+        expect(embeddedCall?.sessionFile).not.toBe(sessionFile);
+        expect(createdDirs).toHaveLength(1);
+        expect(await pathExists(createdDirs[0])).toBe(false);
+      } finally {
+        copyFileSpy.mockRestore();
+        mkdtempSpy.mockRestore();
+      }
+    });
+  });
+
   it("does not create heartbeat transcript clones for CLI providers", async () => {
     await withTempSessionFile("seed", async (sessionFile, seeded) => {
       const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(new Error("mkdtemp failed"));
