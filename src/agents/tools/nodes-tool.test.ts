@@ -172,6 +172,18 @@ describe("createNodesTool run approvals", () => {
           id: payload?.id,
         };
       }
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: {
+              security: "full",
+              ask: "off",
+            },
+            agents: {},
+          },
+        };
+      }
       if (method === "exec.approval.resolve") {
         return { ok: true };
       }
@@ -214,6 +226,83 @@ describe("createNodesTool run approvals", () => {
     expect(approvalRequestCall?.twoPhase).toBe(true);
   });
 
+  it("does not auto-resolve when node approvals override ask to always", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, payload) => {
+      if (method === "node.invoke" && payload?.command === "system.run.prepare") {
+        return {
+          payload: {
+            cmdText: "echo hi",
+            plan: {
+              argv: ["echo", "hi"],
+              cwd: null,
+              rawCommand: "echo hi",
+              agentId: null,
+              sessionKey: null,
+            },
+          },
+        };
+      }
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: {
+              security: "full",
+              ask: "always",
+            },
+            agents: {},
+          },
+        };
+      }
+      if (method === "node.invoke" && payload?.command === "system.run") {
+        if (payload?.params?.approved !== true) {
+          throw new Error("SYSTEM_RUN_DENIED: approval required");
+        }
+        return { payload: { ok: true } };
+      }
+      if (method === "exec.approval.request") {
+        return { decision: "allow-once" };
+      }
+      throw new Error(`unexpected call: ${method}`);
+    });
+    const tool = createNodesTool({
+      config: {
+        tools: {
+          exec: {
+            security: "full",
+            ask: "off",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const result = await tool.execute("call-2b", {
+      action: "run",
+      node: "macbook",
+      command: ["echo", "hi"],
+    });
+
+    expect(result.details).toEqual({ ok: true });
+    const requestCalls = gatewayMocks.callGatewayTool.mock.calls
+      .filter((call) => call[0] === "exec.approval.request")
+      .map((call) => call[2]);
+    expect(requestCalls).toHaveLength(1);
+    expect(requestCalls[0]?.twoPhase).toBeUndefined();
+
+    const runCalls = gatewayMocks.callGatewayTool.mock.calls
+      .filter((call) => call[0] === "node.invoke" && call[2]?.command === "system.run")
+      .map((call) => call[2]);
+    expect(runCalls).toHaveLength(2);
+    expect(runCalls[0]?.params?.approved).not.toBe(true);
+    expect(runCalls[1]?.params?.approved).toBe(true);
+  });
+
   it("does not swallow system.run errors after full/off auto-approval", async () => {
     nodeUtilsMocks.listNodes.mockResolvedValue([
       {
@@ -240,6 +329,18 @@ describe("createNodesTool run approvals", () => {
         return {
           status: "accepted",
           id: payload?.id,
+        };
+      }
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: {
+              security: "full",
+              ask: "off",
+            },
+            agents: {},
+          },
         };
       }
       if (method === "exec.approval.resolve") {

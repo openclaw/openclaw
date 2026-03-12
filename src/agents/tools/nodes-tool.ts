@@ -17,6 +17,16 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  maxAsk,
+  minSecurity,
+  normalizeExecAsk,
+  normalizeExecSecurity,
+  resolveExecApprovalsFromFile,
+  type ExecApprovalsFile,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../../infra/exec-approvals.js";
 import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -103,22 +113,76 @@ function extractPairingRequestId(message: string): string | null {
 }
 
 function resolveExecPolicyForNodeRun(params: { config?: OpenClawConfig; agentId?: string }): {
-  security?: string;
-  ask?: string;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
 } {
   const globalExec = params.config?.tools?.exec;
   const agentExec =
     params.config && params.agentId
       ? resolveAgentConfig(params.config, params.agentId)?.tools?.exec
       : undefined;
+  const security = normalizeExecSecurity(agentExec?.security ?? globalExec?.security) ?? undefined;
+  const ask = normalizeExecAsk(agentExec?.ask ?? globalExec?.ask) ?? undefined;
   return {
-    security: agentExec?.security ?? globalExec?.security,
-    ask: agentExec?.ask ?? globalExec?.ask,
+    security,
+    ask,
   };
 }
 
-function shouldAutoApproveNodeRun(policy: { security?: string; ask?: string }): boolean {
+function shouldAutoApproveNodeRun(policy: { security?: ExecSecurity; ask?: ExecAsk }): boolean {
   return policy.security === "full" && policy.ask === "off";
+}
+
+async function resolveNodeRunEffectiveExecPolicy(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+}): Promise<{
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+}> {
+  const configuredPolicy = resolveExecPolicyForNodeRun({
+    config: params.config,
+    agentId: params.agentId,
+  });
+  try {
+    const approvalsSnapshot = await callGatewayTool<{ file?: unknown }>(
+      "exec.approvals.node.get",
+      params.gatewayOpts,
+      {
+        nodeId: params.nodeId,
+      },
+    );
+    const approvalsFile =
+      approvalsSnapshot && typeof approvalsSnapshot === "object"
+        ? approvalsSnapshot.file
+        : undefined;
+    if (!approvalsFile || typeof approvalsFile !== "object") {
+      return configuredPolicy;
+    }
+    const approvals = resolveExecApprovalsFromFile({
+      file: approvalsFile as ExecApprovalsFile,
+      agentId: params.agentId,
+      overrides: {
+        security: configuredPolicy.security,
+        ask: configuredPolicy.ask,
+      },
+    });
+    const effectiveSecurity = configuredPolicy.security
+      ? minSecurity(configuredPolicy.security, approvals.agent.security)
+      : approvals.agent.security;
+    const effectiveAsk = configuredPolicy.ask
+      ? maxAsk(configuredPolicy.ask, approvals.agent.ask)
+      : approvals.agent.ask;
+    return {
+      security: effectiveSecurity,
+      ask: effectiveAsk,
+    };
+  } catch {
+    // Keep the original fallback behavior when node approvals are temporarily unavailable.
+    return configuredPolicy;
+  }
 }
 
 // Flattened schema: runtime validates per-action requirements.
@@ -711,7 +775,9 @@ export function createNodesTool(options?: {
               });
             };
 
-            const execPolicy = resolveExecPolicyForNodeRun({
+            const execPolicy = await resolveNodeRunEffectiveExecPolicy({
+              gatewayOpts,
+              nodeId,
               config: options?.config,
               agentId,
             });
