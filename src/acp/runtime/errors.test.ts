@@ -78,4 +78,12 @@ describe("describeAcpErrorForLog", () => {
 
     expect(text).toContain('cause1="timeout waiting for socket"');
   });
+
+  it("preserves falsy primitive causes", () => {
+    const zeroError = new Error("top level", { cause: 0 });
+    expect(describeAcpErrorForLog(zeroError)).toContain('cause1="0"');
+
+    const falseError = new Error("top level", { cause: false });
+    expect(describeAcpErrorForLog(falseError)).toContain('cause1="false"');
+  });
 });

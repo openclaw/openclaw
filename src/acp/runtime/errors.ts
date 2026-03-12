@@ -61,7 +61,7 @@ export function describeAcpErrorForLog(error: unknown): string {
   let current: unknown = error;
   let depth = 0;
 
-  while (current && depth < 4 && !seen.has(current)) {
+  while (current !== null && current !== undefined && depth < 4 && !seen.has(current)) {
     seen.add(current);
     const prefix = depth === 0 ? "error" : `cause${depth}`;
     if (current instanceof Error) {
