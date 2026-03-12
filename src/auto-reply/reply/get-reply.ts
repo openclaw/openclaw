@@ -126,12 +126,18 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: { provider, model },
-    });
+    const hasMediaUnderstanding =
+      typeof finalized.Transcript === "string" ||
+      (finalized.MediaUnderstanding?.length ?? 0) > 0 ||
+      (finalized.MediaUnderstandingDecisions?.length ?? 0) > 0;
+    if (!hasMediaUnderstanding) {
+      await applyMediaUnderstanding({
+        ctx: finalized,
+        cfg,
+        agentDir,
+        activeModel: { provider, model },
+      });
+    }
     await applyLinkUnderstanding({
       ctx: finalized,
       cfg,

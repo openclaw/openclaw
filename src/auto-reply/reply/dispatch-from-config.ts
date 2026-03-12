@@ -1,4 +1,5 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -22,6 +23,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
@@ -30,6 +32,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { resolveDefaultModel } from "./directive-handling.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -70,6 +73,53 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+async function maybePreprocessInboundAudioForAcp(params: {
+  ctx: FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  inboundAudio: boolean;
+  sessionKey?: string;
+}): Promise<void> {
+  if (!params.inboundAudio) {
+    return;
+  }
+  if (
+    typeof params.ctx.Transcript === "string" ||
+    (params.ctx.MediaUnderstanding?.length ?? 0) > 0 ||
+    (params.ctx.MediaUnderstandingDecisions?.length ?? 0) > 0
+  ) {
+    return;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  const acpResolution = getAcpSessionManager().resolveSession({
+    cfg: params.cfg,
+    sessionKey,
+  });
+  if (acpResolution.kind === "none") {
+    return;
+  }
+  const agentId = resolveSessionAgentId({
+    sessionKey,
+    config: params.cfg,
+  });
+  const agentDir = resolveAgentDir(params.cfg, agentId);
+  const { defaultProvider, defaultModel } = resolveDefaultModel({
+    cfg: params.cfg,
+    agentId,
+  });
+  await applyMediaUnderstanding({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    agentDir,
+    activeModel: {
+      provider: defaultProvider,
+      model: defaultModel,
+    },
+  });
+}
 
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
@@ -338,6 +388,12 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    await maybePreprocessInboundAudioForAcp({
+      ctx,
+      cfg,
+      inboundAudio,
+      sessionKey: acpDispatchSessionKey,
+    });
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,

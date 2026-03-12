@@ -72,6 +72,9 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
+const mediaMocks = vi.hoisted(() => ({
+  applyMediaUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
+}));
 
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -143,6 +146,9 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+}));
+vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: mediaMocks.applyMediaUnderstanding,
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -235,6 +241,8 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
     });
+    mediaMocks.applyMediaUnderstanding.mockReset();
+    mediaMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
@@ -795,6 +803,216 @@ describe("dispatchReplyFromConfig", () => {
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("preprocesses inbound audio before ACP runtime dispatch", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    mediaMocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const ctx = (args[0] as { ctx: MsgContext }).ctx;
+      ctx.Transcript = "voice transcript";
+      ctx.BodyForAgent = "[Audio]\nTranscript:\nvoice transcript";
+      ctx.BodyForCommands = "voice transcript";
+      ctx.CommandBody = "voice transcript";
+      ctx.RawBody = "voice transcript";
+      ctx.MediaUnderstandingDecisions = [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [],
+        },
+      ];
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      MediaPath: "/tmp/voice.ogg",
+      MediaType: "audio/ogg",
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg"],
+      BodyForAgent: "<media:document> (1 file)",
+      BodyForCommands: "<media:document> (1 file)",
+      CommandBody: "<media:document> (1 file)",
+      RawBody: "<media:document> (1 file)",
+      Body: "<media:document> (1 file)",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+
+    expect(mediaMocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mediaMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeModel: {
+          provider: "openai",
+          model: "gpt-5",
+        },
+      }),
+    );
+    expect(runtime.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "[Audio]\nTranscript:\nvoice transcript",
+      }),
+    );
+  });
+
+  it("does not preprocess inbound audio before non-ACP dispatch", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:main:discord:direct:user-1",
+      MediaPath: "/tmp/voice.ogg",
+      MediaType: "audio/ogg",
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg"],
+      BodyForAgent: "<media:document> (1 file)",
+      BodyForCommands: "<media:document> (1 file)",
+      CommandBody: "<media:document> (1 file)",
+      RawBody: "<media:document> (1 file)",
+      Body: "<media:document> (1 file)",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(mediaMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves ACP audio preprocessing from the native command target session", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    mediaMocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const ctx = (args[0] as { ctx: MsgContext }).ctx;
+      ctx.Transcript = "target transcript";
+      ctx.BodyForAgent = "[Audio]\nTranscript:\ntarget transcript";
+      ctx.BodyForCommands = "target transcript";
+      ctx.CommandBody = "target transcript";
+      ctx.RawBody = "target transcript";
+      ctx.MediaUnderstandingDecisions = [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [],
+        },
+      ];
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+          },
+        },
+        list: [
+          {
+            id: "codex-acp",
+            agentDir: "/tmp/codex-acp-agent",
+            model: "openai/gpt-5-mini",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandSource: "native",
+      SessionKey: "discord:slash:owner",
+      CommandTargetSessionKey: "agent:codex-acp:session-1",
+      MediaPath: "/tmp/voice.ogg",
+      MediaType: "audio/ogg",
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg"],
+      BodyForAgent: "<media:document> (1 file)",
+      BodyForCommands: "<media:document> (1 file)",
+      CommandBody: "<media:document> (1 file)",
+      RawBody: "<media:document> (1 file)",
+      Body: "<media:document> (1 file)",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
+
+    expect(mediaMocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mediaMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/codex-acp-agent",
+        activeModel: {
+          provider: "openai",
+          model: "gpt-5-mini",
+        },
+      }),
+    );
+    expect(runtime.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "[Audio]\nTranscript:\ntarget transcript",
+      }),
+    );
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {

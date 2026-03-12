@@ -12,6 +12,7 @@ import {
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn(async () => {}),
   removeReactionDiscord: vi.fn(async () => {}),
+  sendTyping: vi.fn(async () => {}),
 }));
 function createMockDraftStream() {
   return {
@@ -66,6 +67,10 @@ const resolveStorePath = configSessionsMocks.resolveStorePath;
 vi.mock("../send.js", () => ({
   reactMessageDiscord: sendMocks.reactMessageDiscord,
   removeReactionDiscord: sendMocks.removeReactionDiscord,
+}));
+
+vi.mock("./typing.js", () => ({
+  sendTyping: sendMocks.sendTyping,
 }));
 
 vi.mock("../send.messages.js", () => ({
@@ -149,6 +154,7 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  sendMocks.sendTyping.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
@@ -344,6 +350,49 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
     expect(emojis).toContain("🏁");
+  });
+
+  it("starts discord typing immediately for inbound audio before dispatch completes", async () => {
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      await dispatchGate;
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      message: {
+        id: "m1",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-1",
+            url: "https://invalid.local/voice.ogg",
+            filename: "voice.ogg",
+            size: 12,
+            content_type: "audio/ogg",
+          },
+        ],
+      },
+      discordRestFetch: vi.fn(async () => {
+        throw new Error("fetch blocked in test");
+      }),
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+
+    await vi.waitFor(() => {
+      expect(sendMocks.sendTyping).toHaveBeenCalledWith({
+        client: ctx.client,
+        channelId: "c1",
+      });
+    });
+
+    releaseDispatch();
+    await runPromise;
   });
 
   it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {

@@ -177,4 +177,26 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
+
+  it("does not rerun media understanding when transcript context is already present", async () => {
+    const ctx = buildCtx({
+      Transcript: "existing transcript",
+      MediaUnderstandingDecisions: [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [],
+        },
+      ],
+      BodyForAgent: "[Audio]\nTranscript:\nexisting transcript",
+      Body: "[Audio]\nTranscript:\nexisting transcript",
+      RawBody: "existing transcript",
+      CommandBody: "existing transcript",
+    });
+
+    await getReplyFromConfig(ctx, undefined, {});
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
+  });
 });
