@@ -26,6 +26,7 @@ vi.mock("../../channels/inbound-debounce-policy.js", () => ({
         opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
       }) => {
         await params.onFlush([entry]);
+        return false;
       },
       flushKey: async (_key: string) => true,
     },

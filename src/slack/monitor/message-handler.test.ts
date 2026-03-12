@@ -7,7 +7,7 @@ import {
   MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_TOTAL,
 } from "./message-handler.js";
 
-const enqueueMock = vi.fn(async (_entry: unknown) => {});
+const enqueueMock = vi.fn(async (_entry: unknown) => true);
 const flushKeyMock = vi.fn(async (_key: string) => true);
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
@@ -80,6 +80,7 @@ function createHandlerWithTracker(overrides?: {
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
+    enqueueMock.mockResolvedValue(true);
     flushKeyMock.mockClear();
     flushKeyMock.mockResolvedValue(true);
     resolveThreadTsMock.mockClear();
@@ -367,14 +368,25 @@ describe("createSlackMessageHandler", () => {
       } as never,
       { source: "message" },
     );
+    await handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.999998",
+        text: "",
+      } as never,
+      { source: "message" },
+    );
 
     expect(runtimeError).toHaveBeenCalledWith(
       "slack inbound immediate backlog overflow; bypassing queue to cap memory growth",
     );
-    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledTimes(2);
     expect(enqueueMock).toHaveBeenLastCalledWith({
       message: expect.objectContaining({
-        ts: "1709000000.999999",
+        ts: "1709000000.999998",
         channel: "C111",
       }),
       opts: { source: "message" },
@@ -388,12 +400,12 @@ describe("createSlackMessageHandler", () => {
     );
     await vi.waitFor(() => {
       expect(enqueueMock).toHaveBeenCalledTimes(
-        MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION + 1,
+        MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION + 2,
       );
     });
 
     expect(enqueueMock).toHaveBeenCalledTimes(
-      MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION + 1,
+      MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION + 2,
     );
   });
 
@@ -462,6 +474,64 @@ describe("createSlackMessageHandler", () => {
       message: expect.objectContaining({
         ts: "1709000000.999998",
         channel: "C333",
+      }),
+      opts: { source: "message" },
+    });
+  });
+
+  it("releases top-level pending keys when a debounced message cannot remain buffered", async () => {
+    enqueueMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValue(true);
+    flushKeyMock.mockResolvedValue(false);
+
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    const firstBufferedMessage = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000100",
+      text: "first buffered text",
+    } as SlackMessageEvent;
+    const overflowedBufferedMessage = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000200",
+      text: "second buffered text",
+    } as SlackMessageEvent;
+    const queuedImmediateMessage = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000300",
+      text: "",
+    } as SlackMessageEvent;
+
+    await handler(firstBufferedMessage as never, { source: "message" });
+    await handler(overflowedBufferedMessage as never, { source: "message" });
+    enqueueMock.mockClear();
+
+    await handler(queuedImmediateMessage as never, { source: "message" });
+    expect(enqueueMock).not.toHaveBeenCalled();
+
+    capturedDebouncerParams?.onError?.(
+      Object.assign(new Error("inbound debounce flush retries exceeded"), {
+        code: "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED",
+      }),
+      [{ message: firstBufferedMessage, opts: { source: "message" } }],
+    );
+    await Promise.resolve();
+
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledWith({
+      message: expect.objectContaining({
+        ts: "1709000000.000300",
+        channel: "C111",
       }),
       opts: { source: "message" },
     });

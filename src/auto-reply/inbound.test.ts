@@ -841,6 +841,65 @@ describe("createInboundDebouncer", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not let an empty scheduled flush delete a newer buffer for the same key", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const errors: Array<{ err: unknown; items: string[] }> = [];
+      const firstFlush = { resolve: null as (() => void) | null };
+      let holdFirstFlush = true;
+
+      const debouncer = createInboundDebouncer<{
+        key: string;
+        id: string;
+        windowMs: number;
+      }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        resolveDebounceMs: (item) => item.windowMs,
+        maxTotalBufferedItems: 1,
+        onFlush: async (items) => {
+          const ids = items.map((entry) => entry.id);
+          if (ids.includes("1") && holdFirstFlush) {
+            holdFirstFlush = false;
+            await new Promise<void>((resolve) => {
+              firstFlush.resolve = resolve;
+            });
+          }
+          delivered.push(ids);
+        },
+        onError: (err, items) => {
+          errors.push({ err, items: items.map((entry) => entry.id) });
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1", windowMs: 10 });
+      await vi.advanceTimersByTimeAsync(10); // Start the first flush and keep it in flight.
+
+      await debouncer.enqueue({ key: "b", id: "keep", windowMs: 1 });
+      await debouncer.enqueue({ key: "a", id: "dropped", windowMs: 10 }); // This item is trimmed immediately.
+      firstFlush.resolve?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1); // Flush the other key so the cap is free again.
+
+      await debouncer.enqueue({ key: "a", id: "new", windowMs: 10 });
+      await vi.advanceTimersByTimeAsync(9); // The stale timer fires here if it still exists.
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(errors.at(-1)?.err).toMatchObject({
+        code: "INBOUND_DEBOUNCE_TOTAL_BUFFER_OVERFLOW",
+      });
+      expect(errors.at(-1)?.items).toEqual(["dropped"]);
+      expect(delivered).toContainEqual(["1"]);
+      expect(delivered).toContainEqual(["keep"]);
+      expect(delivered).toContainEqual(["new"]);
+      expect(delivered.flat()).not.toContain("dropped");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {

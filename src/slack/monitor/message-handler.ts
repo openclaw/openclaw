@@ -24,6 +24,7 @@ type SlackInboundEntry = {
 const APP_MENTION_RETRY_TTL_MS = 60_000;
 export const MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION = 50;
 export const MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_TOTAL = 100;
+const PENDING_TOP_LEVEL_IMMEDIATE_OVERFLOW_LOG_COOLDOWN_MS = 10_000;
 
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {
   return message.user ?? message.bot_id ?? null;
@@ -115,6 +116,7 @@ export function createSlackMessageHandler(params: {
   const { ctx, account, trackEvent } = params;
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
   const pendingTopLevelImmediateEntries = new Map<string, SlackInboundEntry[]>();
+  const pendingTopLevelImmediateOverflowLogAt = new Map<string, number>();
   const drainingTopLevelImmediateEntries = new Set<string>();
   let totalPendingTopLevelImmediateEntries = 0;
   let debouncer!: ReturnType<typeof createChannelInboundDebouncer<SlackInboundEntry>>["debouncer"];
@@ -137,15 +139,25 @@ export function createSlackMessageHandler(params: {
     return conversationKey;
   };
 
+  const logImmediateOverflow = (conversationKey: string) => {
+    const now = Date.now();
+    const lastLogAt = pendingTopLevelImmediateOverflowLogAt.get(conversationKey) ?? 0;
+    if (now - lastLogAt < PENDING_TOP_LEVEL_IMMEDIATE_OVERFLOW_LOG_COOLDOWN_MS) {
+      return;
+    }
+    pendingTopLevelImmediateOverflowLogAt.set(conversationKey, now);
+    ctx.runtime.error?.(
+      "slack inbound immediate backlog overflow; bypassing queue to cap memory growth",
+    );
+  };
+
   const queueTopLevelImmediateEntry = (conversationKey: string, entry: SlackInboundEntry) => {
     const queuedEntries = pendingTopLevelImmediateEntries.get(conversationKey) ?? [];
     if (
       queuedEntries.length >= MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION ||
       totalPendingTopLevelImmediateEntries >= MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_TOTAL
     ) {
-      ctx.runtime.error?.(
-        "slack inbound immediate backlog overflow; bypassing queue to cap memory growth",
-      );
+      logImmediateOverflow(conversationKey);
       return false;
     }
     queuedEntries.push(entry);
@@ -162,11 +174,13 @@ export function createSlackMessageHandler(params: {
     const nextEntry = queuedEntries.shift();
     if (!nextEntry) {
       pendingTopLevelImmediateEntries.delete(conversationKey);
+      pendingTopLevelImmediateOverflowLogAt.delete(conversationKey);
       return null;
     }
     totalPendingTopLevelImmediateEntries = Math.max(0, totalPendingTopLevelImmediateEntries - 1);
     if (queuedEntries.length === 0) {
       pendingTopLevelImmediateEntries.delete(conversationKey);
+      pendingTopLevelImmediateOverflowLogAt.delete(conversationKey);
     }
     return nextEntry;
   };
@@ -379,6 +393,12 @@ export function createSlackMessageHandler(params: {
       pendingKeys.add(debounceKey);
       pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
     }
-    await debouncer.enqueue({ message: resolvedMessage, opts });
+    const remainsPending = await debouncer.enqueue({ message: resolvedMessage, opts });
+    if (canDebounce && debounceKey && conversationKey && !remainsPending) {
+      const conversationKeyToDrain = releaseTopLevelPendingKey({ message: resolvedMessage, opts });
+      if (conversationKeyToDrain) {
+        await drainTopLevelImmediateEntries(conversationKeyToDrain);
+      }
+    }
   };
 }
