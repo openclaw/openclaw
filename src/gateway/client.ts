@@ -69,6 +69,7 @@ export type GatewayClientOptions = {
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
   instanceId?: string;
@@ -281,6 +282,7 @@ export class GatewayClient {
     }
     const role = this.opts.role ?? "operator";
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
     const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
@@ -294,21 +296,27 @@ export class GatewayClient {
     if (shouldUseDeviceRetryToken) {
       this.pendingDeviceTokenRetry = false;
     }
-    // Keep shared gateway credentials explicit. Persisted per-device tokens only
-    // participate when no explicit shared token/password is provided.
+    // Shared gateway credentials stay explicit. Bootstrap tokens are different:
+    // once a role-scoped device token exists, it should take precedence so the
+    // temporary bootstrap secret falls out of active use.
     const resolvedDeviceToken =
       explicitDeviceToken ??
-      (shouldUseDeviceRetryToken || !(explicitGatewayToken || this.opts.password?.trim())
+      (shouldUseDeviceRetryToken ||
+      (!(explicitGatewayToken || this.opts.password?.trim()) &&
+        (!explicitBootstrapToken || Boolean(storedToken)))
         ? (storedToken ?? undefined)
         : undefined);
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
     // no explicit shared token is present.
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
+    const authBootstrapToken =
+      !explicitGatewayToken && !resolvedDeviceToken ? explicitBootstrapToken : undefined;
     const authPassword = this.opts.password?.trim() || undefined;
     const auth =
-      authToken || authPassword || resolvedDeviceToken
+      authToken || authBootstrapToken || authPassword || resolvedDeviceToken
         ? {
             token: authToken,
+            bootstrapToken: authBootstrapToken,
             deviceToken: resolvedDeviceToken,
             password: authPassword,
           }
@@ -327,7 +335,7 @@ export class GatewayClient {
         role,
         scopes,
         signedAtMs,
-        token: authToken ?? null,
+        token: authToken ?? authBootstrapToken ?? null,
         nonce,
         platform,
         deviceFamily: this.opts.deviceFamily,
@@ -420,6 +428,7 @@ export class GatewayClient {
     }
     if (
       detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+      detailCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||

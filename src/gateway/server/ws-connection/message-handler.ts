@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
+import { verifyDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -186,7 +187,11 @@ function resolveDeviceSignaturePayloadVersion(params: {
     role: params.role,
     scopes: params.scopes,
     signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    token:
+      params.connectParams.auth?.token ??
+      params.connectParams.auth?.deviceToken ??
+      params.connectParams.auth?.bootstrapToken ??
+      null,
     nonce: params.nonce,
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
@@ -202,7 +207,11 @@ function resolveDeviceSignaturePayloadVersion(params: {
     role: params.role,
     scopes: params.scopes,
     signedAtMs: params.signedAtMs,
-    token: params.connectParams.auth?.token ?? params.connectParams.auth?.deviceToken ?? null,
+    token:
+      params.connectParams.auth?.token ??
+      params.connectParams.auth?.deviceToken ??
+      params.connectParams.auth?.bootstrapToken ??
+      null,
     nonce: params.nonce,
   });
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
@@ -566,6 +575,7 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
           sharedAuthOk,
+          bootstrapTokenCandidate,
           deviceTokenCandidate,
           deviceTokenCandidateSource,
         } = await resolveConnectAuthState({
@@ -610,9 +620,11 @@ export function attachGatewayWsMessageHandler(params: {
               ? "password"
               : connectParams.auth?.token
                 ? "token"
-                : connectParams.auth?.deviceToken
-                  ? "device-token"
-                  : "none",
+                : connectParams.auth?.bootstrapToken
+                  ? "bootstrap-token"
+                  : connectParams.auth?.deviceToken
+                    ? "device-token"
+                    : "none",
             authReason: failedAuth.reason,
             allowTailscale: resolvedAuth.allowTailscale,
           });
@@ -623,9 +635,11 @@ export function attachGatewayWsMessageHandler(params: {
             ? "password"
             : connectParams.auth?.token
               ? "token"
-              : connectParams.auth?.deviceToken
-                ? "device-token"
-                : "none";
+              : connectParams.auth?.bootstrapToken
+                ? "bootstrap-token"
+                : connectParams.auth?.deviceToken
+                  ? "device-token"
+                  : "none";
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,
@@ -774,15 +788,25 @@ export function attachGatewayWsMessageHandler(params: {
             authMethod,
             sharedAuthOk,
             sharedAuthProvided: hasSharedAuth,
+            bootstrapTokenCandidate,
             deviceTokenCandidate,
             deviceTokenCandidateSource,
           },
           hasDeviceIdentity: Boolean(device),
           deviceId: device?.id,
+          publicKey: device?.publicKey,
           role,
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
+          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+            await verifyDeviceBootstrapToken({
+              deviceId,
+              publicKey,
+              token,
+              role,
+              scopes,
+            }),
           verifyDeviceToken,
         }));
         if (!authOk) {

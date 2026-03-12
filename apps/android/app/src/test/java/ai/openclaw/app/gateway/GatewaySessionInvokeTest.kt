@@ -46,6 +46,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
 private data class NodeHarness(
   val session: GatewaySession,
   val sessionJob: Job,
+  val deviceAuthStore: InMemoryDeviceAuthStore,
 )
 
 private data class InvokeScenarioResult(
@@ -56,6 +57,93 @@ private data class InvokeScenarioResult(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
+  @Test
+  fun connect_usesBootstrapTokenWhenSharedAndDeviceTokensAreAbsent() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val connectAuth = CompletableDeferred<JsonObject?>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            if (!connectAuth.isCompleted) {
+              connectAuth.complete(frame["params"]?.jsonObject?.get("auth")?.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      connectNodeSession(
+        session = harness.session,
+        port = server.port,
+        token = null,
+        bootstrapToken = "bootstrap-token",
+      )
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
+      assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
+      assertNull(auth?.get("token"))
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
+  fun connect_prefersStoredDeviceTokenOverBootstrapToken() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val connectAuth = CompletableDeferred<JsonObject?>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            if (!connectAuth.isCompleted) {
+              connectAuth.complete(frame["params"]?.jsonObject?.get("auth")?.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+      harness.deviceAuthStore.saveToken(deviceId, "node", "device-token")
+
+      connectNodeSession(
+        session = harness.session,
+        port = server.port,
+        token = null,
+        bootstrapToken = "bootstrap-token",
+      )
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
+      assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
+      assertNull(auth?.get("bootstrapToken"))
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
   @Test
   fun nodeInvokeRequest_roundTripsInvokeResult() = runBlocking {
     val handshakeOrigin = AtomicReference<String?>(null)
@@ -182,11 +270,12 @@ class GatewaySessionInvokeTest {
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
-        deviceAuthStore = InMemoryDeviceAuthStore(),
+        deviceAuthStore = deviceAuthStore,
         onConnected = { _, _, _ ->
           if (!connected.isCompleted) connected.complete(Unit)
         },
@@ -197,10 +286,15 @@ class GatewaySessionInvokeTest {
         onInvoke = onInvoke,
       )
 
-    return NodeHarness(session = session, sessionJob = sessionJob)
+    return NodeHarness(session = session, sessionJob = sessionJob, deviceAuthStore = deviceAuthStore)
   }
 
-  private suspend fun connectNodeSession(session: GatewaySession, port: Int) {
+  private suspend fun connectNodeSession(
+    session: GatewaySession,
+    port: Int,
+    token: String? = "test-token",
+    bootstrapToken: String? = null,
+  ) {
     session.connect(
       endpoint =
         GatewayEndpoint(
@@ -210,7 +304,8 @@ class GatewaySessionInvokeTest {
           port = port,
           tlsEnabled = false,
         ),
-      token = "test-token",
+      token = token,
+      bootstrapToken = bootstrapToken,
       password = null,
       options =
         GatewayConnectOptions(
