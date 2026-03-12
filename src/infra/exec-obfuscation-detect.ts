@@ -27,7 +27,11 @@ const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x1160,
   0x17b4,
   0x17b5,
+  0x180b,
+  0x180c,
+  0x180d,
   0x180e,
+  0x180f,
   0x3164,
   0xfeff,
   0xffa0,
@@ -224,7 +228,6 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
 
   const normalizedCommand = stripInvisibleUnicode(command.normalize("NFKC"));
   const urlCount = (normalizedCommand.match(/https?:\/\/\S+/g) ?? []).length;
-
   const reasons: string[] = [];
   const matchedPatterns: string[] = [];
 
@@ -233,8 +236,8 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
       continue;
     }
 
-    const suppressed =
-      pattern.id === "curl-pipe-shell" && urlCount <= 1 && shouldSuppressCurlPipeShell(command);
+  const suppressed =
+    pattern.id === "curl-pipe-shell" && urlCount <= 1 && shouldSuppressCurlPipeShell(command);
 
     if (suppressed) {
       continue;
