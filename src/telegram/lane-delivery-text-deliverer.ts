@@ -105,6 +105,8 @@ type PreviewTargetResolution = {
 };
 
 function textLikelyMatchesPreviewSnapshot(snapshot: string | undefined, text: string): boolean {
+  // Empty snapshots are not meaningful matches. Without this guard,
+  // text.startsWith("") would treat every final as a match.
   if (!snapshot) {
     return false;
   }

@@ -400,6 +400,38 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
+  it("falls back to archived boundary preview when both snapshots match the final text", async () => {
+    const harness = createHarness({
+      answerMessageId: 1002,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "After tool",
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 1001,
+      textSnapshot: "After",
+      deleteIfUnused: false,
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "After tool call",
+      payload: { text: "After tool call" },
+      infoKind: "final",
+    });
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1001,
+        text: "After tool call",
+        context: "final",
+      }),
+    );
+    expect(harness.archivedAnswerPreviews).toEqual([]);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("deletes consumed boundary previews after fallback final send", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({
