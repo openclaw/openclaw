@@ -80,6 +80,13 @@ function collectTelegramErrorCandidates(err: unknown) {
   });
 }
 
+function isExplicitNetworkRequestFailureMessage(message: string): boolean {
+  if (!message) {
+    return false;
+  }
+  return message.includes("network request for") && message.includes("failed");
+}
+
 function normalizeCode(code?: string): string {
   return code?.trim().toUpperCase() ?? "";
 }
@@ -220,7 +227,12 @@ export function isRecoverableTelegramNetworkError(
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
       return true;
     }
-    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
+    // Keep explicit grammY network request failures recoverable in send context,
+    // and preserve the stricter "failed after" envelope pattern globally.
+    if (
+      (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) ||
+      (!allowMessageMatch && isExplicitNetworkRequestFailureMessage(message))
+    ) {
       return true;
     }
     if (allowMessageMatch && message) {
