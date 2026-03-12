@@ -49,7 +49,14 @@ vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const {
+  _test,
+  resolveTtsConfig,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  resolveTtsApiKey,
+  TTS_PROVIDERS,
+} = tts;
 
 const {
   isValidVoiceId,
@@ -648,6 +655,128 @@ describe("tts", () => {
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
         expect(body.instructions).toBe("Speak warmly");
       });
+    });
+  });
+
+  describe("getTtsProvider – deepgram", () => {
+    it("auto-selects deepgram when only DEEPGRAM_API_KEY is set", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: {} },
+      };
+      withEnv(
+        {
+          OPENAI_API_KEY: undefined,
+          ELEVENLABS_API_KEY: undefined,
+          XI_API_KEY: undefined,
+          DEEPGRAM_API_KEY: "dg-key",
+        },
+        () => {
+          const config = resolveTtsConfig(cfg);
+          const provider = getTtsProvider(config, "/tmp/tts-prefs-dg-auto.json");
+          expect(provider).toBe("deepgram");
+        },
+      );
+    });
+
+    it("prefers openai over deepgram in auto-selection", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: {} },
+      };
+      withEnv({ OPENAI_API_KEY: "oai-key", DEEPGRAM_API_KEY: "dg-key" }, () => {
+        const config = resolveTtsConfig(cfg);
+        const provider = getTtsProvider(config, "/tmp/tts-prefs-dg-pref.json");
+        expect(provider).toBe("openai");
+      });
+    });
+
+    it("selects deepgram when explicitly configured", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: { provider: "deepgram" } },
+      };
+      withEnv({}, () => {
+        const config = resolveTtsConfig(cfg);
+        const provider = getTtsProvider(config, "/tmp/tts-prefs-dg-explicit.json");
+        expect(provider).toBe("deepgram");
+      });
+    });
+  });
+
+  describe("resolveTtsConfig – deepgram", () => {
+    const baseCfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: { tts: {} },
+    };
+
+    it("defaults to Deepgram public API and aura-2-thalia-en model", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(config.deepgram.baseUrl).toBe("https://api.deepgram.com");
+      expect(config.deepgram.model).toBe("aura-2-thalia-en");
+      expect(config.deepgram.apiKey).toBeUndefined();
+    });
+
+    it("respects config overrides", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            deepgram: {
+              apiKey: "dg-test-key",
+              baseUrl: "https://custom.deepgram.example/",
+              model: "aura-2-luna-en",
+            },
+          },
+        },
+      };
+      const config = resolveTtsConfig(cfg);
+      expect(config.deepgram.baseUrl).toBe("https://custom.deepgram.example");
+      expect(config.deepgram.model).toBe("aura-2-luna-en");
+      expect(config.deepgram.apiKey).toBe("dg-test-key");
+    });
+
+    it("resolves API key from DEEPGRAM_API_KEY env var", () => {
+      withEnv({ DEEPGRAM_API_KEY: "env-dg-key" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        expect(resolveTtsApiKey(config, "deepgram")).toBe("env-dg-key");
+      });
+    });
+  });
+
+  describe("parseTtsDirectives – deepgram", () => {
+    const fullPolicy = {
+      enabled: true,
+      allowText: true,
+      allowProvider: true,
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+      allowNormalization: true,
+      allowSeed: true,
+    };
+
+    it("accepts provider=deepgram", () => {
+      const result = parseTtsDirectives("Hello [[tts:provider=deepgram]] world", fullPolicy);
+      expect(result.overrides.provider).toBe("deepgram");
+      expect(result.hasDirective).toBe(true);
+    });
+
+    it("routes deepgram_model to deepgram override", () => {
+      const result = parseTtsDirectives("[[tts:deepgram_model=aura-2-luna-en]] Hi", fullPolicy);
+      expect(result.overrides.deepgram?.model).toBe("aura-2-luna-en");
+      expect(result.hasDirective).toBe(true);
+    });
+
+    it("routes deepgrammodel alias to deepgram override", () => {
+      const result = parseTtsDirectives("[[tts:deepgrammodel=aura-2-stella-en]] Hi", fullPolicy);
+      expect(result.overrides.deepgram?.model).toBe("aura-2-stella-en");
+    });
+  });
+
+  describe("TTS_PROVIDERS", () => {
+    it("includes deepgram before edge in fallback order", () => {
+      expect(TTS_PROVIDERS).toEqual(["openai", "elevenlabs", "deepgram", "edge"]);
     });
   });
 
