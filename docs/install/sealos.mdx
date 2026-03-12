@@ -1,0 +1,78 @@
+---
+title: Deploy on Sealos
+---
+
+Deploy OpenClaw on Sealos with a one-click App Store template, then manage it from Sealos Canvas.
+
+## Quick checklist
+
+1. Open **Deploy OpenClaw on Sealos** (below).
+2. Fill in required model provider inputs (`provider_kind`, `base_url`, `api_key`, `model`).
+3. Deploy and wait for the app to become ready.
+4. Open the generated App URL in Canvas (includes `token` and `gatewayUrl`).
+5. Add channel tokens if you want Telegram/Discord/Slack access.
+
+## One click deploy
+
+[Deploy OpenClaw on Sealos](https://sealos.io/products/app-store/openclaw/)
+
+## What you get
+
+- Hosted OpenClaw gateway (StatefulSet)
+- HTTPS ingress with public domain
+- Persistent volumes for:
+  - `/home/node/.openclaw`
+  - `/home/node/workspace`
+  - `/home/node/.npm`
+- App access URL generated in Canvas:
+  - `https://<your-domain>/?token=<gateway-token>&gatewayUrl=...`
+
+## Required deployment inputs
+
+The Sealos template asks for:
+
+- `provider_kind` (required): `openai_compat` or `anthropic_compat`
+- `base_url` (required): provider base URL
+  - default: `https://aiproxy.usw-1.sealos.io/v1`
+- `api_key` (required): provider API key
+- `model` (required): default model id
+  - default: `claude-opus-4-6`
+
+## After deployment
+
+### Access OpenClaw
+
+In Sealos Canvas, open the App resource URL for your OpenClaw instance.  
+This URL already includes the required auth token and gateway URL parameters.
+
+### Configure channels
+
+Add channel tokens via Canvas (AI dialog or StatefulSet env edit):
+
+- `TELEGRAM_BOT_TOKEN`
+- `DISCORD_BOT_TOKEN`
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN` (socket mode)
+
+WhatsApp session data is stored in persistent storage at `/home/node/.openclaw/whatsapp`.
+
+## Scaling
+
+Open the StatefulSet resource in Canvas and adjust resources:
+
+- CPU request/limit: `100m` to `1000m`
+- Memory request/limit: `204Mi` to `2048Mi`
+- Replicas: default `1`
+
+## Troubleshooting
+
+- Channels not responding: verify bot tokens are set correctly.
+- Model call errors: verify `api_key`, `base_url`, `provider_kind`, and `model`.
+- Lost session/config data: verify PVCs are still attached and mounted.
+- Cannot open UI: use the App URL from Canvas (contains `token` and `gatewayUrl`).
+
+## References
+
+- [OpenClaw](https://openclaw.ai/)
+- [OpenClaw GitHub repository](https://github.com/openclaw/openclaw)
+- [Sealos documentation](https://sealos.io/docs)

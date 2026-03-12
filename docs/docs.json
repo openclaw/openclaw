@@ -768,6 +768,10 @@
       "destination": "/install/northflank"
     },
     {
+      "source": "/sealos",
+      "destination": "/install/sealos"
+    },
+    {
       "source": "/render",
       "destination": "/install/render"
     },
@@ -806,6 +810,10 @@
     {
       "source": "/platforms/northflank",
       "destination": "/install/northflank"
+    },
+    {
+      "source": "/platforms/sealos",
+      "destination": "/install/sealos"
     },
     {
       "source": "/gateway/trusted-proxy",
@@ -876,6 +884,7 @@
                 "group": "Hosting and deployment",
                 "pages": [
                   "vps",
+                  "install/sealos",
                   "install/fly",
                   "install/hetzner",
                   "install/gcp",
