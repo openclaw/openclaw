@@ -44,6 +44,13 @@ describe("ensureOpenClawCliOnPath", () => {
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
     "XDG_BIN_HOME",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "ProgramFiles",
+    "ProgramW6432",
+    "ProgramFiles(x86)",
+    "SystemRoot",
+    "WINDIR",
   ] as const;
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
 
@@ -211,5 +218,54 @@ describe("ensureOpenClawCliOnPath", () => {
     const parts = updated.split(path.delimiter);
     expect(parts[0]).toBe(linuxbrewBin);
     expect(parts[1]).toBe(linuxbrewSbin);
+  });
+
+  it("prepends common Windows tool dirs when present", () => {
+    const homeDir = abs("C:/Users/TestUser");
+    const execDir = path.join(homeDir, "AppData", "Local", "Programs", "OpenClaw");
+    const localAppData = path.join(homeDir, "AppData", "Local");
+    const appData = path.join(homeDir, "AppData", "Roaming");
+    const programFiles = abs("C:/Program Files");
+    const systemRoot = abs("C:/Windows");
+
+    const pnpmDir = path.join(localAppData, "pnpm");
+    const windowsAppsDir = path.join(localAppData, "Microsoft", "WindowsApps");
+    const npmDir = path.join(appData, "npm");
+    const nodejsDir = path.join(programFiles, "nodejs");
+    const system32Dir = path.join(systemRoot, "System32");
+
+    setDir(homeDir);
+    setDir(execDir);
+    setDir(localAppData);
+    setDir(path.join(localAppData, "Microsoft"));
+    setDir(pnpmDir);
+    setDir(windowsAppsDir);
+    setDir(appData);
+    setDir(npmDir);
+    setDir(programFiles);
+    setDir(nodejsDir);
+    setDir(systemRoot);
+    setDir(system32Dir);
+
+    process.env.PATH = nodejsDir;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.APPDATA = appData;
+    process.env.ProgramFiles = programFiles;
+    process.env.ProgramW6432 = programFiles;
+    process.env.SystemRoot = systemRoot;
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+
+    ensureOpenClawCliOnPath({
+      execPath: path.join(execDir, "node.exe"),
+      cwd: homeDir,
+      homeDir,
+      platform: "win32",
+    });
+
+    const parts = (process.env.PATH ?? "").split(path.delimiter);
+    expect(parts).toEqual(
+      expect.arrayContaining([pnpmDir, windowsAppsDir, npmDir, nodejsDir, system32Dir, systemRoot]),
+    );
+    expect(parts.indexOf(pnpmDir)).toBeLessThan(parts.indexOf(nodejsDir));
   });
 });

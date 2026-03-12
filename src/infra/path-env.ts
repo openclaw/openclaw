@@ -93,6 +93,32 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   if (platform === "darwin") {
     prepend.push(path.join(homeDir, "Library", "pnpm"));
   }
+  if (platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA;
+    const roamingAppData = process.env.APPDATA;
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+    const programFiles = process.env.ProgramW6432 ?? process.env.ProgramFiles;
+    const programFilesX86 = process.env["ProgramFiles(x86)"];
+
+    if (localAppData) {
+      prepend.push(
+        path.join(localAppData, "pnpm"),
+        path.join(localAppData, "Microsoft", "WindowsApps"),
+      );
+    }
+    if (roamingAppData) {
+      prepend.push(path.join(roamingAppData, "npm"));
+    }
+    if (programFiles) {
+      prepend.push(path.join(programFiles, "nodejs"));
+    }
+    if (programFilesX86) {
+      prepend.push(path.join(programFilesX86, "nodejs"));
+    }
+    if (systemRoot) {
+      prepend.push(path.join(systemRoot, "System32"), systemRoot);
+    }
+  }
   if (process.env.XDG_BIN_HOME) {
     prepend.push(process.env.XDG_BIN_HOME);
   }
