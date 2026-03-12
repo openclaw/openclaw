@@ -43,6 +43,48 @@ prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 Looking for third-party listings? See [Community plugins](/plugins/community).
 
+## Architecture
+
+OpenClaw's plugin system has four layers:
+
+1. **Manifest + discovery**
+   OpenClaw finds candidate plugins from configured paths, workspace roots,
+   global extension roots, and bundled extensions. Discovery reads
+   `openclaw.plugin.json` plus package metadata first.
+2. **Enablement + validation**
+   Core decides whether a discovered plugin is enabled, disabled, blocked, or
+   selected for an exclusive slot such as memory.
+3. **Runtime loading**
+   Enabled plugins are loaded in-process via jiti and register capabilities into
+   a central registry.
+4. **Surface consumption**
+   The rest of OpenClaw reads the registry to expose tools, channels, provider
+   setup, hooks, HTTP routes, CLI commands, and services.
+
+The important design boundary:
+
+- discovery + config validation should work from **manifest/schema metadata**
+  without executing plugin code
+- runtime behavior comes from the plugin module's `register(api)` path
+
+That split lets OpenClaw validate config, explain missing/disabled plugins, and
+build UI/schema hints before the full runtime is active.
+
+## Execution model
+
+Plugins run **in-process** with the Gateway. They are not sandboxed. A loaded
+plugin has the same process-level trust boundary as core code.
+
+Implications:
+
+- a plugin can register tools, network handlers, hooks, and services
+- a plugin bug can crash or destabilize the gateway
+- a malicious plugin is equivalent to arbitrary code execution inside the
+  OpenClaw process
+
+Use allowlists and explicit install/load paths for non-bundled plugins. Treat
+workspace plugins as development-time code, not production defaults.
+
 ## Available plugins (official)
 
 - Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
@@ -77,6 +119,48 @@ Plugins can register:
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
+
+## Load pipeline
+
+At startup, OpenClaw does roughly this:
+
+1. discover candidate plugin roots
+2. read `openclaw.plugin.json` and package metadata
+3. reject unsafe candidates
+4. normalize plugin config (`plugins.enabled`, `allow`, `deny`, `entries`,
+   `slots`, `load.paths`)
+5. decide enablement for each candidate
+6. load enabled modules via jiti
+7. call `register(api)` and collect registrations into the plugin registry
+8. expose the registry to commands/runtime surfaces
+
+The safety gates happen **before** runtime execution. Candidates are blocked
+when the entry escapes the plugin root, the path is world-writable, or path
+ownership looks suspicious for non-bundled plugins.
+
+### Manifest-first behavior
+
+The manifest is the control-plane source of truth. OpenClaw uses it to:
+
+- identify the plugin
+- discover declared channels/skills/config schema
+- validate `plugins.entries.<id>.config`
+- augment Control UI labels/placeholders
+- show install/catalog metadata
+
+The runtime module is the data-plane part. It registers actual behavior such as
+hooks, tools, commands, or provider flows.
+
+### What the loader caches
+
+OpenClaw keeps short in-process caches for:
+
+- discovery results
+- manifest registry data
+- loaded plugin registries
+
+These caches reduce bursty startup and repeated command overhead. They are safe
+to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
@@ -259,6 +343,10 @@ Default-on bundled plugin exceptions:
 
 Installed plugins are enabled by default, but can be disabled the same way.
 
+Workspace plugins are **disabled by default** unless you explicitly enable them
+or allowlist them. This is intentional: a checked-out repo should not silently
+become production gateway code.
+
 Hardening notes:
 
 - If `plugins.allow` is empty and non-bundled plugins are discoverable, OpenClaw logs a startup warning with plugin ids and sources.
@@ -274,6 +362,25 @@ manifest.
 
 If multiple plugins resolve to the same id, the first match in the order above
 wins and lower-precedence copies are ignored.
+
+### Enablement rules
+
+Enablement is resolved after discovery:
+
+- `plugins.enabled: false` disables all plugins
+- `plugins.deny` always wins
+- `plugins.entries.<id>.enabled: false` disables that plugin
+- workspace-origin plugins are disabled by default
+- allowlists restrict the active set when `plugins.allow` is non-empty
+- bundled plugins are disabled by default unless:
+  - the bundled id is in the built-in default-on set, or
+  - you explicitly enable it, or
+  - channel config implicitly enables the bundled channel plugin
+- exclusive slots can force-enable the selected plugin for that slot
+
+In current core, bundled default-on ids include local/provider helpers such as
+`ollama`, `sglang`, `vllm`, plus `device-pair`, `phone-control`, and
+`talk-voice`.
 
 ### Package packs
 
@@ -354,6 +461,34 @@ Default plugin ids:
 If a plugin exports `id`, OpenClaw uses it but warns when it doesn’t match the
 configured id.
 
+## Registry model
+
+Loaded plugins do not directly mutate random core globals. They register into a
+central plugin registry.
+
+The registry tracks:
+
+- plugin records (identity, source, origin, status, diagnostics)
+- tools
+- legacy hooks and typed hooks
+- channels
+- providers
+- gateway RPC handlers
+- HTTP routes
+- CLI registrars
+- background services
+- plugin-owned commands
+
+Core features then read from that registry instead of talking to plugin modules
+directly. This keeps loading one-way:
+
+- plugin module -> registry registration
+- core runtime -> registry consumption
+
+That separation matters for maintainability. It means most core surfaces only
+need one integration point: "read the registry", not "special-case every plugin
+module".
+
 ## Config
 
 ```json5
@@ -389,6 +524,17 @@ Validation rules (strict):
 - Plugin config is validated using the JSON Schema embedded in
   `openclaw.plugin.json` (`configSchema`).
 - If a plugin is disabled, its config is preserved and a **warning** is emitted.
+
+### Disabled vs missing vs invalid
+
+These states are intentionally different:
+
+- **disabled**: plugin exists, but enablement rules turned it off
+- **missing**: config references a plugin id that discovery did not find
+- **invalid**: plugin exists, but its config does not match the declared schema
+
+OpenClaw preserves config for disabled plugins so toggling them back on is not
+destructive.
 
 ## Plugin slots (exclusive categories)
 
@@ -487,6 +633,19 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+`register(api)` is where plugins attach behavior. Common registrations include:
+
+- `registerTool`
+- `registerHook`
+- `on(...)` for typed lifecycle hooks
+- `registerChannel`
+- `registerProvider`
+- `registerHttpRoute`
+- `registerCommand`
+- `registerCli`
+- `registerContextEngine`
+- `registerService`
 
 Context engine plugins can also register a runtime-owned context manager:
 
@@ -603,13 +762,150 @@ Migration guidance:
 
 ## Provider plugins (model auth)
 
-Plugins can register **model provider auth** flows so users can run OAuth or
-API-key setup inside OpenClaw (no external scripts needed).
+Plugins can register **model providers** so users can run OAuth or API-key
+setup inside OpenClaw, surface provider setup in onboarding/model-pickers, and
+contribute implicit provider discovery.
+
+Provider plugins are the modular extension seam for model-provider setup. They
+are not just "OAuth helpers" anymore.
+
+### Provider plugin lifecycle
+
+A provider plugin can participate in four distinct phases:
+
+1. **Auth**
+   `auth[].run(ctx)` performs OAuth, API-key capture, device code, or custom
+   setup and returns auth profiles plus optional config patches.
+2. **Wizard integration**
+   `wizard.onboarding` adds an entry to `openclaw onboard`.
+   `wizard.modelPicker` adds a setup entry to the model picker.
+3. **Implicit discovery**
+   `discovery.run(ctx)` can contribute provider config automatically during
+   model resolution/listing.
+4. **Post-selection follow-up**
+   `onModelSelected(ctx)` runs after a model is chosen. Use this for provider-
+   specific work such as downloading a local model.
+
+This is the recommended split because these phases have different lifecycle
+requirements:
+
+- auth is interactive and writes credentials/config
+- wizard metadata is static and UI-facing
+- discovery should be safe, quick, and failure-tolerant
+- post-select hooks are side effects tied to the chosen model
+
+### Provider auth contract
+
+`auth[].run(ctx)` returns:
+
+- `profiles`: auth profiles to write
+- `configPatch`: optional `openclaw.json` changes
+- `defaultModel`: optional `provider/model` ref
+- `notes`: optional user-facing notes
+
+Core then:
+
+1. writes the returned auth profiles
+2. applies auth-profile config wiring
+3. merges the config patch
+4. optionally applies the default model
+5. runs the provider's `onModelSelected` hook when appropriate
+
+That means a provider plugin owns the provider-specific setup logic, while core
+owns the generic persistence and config-merge path.
+
+### Provider wizard metadata
+
+`wizard.onboarding` controls how the provider appears in grouped onboarding:
+
+- `choiceId`: auth-choice value
+- `choiceLabel`: option label
+- `choiceHint`: short hint
+- `groupId`: group bucket id
+- `groupLabel`: group label
+- `groupHint`: group hint
+- `methodId`: auth method to run
+
+`wizard.modelPicker` controls how a provider appears as a "set this up now"
+entry in model selection:
+
+- `label`
+- `hint`
+- `methodId`
+
+When a provider has multiple auth methods, the wizard can either point at one
+explicit method or let OpenClaw synthesize per-method choices.
+
+### Provider discovery contract
+
+`discovery.run(ctx)` returns one of:
+
+- `{ provider }`
+- `{ providers }`
+- `null`
+
+Use `{ provider }` for the common case where the plugin owns one provider id.
+Use `{ providers }` when a plugin discovers multiple provider entries.
+
+The discovery context includes:
+
+- the current config
+- agent/workspace dirs
+- process env
+- a helper to resolve the provider API key and a discovery-safe API key value
+
+Discovery should be:
+
+- fast
+- best-effort
+- safe to skip on failure
+- careful about side effects
+
+It should not depend on prompts or long-running setup.
+
+### Discovery ordering
+
+Provider discovery runs in ordered phases:
+
+- `simple`
+- `profile`
+- `paired`
+- `late`
+
+Use:
+
+- `simple` for cheap environment-only discovery
+- `profile` when discovery depends on auth profiles
+- `paired` for providers that need to coordinate with another discovery step
+- `late` for expensive or local-network probing
+
+Most self-hosted providers should use `late`.
+
+### Good provider-plugin boundaries
+
+Good fit for provider plugins:
+
+- local/self-hosted providers with custom setup flows
+- provider-specific OAuth/device-code login
+- implicit discovery of local model servers
+- post-selection side effects such as model pulls
+
+Less compelling fit:
+
+- trivial API-key-only providers that differ only by env var, base URL, and one
+  default model
+
+Those can still become plugins, but the main modularity payoff comes from
+extracting behavior-rich providers first.
 
 Register a provider via `api.registerProvider(...)`. Each provider exposes one
-or more auth methods (OAuth, API key, device code, etc.). These methods power:
+or more auth methods (OAuth, API key, device code, etc.). Those methods can
+power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
+- `openclaw onboard`
+- model-picker “custom provider” setup entries
+- implicit provider discovery during model resolution/listing
 
 Example:
 
@@ -642,6 +938,31 @@ api.registerProvider({
       },
     },
   ],
+  wizard: {
+    onboarding: {
+      choiceId: "acme",
+      choiceLabel: "AcmeAI",
+      groupId: "acme",
+      groupLabel: "AcmeAI",
+      methodId: "oauth",
+    },
+    modelPicker: {
+      label: "AcmeAI (custom)",
+      hint: "Connect a self-hosted AcmeAI endpoint",
+      methodId: "oauth",
+    },
+  },
+  discovery: {
+    order: "late",
+    run: async () => ({
+      provider: {
+        baseUrl: "https://acme.example/v1",
+        api: "openai-completions",
+        apiKey: "${ACME_API_KEY}",
+        models: [],
+      },
+    }),
+  },
 });
 ```
 
@@ -651,6 +972,14 @@ Notes:
   `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
 - Return `configPatch` when you need to add default models or provider config.
 - Return `defaultModel` so `--set-default` can update agent defaults.
+- `wizard.onboarding` adds a provider choice to `openclaw onboard`.
+- `wizard.modelPicker` adds a “setup this provider” entry to the model picker.
+- `discovery.run` returns either `{ provider }` for the plugin’s own provider id
+  or `{ providers }` for multi-provider discovery.
+- `discovery.order` controls when the provider runs relative to built-in
+  discovery phases: `simple`, `profile`, `paired`, or `late`.
+- `onModelSelected` is the post-selection hook for provider-specific follow-up
+  work such as pulling a local model.
 
 ### Register a messaging channel
 
