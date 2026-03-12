@@ -42,6 +42,7 @@ import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
+  resolveOwnedAcpSessionToolsEnabled,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
 
@@ -196,6 +197,7 @@ export function createSessionStatusTool(opts?: {
         sandboxed: opts?.sandboxed,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const ownedAcpEnabled = resolveOwnedAcpSessionToolsEnabled(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(
         opts?.agentSessionKey ?? effectiveRequesterKey,
       );
@@ -246,6 +248,7 @@ export function createSessionStatusTool(opts?: {
                 sandboxed: true,
               }),
               a2aPolicy,
+              ownedAcpEnabled,
             })
           : null;
 
