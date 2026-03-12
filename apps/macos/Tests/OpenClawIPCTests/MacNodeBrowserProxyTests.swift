@@ -39,6 +39,34 @@ struct MacNodeBrowserProxyTests {
         #expect(tabs[0]["id"] as? String == "tab-1")
     }
 
+    @Test func requestWrapsScalarJSONResults() async throws {
+        let proxy = MacNodeBrowserProxy(
+            endpointProvider: {
+                MacNodeBrowserProxy.Endpoint(
+                    baseURL: URL(string: "http://127.0.0.1:18791")!,
+                    token: nil,
+                    password: nil)
+            },
+            performRequest: { request in
+                let url = try #require(request.url)
+                let response = try #require(
+                    HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]))
+                return (Data("true".utf8), response)
+            })
+
+        let payloadJSON = try await proxy.request(
+            paramsJSON: #"{"method":"GET","path":"/status"}"#)
+        let payload = try #require(
+            JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+
+        #expect(payload["result"] as? Bool == true)
+        #expect(payload["files"] == nil)
+    }
+
     // Regression test: nested POST bodies must serialize without __SwiftValue crashes.
     @Test func postRequestSerializesNestedBodyWithoutCrash() async throws {
         actor BodyCapture {
