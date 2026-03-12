@@ -32,9 +32,9 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
   if (providerLabel) {
-    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+    return `⚠️ ${providerLabel} returned a billing error - your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  return "⚠️ API provider returned a billing error - your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
@@ -140,7 +140,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
 
   // Billing/quota errors can contain patterns like "request size exceeds" or
   // "maximum token limit exceeded" that match the context overflow heuristic.
-  // Billing is a more specific error class — exclude it early.
+  // Billing is a more specific error class - exclude it early.
   if (isBillingErrorMessage(errorMessage)) {
     return false;
   }
@@ -243,8 +243,14 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
   "reached",
   "exhausted",
 ] as const;
+// ZenMux subscription quota 402 pattern: indicates temporary quota exhaustion with automatic refresh
+const RETRYABLE_402_QUOTA_REFRESH_HINTS = [
+  "automatic quota refresh",
+  "rolling time window",
+  "subscription quota limit",
+] as const;
 const RAW_402_MARKER_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b|^\s*402\s+(?:you have reached|subscription quota)\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
 
@@ -266,9 +272,35 @@ function hasRetryable402TransientSignal(text: string): boolean {
   const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
   const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
   const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
+  const hasQuotaRefreshHint = includesAnyHint(text, RETRYABLE_402_QUOTA_REFRESH_HINTS);
+  // Check for explicit plan-upgrade phrasing, not just "upgrade" (avoids false positives on periodic limits)
+  const hasUpgradeHint =
+    text.includes("upgrade your plan") ||
+    text.includes("upgrade plan") ||
+    text.includes("upgrade to a higher");
+  const hasInsufficientCredits = text.includes("insufficient credits");
+  const hasCreditBalance = text.includes("credit balance");
+
+  // Explicit billing signals always win (insufficient credits, credit balance)
+  // Check these before quota-refresh hints to avoid false positives
+  if (hasInsufficientCredits || hasCreditBalance) {
+    return false;
+  }
+
+  // ZenMux subscription quota 402: temporary quota exhaustion with automatic refresh
+  if (hasQuotaRefreshHint) {
+    return true;
+  }
+
+  // Explicit billing signals (upgrade hints)
+  if (hasUpgradeHint) {
+    return false;
+  }
+
   return (
     (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
       includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
+    // Periodic limits (daily/weekly/monthly) with usage or spend limit are retryable
     (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
     (hasPeriodicHint && text.includes("limit") && text.includes("reset")) ||
     (hasScopedHint &&
@@ -287,15 +319,24 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
     return "billing";
   }
 
+  // ZenMux subscription quota with automatic quota refresh is retryable (#43915)
+  // Check this before billing signals to avoid false positives on "subscription" + "limit"
+  const hasQuotaRefreshHint = includesAnyHint(normalized, RETRYABLE_402_QUOTA_REFRESH_HINTS);
+  if (hasQuotaRefreshHint) {
+    return "rate_limit";
+  }
+
+  // Explicit billing signals take precedence (insufficient credits, credit balance, upgrade)
   if (hasExplicit402BillingSignal(normalized)) {
     return "billing";
   }
 
-  if (isRateLimitErrorMessage(normalized)) {
+  // Check other retryable transient signals
+  if (hasRetryable402TransientSignal(normalized)) {
     return "rate_limit";
   }
 
-  if (hasRetryable402TransientSignal(normalized)) {
+  if (isRateLimitErrorMessage(normalized)) {
     return "rate_limit";
   }
 

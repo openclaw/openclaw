@@ -663,6 +663,34 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${billingMessage}`)).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, billingMessage)).toBe("billing");
   });
+
+  it("classifies ZenMux subscription quota 402 as rate_limit for fallback (#43915)", () => {
+    // Real ZenMux 402 payload observed in production
+    const zenMuxQuotaPayload =
+      "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.";
+    expect(classifyFailoverReason(zenMuxQuotaPayload)).toBe("rate_limit");
+    expect(classifyFailoverReasonFromHttpStatus(402, zenMuxQuotaPayload)).toBe("rate_limit");
+
+    // Variants with individual quota refresh hints
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "subscription quota limit reached, automatic quota refresh in 5 minutes",
+      ),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        402,
+        "Quota exhausted. Rolling time window resets soon.",
+      ),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReasonFromHttpStatus(402, "automatic quota refresh scheduled")).toBe(
+      "rate_limit",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(402, "quota refresh in rolling time window")).toBe(
+      "rate_limit",
+    );
+  });
 });
 
 describe("classifyFailoverReason", () => {
