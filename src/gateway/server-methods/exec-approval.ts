@@ -7,6 +7,7 @@ import {
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -20,6 +21,18 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  const hasApprovalClients = (
+    context: {
+      hasExecApprovalClients?: (params?: { excludeConnIds?: ReadonlySet<string> }) => boolean;
+    },
+    probeOpts?: { excludeConnIds?: ReadonlySet<string> },
+  ) => {
+    if (typeof context.hasExecApprovalClients === "function") {
+      return context.hasExecApprovalClients(probeOpts);
+    }
+    // Fail closed when no operator-scope probe is available.
+    return false;
+  };
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -194,7 +207,15 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
+      const requesterConnId =
+        client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+        typeof client?.connId === "string"
+          ? client.connId
+          : null;
+      const approverClientsAvailable = hasApprovalClients(context, {
+        excludeConnIds: requesterConnId ? new Set([requesterConnId]) : undefined,
+      });
+      if (!approverClientsAvailable && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,

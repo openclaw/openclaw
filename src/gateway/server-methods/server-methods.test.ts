@@ -9,6 +9,7 @@ import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -317,7 +318,7 @@ describe("exec approval handlers", () => {
 
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
-    hasExecApprovalClients?: () => boolean;
+    hasExecApprovalClients?: (params?: { excludeConnIds?: ReadonlySet<string> }) => boolean;
   }): ExecApprovalRequestArgs["context"] {
     return context as unknown as ExecApprovalRequestArgs["context"];
   }
@@ -333,6 +334,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -376,7 +378,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -957,6 +959,58 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id: "approval-forwarded", decision: "allow-once" }),
       undefined,
     );
+  });
+
+  it("excludes backend requester connections from approver probes", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new ExecApprovalManager();
+      const handlers = createExecApprovalHandlers(manager);
+      const respond = vi.fn();
+      const hasExecApprovalClients = vi.fn(
+        (params?: { excludeConnIds?: ReadonlySet<string> }) =>
+          !params?.excludeConnIds?.has("req-conn"),
+      );
+      const context = {
+        broadcast: (_event: string, _payload: unknown) => {},
+        hasExecApprovalClients,
+      };
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        client: {
+          connId: "req-conn",
+          connect: {
+            role: "operator",
+            client: {
+              id: "gateway-client",
+              version: "test",
+              platform: "test",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+            },
+            scopes: ["operator.approvals"],
+          },
+        } as ExecApprovalRequestArgs["client"],
+        params: { timeoutMs: 60_000 },
+      });
+      await drainApprovalRequestTicks();
+
+      expect(hasExecApprovalClients).toHaveBeenCalledWith({
+        excludeConnIds: new Set(["req-conn"]),
+      });
+
+      await vi.runOnlyPendingTimersAsync();
+      await requestPromise;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ decision: null }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

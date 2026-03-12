@@ -834,8 +834,16 @@ export async function startGatewayServer(
     nodeUnsubscribe,
     nodeUnsubscribeAll,
     hasConnectedMobileNode: hasMobileNodeConnected,
-    hasExecApprovalClients: () => {
+    hasExecApprovalClients: (params) => {
+      const excludedConnIds = params?.excludeConnIds;
       for (const gatewayClient of clients) {
+        if (excludedConnIds?.has(gatewayClient.connId)) {
+          continue;
+        }
+        const role = gatewayClient.connect.role ?? "operator";
+        if (role !== "operator") {
+          continue;
+        }
         const scopes = Array.isArray(gatewayClient.connect.scopes)
           ? gatewayClient.connect.scopes
           : [];
