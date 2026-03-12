@@ -62,10 +62,7 @@ function normalizePersistedToolResultName(
     return { ...toolResult, toolName: normalizedFallback };
   }
 
-  if (typeof rawToolName === "string") {
-    return { ...toolResult, toolName: "unknown" };
-  }
-  return toolResult;
+  return { ...toolResult, toolName: "unknown" };
 }
 
 export function installSessionToolResultGuard(

@@ -177,10 +177,7 @@ function normalizeToolResultName(
     return { ...message, toolName: normalizedFallback };
   }
 
-  if (typeof rawToolName === "string") {
-    return { ...message, toolName: "unknown" };
-  }
-  return message;
+  return { ...message, toolName: "unknown" };
 }
 
 export { makeMissingToolResult };

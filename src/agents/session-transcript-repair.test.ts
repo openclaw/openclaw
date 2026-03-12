@@ -99,6 +99,28 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(toolResult?.toolName).toBe("read");
   });
 
+  it("fills missing tool result names with unknown when fallback is unavailable", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const out = sanitizeToolUseResultPairing(input);
+    const toolResult = out.find((message) => message.role === "toolResult") as {
+      toolName?: string;
+    };
+
+    expect(toolResult?.toolName).toBe("unknown");
+  });
+
   it("drops duplicate tool results for the same id within a span", () => {
     const input = castAgentMessages([
       ...buildDuplicateToolResultInput(),
