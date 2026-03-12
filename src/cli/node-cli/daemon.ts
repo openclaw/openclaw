@@ -61,6 +61,14 @@ type NodeDaemonStatusOptions = {
   json?: boolean;
 };
 
+function hasNodeHeaderEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    env.OPENCLAW_NODE_HEADERS?.trim() ||
+    env.CF_ACCESS_CLIENT_ID?.trim() ||
+    env.CF_ACCESS_CLIENT_SECRET?.trim(),
+  );
+}
+
 function redactNodeServiceCommandEnv(
   command: GatewayServiceCommandConfig | null,
 ): GatewayServiceCommandConfig | null {
@@ -136,6 +144,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
   if (
     headers === undefined &&
+    !hasNodeHeaderEnv(process.env) &&
     config?.gateway?.headers &&
     Object.keys(config.gateway.headers).length > 0
   ) {

@@ -143,7 +143,9 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
   return nextConfig;
 }
 
-/** Merge headers from config, opts, and env. Precedence: config < opts < OPENCLAW_NODE_HEADERS; CF_* env only applied when that header key is not already set (so explicit --header wins). */
+/** Merge headers from config, opts, and env.
+ * Precedence: config < OPENCLAW_NODE_HEADERS < CF_* env < explicit --header.
+ */
 function resolveNodeHostHeaders(params: {
   configHeaders?: Record<string, string>;
   optsHeaders?: Record<string, string>;
@@ -151,11 +153,6 @@ function resolveNodeHostHeaders(params: {
 }): Record<string, string> {
   const env = params.env ?? process.env;
   const out: Record<string, string> = { ...params.configHeaders };
-  if (params.optsHeaders) {
-    for (const [k, v] of Object.entries(params.optsHeaders)) {
-      out[k] = v;
-    }
-  }
   const openclawHeaders = env.OPENCLAW_NODE_HEADERS?.trim();
   if (openclawHeaders) {
     try {
@@ -175,11 +172,16 @@ function resolveNodeHostHeaders(params: {
   }
   const cfId = env.CF_ACCESS_CLIENT_ID?.trim();
   const cfSecret = env.CF_ACCESS_CLIENT_SECRET?.trim();
-  if (cfId && out["CF-Access-Client-Id"] === undefined) {
+  if (cfId) {
     out["CF-Access-Client-Id"] = cfId;
   }
-  if (cfSecret && out["CF-Access-Client-Secret"] === undefined) {
+  if (cfSecret) {
     out["CF-Access-Client-Secret"] = cfSecret;
+  }
+  if (params.optsHeaders) {
+    for (const [k, v] of Object.entries(params.optsHeaders)) {
+      out[k] = v;
+    }
   }
   return out;
 }
