@@ -91,29 +91,32 @@ describe("collectSmallModelRiskFindings", () => {
   it.each([
     ["perplexity", { OPENROUTER_API_KEY: "sk-or-v1-test" }], // pragma: allowlist secret
     ["grok", { XAI_API_KEY: "xai-env-key" }], // pragma: allowlist secret
-  ])("treats %s explicit provider env credentials as enabling web_search exposure", (provider, env) => {
-    const findings = collectSmallModelRiskFindings({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "qwen2.5-7b-instruct",
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              provider,
+  ])(
+    "treats %s explicit provider env credentials as enabling web_search exposure",
+    (provider, env) => {
+      const findings = collectSmallModelRiskFindings({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "qwen2.5-7b-instruct",
             },
           },
-        },
-      } as OpenClawConfig,
-      env: env as NodeJS.ProcessEnv,
-    });
+          tools: {
+            web: {
+              search: {
+                provider,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: env as NodeJS.ProcessEnv,
+      });
 
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.detail).toContain("web_search");
-    expect(findings[0]?.detail).not.toContain("web=[off]");
-  });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.detail).toContain("web_search");
+      expect(findings[0]?.detail).not.toContain("web=[off]");
+    },
+  );
 
   it.each([
     [
