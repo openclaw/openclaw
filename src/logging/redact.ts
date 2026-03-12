@@ -39,6 +39,9 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
+// Runtime-discovered sensitive values (e.g., from config or environment variables).
+const dynamicSensitiveValues: Set<string> = new Set();
+
 type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: string[];
@@ -97,6 +100,20 @@ function redactMatch(match: string, groups: string[]): string {
 
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
+
+  // First, redact dynamic sensitive values (exact string matches).
+  for (const value of dynamicSensitiveValues) {
+    if (value.length < DEFAULT_REDACT_MIN_LENGTH) {
+      continue; // Skip short values to avoid false positives.
+    }
+    // Escape special regex characters for literal matching.
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "g");
+    const masked = maskToken(value);
+    next = next.replace(regex, masked);
+  }
+
+  // Then apply pattern-based redaction.
   for (const pattern of patterns) {
     next = replacePatternBounded(next, pattern, (...args: string[]) =>
       redactMatch(args[0], args.slice(1, args.length - 2)),
@@ -149,3 +166,37 @@ export function redactToolDetail(detail: string): string {
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
 }
+
+/**
+ * Add a specific sensitive value to be redacted in all text.
+ * This is useful for runtime-discovered secrets (e.g., from config or environment).
+ */
+export function addSensitiveValue(value: string): void {
+  if (value && value.length >= DEFAULT_REDACT_MIN_LENGTH) {
+    dynamicSensitiveValues.add(value);
+  }
+}
+
+/**
+ * Add multiple sensitive values at once.
+ */
+export function addSensitiveValues(values: string[]): void {
+  for (const value of values) {
+    addSensitiveValue(value);
+  }
+}
+
+/**
+ * Clear all dynamically added sensitive values.
+ */
+export function clearDynamicSensitiveValues(): void {
+  dynamicSensitiveValues.clear();
+}
+
+/**
+ * Get count of dynamically registered sensitive values.
+ */
+export function getDynamicSensitiveValuesCount(): number {
+  return dynamicSensitiveValues.size;
+}
+

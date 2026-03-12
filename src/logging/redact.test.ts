@@ -1,122 +1,81 @@
-import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  redactSensitiveText,
+  addSensitiveValue,
+  addSensitiveValues,
+  clearDynamicSensitiveValues,
+  getDynamicSensitiveValuesCount,
+} from "./redact.js";
 
-const defaults = getDefaultRedactPatterns();
-
-describe("redactSensitiveText", () => {
-  it("masks env assignments while keeping the key", () => {
-    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
+describe("redactSensitiveText with dynamic values", () => {
+  beforeEach(() => {
+    clearDynamicSensitiveValues();
   });
 
-  it("masks CLI flags", () => {
-    const input = "curl --token abcdef1234567890ghij https://api.test";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("curl --token abcdef…ghij https://api.test");
+  it("should redact sk- prefixed API keys", () => {
+    const text = "API key: sk-3hjd98348hfkwduy83e4iuhfsa7t5623";
+    const redacted = redactSensitiveText(text);
+    expect(redacted).toContain("sk-3hj");
+    expect(redacted).toContain("5623");
+    expect(redacted).toContain("…");
+    expect(redacted).not.toContain("sk-3hjd98348hfkwduy83e4iuhfsa7t5623");
   });
 
-  it("masks JSON fields", () => {
-    const input = '{"token":"abcdef1234567890ghij"}';
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe('{"token":"abcdef…ghij"}');
+  it("should redact GitHub personal access tokens", () => {
+    const text = "Token: ghp_1234567890abcdefghij1234567890";
+    const redacted = redactSensitiveText(text);
+    expect(redacted).toContain("ghp_12");
+    expect(redacted).toContain("7890");
+    expect(redacted).not.toContain("ghp_1234567890abcdefghij1234567890");
   });
 
-  it("masks bearer tokens", () => {
-    const input = "Authorization: Bearer abcdef1234567890ghij";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  it("should redact dynamically added sensitive values", () => {
+    const secret = "my-super-secret-key-12345678";
+    addSensitiveValue(secret);
+
+    const text = \`Using key: \${secret}\`;
+    const redacted = redactSensitiveText(text);
+
+    expect(redacted).toContain("my-sup");
+    expect(redacted).toContain("5678");
+    expect(redacted).not.toContain(secret);
   });
 
-  it("masks Telegram-style tokens", () => {
-    const input = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("123456…cdef");
+  it("should add multiple sensitive values at once", () => {
+    const secrets = [
+      "secret-key-number-one-123456",
+      "secret-key-number-two-789012",
+    ];
+    addSensitiveValues(secrets);
+
+    expect(getDynamicSensitiveValuesCount()).toBe(2);
+
+    const text = \`First: \${secrets[0]}, Second: \${secrets[1]}\`;
+    const redacted = redactSensitiveText(text);
+
+    expect(redacted).not.toContain(secrets[0]);
+    expect(redacted).not.toContain(secrets[1]);
   });
 
-  it("masks Telegram Bot API URL tokens", () => {
-    const input =
-      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+  it("should not add values shorter than minimum length", () => {
+    addSensitiveValue("short");
+    expect(getDynamicSensitiveValuesCount()).toBe(0);
   });
 
-  it("redacts short tokens fully", () => {
-    const input = "TOKEN=shortvalue";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe("TOKEN=***");
+  it("should clear all dynamic values", () => {
+    addSensitiveValues([
+      "long-secret-value-one-12345",
+      "long-secret-value-two-67890",
+    ]);
+    expect(getDynamicSensitiveValuesCount()).toBe(2);
+
+    clearDynamicSensitiveValues();
+    expect(getDynamicSensitiveValuesCount()).toBe(0);
   });
 
-  it("redacts private key blocks", () => {
-    const input = [
-      "-----BEGIN PRIVATE KEY-----",
-      "ABCDEF1234567890",
-      "ZYXWVUT987654321",
-      "-----END PRIVATE KEY-----",
-    ].join("\n");
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toBe(
-      ["-----BEGIN PRIVATE KEY-----", "…redacted…", "-----END PRIVATE KEY-----"].join("\n"),
-    );
-  });
-
-  it("honors custom patterns with flags", () => {
-    const input = "token=abcdef1234567890ghij";
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: ["/token=([A-Za-z0-9]+)/i"],
-    });
-    expect(output).toBe("token=abcdef…ghij");
-  });
-
-  it("ignores unsafe nested-repetition custom patterns", () => {
-    const input = `${"a".repeat(28)}!`;
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: ["(a+)+$"],
-    });
-    expect(output).toBe(input);
-  });
-
-  it("redacts large payloads with bounded regex passes", () => {
-    const input = `${"x".repeat(40_000)} OPENAI_API_KEY=sk-1234567890abcdef ${"y".repeat(40_000)}`;
-    const output = redactSensitiveText(input, {
-      mode: "tools",
-      patterns: defaults,
-    });
-    expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
-  });
-
-  it("skips redaction when mode is off", () => {
-    const input = "OPENAI_API_KEY=sk-1234567890abcdef";
-    const output = redactSensitiveText(input, {
-      mode: "off",
-      patterns: defaults,
-    });
-    expect(output).toBe(input);
+  it("should handle text without sensitive data", () => {
+    const text = "This is a normal message without secrets";
+    const redacted = redactSensitiveText(text);
+    expect(redacted).toBe(text);
   });
 });

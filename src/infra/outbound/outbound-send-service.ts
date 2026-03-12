@@ -3,6 +3,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
@@ -98,6 +99,10 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+
+  // Redact sensitive information from message content before sending.
+  const redactedMessage = redactSensitiveText(params.message);
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
@@ -105,7 +110,7 @@ export async function executeSendAction(params: {
       if (!params.ctx.mirror) {
         return;
       }
-      const mirrorText = params.ctx.mirror.text ?? params.message;
+      const mirrorText = params.ctx.mirror.text ?? redactedMessage;
       const mirrorMediaUrls =
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??
@@ -126,7 +131,7 @@ export async function executeSendAction(params: {
   const result: MessageSendResult = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
-    content: params.message,
+    content: redactedMessage,
     agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
@@ -167,6 +172,10 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
+  // Redact sensitive information from poll content before sending.
+  const redactedQuestion = redactSensitiveText(params.question);
+  const redactedOptions = params.options.map((opt) => redactSensitiveText(opt));
+
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "poll",
@@ -178,8 +187,8 @@ export async function executePollAction(params: {
   const result: MessagePollResult = await sendPoll({
     cfg: params.ctx.cfg,
     to: params.to,
-    question: params.question,
-    options: params.options,
+    question: redactedQuestion,
+    options: redactedOptions,
     maxSelections: params.maxSelections,
     durationSeconds: params.durationSeconds ?? undefined,
     durationHours: params.durationHours ?? undefined,
