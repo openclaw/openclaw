@@ -26,7 +26,9 @@ vi.mock("../config/config.js", () => ({
 }));
 
 // We will control the loadSessionStore output per-test via the spy.
-const mockLoadSessionStore = vi.fn(() => ({}) as Record<string, unknown>);
+const mockLoadSessionStore = vi.fn(
+  (_storePath: string, _opts?: { skipCache?: boolean }): Record<string, unknown> => ({}),
+);
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: (...args: Parameters<typeof mockLoadSessionStore>) =>
@@ -39,6 +41,29 @@ vi.mock("../config/sessions.js", () => ({
     const agentId = opts?.agentId ?? "main";
     return `/tmp/octest/agents/${agentId}/sessions/sessions.json`;
   },
+  resolveSessionFilePath: (
+    sessionId: string,
+    _entry?: unknown,
+    opts?: { sessionsDir?: string },
+  ) => {
+    const dir = opts?.sessionsDir ?? "/tmp/octest/agents/main/sessions";
+    return `${dir}/${sessionId}.jsonl`;
+  },
+  updateSessionStore: vi.fn(
+    async (
+      storePath: string,
+      mutator: (store: Record<string, unknown>) => void | Promise<void>,
+    ) => {
+      const store: Record<string, unknown> = {};
+      await mutator(store);
+      try {
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+      } catch {
+        // best-effort
+      }
+    },
+  ),
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -345,18 +370,18 @@ describe("rehydrateSessionStoreEntries", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("skips entries that already have endedAt set", () => {
+  it("skips entries that already have endedAt set", async () => {
     const entry = makeRun({ endedAt: Date.now() });
     const runs = new Map([[entry.runId, entry]]);
 
     // loadSessionStore should never be called for a completed run.
-    mockLoadSessionStore.mockReturnValue({} as Record<string, unknown>);
-    rehydrateSessionStoreEntries(runs);
+    mockLoadSessionStore.mockReturnValue({});
+    await rehydrateSessionStoreEntries(runs);
 
     expect(mockLoadSessionStore).not.toHaveBeenCalled();
   });
 
-  it("skips entries that already have a session-store entry", () => {
+  it("skips entries that already have a session-store entry", async () => {
     const entry = makeRun();
     const runs = new Map([[entry.runId, entry]]);
 
@@ -364,13 +389,13 @@ describe("rehydrateSessionStoreEntries", () => {
     mockLoadSessionStore.mockReturnValue({
       [entry.childSessionKey]: { sessionId: "existing-sess", updatedAt: Date.now() },
     });
-    rehydrateSessionStoreEntries(runs);
+    await rehydrateSessionStoreEntries(runs);
 
     // Called once (for the skipCache read) — no write should occur.
     expect(mockLoadSessionStore).toHaveBeenCalledTimes(1);
   });
 
-  it("synthesises a session-store entry from a transcript when the store entry is missing", () => {
+  it("synthesises a session-store entry from a transcript when the store entry is missing", async () => {
     const agentId = "main";
 
     // The global mock for resolveStorePath returns:
@@ -397,9 +422,10 @@ describe("rehydrateSessionStoreEntries", () => {
     // through to the directory scan and inject path.
     mockLoadSessionStore.mockReturnValue({} as Record<string, unknown>);
 
-    rehydrateSessionStoreEntries(runs);
+    await rehydrateSessionStoreEntries(runs);
 
-    // The store file should now exist with our synthetic entry.
+    // The store file should now exist with our synthetic entry (written by the
+    // updateSessionStore mock, which simulates a real file write).
     const written = fs.existsSync(storePath)
       ? (JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, unknown>)
       : {};
@@ -479,11 +505,17 @@ describe("routeResumedRun", () => {
     expect(onCompleteRedispatch).not.toHaveBeenCalled();
   });
 
-  it("returns true and calls onCompleteReplay for resumable-replay runs", () => {
+  it("returns true and invokes onCompleteReplay for resumable-replay runs", async () => {
     const sessionId = "replay-sess";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // Write the transcript at the path that resolveSubagentRunResumability will
+    // derive via the mocked resolveStorePath / resolveSessionFilePath:
+    //   sessionsDir = /tmp/octest/agents/main/sessions
+    //   transcriptPath = /tmp/octest/agents/main/sessions/replay-sess.jsonl
+    const mockSessionsDir = "/tmp/octest/agents/main/sessions";
+    const mockTranscriptPath = path.join(mockSessionsDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(mockSessionsDir, { recursive: true });
     fs.writeFileSync(
-      transcriptPath,
+      mockTranscriptPath,
       [sessionHeaderLine(sessionId), userMessageLine(), assistantMessageLine()].join("\n"),
     );
 
@@ -501,29 +533,33 @@ describe("routeResumedRun", () => {
       waitTimeoutMs: 30_000,
       onCompleteReplay,
       onCompleteRedispatch,
-      // Pass the transcript path directly so the function doesn't have to
-      // derive it from the session store (which is mocked to return our own
-      // store data referencing `/tmp/octest/...` paths).
-      // We achieve this by overriding resolveSubagentRunResumability via
-      // opts passed as an argument through the transcript path override in
-      // resolveSubagentRunResumability.
     });
 
-    // routeResumedRun calls resolveSubagentRunResumability internally.
-    // Since we can't pass transcriptPath through routeResumedRun, we verify
-    // the return value and that the correct handler is invoked.
-    // The actual transcript resolution via the sessions dir is integration-level;
-    // here we confirm the routing table is correct.
     expect(result).toBe(true);
-    // onCompleteReplay is invoked asynchronously (void), so we just confirm it
-    // was called (or will be called) without awaiting the promise.
+
+    // recoverCompletedSubagentRunFromTranscript is called via `void`; wait for
+    // the async chain to complete before asserting on the callback.
+    await vi.waitUntil(() => onCompleteReplay.mock.calls.length > 0, { timeout: 500 });
+
+    // onCompleteReplay must be called with the original runId and a numeric endedAt.
+    expect(onCompleteReplay).toHaveBeenCalledWith(entry.runId, expect.any(Number));
+    expect(onCompleteRedispatch).not.toHaveBeenCalled();
+
+    // Cleanup the shared mock path.
+    try {
+      fs.rmSync(mockSessionsDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
   });
 
-  it("returns true and calls onCompleteRedispatch for resumable-fresh runs", () => {
+  it("returns true and invokes onCompleteRedispatch for resumable-fresh runs", async () => {
     const sessionId = "fresh-sess";
-    // Write a session header only (no assistant turns) to simulate fresh state.
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, `${sessionHeaderLine(sessionId)}\n`);
+    // Write only a session header (no assistant turns) at the mocked path.
+    const mockSessionsDir = "/tmp/octest/agents/main/sessions";
+    const mockTranscriptPath = path.join(mockSessionsDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(mockSessionsDir, { recursive: true });
+    fs.writeFileSync(mockTranscriptPath, `${sessionHeaderLine(sessionId)}\n`);
 
     const entry = makeRun({ childSessionKey: "agent:main:subagent:fresh-run" });
     mockLoadSessionStore.mockReturnValue({
@@ -531,23 +567,9 @@ describe("routeResumedRun", () => {
     });
 
     const onCompleteReplay = vi.fn();
+    // callGateway is mocked to return { status: "ok", runId: "new-run-id" } for
+    // both the `agent` and `agent.wait` calls made by redispatchSubagentRunAfterRestart.
     const onCompleteRedispatch = vi.fn().mockResolvedValue(undefined);
-
-    // For this test we confirm that a fresh session (session store has entry,
-    // transcript exists but is empty/header-only) leads to a redispatch.
-    // The function will internally call resolveSubagentRunResumability which
-    // will try to find the transcript at `sessionsDir/sessionId.jsonl`.
-    // Since the mock resolveStorePath returns `/tmp/octest/agents/main/sessions/sessions.json`,
-    // the transcript path would be `/tmp/octest/agents/main/sessions/fresh-sess.jsonl`.
-    // We write our transcript there so the function can find it.
-    const mockSessionsDir = "/tmp/octest/agents/main/sessions";
-    const mockTranscriptPath = path.join(mockSessionsDir, `${sessionId}.jsonl`);
-    try {
-      fs.mkdirSync(mockSessionsDir, { recursive: true });
-      fs.writeFileSync(mockTranscriptPath, `${sessionHeaderLine(sessionId)}\n`);
-    } catch {
-      // best-effort setup
-    }
 
     const result = routeResumedRun({
       runId: entry.runId,
@@ -557,10 +579,22 @@ describe("routeResumedRun", () => {
       onCompleteRedispatch,
     });
 
-    // The routing should handle the run (return true) for fresh or replay.
     expect(result).toBe(true);
 
-    // Cleanup the mock path.
+    // redispatchSubagentRunAfterRestart is called via `void`; wait for the async
+    // chain (agent + agent.wait callGateway calls) to resolve.
+    await vi.waitUntil(() => onCompleteRedispatch.mock.calls.length > 0, { timeout: 500 });
+
+    // onCompleteRedispatch must be called with the original runId, a numeric
+    // endedAt, and the outcome from agent.wait.
+    expect(onCompleteRedispatch).toHaveBeenCalledWith(
+      entry.runId,
+      expect.any(Number),
+      expect.objectContaining({ status: "ok" }),
+    );
+    expect(onCompleteReplay).not.toHaveBeenCalled();
+
+    // Cleanup the shared mock path.
     try {
       fs.rmSync(mockSessionsDir, { recursive: true, force: true });
     } catch {

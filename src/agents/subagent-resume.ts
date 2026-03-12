@@ -33,7 +33,9 @@ import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
+  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -166,9 +168,14 @@ function findEntryByKey(
 // ---------------------------------------------------------------------------
 
 /**
- * Scan `sessionsDir` for a `.jsonl` transcript that was created close to
- * `targetCreatedAtMs` (within `toleranceMs`).  Returns the absolute path of
- * the candidate if exactly one candidate is found, otherwise `null`.
+ * Scan `sessionsDir` for a `.jsonl` transcript whose creation time is close to
+ * `targetCreatedAtMs` (within `toleranceMs`).  Uses `stat.birthtimeMs`
+ * (creation time) as the primary signal.  On platforms that do not support
+ * birth-time (Linux filesystems where `birthtimeMs === mtimeMs`), `mtimeMs` is
+ * used as a proxy for creation time.
+ *
+ * Returns the absolute path of the candidate if exactly one candidate is found,
+ * otherwise `null`.
  *
  * The one-candidate constraint prevents false matches when multiple subagents
  * were spawned at nearly the same time; in that case rehydration is skipped
@@ -190,8 +197,12 @@ function scanSessionsDirForTranscriptCandidate(
       const fullPath = path.join(sessionsDir, file);
       try {
         const stat = fs.statSync(fullPath);
-        const fileAgeMs = now - stat.mtimeMs;
-        const timeDiffMs = Math.abs(stat.mtimeMs - targetCreatedAtMs);
+        // Use birthtimeMs (creation time) as the primary signal.
+        // On Linux filesystems that do not report birth-time, birthtimeMs equals
+        // mtimeMs; in that case fall back to mtimeMs as a reasonable proxy.
+        const fileCreatedAtMs = stat.birthtimeMs !== stat.mtimeMs ? stat.birthtimeMs : stat.mtimeMs;
+        const fileAgeMs = now - fileCreatedAtMs;
+        const timeDiffMs = Math.abs(fileCreatedAtMs - targetCreatedAtMs);
         if (fileAgeMs <= 60 * 60_000 && timeDiffMs <= toleranceMs) {
           candidates.push(fullPath);
         }
@@ -231,7 +242,9 @@ function scanSessionsDirForTranscriptCandidate(
  * Both steps are best-effort: any failure is logged at debug level and silently
  * ignored so that the normal orphan-pruning path can still fire.
  */
-export function rehydrateSessionStoreEntries(entries: Map<string, SubagentRunRecord>): void {
+export async function rehydrateSessionStoreEntries(
+  entries: Map<string, SubagentRunRecord>,
+): Promise<void> {
   const TOLERANCE_MS = 5 * 60_000; // 5 minutes
 
   for (const entry of entries.values()) {
@@ -287,24 +300,21 @@ export function rehydrateSessionStoreEntries(entries: Map<string, SubagentRunRec
         spawnDepth: 1,
       };
 
-      // Re-read, mutate, write back — keep it simple for Phase 1.
-      // We write with a direct synchronous fs call to stay compatible with the
-      // synchronous `restoreSubagentRunsOnce` call path.
-      const freshStore = loadSessionStore(storePath, { skipCache: true });
+      // Write the synthetic entry via updateSessionStore so that concurrent
+      // session-store writes during startup are serialised through the lock.
       const normalizedKey = childSessionKey.toLowerCase();
-      if (!findEntryByKey(freshStore, childSessionKey)) {
-        freshStore[normalizedKey] = synthetic;
-        try {
-          fs.mkdirSync(path.dirname(storePath), { recursive: true });
-          const serialized = JSON.stringify(freshStore, null, 2);
-          fs.writeFileSync(storePath, `${serialized}\n`, { mode: 0o600 });
-          log.info("rehydrated session store entry", { childSessionKey, sessionId });
-        } catch (writeErr) {
-          log.debug("rehydrate: session-store write failed", {
-            childSessionKey,
-            error: String(writeErr),
-          });
-        }
+      try {
+        await updateSessionStore(storePath, (freshStore) => {
+          if (!findEntryByKey(freshStore, childSessionKey)) {
+            freshStore[normalizedKey] = synthetic;
+            log.info("rehydrated session store entry", { childSessionKey, sessionId });
+          }
+        });
+      } catch (writeErr) {
+        log.debug("rehydrate: session-store write failed", {
+          childSessionKey,
+          error: String(writeErr),
+        });
       }
     } catch (err) {
       // Best-effort — any config/IO error is silently swallowed.
@@ -346,6 +356,8 @@ export function resolveSubagentRunResumability(
 
   // ② Look up session-store entry.
   let sessionId: string | null = null;
+  let sessionEntryForPath: SessionEntry | undefined;
+  let sessionsDir: string | undefined;
   try {
     const cfg = loadConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
@@ -358,6 +370,8 @@ export function resolveSubagentRunResumability(
       sessionEntry.sessionId.trim()
     ) {
       sessionId = sessionEntry.sessionId.trim();
+      sessionEntryForPath = sessionEntry;
+      sessionsDir = path.dirname(storePath);
     }
   } catch {
     // Best-effort — treat as if session store is missing.
@@ -369,16 +383,17 @@ export function resolveSubagentRunResumability(
   }
 
   // ③ Resolve transcript path.
+  // Use resolveSessionFilePath so that sessions with non-standard transcript
+  // paths (sessionFile field set) are handled correctly, consistent with all
+  // other transcript-locating code in the codebase.
   let transcriptPath: string;
   if (opts?.transcriptPath) {
     transcriptPath = opts.transcriptPath;
   } else {
     try {
-      const cfg = loadConfig();
-      const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-      const storePath = resolveStorePath(cfg.session?.store, { agentId });
-      const sessionsDir = path.dirname(storePath);
-      transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+      transcriptPath = resolveSessionFilePath(sessionId, sessionEntryForPath, {
+        sessionsDir,
+      });
     } catch {
       return "orphaned";
     }
@@ -464,6 +479,7 @@ export async function redispatchSubagentRunAfterRestart(
   entry: SubagentRunRecord,
   waitTimeoutMs: number,
   onComplete: (runId: string, endedAt: number, outcome: { status: string }) => Promise<void>,
+  suppressNotifications?: boolean,
 ): Promise<void> {
   const childSessionKey = entry.childSessionKey?.trim();
   if (!childSessionKey || !entry.task) {
@@ -473,25 +489,31 @@ export async function redispatchSubagentRunAfterRestart(
     return;
   }
 
-  // Notify the requester that recovery is in progress.
-  try {
-    await callGateway({
-      method: "chat.send",
-      params: {
-        sessionKey: entry.requesterSessionKey,
-        message: `[gateway restart recovery] Re-dispatching subagent task after restart (run ${runId}). The previous agent process was interrupted; starting fresh in the same session.`,
-        idempotencyKey: `restart-notify-${runId}`,
-        deliver: false,
-      },
-      timeoutMs: 5_000,
-    });
-  } catch {
-    // Best-effort notification — don't abort recovery if this fails.
+  // Notify the requester that recovery is in progress — skipped when
+  // suppressNotifications is true so that the recovery path does not fire
+  // user-visible chat messages before the recovered run completes.
+  if (!suppressNotifications) {
+    try {
+      await callGateway({
+        method: "chat.send",
+        params: {
+          sessionKey: entry.requesterSessionKey,
+          message: `[gateway restart recovery] Re-dispatching subagent task after restart (run ${runId}). The previous agent process was interrupted; starting fresh in the same session.`,
+          idempotencyKey: `restart-notify-${runId}`,
+          deliver: false,
+        },
+        timeoutMs: 5_000,
+      });
+    } catch {
+      // Best-effort notification — don't abort recovery if this fails.
+    }
   }
 
   // Re-dispatch the original task to the child session.
   const redispatchIdem = crypto.randomUUID();
-  let newRunId: string = redispatchIdem;
+  // Use a fresh UUID for newRunId so it is never confused with the idempotency
+  // key, which is for deduplication only and is not a valid run ID.
+  let newRunId: string = crypto.randomUUID();
   try {
     log.info("restart recovery: re-dispatching task to child session", {
       runId,
@@ -507,6 +529,9 @@ export async function redispatchSubagentRunAfterRestart(
         deliver: false,
         lane: AGENT_LANE_SUBAGENT,
         timeout: entry.runTimeoutSeconds,
+        // Preserve original run's depth/parent context so the session tree
+        // remains consistent after restart.
+        spawnedBy: entry.requesterSessionKey,
       },
       timeoutMs: 10_000,
     });
@@ -616,6 +641,7 @@ export function routeResumedRun(params: {
       params.entry,
       params.waitTimeoutMs,
       params.onCompleteRedispatch,
+      true, // suppressNotifications — no user-visible messages before recovered run completes
     );
     return true;
   }

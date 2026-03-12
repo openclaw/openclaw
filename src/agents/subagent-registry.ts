@@ -546,7 +546,7 @@ function resumeSubagentRun(runId: string) {
   resumedRuns.add(runId);
 }
 
-function restoreSubagentRunsOnce() {
+async function restoreSubagentRunsOnce(): Promise<void> {
   if (restoreAttempted) {
     return;
   }
@@ -559,10 +559,16 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
-    // Inject synthetic session-store entries for runs whose store entry went
-    // missing in the race window between spawn and first store write.  Must run
-    // BEFORE reconcileOrphanedRestoredRuns so the orphan check sees them.
-    rehydrateSessionStoreEntries(subagentRuns);
+    // Ordering: rehydrateSessionStoreEntries MUST run before
+    // reconcileOrphanedRestoredRuns.  The rehydration step injects synthetic
+    // session-store entries for runs whose store write fell inside the ~400 ms
+    // race window between sessions_spawn returning and the first store write
+    // completing.  reconcileOrphanedRestoredRuns reads the session store to
+    // determine the orphan reason; if it runs first it will mis-classify these
+    // runs as "missing-session-entry" orphans and prune them incorrectly.
+    // rehydrateSessionStoreEntries is async (writes via updateSessionStore to
+    // serialise concurrent store writers during startup through the lock).
+    await rehydrateSessionStoreEntries(subagentRuns);
     if (reconcileOrphanedRestoredRuns({ runs: subagentRuns, resumedRuns })) {
       persistSubagentRuns();
     }
@@ -967,5 +973,5 @@ export function getLatestSubagentRunByChildSessionKey(
 }
 
 export function initSubagentRegistry() {
-  restoreSubagentRunsOnce();
+  void restoreSubagentRunsOnce();
 }
