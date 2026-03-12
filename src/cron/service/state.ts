@@ -126,6 +126,9 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Set by `stopGraceful` to prevent `armTimer`/`onTimer` from re-arming
+   *  the scheduler after the service has begun shutting down. */
+  stopping: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
   storeLoadedAtMs: number | null;
@@ -138,6 +141,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
+    stopping: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     storeLoadedAtMs: null,

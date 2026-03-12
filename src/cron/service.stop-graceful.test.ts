@@ -4,6 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import { createCronServiceState } from "./service/state.js";
+import { armTimer } from "./service/timer.js";
 import { loadCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -124,6 +126,43 @@ describe("CronService.stopGraceful", () => {
     // Create service but do NOT call start() — store is null
     const cron = makeCronService(store.storePath);
     await expect(cron.stopGraceful()).resolves.toBeUndefined();
+
+    await store.cleanup();
+  });
+
+  it("stopping flag prevents armTimer from re-arming after stopGraceful", async () => {
+    const store = await makeStorePath();
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [makeFutureJob("rearm-guard-job")],
+    });
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const futureMs = Date.now() + 60_000;
+    const job = makeFutureJob("rearm-guard-job");
+    job.state.nextRunAtMs = futureMs;
+    state.store = { version: 1, jobs: [job] };
+
+    // Before stopping, armTimer should arm the timer
+    armTimer(state);
+    expect(state.timer).not.toBeNull();
+
+    // Set the stopping flag (as stopGraceful would)
+    state.stopping = true;
+    clearTimeout(state.timer!);
+    state.timer = null;
+
+    // armTimer should now refuse to re-arm
+    armTimer(state);
+    expect(state.timer).toBeNull();
 
     await store.cleanup();
   });

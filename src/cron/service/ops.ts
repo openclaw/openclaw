@@ -151,14 +151,33 @@ export function stop(state: CronServiceState) {
  * This prevents a write-after-read race when the service is rebuilt during
  * a hot config reload — without draining, the old service's in-flight
  * persist can overwrite changes already loaded by the replacement service.
+ *
+ * NOTE: Jobs dispatched via `enqueueRun` execute outside the `locked()` queue
+ * (in `CommandLane.Cron`). If a manual run is in-flight when this is called,
+ * its final persist may still race with the replacement service. A complete
+ * fix would require draining the command lane, which is out of scope here.
  */
 export async function stopGraceful(state: CronServiceState) {
+  // Signal armTimer/onTimer to stop re-arming the scheduler.
+  state.stopping = true;
   stopTimer(state);
   // Drain the in-flight operation queue so no pending persist can fire
-  // after the caller creates a replacement CronService.
+  // after the caller creates a replacement CronService.  The `locked()`
+  // call waits for any active onTimer tick's locked block to finish, and
+  // the `stopping` flag prevents the tick's finally block from re-arming.
   await locked(state, async () => {
+    // Final timer kill inside the lock in case an in-flight operation
+    // called armTimer() between our stopTimer() above and acquiring the lock.
+    stopTimer(state);
     if (state.store) {
-      await persist(state);
+      try {
+        await persist(state);
+      } catch (err) {
+        state.deps.log.warn(
+          { err: String(err) },
+          "cron: stopGraceful persist failed, proceeding with shutdown",
+        );
+      }
     }
   });
 }

@@ -616,6 +616,9 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
 }
 
 export function armTimer(state: CronServiceState) {
+  if (state.stopping) {
+    return;
+  }
   if (state.timer) {
     clearTimeout(state.timer);
   }
@@ -674,6 +677,9 @@ export function armTimer(state: CronServiceState) {
 }
 
 function armRunningRecheckTimer(state: CronServiceState) {
+  if (state.stopping) {
+    return;
+  }
   if (state.timer) {
     clearTimeout(state.timer);
   }
@@ -685,6 +691,9 @@ function armRunningRecheckTimer(state: CronServiceState) {
 }
 
 export async function onTimer(state: CronServiceState) {
+  if (state.stopping) {
+    return;
+  }
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
     // still executing.  Without this, a long-running job (e.g. an agentTurn
