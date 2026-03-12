@@ -64,9 +64,9 @@ Release behavior:
 - Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Root `package.json.version` is the only version source for iOS.
-- A root version like `2026.3.10-beta.1` becomes:
-  - `CFBundleShortVersionString = 2026.3.10`
-  - `CFBundleVersion = next TestFlight build number for 2026.3.10`
+- A root version like `2026.3.11-beta.1` becomes:
+  - `CFBundleShortVersionString = 2026.3.11`
+  - `CFBundleVersion = next TestFlight build number for 2026.3.11`
 
 Archive without upload:
 
