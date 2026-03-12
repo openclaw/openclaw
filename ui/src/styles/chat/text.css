@@ -60,6 +60,8 @@
   background: rgba(0, 0, 0, 0.15);
   padding: 0.15em 0.4em;
   border-radius: 4px;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .chat-text :where(pre) {
@@ -121,4 +123,24 @@
   border: none;
   border-top: 1px solid var(--border);
   margin: 1em 0;
+}
+
+/* =============================================
+   RTL (Right-to-Left) SUPPORT
+   ============================================= */
+
+.chat-text[dir="rtl"] {
+  text-align: right;
+}
+
+.chat-text[dir="rtl"] :where(ul, ol) {
+  padding-left: 0;
+  padding-right: 1.5em;
+}
+
+.chat-text[dir="rtl"] :where(blockquote) {
+  border-left: none;
+  border-right: 3px solid var(--border);
+  padding-left: 0;
+  padding-right: 1em;
 }

@@ -18,10 +18,11 @@
     "target": "es2023",
     "useDefineForClassFields": false,
     "paths": {
-      "*": ["./*"],
-      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"]
+      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
+      "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"]
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "extensions/**/*.test.ts"]
+  "exclude": ["node_modules", "dist"]
 }

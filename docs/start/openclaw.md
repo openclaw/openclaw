@@ -34,22 +34,6 @@ Start conservative:
 You want this:
 
 ```mermaid
-%%{init: {
-  'theme': 'base',
-  'themeVariables': {
-    'primaryColor': '#ffffff',
-    'primaryTextColor': '#000000',
-    'primaryBorderColor': '#000000',
-    'lineColor': '#000000',
-    'secondaryColor': '#f9f9fb',
-    'tertiaryColor': '#ffffff',
-    'clusterBkg': '#f9f9fb',
-    'clusterBorder': '#000000',
-    'nodeBorder': '#000000',
-    'mainBkg': '#ffffff',
-    'edgeLabelBackground': '#ffffff'
-  }
-}}%%
 flowchart TB
     A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
     B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>Pi agent"]
@@ -180,6 +164,7 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 - If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
+- By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5

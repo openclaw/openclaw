@@ -59,6 +59,12 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 {
   browser: {
     enabled: true, // default: true
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // allowPrivateNetwork: true, // legacy alias
+      // hostnameAllowlist: ["*.example.com", "example.com"],
+      // allowedHostnames: ["localhost"],
+    },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
@@ -86,9 +92,12 @@ Notes:
 - `cdpUrl` defaults to the relay port when unset.
 - `remoteCdpTimeoutMs` applies to remote (non-loopback) CDP reachability checks.
 - `remoteCdpHandshakeTimeoutMs` applies to remote CDP WebSocket reachability checks.
+- Browser navigation/open-tab is SSRF-guarded before navigation and best-effort re-checked on final `http(s)` URL after navigation.
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` (trusted-network model). Set it to `false` for strict public-only browsing.
+- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias for compatibility.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
+- Default profile is `openclaw` (OpenClaw-managed standalone browser). Use `defaultProfile: "chrome"` to opt into the Chrome extension relay.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 
@@ -187,17 +196,65 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
+## Direct WebSocket CDP providers
+
+Some hosted browser services expose a **direct WebSocket** endpoint rather than
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+
+- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+  discover the WebSocket debugger URL, then connects.
+- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
+  skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  WebSocket URL.
+
+### Browserbase
+
+[Browserbase](https://www.browserbase.com) is a cloud platform for running
+headless browsers with built-in CAPTCHA solving, stealth mode, and residential
+proxies.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
+  from the [Overview dashboard](https://www.browserbase.com/overview).
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
+- Browserbase auto-creates a browser session on WebSocket connect, so no
+  manual session creation step is needed.
+- The free tier allows one concurrent session and one browser hour per month.
+  See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
+- See the [Browserbase docs](https://docs.browserbase.com) for full API
+  reference, SDK guides, and integration examples.
+
 ## Security
 
 Key ideas:
 
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
+- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
 Remote CDP tips:
 
-- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Prefer encrypted endpoints (HTTPS or WSS) and short-lived tokens where possible.
 - Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
@@ -271,6 +328,19 @@ Notes:
 
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
+- Leave the relay loopback-only by default. If the relay must be reachable from a different network namespace (for example Gateway in WSL2, Chrome on Windows), set `browser.relayBindHost` to an explicit bind address such as `0.0.0.0` while keeping the surrounding network private and authenticated.
+
+WSL2 / cross-namespace example:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    relayBindHost: "0.0.0.0",
+    defaultProfile: "chrome",
+  },
+}
+```
 
 ## Isolation guarantees
 
@@ -314,6 +384,11 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 All endpoints accept `?profile=<name>`.
+
+If gateway auth is configured, browser HTTP routes require auth too:
+
+- `Authorization: Bearer <gateway token>`
+- `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
 
 ### Playwright requirement
 
@@ -403,9 +478,9 @@ Actions:
 - `openclaw browser scrollintoview e12`
 - `openclaw browser drag 10 11`
 - `openclaw browser select 9 OptionA OptionB`
-- `openclaw browser download e12 /tmp/report.pdf`
-- `openclaw browser waitfordownload /tmp/report.pdf`
-- `openclaw browser upload /tmp/file.pdf`
+- `openclaw browser download e12 report.pdf`
+- `openclaw browser waitfordownload report.pdf`
+- `openclaw browser upload /tmp/openclaw/uploads/file.pdf`
 - `openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
 - `openclaw browser dialog --accept`
 - `openclaw browser wait --text "Done"`
@@ -424,7 +499,7 @@ State:
 - `openclaw browser storage local set theme dark`
 - `openclaw browser storage session clear`
 - `openclaw browser set offline on`
-- `openclaw browser set headers --json '{"X-Debug":"1"}'`
+- `openclaw browser set headers --headers-json '{"X-Debug":"1"}'`
 - `openclaw browser set credentials user pass`
 - `openclaw browser set credentials --clear`
 - `openclaw browser set geo 37.7749 -122.4194 --origin "https://example.com"`
@@ -438,6 +513,11 @@ Notes:
 
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
+- Download and trace output paths are constrained to OpenClaw temp roots:
+  - traces: `/tmp/openclaw` (fallback: `${os.tmpdir()}/openclaw`)
+  - downloads: `/tmp/openclaw/downloads` (fallback: `${os.tmpdir()}/openclaw/downloads`)
+- Upload paths are constrained to an OpenClaw temp uploads root:
+  - uploads: `/tmp/openclaw/uploads` (fallback: `${os.tmpdir()}/openclaw/uploads`)
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
@@ -531,7 +611,7 @@ These are useful for “make the site behave like X” workflows:
 - Cookies: `cookies`, `cookies set`, `cookies clear`
 - Storage: `storage local|session get|set|clear`
 - Offline: `set offline on|off`
-- Headers: `set headers --json '{"X-Debug":"1"}'` (or `--clear`)
+- Headers: `set headers --headers-json '{"X-Debug":"1"}'` (legacy `set headers --json '{"X-Debug":"1"}'` remains supported)
 - HTTP basic auth: `set credentials user pass` (or `--clear`)
 - Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
 - Media: `set media dark|light|no-preference|none`
@@ -550,10 +630,27 @@ These are useful for “make the site behave like X” workflows:
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.
 
+Strict-mode example (block private/internal destinations by default):
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.example.com", "example.com"],
+      allowedHostnames: ["localhost"], // optional exact allow
+    },
+  },
+}
+```
+
 ## Troubleshooting
 
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
+
+For WSL2 Gateway + Windows Chrome split-host setups, see
+[WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
 ## Agent tools + how control works
 

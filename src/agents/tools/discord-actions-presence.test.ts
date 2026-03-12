@@ -1,8 +1,8 @@
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordActionConfig } from "../../config/config.js";
-import type { ActionGate } from "./common.js";
 import { clearGateways, registerGateway } from "../../discord/monitor/gateway-registry.js";
+import type { ActionGate } from "./common.js";
 import { handleDiscordPresenceAction } from "./discord-actions-presence.js";
 
 const mockUpdatePresence = vi.fn();
@@ -15,6 +15,13 @@ const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "prese
 const presenceDisabled: ActionGate<DiscordActionConfig> = () => false;
 
 describe("handleDiscordPresenceAction", () => {
+  async function setPresence(
+    params: Record<string, unknown>,
+    actionGate: ActionGate<DiscordActionConfig> = presenceEnabled,
+  ) {
+    return await handleDiscordPresenceAction("setPresence", params, actionGate);
+  }
+
   beforeEach(() => {
     mockUpdatePresence.mockClear();
     clearGateways();
@@ -33,99 +40,66 @@ describe("handleDiscordPresenceAction", () => {
       status: "online",
       afk: false,
     });
-    const payload = JSON.parse(result.content[0].text ?? "");
+    const textBlock = result.content.find((block) => block.type === "text");
+    const payload = JSON.parse(
+      (textBlock as { type: "text"; text: string } | undefined)?.text ?? "{}",
+    );
     expect(payload.ok).toBe(true);
     expect(payload.activities[0]).toEqual({ type: 0, name: "with fire" });
   });
 
-  it("sets streaming activity with optional URL", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      {
+  it.each([
+    {
+      name: "streaming activity with URL",
+      params: {
         activityType: "streaming",
         activityName: "My Stream",
         activityUrl: "https://twitch.tv/example",
       },
-      presenceEnabled,
-    );
+      expectedActivities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
+    },
+    {
+      name: "streaming activity without URL",
+      params: { activityType: "streaming", activityName: "My Stream" },
+      expectedActivities: [{ name: "My Stream", type: 1 }],
+    },
+    {
+      name: "listening activity",
+      params: { activityType: "listening", activityName: "Spotify" },
+      expectedActivities: [{ name: "Spotify", type: 2 }],
+    },
+    {
+      name: "watching activity",
+      params: { activityType: "watching", activityName: "you" },
+      expectedActivities: [{ name: "you", type: 3 }],
+    },
+    {
+      name: "custom activity using state",
+      params: { activityType: "custom", activityState: "Vibing" },
+      expectedActivities: [{ name: "", type: 4, state: "Vibing" }],
+    },
+    {
+      name: "activity with state",
+      params: { activityType: "playing", activityName: "My Game", activityState: "In the lobby" },
+      expectedActivities: [{ name: "My Game", type: 0, state: "In the lobby" }],
+    },
+    {
+      name: "default empty activity name when only type provided",
+      params: { activityType: "playing" },
+      expectedActivities: [{ name: "", type: 0 }],
+    },
+  ])("sets $name", async ({ params, expectedActivities }) => {
+    await setPresence(params);
     expect(mockUpdatePresence).toHaveBeenCalledWith({
       since: null,
-      activities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
-      status: "online",
-      afk: false,
-    });
-  });
-
-  it("allows streaming without URL", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "streaming", activityName: "My Stream" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "My Stream", type: 1 }],
-      status: "online",
-      afk: false,
-    });
-  });
-
-  it("sets listening activity", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "listening", activityName: "Spotify" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activities: [{ name: "Spotify", type: 2 }],
-      }),
-    );
-  });
-
-  it("sets watching activity", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "watching", activityName: "you" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activities: [{ name: "you", type: 3 }],
-      }),
-    );
-  });
-
-  it("sets custom activity using state", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "custom", activityState: "Vibing" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "", type: 4, state: "Vibing" }],
-      status: "online",
-      afk: false,
-    });
-  });
-
-  it("includes activityState", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "playing", activityName: "My Game", activityState: "In the lobby" },
-      presenceEnabled,
-    );
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "My Game", type: 0, state: "In the lobby" }],
+      activities: expectedActivities,
       status: "online",
       afk: false,
     });
   });
 
   it("sets status-only without activity", async () => {
-    await handleDiscordPresenceAction("setPresence", { status: "idle" }, presenceEnabled);
+    await setPresence({ status: "idle" });
     expect(mockUpdatePresence).toHaveBeenCalledWith({
       since: null,
       activities: [],
@@ -134,72 +108,48 @@ describe("handleDiscordPresenceAction", () => {
     });
   });
 
+  it.each([
+    { name: "invalid status", params: { status: "offline" }, expectedMessage: /Invalid status/ },
+    {
+      name: "invalid activity type",
+      params: { activityType: "invalid" },
+      expectedMessage: /Invalid activityType/,
+    },
+  ])("rejects $name", async ({ params, expectedMessage }) => {
+    await expect(setPresence(params)).rejects.toThrow(expectedMessage);
+  });
+
   it("defaults status to online", async () => {
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { activityType: "playing", activityName: "test" },
-      presenceEnabled,
-    );
+    await setPresence({ activityType: "playing", activityName: "test" });
     expect(mockUpdatePresence).toHaveBeenCalledWith(expect.objectContaining({ status: "online" }));
   });
 
-  it("rejects invalid status", async () => {
-    await expect(
-      handleDiscordPresenceAction("setPresence", { status: "offline" }, presenceEnabled),
-    ).rejects.toThrow(/Invalid status/);
-  });
-
-  it("rejects invalid activity type", async () => {
-    await expect(
-      handleDiscordPresenceAction("setPresence", { activityType: "invalid" }, presenceEnabled),
-    ).rejects.toThrow(/Invalid activityType/);
-  });
-
   it("respects presence gating", async () => {
-    await expect(
-      handleDiscordPresenceAction("setPresence", { status: "online" }, presenceDisabled),
-    ).rejects.toThrow(/disabled/);
+    await expect(setPresence({ status: "online" }, presenceDisabled)).rejects.toThrow(/disabled/);
   });
 
   it("errors when gateway is not registered", async () => {
     clearGateways();
-    await expect(
-      handleDiscordPresenceAction("setPresence", { status: "dnd" }, presenceEnabled),
-    ).rejects.toThrow(/not available/);
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not available/);
   });
 
   it("errors when gateway is not connected", async () => {
     clearGateways();
     registerGateway(undefined, createMockGateway(false));
-    await expect(
-      handleDiscordPresenceAction("setPresence", { status: "dnd" }, presenceEnabled),
-    ).rejects.toThrow(/not connected/);
+    await expect(setPresence({ status: "dnd" })).rejects.toThrow(/not connected/);
   });
 
   it("uses accountId to resolve gateway", async () => {
     const accountGateway = createMockGateway();
     registerGateway("my-account", accountGateway);
-    await handleDiscordPresenceAction(
-      "setPresence",
-      { accountId: "my-account", activityType: "playing", activityName: "test" },
-      presenceEnabled,
-    );
+    await setPresence({ accountId: "my-account", activityType: "playing", activityName: "test" });
     expect(mockUpdatePresence).toHaveBeenCalled();
   });
 
-  it("defaults activity name to empty string when only type is provided", async () => {
-    await handleDiscordPresenceAction("setPresence", { activityType: "playing" }, presenceEnabled);
-    expect(mockUpdatePresence).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activities: [{ name: "", type: 0 }],
-      }),
-    );
-  });
-
   it("requires activityType when activityName is provided", async () => {
-    await expect(
-      handleDiscordPresenceAction("setPresence", { activityName: "My Game" }, presenceEnabled),
-    ).rejects.toThrow(/activityType is required/);
+    await expect(setPresence({ activityName: "My Game" })).rejects.toThrow(
+      /activityType is required/,
+    );
   });
 
   it("rejects unknown presence actions", async () => {

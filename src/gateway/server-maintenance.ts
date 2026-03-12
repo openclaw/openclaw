@@ -1,13 +1,14 @@
 import type { HealthSummary } from "../commands/health.js";
-import type { ChatRunEntry } from "./server-chat.js";
-import type { DedupeEntry } from "./server-shared.js";
+import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
@@ -37,10 +38,12 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  mediaCleanup: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -73,6 +76,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
+    const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
     for (const [k, v] of params.dedupe) {
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -83,6 +87,18 @@ export function startGatewayMaintenanceTimers(params: {
       const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
       for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
         params.dedupe.delete(entries[i][0]);
+      }
+    }
+
+    if (params.agentRunSeq.size > AGENT_RUN_SEQ_MAX) {
+      const excess = params.agentRunSeq.size - AGENT_RUN_SEQ_MAX;
+      let removed = 0;
+      for (const runId of params.agentRunSeq.keys()) {
+        params.agentRunSeq.delete(runId);
+        removed += 1;
+        if (removed >= excess) {
+          break;
+        }
       }
     }
 
@@ -116,5 +132,33 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  if (typeof params.mediaCleanupTtlMs !== "number") {
+    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+  }
+
+  let mediaCleanupInFlight: Promise<void> | null = null;
+  const runMediaCleanup = () => {
+    if (mediaCleanupInFlight) {
+      return mediaCleanupInFlight;
+    }
+    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+      recursive: true,
+      pruneEmptyDirs: true,
+    })
+      .catch((err) => {
+        params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        mediaCleanupInFlight = null;
+      });
+    return mediaCleanupInFlight;
+  };
+
+  const mediaCleanup = setInterval(() => {
+    void runMediaCleanup();
+  }, 60 * 60_000);
+
+  void runMediaCleanup();
+
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
 }

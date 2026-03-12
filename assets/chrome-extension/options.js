@@ -1,3 +1,6 @@
+import { deriveRelayToken } from './background-utils.js'
+import { classifyRelayCheckException, classifyRelayCheckResponse } from './options-validation.js'
+
 const DEFAULT_PORT = 18792
 
 function clampPort(value) {
@@ -20,39 +23,51 @@ function setStatus(kind, message) {
   status.textContent = message || ''
 }
 
-async function checkRelayReachable(port) {
-  const url = `http://127.0.0.1:${port}/`
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 900)
+async function checkRelayReachable(port, token) {
+  const url = `http://127.0.0.1:${port}/json/version`
+  const trimmedToken = String(token || '').trim()
+  if (!trimmedToken) {
+    setStatus('error', 'Gateway token required. Save your gateway token to connect.')
+    return
+  }
   try {
-    const res = await fetch(url, { method: 'HEAD', signal: ctrl.signal })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    setStatus('ok', `Relay reachable at ${url}`)
-  } catch {
-    setStatus(
-      'error',
-      `Relay not reachable at ${url}. Start OpenClaw’s browser relay on this machine, then click the toolbar button again.`,
-    )
-  } finally {
-    clearTimeout(t)
+    const relayToken = await deriveRelayToken(trimmedToken, port)
+    // Delegate the fetch to the background service worker to bypass
+    // CORS preflight on the custom x-openclaw-relay-token header.
+    const res = await chrome.runtime.sendMessage({
+      type: 'relayCheck',
+      url,
+      token: relayToken,
+    })
+    const result = classifyRelayCheckResponse(res, port)
+    if (result.action === 'throw') throw new Error(result.error)
+    setStatus(result.kind, result.message)
+  } catch (err) {
+    const result = classifyRelayCheckException(err, port)
+    setStatus(result.kind, result.message)
   }
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['relayPort'])
+  const stored = await chrome.storage.local.get(['relayPort', 'gatewayToken'])
   const port = clampPort(stored.relayPort)
+  const token = String(stored.gatewayToken || '').trim()
   document.getElementById('port').value = String(port)
+  document.getElementById('token').value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port)
+  await checkRelayReachable(port, token)
 }
 
 async function save() {
-  const input = document.getElementById('port')
-  const port = clampPort(input.value)
-  await chrome.storage.local.set({ relayPort: port })
-  input.value = String(port)
+  const portInput = document.getElementById('port')
+  const tokenInput = document.getElementById('token')
+  const port = clampPort(portInput.value)
+  const token = String(tokenInput.value || '').trim()
+  await chrome.storage.local.set({ relayPort: port, gatewayToken: token })
+  portInput.value = String(port)
+  tokenInput.value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port)
+  await checkRelayReachable(port, token)
 }
 
 document.getElementById('save').addEventListener('click', () => void save())

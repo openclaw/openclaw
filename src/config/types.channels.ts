@@ -24,6 +24,8 @@ export type ChannelDefaultsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
+export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
+
 /**
  * Base type for extension channel config sections.
  * Extensions can use this as a starting point for their channel config.
@@ -31,6 +33,10 @@ export type ChannelDefaultsConfig = {
 export type ExtensionChannelConfig = {
   enabled?: boolean;
   allowFrom?: string | string[];
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
   accounts?: Record<string, unknown>;
@@ -39,6 +45,8 @@ export type ExtensionChannelConfig = {
 
 export type ChannelsConfig = {
   defaults?: ChannelDefaultsConfig;
+  /** Map provider -> channel id -> model override. */
+  modelByChannel?: ChannelModelByChannelConfig;
   whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;

@@ -57,6 +57,7 @@ export type MatrixRawEvent = {
 export type MatrixActionClientOpts = {
   client?: MatrixClient;
   timeoutMs?: number;
+  accountId?: string | null;
 };
 
 export type MatrixMessageSummary = {

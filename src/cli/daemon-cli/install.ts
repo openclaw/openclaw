@@ -1,62 +1,33 @@
-import type { DaemonInstallOptions } from "./types.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
-import { randomToken } from "../../commands/onboard-helpers.js";
-import {
-  loadConfig,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  writeConfigFile,
-} from "../../config/config.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import { resolveGatewayAuth } from "../../gateway/auth.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
+import {
+  buildDaemonServiceSnapshot,
+  createDaemonActionContext,
+  installDaemonServiceAndEmit,
+} from "./response.js";
 import { parsePort } from "./shared.js";
+import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) {
-      return;
-    }
-    emitDaemonActionJson({ action: "install", ...payload });
-  };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message, warnings: warnings.length ? warnings : undefined });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "install", json });
 
   if (resolveIsNixMode(process.env)) {
     fail("Nix mode detected; service install is disabled.");
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = await readBestEffortConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -78,8 +49,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
+    if (isNonFatalSystemdInstallProbeError(err)) {
+      loaded = false;
+    } else {
+      fail(`Gateway service check failed: ${String(err)}`);
+      return;
+    }
   }
   if (loaded) {
     if (!opts.force) {
@@ -88,7 +63,6 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         result: "already-installed",
         message: `Gateway service already ${service.loadedText}.`,
         service: buildDaemonServiceSnapshot(service, loaded),
-        warnings: warnings.length ? warnings : undefined,
       });
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
@@ -100,78 +74,28 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
-  // Resolve effective auth mode to determine if token auto-generation is needed.
-  // Password-mode and Tailscale-only installs do not need a token.
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    env: process.env,
+    explicitToken: opts.token,
+    autoGenerateWhenMissing: true,
+    persistGeneratedToken: true,
   });
-  const needsToken =
-    resolvedAuth.mode === "token" && !resolvedAuth.token && !resolvedAuth.allowTailscale;
-
-  let token: string | undefined =
-    opts.token ||
-    cfg.gateway?.auth?.token ||
-    process.env.OPENCLAW_GATEWAY_TOKEN ||
-    process.env.CLAWDBOT_GATEWAY_TOKEN;
-
-  if (!token && needsToken) {
-    token = randomToken();
-    const warnMsg = "No gateway token found. Auto-generated one and saving to config.";
+  if (tokenResolution.unavailableReason) {
+    fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
+    return;
+  }
+  for (const warning of tokenResolution.warnings) {
     if (json) {
-      warnings.push(warnMsg);
+      warnings.push(warning);
     } else {
-      defaultRuntime.log(warnMsg);
-    }
-
-    // Persist to config file so the gateway reads it at runtime
-    // (launchd does not inherit shell env vars, and CLI tools also
-    // read gateway.auth.token from config for gateway calls).
-    try {
-      const snapshot = await readConfigFileSnapshot();
-      if (snapshot.exists && !snapshot.valid) {
-        // Config file exists but is corrupt/unparseable — don't risk overwriting.
-        // Token is still embedded in the plist EnvironmentVariables.
-        const msg = "Warning: config file exists but is invalid; skipping token persistence.";
-        if (json) {
-          warnings.push(msg);
-        } else {
-          defaultRuntime.log(msg);
-        }
-      } else {
-        const baseConfig = snapshot.exists ? snapshot.config : {};
-        if (!baseConfig.gateway?.auth?.token) {
-          await writeConfigFile({
-            ...baseConfig,
-            gateway: {
-              ...baseConfig.gateway,
-              auth: {
-                ...baseConfig.gateway?.auth,
-                mode: baseConfig.gateway?.auth?.mode ?? "token",
-                token,
-              },
-            },
-          });
-        } else {
-          // Another process wrote a token between loadConfig() and now.
-          token = baseConfig.gateway.auth.token;
-        }
-      }
-    } catch (err) {
-      // Non-fatal: token is still embedded in the plist EnvironmentVariables.
-      const msg = `Warning: could not persist token to config: ${String(err)}`;
-      if (json) {
-        warnings.push(msg);
-      } else {
-        defaultRuntime.log(msg);
-      }
+      defaultRuntime.log(warning);
     }
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
-    token,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {
@@ -183,29 +107,20 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     config: cfg,
   });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-  } catch (err) {
-    fail(`Gateway install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Gateway",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: process.env,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+      });
+    },
   });
 }

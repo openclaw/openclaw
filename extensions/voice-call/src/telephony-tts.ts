@@ -1,5 +1,6 @@
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import { deepMergeDefined } from "./deep-merge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 export type TelephonyTtsRuntime = {
@@ -77,28 +78,5 @@ function mergeTtsConfig(
   if (!base) {
     return override;
   }
-  return deepMerge(base, override);
-}
-
-function deepMerge<T>(base: T, override: T): T {
-  if (!isPlainObject(base) || !isPlainObject(override)) {
-    return override;
-  }
-  const result: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    if (value === undefined) {
-      continue;
-    }
-    const existing = (base as Record<string, unknown>)[key];
-    if (isPlainObject(existing) && isPlainObject(value)) {
-      result[key] = deepMerge(existing, value);
-    } else {
-      result[key] = value;
-    }
-  }
-  return result as T;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return deepMergeDefined(base, override) as VoiceCallTtsConfig;
 }

@@ -7,19 +7,19 @@ describe("formatAgo", () => {
   });
 
   it("returns 'Xm from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("5m from now");
+    expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
   });
 
   it("returns 'Xh from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 60 * 60_000)).toBe("3h from now");
+    expect(formatRelativeTimestamp(Date.now() + 3 * 60 * 60_000)).toBe("in 3h");
   });
 
   it("returns 'Xd from now' for future timestamps beyond 48h", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("3d from now");
+    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
   });
 
   it("returns 'Xs ago' for recent past timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("10s ago");
+    expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
 
   it("returns 'Xm ago' for past timestamps", () => {
@@ -67,5 +67,35 @@ describe("stripThinkingTags", () => {
     // This should not crash and should handle gracefully
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
+  });
+
+  it("strips <relevant-memories> blocks", () => {
+    const input = [
+      "<relevant-memories>",
+      "The following memories may be relevant to this conversation:",
+      "- Internal memory note",
+      "</relevant-memories>",
+      "",
+      "User-visible answer",
+    ].join("\n");
+    expect(stripThinkingTags(input)).toBe("User-visible answer");
+  });
+
+  it("keeps relevant-memories tags in fenced code blocks", () => {
+    const input = [
+      "```xml",
+      "<relevant-memories>",
+      "sample",
+      "</relevant-memories>",
+      "```",
+      "",
+      "Visible text",
+    ].join("\n");
+    expect(stripThinkingTags(input)).toBe(input);
+  });
+
+  it("hides unfinished <relevant-memories> block tails", () => {
+    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
+    expect(stripThinkingTags(input)).toBe("Hello\n");
   });
 });

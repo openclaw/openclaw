@@ -1,16 +1,33 @@
-import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk";
+import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/irc";
 import { describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
+import type { CoreConfig } from "./types.js";
+
+const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
+  const first = params.options[0];
+  if (!first) {
+    throw new Error("no options");
+  }
+  return first.value;
+};
+
+function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
+  return {
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
+    note: vi.fn(async () => {}),
+    select: selectFirstOption as WizardPrompter["select"],
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => "") as WizardPrompter["text"],
+    confirm: vi.fn(async () => false),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    ...overrides,
+  };
+}
 
 describe("irc onboarding", () => {
   it("configures host and nick via onboarding prompts", async () => {
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => "allowlist"),
-      multiselect: vi.fn(async () => []),
+    const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
           return "irc.libera.chat";
@@ -44,13 +61,14 @@ describe("irc onboarding", () => {
         }
         return false;
       }),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    });
 
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
-      exit: vi.fn(),
+      exit: vi.fn((code: number): never => {
+        throw new Error(`exit ${code}`);
+      }),
     };
 
     const result = await ircOnboardingAdapter.configure({
@@ -74,12 +92,7 @@ describe("irc onboarding", () => {
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => "allowlist"),
-      multiselect: vi.fn(async () => []),
+    const prompter = createPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC allowFrom (nick or nick!user@host)") {
           return "Alice, Bob!ident@example.org";
@@ -87,8 +100,7 @@ describe("irc onboarding", () => {
         throw new Error(`Unexpected prompt: ${message}`);
       }) as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    });
 
     const promptAllowFrom = ircOnboardingAdapter.dmPolicy?.promptAllowFrom;
     expect(promptAllowFrom).toBeTypeOf("function");

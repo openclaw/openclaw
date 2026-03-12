@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (list, install, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage in-process Gateway plugins
   - You want to debug plugin load failures
@@ -23,6 +23,7 @@ openclaw plugins list
 openclaw plugins info <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
+openclaw plugins uninstall <id>
 openclaw plugins doctor
 openclaw plugins update <id>
 openclaw plugins update --all
@@ -39,9 +40,23 @@ the plugin from loading and fail config validation.
 
 ```bash
 openclaw plugins install <path-or-spec>
+openclaw plugins install <npm-spec> --pin
 ```
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
+
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
+installs run with `--ignore-scripts` for safety.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as
+`@1.2.3-beta.4`.
+
+If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw
+installs the bundled plugin directly. To install an npm package with the same
+name, use an explicit scoped spec (for example `@scope/diffs`).
 
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
@@ -50,6 +65,27 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
+`plugins.installs` while keeping the default behavior unpinned.
+
+### Uninstall
+
+```bash
+openclaw plugins uninstall <id>
+openclaw plugins uninstall <id> --dry-run
+openclaw plugins uninstall <id> --keep-files
+```
+
+`uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
+the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
+For active memory plugins, the memory slot resets to `memory-core`.
+
+By default, uninstall also removes the plugin install directory under the active
+state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
+`--keep-files` to keep files on disk.
+
+`--keep-config` is supported as a deprecated alias for `--keep-files`.
 
 ### Update
 
@@ -60,3 +96,7 @@ openclaw plugins update <id> --dry-run
 ```
 
 Updates only apply to plugins installed from npm (tracked in `plugins.installs`).
+
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
+import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -45,19 +45,62 @@ function createCtx(resolved: BrowserServerState["resolved"]) {
   return { state, ctx };
 }
 
+async function createWorkProfileWithConfig(params: {
+  resolved: BrowserServerState["resolved"];
+  browserConfig: Record<string, unknown>;
+}) {
+  const { ctx, state } = createCtx(params.resolved);
+  vi.mocked(loadConfig).mockReturnValue({ browser: params.browserConfig });
+  const service = createBrowserProfilesService(ctx);
+  const result = await service.createProfile({ name: "work" });
+  return { result, state };
+}
+
 describe("BrowserProfilesService", () => {
   it("allocates next local port for new profiles", async () => {
-    const resolved = resolveBrowserConfig({});
-    const { ctx, state } = createCtx(resolved);
-
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
-
-    const service = createBrowserProfilesService(ctx);
-    const result = await service.createProfile({ name: "work" });
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved: resolveBrowserConfig({}),
+      browserConfig: { profiles: {} },
+    });
 
     expect(result.cdpPort).toBe(18801);
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
+    expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("falls back to derived CDP range when resolved CDP range is missing", async () => {
+    const base = resolveBrowserConfig({});
+    const baseWithoutRange = { ...base } as {
+      [key: string]: unknown;
+      cdpPortRangeStart?: unknown;
+      cdpPortRangeEnd?: unknown;
+    };
+    delete baseWithoutRange.cdpPortRangeStart;
+    delete baseWithoutRange.cdpPortRangeEnd;
+    const resolved = {
+      ...baseWithoutRange,
+      controlPort: 30000,
+    } as BrowserServerState["resolved"];
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved,
+      browserConfig: { profiles: {} },
+    });
+
+    expect(result.cdpPort).toBe(30009);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(30009);
+    expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
+    const { result, state } = await createWorkProfileWithConfig({
+      resolved: resolveBrowserConfig({ cdpPortRangeStart: 19000 }),
+      browserConfig: { cdpPortRangeStart: 19000, profiles: {} },
+    });
+
+    expect(result.cdpPort).toBe(19001);
+    expect(result.isRemote).toBe(false);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
@@ -87,6 +130,37 @@ describe("BrowserProfilesService", () => {
         }),
       }),
     );
+  });
+
+  it("rejects driver=extension with non-loopback cdpUrl", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "chrome-remote",
+        driver: "extension",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    ).rejects.toThrow(/loopback cdpUrl host/i);
+  });
+
+  it("rejects driver=extension without an explicit cdpUrl", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "chrome-extension",
+        driver: "extension",
+      }),
+    ).rejects.toThrow(/requires an explicit loopback cdpUrl/i);
   });
 
   it("deletes remote profiles without stopping or removing local data", async () => {

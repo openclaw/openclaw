@@ -724,7 +724,7 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`：每话题提及门控覆盖。
 - `channels.telegram.capabilities.inlineButtons`：`off | dm | group | all | allowlist`（默认：allowlist）。
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`：每账户覆盖。
-- `channels.telegram.replyToMode`：`off | first | all`（默认：`first`）。
+- `channels.telegram.replyToMode`：`off | first | all`（默认：`off`）。
 - `channels.telegram.textChunkLimit`：出站分块大小（字符）。
 - `channels.telegram.chunkMode`：`length`（默认）或 `newline` 在长度分块之前按空行（段落边界）分割。
 - `channels.telegram.linkPreview`：切换出站消息的链接预览（默认：true）。

@@ -12,8 +12,8 @@ extension ProcessInfo {
         environment: [String: String],
         standard: UserDefaults,
         stableSuite: UserDefaults?,
-        isAppBundle: Bool
-    ) -> Bool {
+        isAppBundle: Bool) -> Bool
+    {
         if environment["OPENCLAW_NIX_MODE"] == "1" { return true }
         if standard.bool(forKey: "openclaw.nixMode") { return true }
 

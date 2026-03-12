@@ -14,6 +14,7 @@ export async function withTimeout<T>(
   const abortCtrl = new AbortController();
   const timeoutError = new Error(`${label ?? "request"} timed out`);
   const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+  timer.unref?.();
 
   let abortListener: (() => void) | undefined;
   const abortPromise: Promise<never> = abortCtrl.signal.aborted

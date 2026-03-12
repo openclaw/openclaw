@@ -1,5 +1,5 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 
 extension ChannelsStore {
     func loadConfigSchema() async {
