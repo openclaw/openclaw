@@ -393,4 +393,50 @@ describe("discoverOpenClawPlugins", () => {
     });
     expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
   });
+
+  it("skips node_modules and other heavy directories inside plugin roots", async () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    // Create a legitimate plugin
+    const realPlugin = path.join(extensionsDir, "real-plugin");
+    fs.mkdirSync(realPlugin, { recursive: true });
+    fs.writeFileSync(path.join(realPlugin, "index.ts"), "export default function () {}", "utf-8");
+
+    // Place index.ts directly inside each ignored directory so
+    // discoverInDirectory would find it via DEFAULT_PLUGIN_ENTRY_CANDIDATES
+    // if shouldIgnoreScannedDirectory did not filter the directory out.
+    for (const ignored of [
+      "node_modules",
+      ".git",
+      "dist",
+      ".venv",
+      "__pycache__",
+      "browser_data",
+    ]) {
+      const fakeDir = path.join(extensionsDir, ignored);
+      fs.mkdirSync(fakeDir, { recursive: true });
+      fs.writeFileSync(path.join(fakeDir, "index.ts"), "export default function () {}", "utf-8");
+    }
+
+    const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
+
+    // The real plugin should be discovered
+    expect(candidates.some((c) => c.idHint === "real-plugin")).toBe(true);
+
+    // None of the packages inside ignored directories should appear
+    for (const ignored of [
+      "node_modules",
+      ".git",
+      "dist",
+      ".venv",
+      "__pycache__",
+      "browser_data",
+    ]) {
+      expect(candidates.some((c) => c.source.includes(`/${ignored}/`))).toBe(false);
+    }
+  });
 });
