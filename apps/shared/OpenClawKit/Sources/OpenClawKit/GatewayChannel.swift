@@ -112,6 +112,7 @@ public struct GatewayConnectOptions: Sendable {
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
+    case bootstrapToken = "bootstrap-token"
     case password = "password"
     case none = "none"
 }
@@ -130,6 +131,12 @@ private let defaultOperatorConnectScopes: [String] = [
     "operator.approvals",
     "operator.pairing",
 ]
+
+private extension String {
+    var nilIfEmpty: String? {
+        self.isEmpty ? nil : self
+    }
+}
 
 private enum GatewayConnectErrorCodes {
     static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
@@ -154,6 +161,7 @@ public actor GatewayChannelActor {
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
     private var url: URL
     private var token: String?
+    private var bootstrapToken: String?
     private var password: String?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
@@ -185,6 +193,7 @@ public actor GatewayChannelActor {
     public init(
         url: URL,
         token: String?,
+        bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
@@ -193,6 +202,7 @@ public actor GatewayChannelActor {
     {
         self.url = url
         self.token = token
+        self.bootstrapToken = bootstrapToken
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
@@ -402,22 +412,29 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && identity != nil)
                 ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
                 : nil
+        let explicitToken = self.token?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitBootstrapToken =
+            self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
-            storedToken != nil && self.token != nil && self.isTrustedDeviceRetryEndpoint()
+            storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
         if shouldUseDeviceRetryToken {
             self.pendingDeviceTokenRetry = false
         }
         // Keep shared credentials explicit when provided. Device token retry is attached
         // only on a bounded second attempt after token mismatch.
-        let authToken = self.token ?? (includeDeviceIdentity ? storedToken : nil)
+        let authToken = explicitToken ?? (includeDeviceIdentity ? storedToken : nil)
+        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource
-        if authDeviceToken != nil || (self.token == nil && storedToken != nil) {
+        if authDeviceToken != nil || (explicitToken == nil && storedToken != nil) {
             authSource = .deviceToken
         } else if authToken != nil {
             authSource = .sharedToken
-        } else if self.password != nil {
+        } else if authBootstrapToken != nil {
+            authSource = .bootstrapToken
+        } else if explicitPassword != nil {
             authSource = .password
         } else {
             authSource = .none
@@ -430,7 +447,9 @@ public actor GatewayChannelActor {
                 auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
             }
             params["auth"] = ProtoAnyCodable(auth)
-        } else if let password = self.password {
+        } else if let authBootstrapToken {
+            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
+        } else if let password = explicitPassword {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
@@ -443,7 +462,7 @@ public actor GatewayChannelActor {
                 role: role,
                 scopes: scopes,
                 signedAtMs: signedAtMs,
-                token: authToken,
+                token: authToken ?? authBootstrapToken,
                 nonce: connectNonce,
                 platform: platform,
                 deviceFamily: InstanceIdentity.deviceFamily)
@@ -472,7 +491,7 @@ public actor GatewayChannelActor {
         } catch {
             let shouldRetryWithDeviceToken = self.shouldRetryWithStoredDeviceToken(
                 error: error,
-                explicitGatewayToken: self.token,
+                explicitGatewayToken: explicitToken,
                 storedToken: storedToken,
                 attemptedDeviceTokenRetry: authDeviceToken != nil)
             if shouldRetryWithDeviceToken {
