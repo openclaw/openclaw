@@ -11,6 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import { isTrustedProxyAddress } from "../../net.js";
 
 type HandshakeConnectAuth = {
   token?: string;
@@ -49,10 +50,32 @@ function trimToUndefined(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Extract token from WebSocket upgrade request headers.
+ * This allows nginx proxy to inject X-OpenClaw-Token header for browser clients
+ * that cannot send custom WebSocket headers.
+ */
+function extractHeaderToken(req: IncomingMessage): string | undefined {
+  const headerToken = req.headers["x-openclaw-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) {
+    return headerToken.trim();
+  }
+  // Also check Authorization: Bearer header
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
+    const token = auth.slice(7).trim();
+    if (token) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
 function resolveSharedConnectAuth(
   connectAuth: HandshakeConnectAuth | null | undefined,
+  headerToken?: string,
 ): { token?: string; password?: string } | undefined {
-  const token = trimToUndefined(connectAuth?.token);
+  const token = trimToUndefined(connectAuth?.token) ?? headerToken;
   const password = trimToUndefined(connectAuth?.password);
   if (!token && !password) {
     return undefined;
@@ -91,7 +114,15 @@ export async function resolveConnectAuthState(params: {
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
 }): Promise<ConnectAuthState> {
-  const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
+  // Check if request comes from a trusted proxy - if so, we can use header token
+  const remoteAddr = params.req.socket?.remoteAddress;
+  const isFromTrustedProxy = isTrustedProxyAddress(remoteAddr, params.trustedProxies);
+
+  // Extract token from HTTP headers (for browser clients behind trusted proxy)
+  // Only use header token when request comes from a trusted proxy to prevent spoofing
+  const headerToken = isFromTrustedProxy ? extractHeaderToken(params.req) : undefined;
+
+  const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth, headerToken);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
   const bootstrapTokenCandidate = params.hasDeviceIdentity
     ? resolveBootstrapTokenCandidate(params.connectAuth)
