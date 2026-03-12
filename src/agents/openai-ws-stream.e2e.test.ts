@@ -164,7 +164,7 @@ describe("OpenAI WebSocket e2e", () => {
           transport: "websocket",
           toolChoice: "required",
           maxTokens: 128,
-        }),
+        } as unknown as StreamFnParams[2]),
       );
       const firstDone = expectDone(firstEvents);
       const toolCall = firstDone.content.find((block) => block.type === "toolCall") as
@@ -206,7 +206,7 @@ describe("OpenAI WebSocket e2e", () => {
             transport: "websocket",
             openaiWsWarmup: true,
             maxTokens: 32,
-          }),
+          } as unknown as StreamFnParams[2]),
         ),
       );
 
