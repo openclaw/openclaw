@@ -180,6 +180,7 @@ export async function resolveExcludePatterns(
     await fs.access(autoIgnoreFile);
     const lines = await readPatternFile(autoIgnoreFile, {
       permissionCheck: true,
+      symLinkCheck: true,
       throwOnError: false,
     });
     for (const l of lines) {

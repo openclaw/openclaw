@@ -370,6 +370,23 @@ describe("resolveExcludePatterns", () => {
     warnSpy.mockRestore();
   });
 
+  it(".backupignore as symlink is rejected (patterns not loaded)", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const realFile = path.join(tempDir, ".backupignore-real");
+    await fs.writeFile(realFile, "symlink-pattern\n", "utf8");
+    const backupignore = path.join(tempDir, ".backupignore");
+    symlinkSync(realFile, backupignore);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(makeSpec(), tempDir);
+    expect(patterns).not.toContain("symlink-pattern");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("symb"));
+    warnSpy.mockRestore();
+  });
+
   it("--include-all disables .backupignore auto-loading", async () => {
     const backupignore = path.join(tempDir, ".backupignore");
     await fs.writeFile(backupignore, "auto-pattern\n", "utf8");
