@@ -11,6 +11,7 @@ export type OpenAiEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  encodingFormat?: "float" | "base64";
 };
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
