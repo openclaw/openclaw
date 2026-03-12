@@ -16,7 +16,7 @@ function readEnv(keys: string[]): string | undefined {
 }
 
 // Built-in DataHub URL — API key must be configured by the user
-const DEFAULT_DATAHUB_URL = "http://43.134.61.136:8088";
+const DEFAULT_DATAHUB_URL = "http://172.22.0.10:8088";
 const DEFAULT_DATAHUB_USERNAME = "admin";
 
 export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
