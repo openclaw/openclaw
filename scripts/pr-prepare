@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -lt 2 ]; then
-  echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR> [--no-test]"
+if [ "$#" -ne 2 ]; then
+  echo "Usage: scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>"
   exit 2
 fi
 
 mode="$1"
 pr="$2"
-shift 2
-no_test=false
-for arg in "$@"; do
-  case "$arg" in
-    --no-test) no_test=true ;;
-  esac
-done
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 base="$script_dir/pr"
 if common_git_dir=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
@@ -32,11 +25,7 @@ case "$mode" in
     exec "$base" prepare-validate-commit "$pr"
     ;;
   gates)
-    if [ "$no_test" = "true" ]; then
-      exec "$base" prepare-gates "$pr" true
-    else
-      exec "$base" prepare-gates "$pr"
-    fi
+    exec "$base" prepare-gates "$pr"
     ;;
   push)
     exec "$base" prepare-push "$pr"
