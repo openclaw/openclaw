@@ -4,6 +4,7 @@ import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import {
   extractAssistantText,
   stripDowngradedToolCallText,
+  stripModelSpecialTokens,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
 } from "./pi-embedded-utils.js";
@@ -29,9 +30,36 @@ export function normalizeAssistantMessagePhase(value: unknown): AssistantMessage
 
 function sanitizeAssistantSegmentText(text: string, errorContext: boolean) {
   return sanitizeUserFacingText(
-    stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text))).trim(),
+    stripThinkingTagsFromText(
+      stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+    ).trim(),
     { errorContext },
   );
+}
+
+function parseAssistantTextSignature(
+  value: unknown,
+): { id: string; phase?: AssistantMessagePhase } | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) {
+    return { id: trimmed };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { id?: unknown; phase?: unknown };
+    if (typeof parsed.id !== "string" || parsed.id.trim().length === 0) {
+      return null;
+    }
+    const normalizedPhase = normalizeAssistantMessagePhase(parsed.phase);
+    return {
+      id: parsed.id,
+      ...(normalizedPhase ? { phase: normalizedPhase } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function resolveAssistantTextBlockPhase(
@@ -42,32 +70,15 @@ function resolveAssistantTextBlockPhase(
   if (directPhase) {
     return directPhase;
   }
-  const signature = block.textSignature;
-  if (typeof signature === "string" && signature.trim().length > 0) {
-    try {
-      const parsed = JSON.parse(signature) as { phase?: unknown };
-      const signaturePhase = normalizeAssistantMessagePhase(parsed.phase);
-      if (signaturePhase) {
-        return signaturePhase;
-      }
-    } catch {
-      // Ignore malformed signatures and fall back to the message-level phase.
-    }
+  const parsedSignature = parseAssistantTextSignature(block.textSignature);
+  if (parsedSignature?.phase) {
+    return parsedSignature.phase;
   }
   return defaultPhase ?? null;
 }
 
 function resolveAssistantTextBlockSignatureId(block: Record<string, unknown>) {
-  const signature = block.textSignature;
-  if (typeof signature !== "string" || signature.trim().length === 0) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(signature) as { id?: unknown };
-    return typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : undefined;
-  } catch {
-    return undefined;
-  }
+  return parseAssistantTextSignature(block.textSignature)?.id;
 }
 
 function resolveAssistantMessageStableId(

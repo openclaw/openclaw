@@ -41,6 +41,41 @@ describe("assistant output extraction", () => {
       },
     ]);
   });
+
+  it("accepts raw textSignature ids", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "Hello", textSignature: "msg_test" }],
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const segments = extractAssistantOutputSegments(message as any);
+
+    expect(segments).toEqual([
+      {
+        segmentId: "msg_test",
+        text: "Hello",
+      },
+    ]);
+  });
+
+  it("strips model control tokens from assistant output segments", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "<|assistant|>Hello<|end|>" }],
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const segments = extractAssistantOutputSegments(message as any);
+
+    expect(segments).toEqual([
+      expect.objectContaining({
+        text: "Hello",
+      }),
+    ]);
+  });
 });
 
 describe("assistant output reconciliation", () => {
