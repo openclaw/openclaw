@@ -221,6 +221,7 @@ function wrapApplyPatchToolWithMemoryDocumentSync(
     sourceRoot?: string;
     agentId?: string;
     containerWorkdir?: string;
+    skipFilesystemResync?: boolean;
   },
 ): AnyAgentTool {
   return {
@@ -240,10 +241,14 @@ function wrapApplyPatchToolWithMemoryDocumentSync(
 
       try {
         const result = await tool.execute(toolCallId, args, signal, onUpdate);
-        syncAffectedMemoryDocs(result);
+        if (!options.skipFilesystemResync) {
+          syncAffectedMemoryDocs(result);
+        }
         return result;
       } catch (error) {
-        syncAffectedMemoryDocs(error);
+        if (!options.skipFilesystemResync) {
+          syncAffectedMemoryDocs(error);
+        }
         throw error;
       }
     },
@@ -523,6 +528,7 @@ export function createOpenClawCodingTools(options?: {
             sourceRoot: sandboxRoot ?? workspaceRoot,
             agentId: options?.agentId,
             containerWorkdir: sandbox?.containerWorkdir,
+            skipFilesystemResync: !sandboxRoot && Boolean(workspaceRoot),
           },
         );
   const tools: AnyAgentTool[] = [

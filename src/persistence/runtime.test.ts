@@ -106,4 +106,34 @@ describe("postgres runtime bootstrap", () => {
     expect(replaceRuntimeAuthProfileStoreSnapshotsMock).not.toHaveBeenCalled();
     expect(clearRuntimeAuthProfileStoreSnapshotsMock).not.toHaveBeenCalled();
   });
+
+  it("treats encryption key changes as a distinct auth bootstrap state", async () => {
+    const configAlpha = {
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+          encryptionKey: "alpha",
+        },
+      },
+    };
+    const configBeta = {
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+          encryptionKey: "beta",
+        },
+      },
+    };
+
+    await bootstrapPostgresRuntimeState({
+      config: configAlpha,
+      auth: true,
+      subagents: false,
+    });
+
+    expect(hasBootstrappedPostgresAuthRuntimeState(configAlpha)).toBe(true);
+    expect(hasBootstrappedPostgresAuthRuntimeState(configBeta)).toBe(false);
+  });
 });

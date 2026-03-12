@@ -63,7 +63,10 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
   if (primary === "status" || primary === "health" || primary === "sessions") {
     return false;
   }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+  if (
+    primary === "config" &&
+    (secondary === "get" || secondary === "set" || secondary === "unset")
+  ) {
     return false;
   }
   if (primary === "models" && (secondary === "list" || secondary === "status")) {
@@ -83,7 +86,10 @@ export function shouldBootstrapCliRuntimeState(argv: string[]): boolean {
   if (primary === "status" || primary === "health" || primary === "sessions") {
     return false;
   }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+  if (
+    primary === "config" &&
+    (secondary === "get" || secondary === "set" || secondary === "unset")
+  ) {
     return false;
   }
   if (primary === "storage") {

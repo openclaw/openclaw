@@ -715,12 +715,16 @@ function wrapToolMemoryDocumentSync(
     sourceRoot?: string;
     agentId?: string;
     containerWorkdir?: string;
+    skipFilesystemResync?: boolean;
   },
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      if (options.skipFilesystemResync) {
+        return result;
+      }
       syncMemoryDocumentAfterHostMutation({
         workspaceRoot: options.workspaceRoot,
         sourceRoot: options.sourceRoot,
@@ -741,7 +745,11 @@ export function createHostWorkspaceWriteTool(
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(
-    wrapToolMemoryDocumentSync(base, { workspaceRoot: root, agentId: options?.agentId }),
+    wrapToolMemoryDocumentSync(base, {
+      workspaceRoot: root,
+      agentId: options?.agentId,
+      skipFilesystemResync: true,
+    }),
     CLAUDE_PARAM_GROUPS.write,
   );
 }
@@ -755,7 +763,11 @@ export function createHostWorkspaceEditTool(
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
   return wrapToolParamNormalization(
-    wrapToolMemoryDocumentSync(withRecovery, { workspaceRoot: root, agentId: options?.agentId }),
+    wrapToolMemoryDocumentSync(withRecovery, {
+      workspaceRoot: root,
+      agentId: options?.agentId,
+      skipFilesystemResync: true,
+    }),
     CLAUDE_PARAM_GROUPS.edit,
   );
 }

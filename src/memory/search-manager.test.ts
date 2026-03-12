@@ -403,4 +403,24 @@ describe("getMemorySearchManager caching", () => {
       },
     );
   });
+
+  it("skips filesystem reconcile during sync when postgres exports are disabled", async () => {
+    const cfg = {
+      ...createQmdCfg("postgres-sync-no-export"),
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+          exportCompatibility: false,
+        },
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "postgres-sync-no-export" });
+    const manager = requireManager(result);
+    await manager.sync?.({ reason: "watch", force: true });
+
+    expect(mockPrimary.sync).toHaveBeenCalledWith({ reason: "watch", force: true });
+    expect(reconcileWorkspaceMemoryDocumentsToPostgresMock).not.toHaveBeenCalled();
+  });
 });

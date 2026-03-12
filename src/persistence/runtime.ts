@@ -26,6 +26,7 @@ function buildAuthBootstrapKey(config: OpenClawConfig): string {
           url: config.persistence.postgres.url ?? null,
           schema: config.persistence.postgres.schema ?? null,
           maxConnections: config.persistence.postgres.maxConnections ?? null,
+          encryptionKey: config.persistence.postgres.encryptionKey ?? null,
           exportCompatibility: config.persistence.postgres.exportCompatibility ?? null,
         }
       : null,

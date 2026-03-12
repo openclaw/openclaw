@@ -142,6 +142,16 @@ describe("shouldBootstrapCliRuntimeState", () => {
     expect(
       shouldBootstrapCliRuntimeState(["node", "openclaw", "config", "get", "gateway.mode"]),
     ).toBe(false);
+    expect(
+      shouldBootstrapCliRuntimeState([
+        "node",
+        "openclaw",
+        "config",
+        "set",
+        "gateway.mode",
+        "local",
+      ]),
+    ).toBe(false);
     expect(shouldBootstrapCliRuntimeState(["node", "openclaw", "storage", "verify"])).toBe(false);
   });
 

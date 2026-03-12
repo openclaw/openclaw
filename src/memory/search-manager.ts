@@ -380,6 +380,12 @@ class PostgresReadThroughMemoryManager implements MemorySearchManager {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     await this.deps.manager?.sync?.(params);
+    if (
+      this.deps.cfg.persistence?.backend !== "postgres" ||
+      this.deps.cfg.persistence.postgres?.exportCompatibility === false
+    ) {
+      return;
+    }
     await reconcileWorkspaceMemoryDocumentsToPostgres(
       {
         workspaceRoot: this.deps.workspaceRoot,
