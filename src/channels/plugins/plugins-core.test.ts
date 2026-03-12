@@ -153,6 +153,44 @@ describe("channel plugin catalog", () => {
     );
     expect(ids).toContain("demo-channel");
   });
+
+  it("uses the provided env for external catalog path resolution", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
+    const catalogPath = path.join(home, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-demo-channel",
+            openclaw: {
+              channel: {
+                id: "env-demo-channel",
+                label: "Env Demo Channel",
+                selectionLabel: "Env Demo Channel",
+                docsPath: "/channels/env-demo-channel",
+                blurb: "Env demo entry",
+                order: 1000,
+              },
+              install: {
+                npmSpec: "@openclaw/env-demo-channel",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const ids = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+        HOME: home,
+      },
+    }).map((entry) => entry.id);
+
+    expect(ids).toContain("env-demo-channel");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);

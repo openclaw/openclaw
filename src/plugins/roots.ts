@@ -25,6 +25,7 @@ export function resolvePluginSourceRoots(params: {
   return { stock, global, workspace };
 }
 
+// Shared env-aware cache inputs for discovery, manifest, and loader caches.
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: string[];
@@ -35,6 +36,7 @@ export function resolvePluginCacheInputs(params: {
     workspaceDir: params.workspaceDir,
     env,
   });
+  // Preserve caller order because load-path precedence follows input order.
   const loadPaths = (params.loadPaths ?? [])
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())

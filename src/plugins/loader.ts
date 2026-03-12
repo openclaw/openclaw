@@ -38,6 +38,8 @@ export type PluginLoadResult = PluginRegistry;
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  // Allows callers to resolve plugin roots and load paths against an explicit env
+  // instead of the process-global environment.
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
@@ -320,12 +322,16 @@ function createPathMatcher(): PathMatcher {
   return { exact: new Set<string>(), dirs: [] };
 }
 
-function addPathToMatcher(matcher: PathMatcher, rawPath: string): void {
+function addPathToMatcher(
+  matcher: PathMatcher,
+  rawPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   const trimmed = rawPath.trim();
   if (!trimmed) {
     return;
   }
-  const resolved = resolveUserPath(trimmed);
+  const resolved = resolveUserPath(trimmed, env);
   if (!resolved) {
     return;
   }
@@ -350,10 +356,11 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
 function buildProvenanceIndex(params: {
   config: OpenClawConfig;
   normalizedLoadPaths: string[];
+  env: NodeJS.ProcessEnv;
 }): PluginProvenanceIndex {
   const loadPathMatcher = createPathMatcher();
   for (const loadPath of params.normalizedLoadPaths) {
-    addPathToMatcher(loadPathMatcher, loadPath);
+    addPathToMatcher(loadPathMatcher, loadPath, params.env);
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
@@ -370,7 +377,7 @@ function buildProvenanceIndex(params: {
       rule.trackedWithoutPaths = true;
     } else {
       for (const trackedPath of trackedPaths) {
-        addPathToMatcher(rule.matcher, trackedPath);
+        addPathToMatcher(rule.matcher, trackedPath, params.env);
       }
     }
     installRules.set(pluginId, rule);
@@ -383,8 +390,9 @@ function isTrackedByProvenance(params: {
   pluginId: string;
   source: string;
   index: PluginProvenanceIndex;
+  env: NodeJS.ProcessEnv;
 }): boolean {
-  const sourcePath = resolveUserPath(params.source);
+  const sourcePath = resolveUserPath(params.source, params.env);
   const installRule = params.index.installRules.get(params.pluginId);
   if (installRule) {
     if (installRule.trackedWithoutPaths) {
@@ -427,6 +435,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
   logger: PluginLogger;
+  env: NodeJS.ProcessEnv;
 }) {
   for (const plugin of params.registry.plugins) {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
@@ -437,6 +446,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
         pluginId: plugin.id,
         source: plugin.source,
         index: params.provenance,
+        env: params.env,
       })
     ) {
       continue;
@@ -550,6 +560,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const provenance = buildProvenanceIndex({
     config: cfg,
     normalizedLoadPaths: normalized.loadPaths,
+    env,
   });
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
@@ -828,6 +839,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry,
     provenance,
     logger,
+    env,
   });
 
   if (cacheEnabled) {

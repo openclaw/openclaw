@@ -1383,6 +1383,96 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("does not warn about missing provenance for env-resolved load paths", () => {
+    useNoBundledPlugins();
+    const openclawHome = makeTempDir();
+    const ignoredHome = makeTempDir();
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(openclawHome, "plugins", "tracked-load-path");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const plugin = writePlugin({
+      id: "tracked-load-path",
+      dir: pluginDir,
+      filename: "index.cjs",
+      body: `module.exports = { id: "tracked-load-path", register() {} };`,
+    });
+
+    const warnings: string[] = [];
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: openclawHome,
+        HOME: ignoredHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      config: {
+        plugins: {
+          load: { paths: ["~/plugins/tracked-load-path"] },
+          allow: ["tracked-load-path"],
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "tracked-load-path")?.source).toBe(
+      plugin.file,
+    );
+    expect(
+      warnings.some((msg) => msg.includes("loaded without install/load-path provenance")),
+    ).toBe(false);
+  });
+
+  it("does not warn about missing provenance for env-resolved install paths", () => {
+    useNoBundledPlugins();
+    const openclawHome = makeTempDir();
+    const ignoredHome = makeTempDir();
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(openclawHome, "plugins", "tracked-install-path");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const plugin = writePlugin({
+      id: "tracked-install-path",
+      dir: pluginDir,
+      filename: "index.cjs",
+      body: `module.exports = { id: "tracked-install-path", register() {} };`,
+    });
+
+    const warnings: string[] = [];
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: openclawHome,
+        HOME: ignoredHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["tracked-install-path"],
+          installs: {
+            "tracked-install-path": {
+              installPath: "~/plugins/tracked-install-path",
+              sourcePath: "~/plugins/tracked-install-path",
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "tracked-install-path")?.source).toBe(
+      plugin.file,
+    );
+    expect(
+      warnings.some((msg) => msg.includes("loaded without install/load-path provenance")),
+    ).toBe(false);
+  });
+
   it("rejects plugin entry files that escape plugin root via symlink", () => {
     useNoBundledPlugins();
     const { outsideEntry, linkedEntry } = createEscapingEntryFixture({

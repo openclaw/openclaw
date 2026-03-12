@@ -36,6 +36,7 @@ export type ChannelPluginCatalogEntry = {
 type CatalogOptions = {
   workspaceDir?: string;
   catalogPaths?: string[];
+  env?: NodeJS.ProcessEnv;
 };
 
 const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
@@ -91,8 +92,9 @@ function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
   if (options.catalogPaths && options.catalogPaths.length > 0) {
     return options.catalogPaths.map((entry) => entry.trim()).filter(Boolean);
   }
+  const env = options.env ?? process.env;
   for (const key of ENV_CATALOG_PATHS) {
-    const raw = process.env[key];
+    const raw = env[key];
     if (raw && raw.trim()) {
       return splitEnvPaths(raw);
     }
@@ -102,9 +104,10 @@ function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
 
 function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEntry[] {
   const paths = resolveExternalCatalogPaths(options);
+  const env = options.env ?? process.env;
   const entries: ExternalCatalogEntry[] = [];
   for (const rawPath of paths) {
-    const resolved = resolveUserPath(rawPath);
+    const resolved = resolveUserPath(rawPath, env);
     if (!fs.existsSync(resolved)) {
       continue;
     }
@@ -259,7 +262,10 @@ export function buildChannelUiCatalog(
 export function listChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: options.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: options.workspaceDir,
+    env: options.env,
+  });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
   for (const candidate of discovery.candidates) {

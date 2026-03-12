@@ -377,5 +377,28 @@ describe("applyPluginAutoEnable", () => {
       expect(result.config.channels?.imessage?.enabled).toBe(true);
       expect(result.changes.join("\n")).toContain("iMessage configured, enabled automatically.");
     });
+
+    it("uses the provided env when loading installed plugin manifests", () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "apn-channel");
+      writePluginManifestFixture({
+        rootDir: pluginDir,
+        id: "apn-channel",
+        channels: ["apn"],
+      });
+
+      const result = applyPluginAutoEnable({
+        config: makeApnChannelConfig(),
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+      });
+
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.apn).toBeUndefined();
+    });
   });
 });

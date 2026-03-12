@@ -397,6 +397,7 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
 }): Promise<PluginChannelSyncResult> {
   const summary: PluginChannelSyncSummary = {
@@ -405,7 +406,10 @@ export async function syncPluginsForUpdateChannel(params: {
     warnings: [],
     errors: [],
   };
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   if (bundled.size === 0) {
     return { config: params.config, changed: false, summary };
   }

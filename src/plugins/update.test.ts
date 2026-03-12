@@ -245,4 +245,22 @@ describe("syncPluginsForUpdateChannel", () => {
     });
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
+
+  it("forwards an explicit env to bundled plugin source resolution", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+
+    const { syncPluginsForUpdateChannel } = await import("./update.js");
+    await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: {},
+      workspaceDir: "/workspace",
+      env,
+    });
+
+    expect(resolveBundledPluginSourcesMock).toHaveBeenCalledWith({
+      workspaceDir: "/workspace",
+      env,
+    });
+  });
 });
