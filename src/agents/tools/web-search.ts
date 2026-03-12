@@ -1710,7 +1710,7 @@ async function runMistralSearch(params: {
           if (!agentRes) {
             throw new Error("Mistral agent creation succeeded but returned no agent id");
           }
-          writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agent_id }, 3600000); // TTL: 1 hour
+          writeCache(SEARCH_CACHE, dynamicCacheKey, { id: agentRes }, 3600000); // TTL: 1 hour
           return agentRes;
         })();
         AGENT_CREATION_PROMISES.set(dynamicCacheKey, inFlightPromise); // register promise so concurrent calls can use same agentId promise (no duplication)
