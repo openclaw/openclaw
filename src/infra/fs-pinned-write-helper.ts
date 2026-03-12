@@ -169,7 +169,7 @@ export async function runPinnedWriteHelper(params: {
       params.relativeParentPath,
       params.basename,
       params.mkdir ? "1" : "0",
-      (params.mode || 0o600).toString(8),
+      (params.mode ?? 0o600).toString(8),
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
