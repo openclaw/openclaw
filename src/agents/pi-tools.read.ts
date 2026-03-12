@@ -452,7 +452,9 @@ function mapContainerPathToWorkspaceRoot(params: {
     }
   }
 
-  const normalizedCandidate = candidate.replace(/\\/g, "/");
+  const posixCandidate = path.posix.normalize(candidate.replace(/\\/g, "/"));
+  const normalizedCandidate =
+    posixCandidate === "/" ? "/" : posixCandidate.replace(/\/+$/, "") || ".";
 
   const bindMatches = (params.bindMounts ?? [])
     .map((bind) => parseSandboxBindMount(bind))

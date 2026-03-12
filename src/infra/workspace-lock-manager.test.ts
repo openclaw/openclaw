@@ -355,6 +355,43 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
+  it("canonicalizes missing-file targets through existing symlinked ancestors", async () => {
+    const dir = await makeCaseDir();
+    const realDir = path.join(dir, "real");
+    const aliasDir = path.join(dir, "alias");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.symlink(realDir, aliasDir, "dir");
+
+    const realTarget = path.join(realDir, "new", "state.json");
+    const aliasTarget = path.join(aliasDir, "new", "state.json");
+
+    const lockA = await acquireWorkspaceLock(realTarget, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await expect(
+      acquireWorkspaceLock(aliasTarget, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    await lockA.release();
+
+    const lockB = await acquireWorkspaceLock(aliasTarget, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+    await lockB.release();
+  });
+
   it("keeps file lock path stable when parent directories appear later", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "new", "nested", "state.json");

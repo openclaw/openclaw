@@ -46,16 +46,31 @@ function lockMapKey(kind: WorkspaceLockKind, normalizedTarget: string): string {
   return `${kind}:${normalizedTarget}`;
 }
 
+async function canonicalizePathViaNearestExistingAncestor(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const suffix: string[] = [];
+  let cursor = resolved;
+
+  // Walk upward until we hit an existing ancestor (or filesystem root).
+  while (true) {
+    try {
+      const canonical = await fs.realpath(cursor);
+      return suffix.length === 0 ? canonical : path.join(canonical, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return suffix.length === 0 ? resolved : path.join(cursor, ...suffix.toReversed());
+      }
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
 async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind): Promise<string> {
   const resolved = path.resolve(targetPath);
   if (kind === "file") {
-    const canonicalFile = await fs.realpath(resolved).catch(() => null);
-    if (canonicalFile) {
-      return canonicalFile;
-    }
-    const parentDir = path.dirname(resolved);
-    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
-    return path.join(canonicalParent, path.basename(resolved));
+    return await canonicalizePathViaNearestExistingAncestor(resolved);
   }
   await fs.mkdir(resolved, { recursive: true });
   try {
