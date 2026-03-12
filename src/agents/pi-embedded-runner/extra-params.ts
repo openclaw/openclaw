@@ -16,6 +16,7 @@ import {
   createMoonshotThinkingWrapper,
   createSiliconFlowThinkingWrapper,
   resolveMoonshotThinkingType,
+  shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
@@ -373,7 +374,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
-  if (provider === "moonshot") {
+  if (shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
     const moonshotThinkingType = resolveMoonshotThinkingType({
       configuredThinking: merged?.thinking,
       thinkingLevel,
