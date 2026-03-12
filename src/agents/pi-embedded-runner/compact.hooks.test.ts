@@ -284,9 +284,15 @@ vi.mock("../../config/channel-capabilities.js", () => ({
   resolveChannelCapabilities: vi.fn(() => undefined),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
-  normalizeMessageChannel: vi.fn(() => undefined),
-}));
+vi.mock("../../utils/message-channel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  );
+  return {
+    ...actual,
+    normalizeMessageChannel: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("../pi-embedded-helpers.js", () => ({
   ensureSessionHeader: vi.fn(async () => {}),
