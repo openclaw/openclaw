@@ -105,7 +105,8 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo =
+        params.streamTo === "parent" ? "parent" : runtime === "acp" ? "parent" : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
