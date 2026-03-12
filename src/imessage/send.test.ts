@@ -90,36 +90,28 @@ describe("sendMessageIMessage", () => {
     expect(result.messageId).toBe("123");
   });
 
-  it("prepends reply tag as the first token when replyToId is provided", async () => {
-    await sendWithDefaults("chat_id:123", "  hello\nworld", {
-      replyToId: "abc-123",
-    });
+  it("strips reply tags from message text (iMessage doesn't support native replies)", async () => {
+    await sendWithDefaults("chat_id:123", "[[reply_to:abc-123]] hello\nworld");
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+    expect(params.text).toBe("hello\nworld");
   });
 
-  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
-    await sendWithDefaults("chat_id:123", " [[reply_to:old-id]] hello", {
-      replyToId: "new-id",
-    });
-    const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:new-id]] hello");
-  });
-
-  it("sanitizes replyToId before writing the leading reply tag", async () => {
-    await sendWithDefaults("chat_id:123", "hello", {
-      replyToId: " [ab]\n\u0000c\td ] ",
-    });
-    const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abcd]] hello");
-  });
-
-  it("skips reply tagging when sanitized replyToId is empty", async () => {
-    await sendWithDefaults("chat_id:123", "hello", {
-      replyToId: "[]\u0000\n\r",
-    });
+  it("strips reply_to_current tags from message text", async () => {
+    await sendWithDefaults("chat_id:123", "[[reply_to_current]] hello");
     const params = getSentParams();
     expect(params.text).toBe("hello");
+  });
+
+  it("strips multiple reply tags from message text", async () => {
+    await sendWithDefaults("chat_id:123", "[[reply_to:old]] [[reply_to:new]] hello");
+    const params = getSentParams();
+    expect(params.text).toBe("hello");
+  });
+
+  it("preserves message text when no reply tags present", async () => {
+    await sendWithDefaults("chat_id:123", "hello world");
+    const params = getSentParams();
+    expect(params.text).toBe("hello world");
   });
 
   it("normalizes string message_id values from rpc result", async () => {
