@@ -41,7 +41,7 @@ describe("resolveSnapshotStoreConfig", () => {
           OPENCLAW_STATE_DIR: stateDir,
         },
       }),
-    ).rejects.toThrow("backup.target must not be inside the live state directory.");
+    ).rejects.toThrow("Refusing path that is a symbolic link");
   });
 
   it("rejects backup targets that live inside a configured workspace", async () => {
