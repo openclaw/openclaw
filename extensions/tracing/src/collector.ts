@@ -327,7 +327,10 @@ export class TraceCollector {
     // can inherit it. The subagent sessionKey will start with the parent's sessionKey prefix.
     if (event.toolName === "sessions_spawn") {
       const parentPrefix = key.replace(/:main$/, "");
-      this.parentTraceIds.set(parentPrefix, { traceId: session.traceId, parentSpanId: session.spanId });
+      this.parentTraceIds.set(parentPrefix, {
+        traceId: session.traceId,
+        parentSpanId: session.spanId,
+      });
     }
   }
 
