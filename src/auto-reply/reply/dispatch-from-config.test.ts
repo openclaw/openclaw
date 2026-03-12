@@ -355,12 +355,17 @@ describe("dispatchReplyFromConfig", () => {
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
+    // Simulate the real store: lastThreadId is normalised from origin.threadId when
+    // deliveryContext.threadId is absent. Using lastThreadId as a fallback would
+    // incorrectly revive stale thread routing.
     sessionStoreMocks.currentEntry = {
       deliveryContext: {
         channel: "mattermost",
         to: "channel:CHAN1",
         accountId: "default",
+        // threadId deliberately absent — the route was cleared
       },
+      lastThreadId: "stale-root", // normalised from origin.threadId by loadSessionStore
       origin: {
         threadId: "stale-root",
       },

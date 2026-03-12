@@ -172,10 +172,10 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  // Preserve cleared route threads; `origin.threadId` can outlive the active delivery route.
-  const persistedRouteThreadId =
-    sessionStoreEntry.entry?.deliveryContext?.threadId ?? sessionStoreEntry.entry?.lastThreadId;
-  const routeThreadId = ctx.MessageThreadId ?? persistedRouteThreadId;
+  // Only use the active delivery context's threadId. `lastThreadId` is not safe here because
+  // `loadSessionStore` normalises it from `origin.threadId`, which can outlive an intentionally
+  // cleared delivery route and would resurrect stale thread routing.
+  const routeThreadId = ctx.MessageThreadId ?? sessionStoreEntry.entry?.deliveryContext?.threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
