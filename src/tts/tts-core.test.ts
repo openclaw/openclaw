@@ -51,6 +51,42 @@ describe("cliTTS", () => {
     );
   });
 
+  it("preserves unrecognized template variables", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    mocks.existsSync.mockReturnValue(true);
+
+    const config = {
+      command: "custom-tool",
+      args: ["--text", "{{TtsText}}", "--custom", "{{UnknownVar}}", "--typo", "{{TtsOutPutPath}}"],
+    };
+
+    await cliTTS({
+      text: "Hello",
+      outputPath: "/tmp/out.mp3",
+      config,
+      outputFormat: "mp3",
+      timeoutMs: 30000,
+    });
+
+    // Unknown vars should be preserved, not collapsed to empty strings
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        "custom-tool",
+        "--text",
+        "Hello",
+        "--custom",
+        "{{UnknownVar}}",
+        "--typo",
+        "{{TtsOutPutPath}}",
+      ],
+      expect.any(Object),
+    );
+  });
+
   it("passes environment variables correctly", async () => {
     mocks.runCommandWithTimeout.mockResolvedValue({
       code: 0,
