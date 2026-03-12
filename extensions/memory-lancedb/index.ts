@@ -54,6 +54,29 @@ type MemorySearchResult = {
 };
 
 // ============================================================================
+// Per-memoryId mutex
+// Serializes concurrent replace calls on the same ID so that a
+// delete/insert from one caller never races with another.
+// ============================================================================
+
+const _memoryLocks = new Map<string, Promise<void>>();
+
+function withMemoryLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = _memoryLocks.get(id) ?? Promise.resolve();
+  let resolveLock!: () => void;
+  const next = new Promise<void>((r) => {
+    resolveLock = r;
+  });
+  _memoryLocks.set(id, next);
+  return prev
+    .then(() => fn())
+    .finally(() => {
+      resolveLock();
+      if (_memoryLocks.get(id) === next) _memoryLocks.delete(id);
+    });
+}
+
+// ============================================================================
 // LanceDB Provider
 // ============================================================================
 
@@ -591,110 +614,114 @@ const memoryPlugin = {
           // MODE 2: Atomic replace (memoryId provided)
           // Check existence BEFORE calling embeddings.embed() so that a typo
           // or stale ID returns immediately without a wasted API call (Fix 3).
+          // Wrapped in withMemoryLock so concurrent calls on the same ID
+          // serialize correctly (no interleaved delete/insert races).
           // ------------------------------------------------------------------
-          const existing = await db.getById(memoryId);
-          if (!existing) {
-            return {
-              content: [{ type: "text", text: `Memory ${memoryId} not found.` }],
-              details: { operation: "error", error: "not_found", memoryId },
-            };
-          }
-
-          // Inherit category and importance from the existing entry when the
-          // caller does not supply them, so a text-only update never silently
-          // resets metadata to defaults (Fix 2).
-          const resolvedCategory = category ?? existing.category;
-          const resolvedImportance = importance ?? existing.importance;
-
-          const vector = await embeddings.embed(text);
-          const oldTextPreview = existing.text.slice(0, 80);
-
-          // Delete the old entry
-          await db.delete(memoryId);
-
-          // Insert new entry — with best-effort rollback on failure
-          let newEntry: MemoryEntry;
-          let rollbackWarning: string | undefined;
-
-          try {
-            newEntry = await db.store({
-              text,
-              vector,
-              importance: resolvedImportance,
-              category: resolvedCategory,
-            });
-          } catch (insertErr) {
-            // Best-effort rollback: restore the original entry with its
-            // original ID so callers are never left with a stale reference
-            // to a non-existent ID (Fix 1).
-            let rollbackSucceeded = false;
-            try {
-              await db.storeRaw(existing);
-              rollbackSucceeded = true;
-              rollbackWarning = `Insert failed; original restored with original ID ${existing.id}. Insert error: ${String(insertErr)}`;
-            } catch (rollbackErr) {
-              rollbackWarning = `Insert failed AND rollback failed (DATA LOSS POSSIBLE). Insert: ${String(insertErr)}. Rollback: ${String(rollbackErr)}`;
+          return withMemoryLock(memoryId, async () => {
+            const existing = await db.getById(memoryId);
+            if (!existing) {
+              return {
+                content: [{ type: "text", text: `Memory ${memoryId} not found.` }],
+                details: { operation: "error", error: "not_found", memoryId },
+              };
             }
+
+            // Inherit category and importance from the existing entry when the
+            // caller does not supply them, so a text-only update never silently
+            // resets metadata to defaults (Fix 2).
+            const resolvedCategory = category ?? existing.category;
+            const resolvedImportance = importance ?? existing.importance;
+
+            const vector = await embeddings.embed(text);
+            const oldTextPreview = existing.text.slice(0, 80);
+
+            // Delete the old entry
+            await db.delete(memoryId);
+
+            // Insert new entry — with best-effort rollback on failure
+            let newEntry: MemoryEntry;
+            let rollbackWarning: string | undefined;
+
+            try {
+              newEntry = await db.store({
+                text,
+                vector,
+                importance: resolvedImportance,
+                category: resolvedCategory,
+              });
+            } catch (insertErr) {
+              // Best-effort rollback: restore the original entry with its
+              // original ID so callers are never left with a stale reference
+              // to a non-existent ID (Fix 1).
+              let rollbackSucceeded = false;
+              try {
+                await db.storeRaw(existing);
+                rollbackSucceeded = true;
+                rollbackWarning = `Insert failed; original restored with original ID ${existing.id}. Insert error: ${String(insertErr)}`;
+              } catch (rollbackErr) {
+                rollbackWarning = `Insert failed AND rollback failed (DATA LOSS POSSIBLE). Insert: ${String(insertErr)}. Rollback: ${String(rollbackErr)}`;
+              }
+              return {
+                content: [{ type: "text", text: `Replace failed: ${rollbackWarning}` }],
+                details: {
+                  operation: "error",
+                  error: "insert_failed",
+                  success: false,
+                  rollbackWarning,
+                  // Only populate restored_id when the rollback actually succeeded.
+                  // If rollback also failed, the row is gone — omit restored_id so
+                  // callers are not misled into treating a failed recovery as
+                  // successful.
+                  ...(rollbackSucceeded ? { restored_id: existing.id } : { restored_id: null }),
+                },
+              };
+            }
+
+            // Compute similarity using 1/(1+L2) — the same metric used by
+            // memory_recall and db.search — so search results and audit log
+            // are directly comparable (Fix 4).
+            let similarity: number | null = null;
+            if (existing.vector.length === vector.length) {
+              const l2sq = existing.vector.reduce((sum, v, i) => {
+                const diff = v - (vector[i] ?? 0);
+                return sum + diff * diff;
+              }, 0);
+              similarity = 1 / (1 + Math.sqrt(l2sq));
+            }
+
+            // Append to audit log
+            const auditLogPath = path.join(homedir(), ".openclaw", "memory", "refresh-audit.jsonl");
+            try {
+              await mkdir(path.dirname(auditLogPath), { recursive: true });
+              const auditEntry = {
+                ts: Date.now(),
+                operation: "replaced",
+                old_id: memoryId,
+                new_id: newEntry.id,
+                similarity,
+                old_text: oldTextPreview,
+                new_text: text.slice(0, 80),
+              };
+              await appendFile(auditLogPath, JSON.stringify(auditEntry) + "\n", "utf8");
+            } catch (auditErr) {
+              api.logger.warn(`memory-lancedb: audit log write failed: ${String(auditErr)}`);
+            }
+
             return {
-              content: [{ type: "text", text: `Replace failed: ${rollbackWarning}` }],
+              content: [
+                {
+                  type: "text",
+                  text: `Replaced memory ${memoryId.slice(0, 8)}… → ${newEntry.id.slice(0, 8)}…\n\nOld: "${oldTextPreview}"\nNew: "${text.slice(0, 80)}"`,
+                },
+              ],
               details: {
-                operation: "error",
-                error: "insert_failed",
-                success: false,
-                rollbackWarning,
-                // Only populate restored_id when the rollback actually succeeded.
-                // If rollback also failed, the row is gone — omit restored_id so
-                // callers are not misled into treating a failed recovery as
-                // successful.
-                ...(rollbackSucceeded ? { restored_id: existing.id } : { restored_id: null }),
+                operation: "replaced",
+                old_id: memoryId,
+                new_id: newEntry.id,
+                old_text_preview: oldTextPreview,
               },
             };
-          }
-
-          // Compute similarity using 1/(1+L2) — the same metric used by
-          // memory_recall and db.search — so search results and audit log
-          // are directly comparable (Fix 4).
-          let similarity: number | null = null;
-          if (existing.vector.length === vector.length) {
-            const l2sq = existing.vector.reduce((sum, v, i) => {
-              const diff = v - (vector[i] ?? 0);
-              return sum + diff * diff;
-            }, 0);
-            similarity = 1 / (1 + Math.sqrt(l2sq));
-          }
-
-          // Append to audit log
-          const auditLogPath = path.join(homedir(), ".openclaw", "memory", "refresh-audit.jsonl");
-          try {
-            await mkdir(path.dirname(auditLogPath), { recursive: true });
-            const auditEntry = {
-              ts: Date.now(),
-              operation: "replaced",
-              old_id: memoryId,
-              new_id: newEntry.id,
-              similarity,
-              old_text: oldTextPreview,
-              new_text: text.slice(0, 80),
-            };
-            await appendFile(auditLogPath, JSON.stringify(auditEntry) + "\n", "utf8");
-          } catch (auditErr) {
-            api.logger.warn(`memory-lancedb: audit log write failed: ${String(auditErr)}`);
-          }
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Replaced memory ${memoryId.slice(0, 8)}… → ${newEntry.id.slice(0, 8)}…\n\nOld: "${oldTextPreview}"\nNew: "${text.slice(0, 80)}"`,
-              },
-            ],
-            details: {
-              operation: "replaced",
-              old_id: memoryId,
-              new_id: newEntry.id,
-              old_text_preview: oldTextPreview,
-            },
-          };
+          });
         },
       },
       { name: "memory_refresh" },

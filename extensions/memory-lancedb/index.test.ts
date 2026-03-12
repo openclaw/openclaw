@@ -919,6 +919,107 @@ describe("memory plugin e2e", () => {
       vi.resetModules();
     }
   });
+
+  test("memory_refresh concurrent replace calls on same ID serialize: operations do not interleave", async () => {
+    const existingId = "ffffffff-0000-0000-0000-000000000001";
+    const existingEntry = {
+      id: existingId,
+      text: "Original text",
+      vector: [0.1, 0.2, 0.3],
+      importance: 0.7,
+      category: "fact",
+      createdAt: 1000,
+    };
+
+    // Track the order of DB operations across both concurrent calls.
+    const callLog: string[] = [];
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+
+    // Static mock: getById always returns the same entry regardless of prior
+    // deletes — this lets both calls succeed so we can assert the op order.
+    const toArray = vi.fn(async () => [existingEntry]);
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({
+      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+    }));
+
+    // tableDelete introduces a small async gap so that without the mutex the
+    // two calls' delete operations would both complete before either add fires,
+    // producing the interleaved log ["delete","delete","add","add"].
+    // With the mutex the expected log is ["delete","add","delete","add"].
+    const tableDelete = vi.fn(async () => {
+      callLog.push("delete");
+      await new Promise<void>((r) => setTimeout(r, 5));
+    });
+    const tableAdd = vi.fn(async () => {
+      callLog.push("add");
+    });
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 1),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      // Fire two replace calls simultaneously on the same memoryId.
+      const [result1, result2] = await Promise.all([
+        refreshTool.execute("concurrent-call-1", { text: "Update A", memoryId: existingId }),
+        refreshTool.execute("concurrent-call-2", { text: "Update B", memoryId: existingId }),
+      ]);
+
+      // Both calls must complete without throwing (promises resolve, not reject).
+      expect(result1).toBeDefined();
+      expect(result2).toBeDefined();
+
+      // Both succeed because the static mock always returns the entry.
+      expect(result1.details.operation).toBe("replaced");
+      expect(result2.details.operation).toBe("replaced");
+
+      // Serialized pattern: delete, add, delete, add.
+      // Interleaved (racy) pattern would be: delete, delete, add, add.
+      // The mutex guarantees the former.
+      expect(callLog).toEqual(["delete", "add", "delete", "add"]);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
 });
 
 // Live tests that require OpenAI API key and actually use LanceDB
