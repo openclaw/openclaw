@@ -6,6 +6,7 @@ export type JsonSchema = {
   description?: string;
   tags?: string[];
   "x-tags"?: string[];
+  required?: string[];
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema | JsonSchema[];
   additionalProperties?: JsonSchema | boolean;
