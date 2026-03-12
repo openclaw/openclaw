@@ -23,6 +23,7 @@ import {
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
@@ -42,6 +43,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   const unauthorized = rejectUnauthorizedCommand(params, "/config");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/config");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/config",
@@ -196,6 +201,10 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
   const unauthorized = rejectUnauthorizedCommand(params, "/debug");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/debug");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/debug",
