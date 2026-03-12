@@ -4,6 +4,8 @@ import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assi
 
 export { formatRelativeTimestamp, formatDurationHuman };
 
+export const formatAgo = formatRelativeTimestamp;
+
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) {
     return "n/a";
