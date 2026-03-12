@@ -99,12 +99,18 @@ await web_search({
   query: "product reviews",
   domain_filter: ["-reddit.com", "-pinterest.com"],
 });
+
+// Mixed allowlist and denylist
+await web_search({
+  query: "climate research",
+  domain_filter: ["nature.com", "science.org", "-reddit.com"],
+});
 ```
 
 ### Domain filter rules
 
 - Maximum 20 domains per filter
-- Cannot mix allowlist and denylist in the same request
+- Allowlist and denylist entries can be mixed in the same request (e.g., `["nature.com", "-reddit.com"]`)
 - Use `-` prefix for denylist entries (e.g., `["-reddit.com"]`)
 
 ## Notes
