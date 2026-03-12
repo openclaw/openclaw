@@ -142,6 +142,27 @@ describe("cliTTS", () => {
     ).rejects.toThrow("CLI TTS failed (exit code 1): Command not found");
   });
 
+  it("throws error when process is killed by signal", async () => {
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: null,
+      stdout: "",
+      stderr: "",
+      signal: "SIGTERM",
+      killed: true,
+      termination: "timeout",
+    });
+
+    await expect(
+      cliTTS({
+        text: "Hello",
+        outputPath: "/tmp/out.mp3",
+        config: { command: "slow-tts" },
+        outputFormat: "mp3",
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow("CLI TTS failed (killed by signal SIGTERM)");
+  });
+
   it("throws error when output file is not created", async () => {
     mocks.runCommandWithTimeout.mockResolvedValue({
       code: 0,
