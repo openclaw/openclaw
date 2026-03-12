@@ -241,13 +241,17 @@ export function sanitizeFileNameForUpload(fileName: string): string {
  * This is used when receiving filenames from Feishu messages, to ensure proper
  * display of non-ASCII characters.
  */
-export function decodeFileNameFromFeishu(fileName: string | undefined | null): string {
+export function decodeFileNameFromFeishu(
+  fileName: string | undefined | null,
+): string | undefined | null {
   if (!fileName) {
-    return fileName ?? "";
+    return fileName;
   }
-  // Check if the filename looks URL-encoded
-  const hasEncodedChars = /%[0-9A-Fa-f]{2}/.test(fileName);
-  if (!hasEncodedChars) {
+  // Only decode if it looks like UTF-8 percent-encoded sequences
+  // (e.g., %E6%96%87%E6%A1%A3 for Chinese characters)
+  // Avoids false positives for literal % in filenames like "report%20draft.txt"
+  const hasUtf8EncodedChars = /%(?:E[0-9A-F]|C[2-9A-F]|D[0-9A-F])[0-9A-F]{2}/i.test(fileName);
+  if (!hasUtf8EncodedChars) {
     return fileName;
   }
   try {

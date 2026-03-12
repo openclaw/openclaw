@@ -486,9 +486,9 @@ describe("decodeFileNameFromFeishu", () => {
     expect(decodeFileNameFromFeishu("")).toBe("");
   });
 
-  it("returns empty string for null/undefined", () => {
-    expect(decodeFileNameFromFeishu(null as any)).toBe("");
-    expect(decodeFileNameFromFeishu(undefined as any)).toBe("");
+  it("returns null/undefined unchanged", () => {
+    expect(decodeFileNameFromFeishu(null as any)).toBe(null);
+    expect(decodeFileNameFromFeishu(undefined as any)).toBe(undefined);
   });
 
   it("returns ASCII filenames unchanged", () => {
@@ -520,6 +520,13 @@ describe("decodeFileNameFromFeishu", () => {
   it("decodes mixed ASCII and encoded characters", () => {
     const encoded = "Report_" + encodeURIComponent("报告") + "_2026.xlsx";
     expect(decodeFileNameFromFeishu(encoded)).toBe("Report_报告_2026.xlsx");
+  });
+
+  it("does not decode literal percent sequences like report%20draft.txt", () => {
+    // Literal %20 should NOT be decoded to space
+    expect(decodeFileNameFromFeishu("report%20draft.txt")).toBe("report%20draft.txt");
+    // Literal %2F should NOT be decoded to /
+    expect(decodeFileNameFromFeishu("data%2F2026.csv")).toBe("data%2F2026.csv");
   });
 });
 
