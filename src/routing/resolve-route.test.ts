@@ -656,6 +656,31 @@ describe("backward compatibility: peer.kind group ↔ channel", () => {
   });
 });
 
+describe("backward compatibility: feishu channel alias lark", () => {
+  test("legacy lark binding matches feishu runtime routing inputs", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "nova",
+          match: {
+            channel: "lark",
+            accountId: "main",
+            peer: { kind: "group", id: "oc_nova_group" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      peer: { kind: "group", id: "oc_nova_group" },
+    });
+    expect(route.agentId).toBe("nova");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 

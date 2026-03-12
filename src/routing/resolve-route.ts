@@ -1,6 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -76,6 +77,23 @@ export function resolveInboundLastRouteSessionKey(params: {
 
 function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function normalizeRoutingChannelId(value: string | undefined | null): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const normalizedBuiltIn = normalizeChatChannelId(trimmed);
+  if (normalizedBuiltIn) {
+    return normalizedBuiltIn;
+  }
+  const lowered = trimmed.toLowerCase();
+  // Feishu plugin channel id is "feishu"; keep legacy "lark" bindings routable.
+  if (lowered === "lark") {
+    return "feishu";
+  }
+  return lowered;
 }
 
 function normalizeId(value: unknown): string {
@@ -241,7 +259,7 @@ function buildEvaluatedBindingsByChannel(
     if (!binding || typeof binding !== "object") {
       continue;
     }
-    const channel = normalizeToken(binding.match?.channel);
+    const channel = normalizeRoutingChannelId(binding.match?.channel);
     if (!channel) {
       continue;
     }
@@ -612,7 +630,7 @@ function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope)
 }
 
 export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
-  const channel = normalizeToken(input.channel);
+  const channel = normalizeRoutingChannelId(input.channel);
   const accountId = normalizeAccountId(input.accountId);
   const peer = input.peer
     ? {
