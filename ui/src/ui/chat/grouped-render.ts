@@ -56,6 +56,48 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
+/**
+ * Render a collapsible wrapper around consecutive tool-related message groups.
+ * The wrapper includes a toggle button and hides/shows the tool groups on click.
+ */
+export function renderToolCollapseWrapper(count: number, toolGroupsHtml: unknown) {
+  const handleToggle = (e: Event) => {
+    const btn = e.currentTarget as HTMLElement;
+    const wrapper = btn.closest(".tool-collapse-wrapper");
+    if (!wrapper) {
+      return;
+    }
+    const isCollapsed = wrapper.classList.toggle("tool-collapse--collapsed");
+    const label = btn.querySelector(".tool-collapse-btn__label") as HTMLElement;
+    const arrow = btn.querySelector(".tool-collapse-btn__arrow") as HTMLElement;
+    if (label) {
+      label.textContent = isCollapsed ? `Show tool calls (${count})` : "Hide tool calls";
+    }
+    if (arrow) {
+      arrow.textContent = isCollapsed ? "▶" : "▼";
+    }
+  };
+
+  return html`
+    <div class="tool-collapse-wrapper">
+      <button
+        class="tool-collapse-btn"
+        type="button"
+        @click=${handleToggle}
+        aria-expanded="true"
+        aria-label="Toggle tool call visibility"
+      >
+        <span class="tool-collapse-btn__icon">⚙</span>
+        <span class="tool-collapse-btn__label">Hide tool calls</span>
+        <span class="tool-collapse-btn__arrow">▼</span>
+      </button>
+      <div class="tool-collapse-content">
+        ${toolGroupsHtml}
+      </div>
+    </div>
+  `;
+}
+
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
   return html`
     <div class="chat-group assistant">
