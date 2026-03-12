@@ -19,7 +19,7 @@ export type RepoBootstrapManifest = {
   repos: RepoBootstrapEntry[];
 };
 
-export const DEFAULT_SRE_REPO_CHECKOUT_ROOT = "/Users/florian/morpho";
+export const DEFAULT_SRE_REPO_CHECKOUT_ROOT = "/srv/openclaw/repos";
 
 export function resolveSreRepoCheckoutRoot(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OPENCLAW_SRE_REPO_CHECKOUT_ROOT?.trim();

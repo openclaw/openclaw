@@ -121,6 +121,7 @@ Swabble/build/
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
 .ant-colony/
+.build-context/
 
 # Eclipse
 **/.project

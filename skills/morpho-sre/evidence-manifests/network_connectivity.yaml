@@ -1,0 +1,8 @@
+category: network_connectivity
+critical:
+  - critical_alerts
+  - log_signals
+optional:
+  - aws_critical
+  - argocd_sync
+  - changes_in_window

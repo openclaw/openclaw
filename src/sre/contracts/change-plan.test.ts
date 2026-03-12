@@ -23,7 +23,7 @@ describe("sre change plan contracts", () => {
       repos: [
         {
           repoId: "openclaw-sre",
-          localPath: "/Users/florian/morpho/openclaw-sre",
+          localPath: "/srv/openclaw/repos/openclaw-sre",
           ownedGlobs: ["src/**"],
           sourceOfTruthDomains: ["runtime-core"],
           dependentRepos: ["morpho-infra-helm"],
@@ -33,7 +33,7 @@ describe("sre change plan contracts", () => {
         },
         {
           repoId: "morpho-infra-helm",
-          localPath: "/Users/florian/morpho/morpho-infra-helm",
+          localPath: "/srv/openclaw/repos/morpho-infra-helm",
           ownedGlobs: ["charts/openclaw-sre/**"],
           sourceOfTruthDomains: ["deploy-config"],
           dependentRepos: [],

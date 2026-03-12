@@ -9,6 +9,7 @@
   "tabWidth": 2,
   "useTabs": false,
   "ignorePatterns": [
+    ".build-context/",
     "apps/",
     "assets/",
     "CLAUDE.md",

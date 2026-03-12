@@ -385,10 +385,10 @@ export function buildSelfImproveRunbookText(params: {
     "- Also identify improvement/new-feature asks from user requests and turn them into specific improvement proposals or PRs.",
   );
   lines.push(
-    "- Choose the right repo for each change: bot/runtime/code fixes belong in openclaw-sre; deployment/runtime config or skill seed changes belong in ../morpho-infra-helm.",
+    "- Choose the right repo for each change: bot/runtime/code fixes, config defaults, runtime bootstrap, and SRE skill changes belong in openclaw-sre; chart/value changes belong in ../morpho-infra-helm.",
   );
   lines.push(
-    "- For infra-side changes, inspect ../morpho-infra-helm/charts/openclaw-sre/files/seed-config and ../morpho-infra-helm/charts/openclaw-sre/files/seed-skills before proposing edits.",
+    "- For SRE substrate changes, inspect skills/morpho-sre and scripts/sre-runtime before proposing edits; inspect ../morpho-infra-helm only for chart/value changes.",
   );
   lines.push(
     "- For each proposal or PR, include evidence from conversation history and name the target repo/path.",

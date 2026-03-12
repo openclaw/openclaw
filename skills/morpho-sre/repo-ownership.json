@@ -1,0 +1,66 @@
+{
+  "version": "sre.repo-ownership-map.v1",
+  "generatedAt": "2026-03-06T00:00:00.000Z",
+  "repos": [
+    {
+      "repoId": "openclaw-sre",
+      "githubRepo": "morpho-org/openclaw-sre",
+      "localPath": "/srv/openclaw/repos/openclaw-sre",
+      "ownedGlobs": [
+        "src/**",
+        "docs/plans/**",
+        ".github/docker/**",
+        "package.json",
+        "pnpm-lock.yaml"
+      ],
+      "sourceOfTruthDomains": ["runtime-code", "sre-substrate", "agent-orchestration"],
+      "dependentRepos": ["morpho-infra-helm"],
+      "impactedApps": ["openclaw-sre"],
+      "deployments": ["openclaw-sre"],
+      "charts": ["charts/openclaw-sre"],
+      "branchBase": "main",
+      "ciChecks": ["pnpm build", "pnpm test -- src/sre"],
+      "validationCommands": ["pnpm build", "pnpm test -- src/sre"],
+      "validationProfiles": {
+        "runtime-only": ["pnpm build", "pnpm test -- src/sre"],
+        "runtime-and-broker": [
+          "pnpm build",
+          "pnpm test -- src/sre/context-broker/index.test.ts src/agents/tools/relationship-neighbors.test.ts src/sre/contracts/change-plan.test.ts"
+        ]
+      },
+      "reviewers": ["runtime-team"],
+      "canaryStrategy": "draft-pr-only",
+      "rollbackHints": [
+        "revert the runtime commit and rebuild the openclaw-sre image",
+        "disable the related sre feature flags before redeploy"
+      ]
+    },
+    {
+      "repoId": "morpho-infra-helm",
+      "githubRepo": "morpho-org/morpho-infra-helm",
+      "localPath": "/srv/openclaw/repos/morpho-infra-helm",
+      "ownedGlobs": [
+        "charts/openclaw-sre/**",
+        "environments/dev/openclaw-sre/**",
+        "environments/prd/openclaw-sre/**"
+      ],
+      "sourceOfTruthDomains": ["helm-release-config", "seeded-skills", "deployment-shape"],
+      "dependentRepos": ["openclaw-sre"],
+      "impactedApps": ["openclaw-sre"],
+      "deployments": ["openclaw-sre"],
+      "charts": ["charts/openclaw-sre"],
+      "branchBase": "main",
+      "ciChecks": ["helm template charts/openclaw-sre", "helm lint charts/openclaw-sre"],
+      "validationCommands": ["helm template charts/openclaw-sre", "helm lint charts/openclaw-sre"],
+      "validationProfiles": {
+        "chart-only": ["helm template charts/openclaw-sre", "helm lint charts/openclaw-sre"]
+      },
+      "reviewers": ["platform-team"],
+      "canaryStrategy": "dev-first",
+      "rollbackHints": [
+        "revert the chart change and redeploy the previous values",
+        "keep production feature flags disabled until dev verification passes"
+      ]
+    }
+  ]
+}

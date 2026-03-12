@@ -1,0 +1,7 @@
+category: config_drift
+critical:
+  - config_drift
+  - config_lineage
+optional:
+  - argocd_sync
+  - changes_in_window

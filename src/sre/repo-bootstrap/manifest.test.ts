@@ -8,7 +8,7 @@ import {
 
 describe("repo bootstrap manifest", () => {
   it("uses the default checkout root when unset", () => {
-    expect(resolveSreRepoCheckoutRoot({})).toBe("/Users/florian/morpho");
+    expect(resolveSreRepoCheckoutRoot({})).toBe("/srv/openclaw/repos");
   });
 
   it("supports overriding the checkout root", () => {

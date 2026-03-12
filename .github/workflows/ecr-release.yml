@@ -6,10 +6,11 @@ on:
       - main
     paths-ignore:
       - "docs/**"
-      - "**/*.md"
-      - "**/*.mdx"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "AGENTS.md"
+      - "docs.acp.md"
       - ".agents/**"
-      - "skills/**"
   workflow_dispatch:
     inputs:
       update_infra:
@@ -91,7 +92,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .build-context
-          cp .github/docker/Dockerfile.ecr-runtime .build-context/Dockerfile
           mkdir -p .build-context/openclaw-sre
           git archive --format=tar HEAD | tar -x -C .build-context/openclaw-sre
 
@@ -116,6 +116,7 @@ jobs:
           set -euo pipefail
           docker build \
             --platform linux/amd64 \
+            -f docker/sre-runtime.Dockerfile \
             --build-arg OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz \
             -t "${{ steps.image.outputs.uri }}" \
             .build-context

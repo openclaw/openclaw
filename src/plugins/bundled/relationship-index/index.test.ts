@@ -35,12 +35,12 @@ describe("relationship index plugin", () => {
       config: {
         sre: {
           repoBootstrap: {
-            rootDir: "/Users/florian/morpho",
+            rootDir: "/srv/openclaw/repos",
           },
         },
         agents: {
           defaults: {
-            workspace: "/Users/florian/morpho/openclaw-sre",
+            workspace: "/srv/openclaw/repos/openclaw-sre",
           },
         },
       },

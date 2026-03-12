@@ -1,0 +1,7 @@
+category: dependency_failure
+critical:
+  - log_signals
+  - prom_critical
+optional:
+  - changes_in_window
+  - aws_critical

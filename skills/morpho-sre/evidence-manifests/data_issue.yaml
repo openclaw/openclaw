@@ -1,0 +1,16 @@
+category: data_issue
+critical:
+  - critical_alerts
+  - log_signals
+  - db_schema_check
+  - db_data_check
+  - pg_internal_check
+optional:
+  - incident_memory
+  - changes_in_window
+  - config_lineage
+  - replica_lag
+  - pg_activity
+  - pg_statements
+  - pg_conflicts
+  - db_topology

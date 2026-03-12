@@ -1,0 +1,499 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.22",
+    "lastTouchedAt": "2026-02-22T23:44:26.547Z"
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "sandbox": {
+        "mode": "off"
+      },
+      "model": {
+        "primary": "openai-codex/gpt-5.4",
+        "fallbacks": ["anthropic/claude-opus-4-6"]
+      },
+      "models": {
+        "openai-codex/gpt-5.4": {
+          "params": {
+            "thinking": "xhigh"
+          }
+        },
+        "anthropic/claude-opus-4-6": {
+          "params": {
+            "thinking": "high",
+            "context1m": true
+          }
+        }
+      },
+      "memorySearch": {
+        "enabled": true,
+        "sources": ["memory", "sessions"],
+        "extraPaths": [
+          "/srv/openclaw/repos/morpho-infra",
+          "/srv/openclaw/repos/morpho-infra-helm",
+          "/srv/openclaw/repos/openclaw-sre"
+        ]
+      },
+      "subagents": {
+        "maxConcurrent": 4,
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 5
+      },
+      "heartbeat": {
+        "every": "30m",
+        "target": "slack",
+        "activeHours": {
+          "start": "00:00",
+          "end": "24:00",
+          "timezone": "user"
+        },
+        "ackMaxChars": 30,
+        "session": "sentinel-monitor",
+        "to": "channel:#staging-infra-monitoring",
+        "routeAllowlist": ["channel:#staging-infra-monitoring", "user:U07KE3NALTX"]
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "workspace": "~/.openclaw/workspace",
+        "subagents": {
+          "allowAgents": ["sre-k8s", "sre-observability", "sre-release"]
+        }
+      },
+      {
+        "id": "sre",
+        "name": "SRE",
+        "workspace": "~/.openclaw/workspace-sre",
+        "agentDir": "~/.openclaw/agents/sre/agent",
+        "heartbeat": {
+          "session": "sentinel-monitor"
+        },
+        "subagents": {
+          "allowAgents": [
+            "sre-k8s",
+            "sre-observability",
+            "sre-release",
+            "sre-repo-runtime",
+            "sre-repo-helm",
+            "sre-verifier"
+          ]
+        },
+        "tools": {
+          "allow": [
+            "exec",
+            "process",
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send",
+            "session_status",
+            "memory_search",
+            "memory_get",
+            "web_search",
+            "web_fetch"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "apply_patch",
+            "browser",
+            "canvas",
+            "gateway",
+            "cron",
+            "nodes",
+            "message"
+          ],
+          "elevated": {
+            "enabled": true,
+            "allowFrom": {
+              "slack": ["*"]
+            }
+          },
+          "exec": {
+            "host": "gateway",
+            "security": "full",
+            "ask": "off"
+          }
+        },
+        "model": {
+          "primary": "openai-codex/gpt-5.4"
+        },
+        "skills": ["morpho-sre", "foundry-evm-debug"]
+      },
+      {
+        "id": "sre-k8s",
+        "name": "SRE K8s",
+        "skills": ["morpho-sre", "eks-troubleshoot", "argocd-diff"],
+        "tools": {
+          "profile": "coding",
+          "deny": ["gateway", "nodes"]
+        }
+      },
+      {
+        "id": "sre-observability",
+        "name": "SRE Observability",
+        "skills": ["morpho-sre", "go-memory-profiling", "grafana-metrics-best-practices"],
+        "tools": {
+          "profile": "coding",
+          "deny": ["gateway", "nodes"]
+        }
+      },
+      {
+        "id": "sre-release",
+        "name": "SRE Release",
+        "skills": ["morpho-sre", "terraform-ci-review", "foundry-evm-debug"],
+        "tools": {
+          "profile": "coding",
+          "deny": ["gateway", "nodes"]
+        }
+      },
+      {
+        "id": "sre-repo-runtime",
+        "name": "SRE Repo Runtime",
+        "workspace": "/srv/openclaw/repos/openclaw-sre",
+        "skills": ["morpho-sre", "foundry-evm-debug"],
+        "tools": {
+          "profile": "coding",
+          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
+        }
+      },
+      {
+        "id": "sre-repo-helm",
+        "name": "SRE Repo Helm",
+        "workspace": "/srv/openclaw/repos/morpho-infra-helm",
+        "skills": ["morpho-sre"],
+        "tools": {
+          "profile": "coding",
+          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
+        }
+      },
+      {
+        "id": "sre-verifier",
+        "name": "SRE Verifier",
+        "workspace": "~/.openclaw/workspace-sre",
+        "skills": ["morpho-sre", "foundry-evm-debug"],
+        "tools": {
+          "allow": [
+            "exec",
+            "process",
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "session_status",
+            "memory_search",
+            "memory_get",
+            "web_search",
+            "web_fetch"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "apply_patch",
+            "browser",
+            "canvas",
+            "gateway",
+            "cron",
+            "nodes",
+            "message"
+          ],
+          "exec": {
+            "host": "gateway",
+            "security": "full",
+            "ask": "off"
+          }
+        }
+      }
+    ]
+  },
+  "tools": {
+    "elevated": {
+      "enabled": true,
+      "allowFrom": {
+        "slack": ["*"]
+      }
+    },
+    "exec": {
+      "host": "gateway",
+      "security": "allowlist",
+      "ask": "off",
+      "safeBins": [
+        "anvil",
+        "cast",
+        "chisel",
+        "cut",
+        "forge",
+        "jq",
+        "uniq",
+        "head",
+        "tail",
+        "tr",
+        "wc"
+      ],
+      "safeBinProfiles": {
+        "anvil": {},
+        "cast": {},
+        "chisel": {},
+        "cut": {},
+        "forge": {},
+        "head": {},
+        "jq": {},
+        "tail": {},
+        "tr": {},
+        "uniq": {},
+        "wc": {}
+      },
+      "safeBinTrustedDirs": []
+    },
+    "profile": "coding",
+    "deny": ["gateway", "nodes"],
+    "loopDetection": {
+      "enabled": true
+    },
+    "agentToAgent": {
+      "enabled": true,
+      "allow": ["sre-k8s", "sre-observability", "sre-release"]
+    }
+  },
+  "bindings": [
+    {
+      "agentId": "sre",
+      "match": {
+        "channel": "slack",
+        "accountId": "*"
+      }
+    }
+  ],
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "text": true,
+    "bash": false,
+    "restart": true,
+    "useAccessGroups": true
+  },
+  "memory": {
+    "backend": "qmd",
+    "citations": "on",
+    "qmd": {
+      "command": "/usr/local/bin/qmd",
+      "paths": [
+        {
+          "path": "/home/node/.openclaw/state/sre-dossiers",
+          "name": "incident-dossiers",
+          "pattern": "**/*.md"
+        },
+        {
+          "path": "/home/node/.openclaw/skills/morpho-sre",
+          "name": "sre-runbooks",
+          "pattern": "**/*.md"
+        },
+        {
+          "path": "/srv/openclaw/repos/openclaw-sre/docs",
+          "name": "repo-docs-openclaw-sre",
+          "pattern": "**/*.md"
+        },
+        {
+          "path": "/srv/openclaw/repos/openclaw-sre/skills/morpho-sre",
+          "name": "repo-docs-openclaw-sre-skill",
+          "pattern": "*.md"
+        },
+        {
+          "path": "/home/node/.openclaw/state/sre-index/session-summaries",
+          "name": "session-summary-index",
+          "pattern": "**/*.md"
+        }
+      ],
+      "sessions": {
+        "enabled": true,
+        "exportDir": "/home/node/.openclaw/state/sre-index/session-summaries",
+        "retentionDays": 14
+      }
+    }
+  },
+  "sre": {
+    "provenance": {
+      "enabled": false
+    },
+    "structuredEvidence": {
+      "enabled": false
+    },
+    "incidentDossier": {
+      "enabled": false
+    },
+    "contextBroker": {
+      "enabled": false
+    },
+    "repoOwnership": {
+      "enabled": false,
+      "filePath": "/home/node/.openclaw/state/sre-index/repo-ownership.json"
+    },
+    "multiRepoPlanning": {
+      "enabled": false
+    },
+    "multiRepoPr": {
+      "enabled": false
+    },
+    "changeIntel": {
+      "enabled": false
+    },
+    "relationshipIndex": {
+      "enabled": false
+    },
+    "stateRoots": {
+      "graphDir": "/home/node/.openclaw/state/sre-graph",
+      "dossiersDir": "/home/node/.openclaw/state/sre-dossiers",
+      "indexDir": "/home/node/.openclaw/state/sre-index",
+      "plansDir": "/home/node/.openclaw/state/sre-plans"
+    },
+    "repoBootstrap": {
+      "rootDir": "/srv/openclaw/repos"
+    }
+  },
+  "channels": {
+    "defaults": {},
+    "slack": {
+      "mode": "socket",
+      "webhookPath": "/slack/events",
+      "enabled": true,
+      "commands": {
+        "native": true,
+        "nativeSkills": true
+      },
+      "configWrites": false,
+      "userTokenReadOnly": true,
+      "allowBots": false,
+      "groupPolicy": "open",
+      "streaming": "partial",
+      "nativeStreaming": true,
+      "dmPolicy": "open",
+      "channels": {
+        "#platform-monitoring": {
+          "enabled": true,
+          "requireMention": false,
+          "allowBots": true,
+          "skills": ["morpho-sre"],
+          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+        },
+        "#public-api-monitoring": {
+          "enabled": true,
+          "requireMention": false,
+          "allowBots": true,
+          "skills": ["morpho-sre"],
+          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+        },
+        "#staging-infra-monitoring": {
+          "enabled": true,
+          "requireMention": false,
+          "allowBots": true,
+          "skills": ["morpho-sre"],
+          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+        }
+      },
+      "signingSecret": "${SLACK_SIGNING_SECRET}",
+      "allowFrom": ["*"],
+      "dm": {
+        "enabled": true,
+        "groupEnabled": true,
+        "groupChannels": ["*"]
+      },
+      "requireMention": false,
+      "replyToModeByChatType": {
+        "channel": "all"
+      },
+      "thread": {
+        "initialHistoryLimit": 0
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "controlUi": {
+      "dangerouslyAllowHostHeaderOriginFallback": true,
+      "allowInsecureAuth": true,
+      "dangerouslyDisableDeviceAuth": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "mcpServers": {
+            "posthog-dev-curator-v1": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "curator-v1"]
+            },
+            "posthog-dev-curator-v2": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "curator-v2"]
+            },
+            "posthog-dev-data": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "data"]
+            },
+            "posthog-dev-landing": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "landing"]
+            },
+            "posthog-dev-markets-v2": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "markets-v2"]
+            },
+            "posthog-dev-vmv1": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["dev", "--project-key", "vmv1"]
+            },
+            "posthog-prd-curator-v1": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "curator-v1"]
+            },
+            "posthog-prd-curator-v2": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "curator-v2"]
+            },
+            "posthog-prd-data": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "data"]
+            },
+            "posthog-prd-landing": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "landing"]
+            },
+            "posthog-prd-markets-v2": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "markets-v2"]
+            },
+            "posthog-prd-vmv1": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
+              "args": ["prd", "--project-key", "vmv1"]
+            },
+            "wiz": {
+              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh"
+            }
+          }
+        }
+      },
+      "slack": {
+        "enabled": true
+      }
+    }
+  },
+  "web": {
+    "enabled": false
+  },
+  "logging": {
+    "redactSensitive": "tools"
+  }
+}

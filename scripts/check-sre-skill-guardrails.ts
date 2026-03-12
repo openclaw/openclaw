@@ -88,15 +88,7 @@ async function validateFile(filePath: string): Promise<SkillGuardrailIssue[]> {
 }
 
 function defaultSkillPath(): string {
-  return path.resolve(
-    "..",
-    "morpho-infra-helm",
-    "charts",
-    "openclaw-sre",
-    "files",
-    "seed-skills",
-    "SKILL.md",
-  );
+  return path.resolve("skills", "morpho-sre", "SKILL.md");
 }
 
 function printHelp(): void {
@@ -110,7 +102,7 @@ Validates that the Morpho SRE skill keeps the required guardrails:
 - retrieval-before-repo rules
 
 Default path:
-  ../morpho-infra-helm/charts/openclaw-sre/files/seed-skills/SKILL.md`);
+  skills/morpho-sre/SKILL.md`);
 }
 
 async function main(): Promise<void> {

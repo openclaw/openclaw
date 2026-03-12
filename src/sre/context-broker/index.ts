@@ -362,6 +362,8 @@ async function retrieveSeedKnowledgeEvidence(
 
   const tokens = tokenize(input.prompt);
   const seedRootCandidates = unique([
+    path.join(repoRootDir, "openclaw-sre", "skills", "morpho-sre"),
+    path.join(repoRootDir, "skills", "morpho-sre"),
     path.join(repoRootDir, "morpho-infra-helm", "charts", "openclaw-sre", "files", "seed-skills"),
     path.join(
       repoRootDir,

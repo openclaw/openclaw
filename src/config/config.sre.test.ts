@@ -18,7 +18,7 @@ describe("sre config schema", () => {
           plansDir: "/home/node/.openclaw/state/sre-plans",
         },
         repoBootstrap: {
-          rootDir: "/Users/florian/morpho",
+          rootDir: "/srv/openclaw/repos",
         },
       },
     });

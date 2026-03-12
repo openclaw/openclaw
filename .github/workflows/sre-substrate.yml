@@ -1,0 +1,47 @@
+name: SRE Substrate Validation
+
+on:
+  push:
+    paths:
+      - ".github/workflows/sre-substrate.yml"
+      - "skills/morpho-sre/**"
+      - "scripts/check-sre-skill-guardrails.ts"
+      - "scripts/sre-runtime/**"
+      - "docker/**"
+      - "test/sre-substrate/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  pull_request:
+    paths:
+      - ".github/workflows/sre-substrate.yml"
+      - "skills/morpho-sre/**"
+      - "scripts/check-sre-skill-guardrails.ts"
+      - "scripts/sre-runtime/**"
+      - "docker/**"
+      - "test/sre-substrate/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Morpho SRE skill guardrails
+        run: node --import tsx scripts/check-sre-skill-guardrails.ts
+
+      - name: Run Morpho SRE substrate tests
+        run: pnpm test:sre-substrate

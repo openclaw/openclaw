@@ -1,0 +1,7 @@
+category: scaling_issue
+critical:
+  - pod_issues
+  - prom_critical
+optional:
+  - changes_in_window
+  - aws_critical

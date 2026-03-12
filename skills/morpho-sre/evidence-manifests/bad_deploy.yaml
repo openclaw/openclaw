@@ -1,0 +1,8 @@
+category: bad_deploy
+critical:
+  - deploy_gaps
+  - image_revision
+optional:
+  - ci_signal
+  - argocd_sync
+  - changes_in_window

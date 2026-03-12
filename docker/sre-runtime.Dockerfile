@@ -5,7 +5,7 @@ USER root
 ARG KUBECTL_VERSION=v1.33.5
 ARG HELM_VERSION=v3.17.1
 ARG TERRAFORM_VERSION=1.14.5
-ARG OPENCLAW_VERSION=latest
+ARG OPENCLAW_VERSION=2026.3.9
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
 ARG OPENCLAW_FOUNDRY_VERSION=1.3.1
 ARG QMD_VERSION=1.1.5
@@ -33,9 +33,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY ${OPENCLAW_LOCAL_TARBALL} /tmp/openclaw-local.tgz
-RUN mkdir -p /Users/florian/morpho/openclaw-sre \
+RUN mkdir -p /srv/openclaw/repos/openclaw-sre \
   && if [ -s /tmp/openclaw-local.tgz ]; then \
-      tar -xzf /tmp/openclaw-local.tgz -C /Users/florian/morpho/openclaw-sre --strip-components=1 package; \
+      tar -xzf /tmp/openclaw-local.tgz -C /srv/openclaw/repos/openclaw-sre --strip-components=1 package; \
       npm install -g /tmp/openclaw-local.tgz; \
     else \
       npm install -g "openclaw@${OPENCLAW_VERSION}"; \
@@ -43,9 +43,6 @@ RUN mkdir -p /Users/florian/morpho/openclaw-sre \
   && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
   && rm -f /tmp/openclaw-local.tgz
 
-# Trust boundary: the installer script itself is fetched over HTTPS and piped to
-# bash. foundryup then verifies downloaded release binaries via GitHub
-# attestations before activation.
 RUN export FOUNDRY_DIR=/opt/foundry \
   && curl -fsSL https://foundry.paradigm.xyz | bash \
   && /opt/foundry/bin/foundryup --install "${OPENCLAW_FOUNDRY_VERSION}" \
@@ -106,11 +103,23 @@ RUN set -eux; \
     /tmp/vault.zip \
     /tmp/boundary.zip
 
-RUN mkdir -p /Users/florian/morpho \
-  && chown -R node:node /Users/florian
+RUN mkdir -p /srv/openclaw/repos \
+  && chown -R node:node /srv/openclaw
 
-COPY --chown=node:node morpho-infra /Users/florian/morpho/morpho-infra
-COPY --chown=node:node morpho-infra-helm /Users/florian/morpho/morpho-infra-helm
-COPY --chown=node:node openclaw-sre /Users/florian/morpho/openclaw-sre
+COPY --chown=node:node morpho-infra /srv/openclaw/repos/morpho-infra
+COPY --chown=node:node morpho-infra-helm /srv/openclaw/repos/morpho-infra-helm
+COPY --chown=node:node openclaw-sre /srv/openclaw/repos/openclaw-sre
+
+RUN chmod -R a+rX /usr/local/lib/node_modules/openclaw/extensions/acpx \
+  && find /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules/.bin -type f -exec chmod 755 {} + \
+  && for skill_root in \
+    /usr/local/lib/node_modules/openclaw/skills/morpho-sre \
+    /srv/openclaw/repos/openclaw-sre/skills/morpho-sre; do \
+      mkdir -p "${skill_root}/scripts"; \
+      find "${skill_root}" -maxdepth 1 -type f -name '*.sh' | while read -r script; do \
+        name="$(basename "$script")"; \
+        ln -sf "../${name}" "${skill_root}/scripts/${name}"; \
+      done; \
+    done
 
 USER node

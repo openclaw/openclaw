@@ -1,0 +1,8 @@
+category: resource_exhaustion
+critical:
+  - pod_issues
+  - prom_critical
+optional:
+  - argocd_sync
+  - changes_in_window
+  - image_revision
