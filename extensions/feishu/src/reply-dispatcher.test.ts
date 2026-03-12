@@ -527,32 +527,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       return origPush.apply(this, args);
     } as any;
 
-    createFeishuReplyDispatcher({
-      cfg: {} as never,
-      agentId: "agent",
-      runtime: { log: vi.fn(), error: errorMock } as never,
-      chatId: "oc_chat",
-    });
+    try {
+      createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: { log: vi.fn(), error: errorMock } as never,
+        chatId: "oc_chat",
+      });
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+      const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
 
-    // First deliver with markdown triggers startStreaming - which will fail
-    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+      // First deliver with markdown triggers startStreaming - which will fail
+      await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
 
-    // Wait for the async error to propagate
-    await vi.waitFor(() => {
-      expect(errorMock).toHaveBeenCalledWith(expect.stringContaining("streaming start failed"));
-    });
+      // Wait for the async error to propagate
+      await vi.waitFor(() => {
+        expect(errorMock).toHaveBeenCalledWith(expect.stringContaining("streaming start failed"));
+      });
 
-    // Second deliver should create a NEW streaming session (not stuck)
-    await options.deliver({ text: "```ts\nconst y = 2\n```" }, { kind: "final" });
+      // Second deliver should create a NEW streaming session (not stuck)
+      await options.deliver({ text: "```ts\nconst y = 2\n```" }, { kind: "final" });
 
-    // Restore original push
-    streamingInstances.push = origPush;
-
-    // Two instances created: first failed, second succeeded and closed
-    expect(streamingInstances).toHaveLength(2);
-    expect(streamingInstances[1].start).toHaveBeenCalled();
-    expect(streamingInstances[1].close).toHaveBeenCalled();
+      // Two instances created: first failed, second succeeded and closed
+      expect(streamingInstances).toHaveLength(2);
+      expect(streamingInstances[1].start).toHaveBeenCalled();
+      expect(streamingInstances[1].close).toHaveBeenCalled();
+    } finally {
+      streamingInstances.push = origPush;
+    }
   });
 });
