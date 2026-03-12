@@ -4,6 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { BackupSchema } from "./zod-schema.backup.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -250,6 +251,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    backup: BackupSchema,
     diagnostics: z
       .object({
         enabled: z.boolean().optional(),

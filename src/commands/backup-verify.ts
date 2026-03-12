@@ -1,17 +1,18 @@
 import path from "node:path";
 import * as tar from "tar";
+import { isBlockedTarEntryType } from "../infra/archive.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-type BackupManifestAsset = {
+export type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
 };
 
-type BackupManifest = {
+export type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -59,7 +60,7 @@ function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
-function normalizeArchivePath(entryPath: string, label: string): string {
+export function normalizeArchivePath(entryPath: string, label: string): string {
   const trimmed = stripTrailingSlashes(entryPath.trim());
   if (!trimmed) {
     throw new Error(`${label} is empty.`);
@@ -81,7 +82,7 @@ function normalizeArchivePath(entryPath: string, label: string): string {
   return normalized;
 }
 
-function normalizeArchiveRoot(rootName: string): string {
+export function normalizeArchiveRoot(rootName: string): string {
   const normalized = normalizeArchivePath(rootName, "Backup manifest archiveRoot");
   if (normalized.includes("/")) {
     throw new Error(`Backup manifest archiveRoot must be a single path segment: ${rootName}`);
@@ -94,7 +95,7 @@ function isArchivePathWithin(child: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("../") && relative !== "..");
 }
 
-function parseManifest(raw: string): BackupManifest {
+export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -170,13 +171,15 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
+async function listArchiveEntries(
+  archivePath: string,
+): Promise<Array<{ path: string; type?: string }>> {
+  const entries: Array<{ path: string; type?: string }> = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push({ path: entry.path, type: entry.type });
     },
   });
   return entries;
@@ -276,6 +279,12 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
+export function findUnsupportedTarSpecialEntry(
+  entries: Array<{ path: string; type?: string }>,
+): { path: string; type?: string } | undefined {
+  return entries.find((entry) => isBlockedTarEntryType(entry.type ?? ""));
+}
+
 export async function backupVerifyCommand(
   runtime: RuntimeEnv,
   opts: BackupVerifyOptions,
@@ -285,10 +294,16 @@ export async function backupVerifyCommand(
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
+  const unsupportedSpecialEntry = findUnsupportedTarSpecialEntry(rawEntries);
+  if (unsupportedSpecialEntry) {
+    throw new Error(
+      `Archive contains unsupported tar special entry (${unsupportedSpecialEntry.type}): ${unsupportedSpecialEntry.path}`,
+    );
+  }
 
   const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
@@ -306,7 +321,7 @@ export async function backupVerifyCommand(
   }
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  const manifest = parseManifest(manifestRaw);
+  const manifest = parseBackupManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
 
   const result: BackupVerifyResult = {

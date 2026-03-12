@@ -5,7 +5,7 @@ import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
-import { backupVerifyCommand } from "./backup-verify.js";
+import { backupVerifyCommand, findUnsupportedTarSpecialEntry } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 
 describe("backupVerifyCommand", () => {
@@ -388,5 +388,64 @@ describe("backupVerifyCommand", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("fails when the archive contains blocked tar special entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-entry-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
+      const root = path.join(tempDir, rootName);
+      const outsideDir = path.join(tempDir, "outside");
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "owned.txt"), "owned\n", "utf8");
+      await fs.writeFile(
+        path.join(root, "manifest.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: rootName,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [],
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      await fs.symlink("../outside", path.join(root, "payload"));
+
+      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /unsupported tar special entry/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the archive contains fifo tar entries", async () => {
+    expect(
+      findUnsupportedTarSpecialEntry([
+        {
+          path: "2026-03-09T00-00-00.000Z-openclaw-backup/payload/fifo",
+          type: "FIFO",
+        },
+      ]),
+    ).toEqual({
+      path: "2026-03-09T00-00-00.000Z-openclaw-backup/payload/fifo",
+      type: "FIFO",
+    });
   });
 });
