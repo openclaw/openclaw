@@ -111,7 +111,7 @@ describe("L3 — HTTP Endpoints & Error Handling", () => {
     tools = ctx.tools;
 
     const result = parseResult(await tools.get("fin_data_markets")!.execute("h1", {}));
-    expect(result).toHaveProperty("datahub");
+    expect(result).toHaveProperty("connected");
     expect(result).toHaveProperty("markets");
     expect(result).toHaveProperty("categories");
     expect(result.endpoints).toBe(172);

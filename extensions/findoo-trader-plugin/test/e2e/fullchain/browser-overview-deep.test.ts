@@ -59,7 +59,11 @@ d("L5 — Browser Overview Deep", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
   });
 

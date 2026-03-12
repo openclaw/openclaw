@@ -228,7 +228,7 @@ describe("L3 — Plugin Boot Contract", () => {
 
     findooDatahubPlugin.register(api);
 
-    const warnLog = logs.find((l) => l.level === "warn" && l.msg.includes("no API key"));
+    const warnLog = logs.find((l) => l.level === "error" && l.msg.includes("API key is required"));
     expect(warnLog).toBeDefined();
 
     Object.assign(process.env, saved);

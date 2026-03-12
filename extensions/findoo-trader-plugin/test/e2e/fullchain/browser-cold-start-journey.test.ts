@@ -99,7 +99,11 @@ d("L5 — Browser Cold-Start Journey", () => {
     await page.evaluate(() => {
       const overlay = document.getElementById("onboardOverlay");
       if (overlay) overlay.remove();
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
     return (await page.evaluate(() => document.contentType)) === "text/html";
   }

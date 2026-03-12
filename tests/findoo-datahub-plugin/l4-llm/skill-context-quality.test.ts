@@ -114,7 +114,7 @@ function simulateSkillRoute(query: string): { skill: string; tools: ToolUseCall[
     q.match(/\d{6}\.(sh|sz)/i)
   ) {
     const tools: ToolUseCall[] = [];
-    const symbolMatch = q.match(/(\d{6}\.(SH|SZ|sh|sz))/);
+    const symbolMatch = query.match(/(\d{6}\.(SH|SZ|sh|sz))/);
     const symbol = symbolMatch ? symbolMatch[1] : "600519.SH";
 
     if (q.includes("price") || q.includes("quote") || q.includes("行情")) {

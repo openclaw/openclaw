@@ -818,7 +818,11 @@ describeBrowser("Phase E: Playwright Browser E2E — 8 User Journeys", () => {
     page = await browser.newPage();
     // Dismiss onboarding overlay so it doesn't block pointer events
     await page.addInitScript(() => {
-      try { localStorage.setItem("ofc_onboarded", "1"); } catch (_) { /* noop */ }
+      try {
+        localStorage.setItem("ofc_onboarded", "1");
+      } catch (_) {
+        /* noop */
+      }
     });
   });
 

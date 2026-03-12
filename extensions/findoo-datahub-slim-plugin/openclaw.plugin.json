@@ -1,0 +1,27 @@
+{
+  "id": "findoo-datahub-slim-plugin",
+  "name": "Findoo DataHub Slim",
+  "description": "Lightweight price query — OHLCV, ticker, crypto market data. Simple and fast.",
+  "kind": "financial",
+  "version": "2026.3.12",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "datahubApiKey": {
+        "type": "string",
+        "minLength": 1,
+        "description": "DataHub API key (required). Also accepted via DATAHUB_API_KEY env var.",
+        "sensitive": true
+      }
+    }
+  },
+  "uiHints": {
+    "datahubApiKey": {
+      "label": "API Key",
+      "help": "DataHub API 密钥（必填）。",
+      "sensitive": true,
+      "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    }
+  }
+}

@@ -7,8 +7,9 @@ const FIXTURE_DIR = new URL(".", import.meta.url).pathname;
 /** Load all scenario JSON files from fixtures directory tree. */
 export function loadAllScenarios(): Scenario[] {
   const scenarios: Scenario[] = [];
-  const categories = readdirSync(FIXTURE_DIR, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && !d.name.startsWith("_"));
+  const categories = readdirSync(FIXTURE_DIR, { withFileTypes: true }).filter(
+    (d) => d.isDirectory() && !d.name.startsWith("_"),
+  );
 
   for (const cat of categories) {
     const catDir = join(FIXTURE_DIR, cat.name);

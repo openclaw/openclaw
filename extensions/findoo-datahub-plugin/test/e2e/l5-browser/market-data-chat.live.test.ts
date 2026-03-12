@@ -30,97 +30,90 @@ const SKIP =
 // Chat API helpers
 // ---------------------------------------------------------------------------
 
-type ChatMessage = {
-  role: "user" | "assistant" | "tool_use" | "tool_result";
-  content: string;
-  name?: string;
-  tool_call_id?: string;
+/**
+ * OpenAI-compatible chat completion response shape.
+ */
+type ChatChoice = {
+  index: number;
+  message: {
+    role: string;
+    content: string | null;
+    tool_calls?: Array<{
+      id: string;
+      type: string;
+      function: { name: string; arguments: string };
+    }>;
+  };
+  finish_reason: string;
 };
 
 type ChatResponse = {
   id?: string;
-  messages?: ChatMessage[];
+  choices?: ChatChoice[];
   content?: string;
-  tool_calls?: Array<{
-    name: string;
-    arguments: Record<string, unknown>;
-  }>;
-  error?: string;
+  tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>;
+  error?: string | { message: string };
 };
 
 /**
- * Send a chat message to the gateway and wait for the full response.
- * Uses the /api/chat or /api/v1/chat endpoint (whichever is available).
+ * Send a chat message via the OpenAI-compatible /v1/chat/completions endpoint.
+ * This is the actual HTTP chat API the gateway exposes.
  */
 async function sendChatMessage(message: string, timeoutMs = 120_000): Promise<ChatResponse> {
-  const endpoints = ["/api/v1/chat", "/api/chat"];
+  const resp = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "default",
+      messages: [{ role: "user", content: message }],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
 
-  for (const endpoint of endpoints) {
-    try {
-      const resp = await fetch(`${GATEWAY_URL}${endpoint}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${AUTH_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          message,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-
-      if (resp.status === 404) continue;
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Chat API (${endpoint}) returned ${resp.status}: ${text.slice(0, 300)}`);
-      }
-
-      return resp.json() as Promise<ChatResponse>;
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("404")) continue;
-      throw err;
-    }
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`/v1/chat/completions returned ${resp.status}: ${text.slice(0, 500)}`);
   }
 
-  throw new Error("No chat API endpoint found. Tried: " + endpoints.join(", "));
+  return resp.json() as Promise<ChatResponse>;
 }
 
 /**
- * Send a message via WebSocket for streaming responses.
- * Falls back to HTTP if WS is not available.
+ * Send a chat message and extract the assistant's text reply.
  */
 async function sendChatWs(message: string, timeoutMs = 120_000): Promise<string> {
-  // Try HTTP first as it's more reliable for testing
   try {
     const resp = await sendChatMessage(message, timeoutMs);
-    if (resp.content) return resp.content;
-    if (resp.messages) {
-      const assistantMsg = resp.messages.find((m) => m.role === "assistant");
-      return assistantMsg?.content ?? JSON.stringify(resp);
+    // OpenAI format: choices[0].message.content
+    if (resp.choices && resp.choices.length > 0) {
+      return resp.choices[0]!.message.content ?? JSON.stringify(resp);
     }
+    if (resp.content) return resp.content;
     return JSON.stringify(resp);
-  } catch {
-    // If HTTP fails, the test should still provide useful diagnostics
+  } catch (err) {
     throw new Error(
       `Chat request failed for message: "${message}". ` +
-        `Ensure gateway is running at ${GATEWAY_URL} with LLM configured.`,
+        `Ensure gateway is running at ${GATEWAY_URL} with LLM configured. ` +
+        `(${err instanceof Error ? err.message : err})`,
     );
   }
 }
 
 /**
- * Extract tool calls from a chat response.
+ * Extract tool call names from a chat response.
  */
 function extractToolCalls(resp: ChatResponse): string[] {
+  // OpenAI format: choices[0].message.tool_calls
+  if (resp.choices && resp.choices.length > 0) {
+    const tc = resp.choices[0]!.message.tool_calls;
+    if (tc) return tc.map((t) => t.function.name);
+  }
   if (resp.tool_calls) {
     return resp.tool_calls.map((tc) => tc.name);
-  }
-  // Try to parse from messages
-  if (resp.messages) {
-    return resp.messages
-      .filter((m) => m.role === "tool_use" || m.name?.startsWith("fin_"))
-      .map((m) => m.name ?? "unknown");
   }
   return [];
 }

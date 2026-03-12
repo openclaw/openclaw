@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { loadAllScenarios, filterByTags, filterByMarket, filterByCategory, getScenarioIds, getCategories } from "./_loader.js";
+import {
+  loadAllScenarios,
+  filterByTags,
+  filterByMarket,
+  filterByCategory,
+  getScenarioIds,
+  getCategories,
+} from "./_loader.js";
 
 describe("fixture loader", () => {
   const scenarios = loadAllScenarios();
@@ -21,8 +28,14 @@ describe("fixture loader", () => {
   it("covers all expected categories", () => {
     const cats = getCategories(scenarios);
     for (const expected of [
-      "cn-a-share", "us-equity", "hk-equity", "crypto",
-      "risk-control", "cross-market", "approval-flow", "user-journeys",
+      "cn-a-share",
+      "us-equity",
+      "hk-equity",
+      "crypto",
+      "risk-control",
+      "cross-market",
+      "approval-flow",
+      "user-journeys",
     ]) {
       expect(cats).toContain(expected);
     }

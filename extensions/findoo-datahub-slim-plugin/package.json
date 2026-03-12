@@ -1,0 +1,28 @@
+{
+  "name": "@openfinclaw/findoo-datahub-slim-plugin",
+  "version": "2026.3.13",
+  "description": "Lightweight price query plugin — simple OHLCV, ticker, and market snapshot via DataHub. Zero external dependencies.",
+  "keywords": [
+    "crypto",
+    "finance",
+    "ohlcv",
+    "price",
+    "ticker"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "type": "module",
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openfinclaw/findoo-datahub-slim-plugin"
+    }
+  }
+}

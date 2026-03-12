@@ -2,28 +2,32 @@ import { z } from "zod";
 
 const MarketTypeSchema = z.enum(["crypto", "us-equity", "hk-equity", "cn-a-share", "multi"]);
 
-const ExchangeConfigSchema = z.object({
-  exchange: z.string(),
-  apiKey: z.string().optional(),
-  secret: z.string().optional(),
-  testnet: z.boolean().optional(),
-  paper: z.boolean().optional(),
-  ctpBrokerId: z.string().optional(),
-  ctpFrontAddr: z.string().optional(),
-  ctpAppId: z.string().optional(),
-  ctpAuthCode: z.string().optional(),
-}).passthrough();
+const ExchangeConfigSchema = z
+  .object({
+    exchange: z.string(),
+    apiKey: z.string().optional(),
+    secret: z.string().optional(),
+    testnet: z.boolean().optional(),
+    paper: z.boolean().optional(),
+    ctpBrokerId: z.string().optional(),
+    ctpFrontAddr: z.string().optional(),
+    ctpAppId: z.string().optional(),
+    ctpAuthCode: z.string().optional(),
+  })
+  .passthrough();
 
-const RiskConfigSchema = z.object({
-  enabled: z.boolean(),
-  maxAutoTradeUsd: z.number().optional(),
-  confirmThresholdUsd: z.number().optional(),
-  maxDailyLossUsd: z.number().optional(),
-  maxPositionPct: z.number().optional(),
-  maxLeverage: z.number().optional(),
-  allowedPairs: z.array(z.string()).optional(),
-  blockedPairs: z.array(z.string()).optional(),
-}).passthrough();
+const RiskConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+    maxAutoTradeUsd: z.number().optional(),
+    confirmThresholdUsd: z.number().optional(),
+    maxDailyLossUsd: z.number().optional(),
+    maxPositionPct: z.number().optional(),
+    maxLeverage: z.number().optional(),
+    allowedPairs: z.array(z.string()).optional(),
+    blockedPairs: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 const MockTickerSchema = z.object({
   symbol: z.string(),
