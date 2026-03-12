@@ -337,12 +337,14 @@ export function createOpenClawCodingTools(options?: {
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    allowedRoots: fsConfig.allowedRoots,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsPolicy.workspaceOnly;
+  const allowedRoots = fsPolicy.allowedRoots;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -372,9 +374,14 @@ export function createOpenClawCodingTools(options?: {
         });
         return [
           workspaceOnly
-            ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                containerWorkdir: sandbox.containerWorkdir,
-              })
+            ? wrapToolWorkspaceRootGuardWithOptions(
+                sandboxed,
+                sandboxRoot,
+                {
+                  containerWorkdir: sandbox.containerWorkdir,
+                },
+                allowedRoots,
+              )
             : sandboxed,
         ];
       }
@@ -383,7 +390,9 @@ export function createOpenClawCodingTools(options?: {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
       });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      return [
+        workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot, allowedRoots) : wrapped,
+      ];
     }
     if (tool.name === "bash" || tool.name === execToolName) {
       return [];
@@ -392,15 +401,19 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly, allowedRoots });
+      return [
+        workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot, allowedRoots) : wrapped,
+      ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-      return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly, allowedRoots });
+      return [
+        workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot, allowedRoots) : wrapped,
+      ];
     }
     return [tool];
   });
@@ -467,6 +480,7 @@ export function createOpenClawCodingTools(options?: {
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
+                  allowedRoots,
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
             workspaceOnly
@@ -476,6 +490,7 @@ export function createOpenClawCodingTools(options?: {
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
+                  allowedRoots,
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
           ]

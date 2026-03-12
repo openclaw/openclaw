@@ -3,16 +3,22 @@ import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ToolFsPolicy = {
   workspaceOnly: boolean;
+  allowedRoots: string[];
 };
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  allowedRoots?: string[];
+}): ToolFsPolicy {
   return {
     workspaceOnly: params.workspaceOnly === true,
+    allowedRoots: params.allowedRoots ?? [],
   };
 }
 
 export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
   workspaceOnly?: boolean;
+  allowedRoots?: string[];
 } {
   const cfg = params.cfg;
   const globalFs = cfg?.tools?.fs;
@@ -20,6 +26,7 @@ export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: st
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
   return {
     workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
+    allowedRoots: agentFs?.allowedRoots ?? globalFs?.allowedRoots,
   };
 }
 
