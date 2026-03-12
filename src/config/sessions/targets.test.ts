@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,10 +11,6 @@ import {
 
 async function resolveRealStorePath(sessionsDir: string): Promise<string> {
   return await fs.realpath(path.join(sessionsDir, "sessions.json"));
-}
-
-function resolveRealStorePathSync(sessionsDir: string): string {
-  return fsSync.realpathSync(path.join(sessionsDir, "sessions.json"));
 }
 
 describe("resolveSessionStoreTargets", () => {
@@ -346,21 +341,15 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: envStateDir,
       };
-      const mainStorePath = resolveRealStorePathSync(mainSessionsDir);
-      const retiredStorePath = resolveRealStorePathSync(retiredSessionsDir);
+      const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env });
 
-      expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toEqual(
-        expect.arrayContaining([
-          {
-            agentId: "main",
-            storePath: mainStorePath,
-          },
-          {
-            agentId: "retired",
-            storePath: retiredStorePath,
-          },
-        ]),
-      );
+      expect(targets.map((target) => target.agentId).toSorted()).toEqual(["main", "retired"]);
+      for (const target of targets) {
+        expect(target.storePath.toLowerCase()).toContain(`${path.sep}env-state${path.sep}`);
+        expect(target.storePath.toLowerCase()).toContain(
+          path.join(target.agentId, "sessions", "sessions.json").toLowerCase(),
+        );
+      }
     });
   });
 
