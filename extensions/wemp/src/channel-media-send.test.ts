@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
+import { recordUserInteraction } from "../src/api.js";
 
 function configFixture(): OpenClawConfig {
   return {
@@ -84,8 +85,12 @@ test("channel outbound sendMedia 文本发送成功", async (t) => {
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendTextCalls += 1;
-      assert.equal(typeof init?.body, "string");
-      const payload = JSON.parse(init.body as string) as Record<string, unknown>;
+      const requestBody = init?.body;
+      assert.equal(typeof requestBody, "string");
+      if (typeof requestBody !== "string") {
+        throw new Error("expected text request body");
+      }
+      const payload = JSON.parse(requestBody) as Record<string, unknown>;
       assert.equal(payload.msgtype, "text");
       assert.equal((payload.text as { content?: unknown } | undefined)?.content, "hello-text");
       return new Response(
@@ -105,6 +110,7 @@ test("channel outbound sendMedia 文本发送成功", async (t) => {
   });
 
   const id = accountId("acc-text");
+  recordUserInteraction(id, "open-id-text");
   const result = await sendMedia({
     cfg,
     to: "open-id-text",
@@ -122,7 +128,7 @@ test("channel outbound sendMedia 媒体发送成功", async (t) => {
 
   const originalFetch = globalThis.fetch;
   const cfg = configFixture();
-  const mediaUrl = "https://cdn.example.com/test-image.jpg";
+  const mediaUrl = "https://example.com/test-image.jpg";
   let downloadCalls = 0;
   let uploadCalls = 0;
   let sendImageCalls = 0;
@@ -257,21 +263,21 @@ test("channel outbound sendMedia 可路由 voice/video/file", async (t) => {
   const mediaCases = [
     {
       name: "voice",
-      mediaUrl: "https://cdn.example.com/test-audio.mp3",
+      mediaUrl: "https://example.com/test-audio.mp3",
       contentType: "audio/mpeg",
       expectedMsgType: "voice",
       expectedUploadType: "voice",
     },
     {
       name: "video",
-      mediaUrl: "https://cdn.example.com/test-video.mp4",
+      mediaUrl: "https://example.com/test-video.mp4",
       contentType: "video/mp4",
       expectedMsgType: "video",
       expectedUploadType: "video",
     },
     {
       name: "file",
-      mediaUrl: "https://cdn.example.com/test-file.pdf",
+      mediaUrl: "https://example.com/test-file.pdf",
       contentType: "application/pdf",
       expectedMsgType: "file",
       expectedUploadType: "file",
@@ -381,16 +387,16 @@ test("channel outbound sendMedia 文本发送失败时不返回成功回执", as
     globalThis.fetch = originalFetch;
   });
 
-  await assert.rejects(
-    () =>
-      sendMedia({
-        cfg,
-        to: "open-id-text-fail",
-        text: "hello-text-fail",
-        accountId: accountId("acc-text-fail"),
-      }),
-    /wemp_outbound_text_failed:40003:invalid openid/,
-  );
+  await assert.rejects(() => {
+    const id = accountId("acc-text-fail");
+    recordUserInteraction(id, "open-id-text-fail");
+    return sendMedia({
+      cfg,
+      to: "open-id-text-fail",
+      text: "hello-text-fail",
+      accountId: id,
+    });
+  }, /wemp_outbound_text_failed:40003:invalid openid/);
 });
 
 test("channel outbound sendMedia mediaUrl 下载失败时抛错", async (t) => {
@@ -398,7 +404,7 @@ test("channel outbound sendMedia mediaUrl 下载失败时抛错", async (t) => {
 
   const originalFetch = globalThis.fetch;
   const cfg = configFixture();
-  const mediaUrl = "https://cdn.example.com/not-found.jpg";
+  const mediaUrl = "https://example.com/not-found.jpg";
 
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);
@@ -430,7 +436,7 @@ test("channel outbound sendMedia 上传失败时抛错", async (t) => {
 
   const originalFetch = globalThis.fetch;
   const cfg = configFixture();
-  const mediaUrl = "https://cdn.example.com/upload-fail.jpg";
+  const mediaUrl = "https://example.com/upload-fail.jpg";
   let sendImageCalls = 0;
 
   globalThis.fetch = (async (url: string | URL) => {
@@ -495,7 +501,7 @@ test("channel outbound sendMedia 发送失败时抛错", async (t) => {
 
   const originalFetch = globalThis.fetch;
   const cfg = configFixture();
-  const mediaUrl = "https://cdn.example.com/send-fail.jpg";
+  const mediaUrl = "https://example.com/send-fail.jpg";
 
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);

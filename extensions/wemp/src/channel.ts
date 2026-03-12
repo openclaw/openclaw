@@ -1,17 +1,20 @@
 import { createHash } from "node:crypto";
 import type {
+  ChannelLogSink,
   ChannelPlugin,
   ChannelGatewayContext,
   ChannelStatusIssue,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
+  fetchWithSsrFGuard,
   migrateBaseNameToDefaultAccount,
+  resolveChannelMediaMaxBytes,
   setAccountEnabledInConfigSection,
   deleteAccountFromConfigSection,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import {
   getAccessToken,
   uploadTempMedia,
@@ -84,6 +87,7 @@ const HANDOFF_NOTIFY_PUMP_INTERVAL_MS = Math.max(
 );
 let pairingNotifyPumpTimer: ReturnType<typeof setInterval> | null = null;
 let handoffNotifyPumpTimer: ReturnType<typeof setInterval> | null = null;
+const DEFAULT_OUTBOUND_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 
 function startPairingNotifyPump(): void {
   if (pairingNotifyPumpTimer) return;
@@ -269,6 +273,61 @@ function validateOutboundMediaUrl(input: string): URL {
   return parsed;
 }
 
+function resolveOutboundMediaMaxBytes(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): number {
+  return (
+    resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      resolveChannelLimitMb: () => undefined,
+    }) ?? DEFAULT_OUTBOUND_MEDIA_MAX_BYTES
+  );
+}
+
+async function readResponseBytesWithLimit(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const contentLength = Number(response.headers.get("content-length") || "");
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`media exceeds maxBytes ${maxBytes}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return new Uint8Array();
+  }
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = value ?? new Uint8Array();
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new Error(`media exceeds maxBytes ${maxBytes}`);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 function normalizeContentType(contentType: string): string {
   return String(contentType || "")
     .split(";")[0]!
@@ -404,13 +463,9 @@ function collectWempStatusIssues(
 }
 
 interface AccountLifecycleContext {
-  log?: {
-    info?: (...args: unknown[]) => void;
-    warn?: (...args: unknown[]) => void;
-    error?: (...args: unknown[]) => void;
-  };
-  getStatus: () => Record<string, unknown>;
-  setStatus: (status: Record<string, unknown>) => void;
+  log?: ChannelLogSink;
+  getStatus: ChannelGatewayContext<ResolvedWempAccount>["getStatus"];
+  setStatus: ChannelGatewayContext<ResolvedWempAccount>["setStatus"];
 }
 
 function cloneAccountState<T>(value: T): T {
@@ -554,7 +609,7 @@ function activateAccountRuntime(
     runtimeCandidate &&
     typeof (runtimeCandidate as Record<string, unknown>).channel === "object"
   ) {
-    setWempRuntime(runtimeCandidate as import("openclaw/plugin-sdk").PluginRuntime);
+    setWempRuntime(runtimeCandidate as import("openclaw/plugin-sdk/compat").PluginRuntime);
   } else {
     ctx.log?.warn?.(
       `[wemp:${account.accountId}] runtime dispatchInbound unavailable on ${phase} context`,
@@ -572,6 +627,164 @@ function activateAccountRuntime(
   ctx.log?.info?.(`[wemp:${account.accountId}] ${actionLabel} at ${registered.path}`);
   syncMenuForAccount(account, ctx);
 }
+
+const wempGateway = {
+  startAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
+    const account = ctx.account;
+    const accountId = account.accountId;
+    attachOpenClawLogBridge(accountId, ctx.log);
+    activeAccounts.add(accountId);
+    startPairingNotifyPump();
+    startHandoffNotifyPump();
+
+    const cleanupAccountContext = () => {
+      detachOpenClawLogBridge(accountId);
+      activeAccounts.delete(accountId);
+      stopAccountHandlersByAccount.delete(accountId);
+      forgetAppliedAccount(accountId);
+      if (activeAccounts.size === 0) {
+        stopPairingNotifyPump();
+        stopHandoffNotifyPump();
+        clearWempRuntime();
+      }
+    };
+
+    const waitForAbort = (beforeCleanup?: () => void) => {
+      let cleaned = false;
+      let resolver: (() => void) | null = null;
+      const runCleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        try {
+          beforeCleanup?.();
+        } finally {
+          cleanupAccountContext();
+          resolver?.();
+          resolver = null;
+        }
+      };
+      stopAccountHandlersByAccount.set(accountId, runCleanup);
+      if (ctx.abortSignal.aborted) {
+        runCleanup();
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        resolver = resolve;
+        ctx.abortSignal.addEventListener(
+          "abort",
+          () => {
+            runCleanup();
+          },
+          { once: true },
+        );
+      });
+    };
+
+    const accountIssues = validateResolvedWempAccount(account);
+    if (accountIssues.length) {
+      const message = `invalid_account_config:${accountIssues.join("; ")}`;
+      const snapshot = markRuntimeError(account.accountId, message);
+      ctx.setStatus({
+        ...ctx.getStatus(),
+        ...snapshot,
+        running: false,
+        connected: false,
+      });
+      ctx.log?.error?.(`[wemp:${account.accountId}] ${message}`);
+      return waitForAbort();
+    }
+
+    if (!account.enabled) {
+      applyDisabledAccountState(account.accountId, ctx);
+      ctx.log?.info?.(`[wemp:${account.accountId}] account disabled, skip webhook registration`);
+      return waitForAbort(() => {
+        unregisterWempWebhookByAccountId(account.accountId);
+      });
+    }
+
+    activateAccountRuntime(account, ctx, "startAccount");
+    return waitForAbort(() => {
+      unregisterWempWebhook(account);
+      const stopped = markRuntimeConnected(account.accountId, false);
+      ctx.setStatus({
+        ...ctx.getStatus(),
+        ...stopped,
+      });
+    });
+  },
+  reloadAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
+    const account = ctx.account;
+    const accountId = account.accountId;
+    attachOpenClawLogBridge(accountId, ctx.log);
+    const nextSignature = buildAccountConfigSignature(account);
+    const previousApplied = appliedAccountStateByAccount.get(accountId);
+    if (previousApplied?.signature === nextSignature) {
+      ctx.log?.info?.(`[wemp:${accountId}] reload skipped, config unchanged`);
+      return;
+    }
+
+    const accountIssues = validateResolvedWempAccount(account);
+    if (accountIssues.length) {
+      const message = `invalid_account_config:${accountIssues.join("; ")}`;
+      const rollbackAccount = restorePreviousAccount(accountId);
+      if (rollbackAccount) {
+        const registered = registerWempWebhook(rollbackAccount);
+        const connectedSnapshot = markRuntimeConnected(accountId, true, Date.now());
+        const rollbackMessage = `reload_rolled_back:${message}`;
+        const errorSnapshot = markRuntimeError(accountId, rollbackMessage);
+        ctx.setStatus({
+          ...ctx.getStatus(),
+          ...connectedSnapshot,
+          ...errorSnapshot,
+        });
+        ctx.log?.warn?.(
+          `[wemp:${accountId}] ${rollbackMessage}; restored webhook ${registered.path}`,
+        );
+        return;
+      }
+      unregisterWempWebhookByAccountId(accountId);
+      const snapshot = markRuntimeError(accountId, message);
+      ctx.setStatus({
+        ...ctx.getStatus(),
+        ...snapshot,
+        running: false,
+        connected: false,
+      });
+      ctx.log?.error?.(`[wemp:${accountId}] ${message}`);
+      return;
+    }
+
+    if (!account.enabled) {
+      applyDisabledAccountState(accountId, ctx);
+      ctx.log?.info?.(`[wemp:${accountId}] account disabled on reload, webhook unregistered`);
+      return;
+    }
+
+    activateAccountRuntime(account, ctx, "reloadAccount");
+  },
+  stopAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
+    const accountId = String(ctx?.account?.accountId || "").trim();
+    if (!accountId) return;
+    const stopped = stopAccountRuntime(accountId);
+    unregisterWempWebhookByAccountId(accountId);
+    menuSyncStateByAccount.delete(accountId);
+    const disconnectedSnapshot = markRuntimeConnected(accountId, false);
+    const errorSnapshot = markRuntimeError(accountId, "account_stopped");
+    ctx.setStatus?.({
+      ...(ctx.getStatus?.() || {}),
+      ...disconnectedSnapshot,
+      ...errorSnapshot,
+      running: false,
+      connected: false,
+    });
+    if (!stopped) {
+      detachOpenClawLogBridge(accountId);
+    }
+    ctx.log?.info?.(`[wemp:${accountId}] account stopped`);
+  },
+} as ChannelPlugin<ResolvedWempAccount>["gateway"] & {
+  reloadAccount: (ctx: ChannelGatewayContext<ResolvedWempAccount>) => Promise<void>;
+};
 
 export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
   id: "wemp",
@@ -679,7 +892,7 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
   },
   config: {
     listAccountIds: (cfg: OpenClawConfig) => listWempAccountIds(cfg),
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string) => {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => {
       const account = resolveWempAccount(cfg, accountId);
       const accountIssues = validateResolvedWempAccount(account);
       const channelIssues = validateWempChannelConfig(cfg);
@@ -797,45 +1010,59 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
       let mediaOnlyMessageId: string | null = null;
       if (mediaUrl) {
         const validatedUrl = validateOutboundMediaUrl(mediaUrl);
+        const mediaMaxBytes = resolveOutboundMediaMaxBytes({ cfg, accountId });
         let mediaResponse: Response;
+        let releaseMediaResponse: (() => Promise<void>) | null = null;
         try {
-          mediaResponse = await fetch(validatedUrl.toString(), { redirect: "error" });
+          const guarded = await fetchWithSsrFGuard({
+            url: validatedUrl.toString(),
+            maxRedirects: 0,
+          });
+          mediaResponse = guarded.response;
+          releaseMediaResponse = guarded.release;
         } catch (error) {
           throw new Error(
             `wemp_media_download_failed:${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        if (!mediaResponse.ok) {
-          throw new Error(`wemp_media_download_failed:http_${mediaResponse.status}`);
-        }
+        try {
+          if (!mediaResponse.ok) {
+            throw new Error(`wemp_media_download_failed:http_${mediaResponse.status}`);
+          }
 
-        const mediaType = resolveOutboundMediaType(
-          mediaResponse.headers.get("content-type") || "",
-          validatedUrl.pathname,
-        );
-        const bytes = new Uint8Array(await mediaResponse.arrayBuffer());
-        const filename = resolveOutboundFilename(validatedUrl.pathname, mediaType);
-        const uploaded = await uploadTempMedia(account, mediaType, bytes, filename);
-        if (!uploaded.ok) {
-          throw new Error(
-            `wemp_media_upload_failed:${uploaded.errcode ?? "unknown"}:${uploaded.errmsg ?? "unknown"}`,
+          const mediaPathname = new URL(mediaResponse.url || validatedUrl.toString()).pathname;
+          const mediaType = resolveOutboundMediaType(
+            mediaResponse.headers.get("content-type") || "",
+            mediaPathname,
           );
-        }
-        const mediaId = uploaded.data?.media_id;
-        if (!mediaId) {
-          throw new Error("wemp_media_upload_failed:missing_media_id");
-        }
+          const bytes = await readResponseBytesWithLimit(mediaResponse, mediaMaxBytes);
+          const filename = resolveOutboundFilename(mediaPathname, mediaType);
+          const uploaded = await uploadTempMedia(account, mediaType, bytes, filename);
+          if (!uploaded.ok) {
+            throw new Error(
+              `wemp_media_upload_failed:${uploaded.errcode ?? "unknown"}:${uploaded.errmsg ?? "unknown"}`,
+            );
+          }
+          const mediaId = uploaded.data?.media_id;
+          if (!mediaId) {
+            throw new Error("wemp_media_upload_failed:missing_media_id");
+          }
 
-        const sent = await sendCustomMediaMessage(account, to, mediaType, mediaId);
-        if (!sent.ok) {
-          throw new Error(
-            `wemp_media_send_failed:${sent.errcode ?? "unknown"}:${sent.errmsg ?? "unknown"}`,
-          );
+          const sent = await sendCustomMediaMessage(account, to, mediaType, mediaId);
+          if (!sent.ok) {
+            throw new Error(
+              `wemp_media_send_failed:${sent.errcode ?? "unknown"}:${sent.errmsg ?? "unknown"}`,
+            );
+          }
+          const upstreamMediaId = extractMessageIdFromData(sent.data);
+          mediaOnlyMessageId = upstreamMediaId
+            ? `${account.accountId}:${to}:${upstreamMediaId}`
+            : `${account.accountId}:${to}:media:${mediaId}`;
+        } finally {
+          if (releaseMediaResponse) {
+            await releaseMediaResponse();
+          }
         }
-        const upstreamMediaId = extractMessageIdFromData(sent.data);
-        mediaOnlyMessageId = upstreamMediaId
-          ? `${account.accountId}:${to}:${upstreamMediaId}`
-          : `${account.accountId}:${to}:media:${mediaId}`;
       }
       if (text) {
         const result = await sendText(account, to, text);
@@ -854,161 +1081,7 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
       };
     },
   },
-  gateway: {
-    startAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
-      const account = ctx.account;
-      const accountId = account.accountId;
-      attachOpenClawLogBridge(accountId, ctx.log);
-      activeAccounts.add(accountId);
-      startPairingNotifyPump();
-      startHandoffNotifyPump();
-
-      const cleanupAccountContext = () => {
-        detachOpenClawLogBridge(accountId);
-        activeAccounts.delete(accountId);
-        stopAccountHandlersByAccount.delete(accountId);
-        forgetAppliedAccount(accountId);
-        if (activeAccounts.size === 0) {
-          stopPairingNotifyPump();
-          stopHandoffNotifyPump();
-          clearWempRuntime();
-        }
-      };
-
-      const waitForAbort = (beforeCleanup?: () => void) => {
-        let cleaned = false;
-        let resolver: (() => void) | null = null;
-        const runCleanup = () => {
-          if (cleaned) return;
-          cleaned = true;
-          try {
-            beforeCleanup?.();
-          } finally {
-            cleanupAccountContext();
-            resolver?.();
-            resolver = null;
-          }
-        };
-        stopAccountHandlersByAccount.set(accountId, runCleanup);
-        if (ctx.abortSignal.aborted) {
-          runCleanup();
-          return Promise.resolve();
-        }
-        return new Promise<void>((resolve) => {
-          resolver = resolve;
-          ctx.abortSignal.addEventListener(
-            "abort",
-            () => {
-              runCleanup();
-            },
-            { once: true },
-          );
-        });
-      };
-
-      const accountIssues = validateResolvedWempAccount(account);
-      if (accountIssues.length) {
-        const message = `invalid_account_config:${accountIssues.join("; ")}`;
-        const snapshot = markRuntimeError(account.accountId, message);
-        ctx.setStatus({
-          ...ctx.getStatus(),
-          ...snapshot,
-          running: false,
-          connected: false,
-        });
-        ctx.log?.error?.(`[wemp:${account.accountId}] ${message}`);
-        return waitForAbort();
-      }
-
-      if (!account.enabled) {
-        applyDisabledAccountState(account.accountId, ctx);
-        ctx.log?.info?.(`[wemp:${account.accountId}] account disabled, skip webhook registration`);
-        return waitForAbort(() => {
-          unregisterWempWebhookByAccountId(account.accountId);
-        });
-      }
-
-      activateAccountRuntime(account, ctx, "startAccount");
-      return waitForAbort(() => {
-        unregisterWempWebhook(account);
-        const stopped = markRuntimeConnected(account.accountId, false);
-        ctx.setStatus({
-          ...ctx.getStatus(),
-          ...stopped,
-        });
-      });
-    },
-    reloadAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
-      const account = ctx.account;
-      const accountId = account.accountId;
-      attachOpenClawLogBridge(accountId, ctx.log);
-      const nextSignature = buildAccountConfigSignature(account);
-      const previousApplied = appliedAccountStateByAccount.get(accountId);
-      if (previousApplied?.signature === nextSignature) {
-        ctx.log?.info?.(`[wemp:${accountId}] reload skipped, config unchanged`);
-        return;
-      }
-
-      const accountIssues = validateResolvedWempAccount(account);
-      if (accountIssues.length) {
-        const message = `invalid_account_config:${accountIssues.join("; ")}`;
-        const rollbackAccount = restorePreviousAccount(accountId);
-        if (rollbackAccount) {
-          const registered = registerWempWebhook(rollbackAccount);
-          const connectedSnapshot = markRuntimeConnected(accountId, true, Date.now());
-          const rollbackMessage = `reload_rolled_back:${message}`;
-          const errorSnapshot = markRuntimeError(accountId, rollbackMessage);
-          ctx.setStatus({
-            ...ctx.getStatus(),
-            ...connectedSnapshot,
-            ...errorSnapshot,
-          });
-          ctx.log?.warn?.(
-            `[wemp:${accountId}] ${rollbackMessage}; restored webhook ${registered.path}`,
-          );
-          return;
-        }
-        unregisterWempWebhookByAccountId(accountId);
-        const snapshot = markRuntimeError(accountId, message);
-        ctx.setStatus({
-          ...ctx.getStatus(),
-          ...snapshot,
-          running: false,
-          connected: false,
-        });
-        ctx.log?.error?.(`[wemp:${accountId}] ${message}`);
-        return;
-      }
-
-      if (!account.enabled) {
-        applyDisabledAccountState(accountId, ctx);
-        ctx.log?.info?.(`[wemp:${accountId}] account disabled on reload, webhook unregistered`);
-        return;
-      }
-
-      activateAccountRuntime(account, ctx, "reloadAccount");
-    },
-    stopAccount: async (ctx: ChannelGatewayContext<ResolvedWempAccount>) => {
-      const accountId = String(ctx?.account?.accountId || "").trim();
-      if (!accountId) return;
-      const stopped = stopAccountRuntime(accountId);
-      unregisterWempWebhookByAccountId(accountId);
-      menuSyncStateByAccount.delete(accountId);
-      const disconnectedSnapshot = markRuntimeConnected(accountId, false);
-      const errorSnapshot = markRuntimeError(accountId, "account_stopped");
-      ctx.setStatus?.({
-        ...(ctx.getStatus?.() || {}),
-        ...disconnectedSnapshot,
-        ...errorSnapshot,
-        running: false,
-        connected: false,
-      });
-      if (!stopped) {
-        detachOpenClawLogBridge(accountId);
-      }
-      ctx.log?.info?.(`[wemp:${accountId}] account stopped`);
-    },
-  },
+  gateway: wempGateway,
   status: {
     defaultRuntime: defaultRuntime(),
     collectStatusIssues: (accounts) => collectWempStatusIssues(accounts),

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function loadWempPlugin() {
@@ -21,6 +21,7 @@ describe("wemp channel setup", () => {
 
   it("applyAccountConfig 写回 default 账号结构", async () => {
     const wempPlugin = await loadWempPlugin();
+    const applyAccountConfig = wempPlugin.setup!.applyAccountConfig!;
     const cfg = {
       channels: {
         wemp: {
@@ -30,7 +31,7 @@ describe("wemp channel setup", () => {
       },
     } as OpenClawConfig;
 
-    const next = wempPlugin.setup.applyAccountConfig({
+    const next = applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
@@ -52,6 +53,7 @@ describe("wemp channel setup", () => {
 
   it("applyAccountConfig 写回 named 账号结构并迁移 base name", async () => {
     const wempPlugin = await loadWempPlugin();
+    const applyAccountConfig = wempPlugin.setup!.applyAccountConfig!;
     const cfg = {
       channels: {
         wemp: {
@@ -66,7 +68,7 @@ describe("wemp channel setup", () => {
       },
     } as OpenClawConfig;
 
-    const next = wempPlugin.setup.applyAccountConfig({
+    const next = applyAccountConfig({
       cfg,
       accountId: "branda",
       input: {
@@ -91,6 +93,7 @@ describe("wemp channel setup", () => {
 
   it("setAccountEnabled 覆盖 default 与 named 分支", async () => {
     const wempPlugin = await loadWempPlugin();
+    const setAccountEnabled = wempPlugin.config.setAccountEnabled!;
     const cfg = {
       channels: {
         wemp: {
@@ -102,7 +105,7 @@ describe("wemp channel setup", () => {
       },
     } as OpenClawConfig;
 
-    const defaultDisabled = wempPlugin.config.setAccountEnabled({
+    const defaultDisabled = setAccountEnabled({
       cfg,
       accountId: "default",
       enabled: false,
@@ -112,7 +115,7 @@ describe("wemp channel setup", () => {
       true,
     );
 
-    const namedDisabled = wempPlugin.config.setAccountEnabled({
+    const namedDisabled = setAccountEnabled({
       cfg,
       accountId: "branda",
       enabled: false,
@@ -125,6 +128,7 @@ describe("wemp channel setup", () => {
 
   it("deleteAccount 覆盖 default 与 named 分支", async () => {
     const wempPlugin = await loadWempPlugin();
+    const deleteAccount = wempPlugin.config.deleteAccount!;
     const cfg = {
       channels: {
         wemp: {
@@ -137,14 +141,14 @@ describe("wemp channel setup", () => {
       },
     } as OpenClawConfig;
 
-    const defaultDeleted = wempPlugin.config.deleteAccount({
+    const defaultDeleted = deleteAccount({
       cfg,
       accountId: "default",
     });
     expect((defaultDeleted.channels as Record<string, any>).wemp.enabled).toBe(false);
     expect((defaultDeleted.channels as Record<string, any>).wemp.accounts.branda).toBeTruthy();
 
-    const namedDeleted = wempPlugin.config.deleteAccount({
+    const namedDeleted = deleteAccount({
       cfg,
       accountId: "branda",
     });

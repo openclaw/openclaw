@@ -97,7 +97,6 @@ export default defineConfig({
       "dist/OpenClaw.app/**",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
-      "**/*.integration.test.ts",
       // wemp extension tests that use node:test (not vitest)
       "extensions/wemp/src/api-rate-limit.test.ts",
       "extensions/wemp/src/assistant-toggle-isolation.test.ts",
@@ -112,6 +111,8 @@ export default defineConfig({
       "extensions/wemp/src/menu-sync.test.ts",
       "extensions/wemp/src/outbound.test.ts",
       "extensions/wemp/src/pairing.test.ts",
+      "extensions/wemp/src/webhook-media.integration.test.ts",
+      "extensions/wemp/src/webhook.integration.test.ts",
       "extensions/wemp/src/webhook-media-e2e.test.ts",
     ],
     coverage: {

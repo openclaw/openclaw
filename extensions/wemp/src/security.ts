@@ -1,4 +1,4 @@
-import { formatPairingApproveHint } from "openclaw/plugin-sdk";
+import { formatPairingApproveHint } from "openclaw/plugin-sdk/compat";
 import type { ResolvedWempAccount } from "./types.js";
 
 function normalizeAllowFrom(policy: string, allowFrom: string[]): string[] {

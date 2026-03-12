@@ -231,6 +231,9 @@ export async function channelsAddCommand(
   const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
+    appId: opts.appId,
+    appSecret: opts.appSecret,
+    encodingAESKey: opts.encodingAESKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,

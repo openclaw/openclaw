@@ -7,7 +7,7 @@ import {
   type ChannelOnboardingDmPolicy,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/compat";
 import { listWempAccountIds, resolveDefaultWempAccountId, resolveWempAccount } from "./config.js";
 import { scaffoldWempKf } from "./scaffold.js";
 import type { WempScaffoldAnswers } from "./types.js";

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/compat";
 import { recordUserInteraction } from "./api.js";
 import {
   buildEncryptedReply,
@@ -43,6 +44,7 @@ export interface RegisteredWebhook {
 }
 
 const registeredByPath = new Map<string, ResolvedWempAccount>();
+const routeUnregisterByAccount = new Map<string, () => void>();
 const inFlightByAccount = new Map<string, number>();
 const MAX_IN_FLIGHT_PER_ACCOUNT = 64;
 const INBOUND_TIMEOUT_MS = 2000;
@@ -276,15 +278,31 @@ function parseContentLengthHeader(header: string | string[] | undefined): number
 }
 
 export function registerWempWebhook(account: ResolvedWempAccount): RegisteredWebhook {
+  const accountId = String(account.accountId || "").trim();
+  const previousRouteUnregister = routeUnregisterByAccount.get(accountId);
   for (const [pathname, item] of registeredByPath.entries()) {
-    if (item.accountId === account.accountId && pathname !== account.webhookPath) {
+    if (item.accountId === accountId && pathname !== account.webhookPath) {
       registeredByPath.delete(pathname);
     }
   }
   registeredByPath.set(account.webhookPath, account);
+  previousRouteUnregister?.();
+  routeUnregisterByAccount.set(
+    accountId,
+    registerPluginHttpRoute({
+      path: account.webhookPath,
+      auth: "plugin",
+      match: "exact",
+      replaceExisting: true,
+      pluginId: "wemp",
+      source: "extensions/wemp/src/webhook.ts",
+      accountId,
+      handler: handleRegisteredWebhookRequest,
+    }),
+  );
   return {
     path: account.webhookPath,
-    accountId: account.accountId,
+    accountId,
   };
 }
 
@@ -293,6 +311,8 @@ export function unregisterWempWebhook(account: ResolvedWempAccount): void {
   if (matched?.accountId === account.accountId) {
     registeredByPath.delete(account.webhookPath);
   }
+  routeUnregisterByAccount.get(account.accountId)?.();
+  routeUnregisterByAccount.delete(account.accountId);
 }
 
 export function unregisterWempWebhookByAccountId(accountId: string): void {
@@ -303,6 +323,8 @@ export function unregisterWempWebhookByAccountId(accountId: string): void {
       registeredByPath.delete(pathname);
     }
   }
+  routeUnregisterByAccount.get(normalized)?.();
+  routeUnregisterByAccount.delete(normalized);
 }
 
 export function resolveRegisteredWebhook(pathname: string): ResolvedWempAccount | null {
@@ -545,6 +567,7 @@ export async function handleWebhookRequest(
       res,
       pathname,
       method,
+      msgSignature,
       timestamp,
       nonce,
       maxBodyBytes,
@@ -562,6 +585,7 @@ async function handlePostMessageBody(
   res: ServerResponse,
   pathname: string,
   method: string,
+  msgSignature: string,
   timestamp: string,
   nonce: string,
   maxBodyBytes: number,
@@ -827,6 +851,7 @@ async function handlePostMessageBody(
     return;
   }
 
+  const dispatchTimeoutMs = Math.min(DISPATCH_TIMEOUT_MS, Math.max(1, globalDeadline - Date.now()));
   const dispatched = await withTimeout(
     dispatchToAgent({
       channel: "wemp",
@@ -836,12 +861,12 @@ async function handlePostMessageBody(
       text: result.text,
       messageId: parsed.msgId,
     }),
-    DISPATCH_TIMEOUT_MS,
+    dispatchTimeoutMs,
   );
   if (!dispatched) {
     logWarn("webhook_dispatch_timeout", {
       accountId: account.accountId,
-      timeoutMs: DISPATCH_TIMEOUT_MS,
+      timeoutMs: dispatchTimeoutMs,
     });
     const replyXml = buildPassiveTextReply(
       parsed.fromUserName,

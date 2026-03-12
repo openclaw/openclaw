@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/compat";
 import { wempConfigSchema } from "./config-schema.js";
 import type {
   WempAccountConfig,
@@ -322,7 +323,7 @@ function normalizeFeatures(features?: WempChannelConfig["features"]) {
   } as const;
 }
 
-export function listWempAccountIds(cfg: { channels?: { wemp?: WempChannelConfig } }): string[] {
+export function listWempAccountIds(cfg: OpenClawConfig): string[] {
   const channelCfg = cfg.channels?.wemp;
   if (!channelCfg) return [];
   const ids = new Set<string>();
@@ -331,9 +332,7 @@ export function listWempAccountIds(cfg: { channels?: { wemp?: WempChannelConfig 
   return ids.size ? Array.from(ids) : [DEFAULT_ACCOUNT_ID];
 }
 
-export function resolveDefaultWempAccountId(cfg: {
-  channels?: { wemp?: WempChannelConfig };
-}): string {
+export function resolveDefaultWempAccountId(cfg: OpenClawConfig): string {
   return cfg.channels?.wemp?.defaultAccount || DEFAULT_ACCOUNT_ID;
 }
 
@@ -425,9 +424,7 @@ export function validateResolvedWempAccount(account: ResolvedWempAccount): strin
   return issues;
 }
 
-export function validateWempChannelConfig(cfg: {
-  channels?: { wemp?: WempChannelConfig };
-}): string[] {
+export function validateWempChannelConfig(cfg: OpenClawConfig): string[] {
   const issues: string[] = [];
   const channelCfg = cfg.channels?.wemp;
   if (!channelCfg) return issues;
@@ -454,8 +451,8 @@ export function validateWempChannelConfig(cfg: {
 }
 
 export function resolveWempAccount(
-  cfg: { channels?: { wemp?: WempChannelConfig } },
-  accountId?: string,
+  cfg: OpenClawConfig,
+  accountId?: string | null,
 ): ResolvedWempAccount {
   const channelCfg = cfg.channels?.wemp ?? {};
   const id = accountId || resolveDefaultWempAccountId(cfg);
