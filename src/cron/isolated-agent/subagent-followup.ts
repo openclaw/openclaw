@@ -117,14 +117,26 @@ export async function waitForDescendantSubagentSummary(params: {
   initialReply?: string;
   timeoutMs: number;
   observedActiveDescendants?: boolean;
+  runStartedAt?: number;
 }): Promise<string | undefined> {
   const initialReply = params.initialReply?.trim();
   const deadline = Date.now() + Math.max(CRON_SUBAGENT_WAIT_MIN_MS, Math.floor(params.timeoutMs));
+  const runStartedAt =
+    typeof params.runStartedAt === "number" && Number.isFinite(params.runStartedAt)
+      ? params.runStartedAt
+      : undefined;
+  const isInRunWindow = (entry: { createdAt: number; startedAt?: number }) => {
+    if (runStartedAt === undefined) {
+      return true;
+    }
+    const startedAt = typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
+    return startedAt >= runStartedAt;
+  };
 
   // Snapshot the currently active descendant run IDs.
   const getActiveRuns = () =>
     listDescendantRunsForRequester(params.sessionKey).filter(
-      (entry) => typeof entry.endedAt !== "number",
+      (entry) => typeof entry.endedAt !== "number" && isInRunWindow(entry),
     );
 
   const initialActiveRuns = getActiveRuns();

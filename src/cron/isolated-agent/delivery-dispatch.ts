@@ -294,6 +294,7 @@ export async function dispatchCronDelivery(
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
+        runStartedAt: params.runStartedAt,
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {

@@ -285,6 +285,32 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("ignores stale active descendants that started before the current cron run", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      {
+        runId: "stale-run",
+        childSessionKey: "child-stale",
+        requesterSessionKey: "cron-session",
+        requesterDisplayKey: "cron-session",
+        task: "stale",
+        cleanup: "keep",
+        createdAt: 1_000,
+        startedAt: 1_500,
+      },
+    ]);
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: "on it",
+      timeoutMs: 30_000,
+      observedActiveDescendants: false,
+      runStartedAt: 5_000,
+    });
+
+    expect(result).toBe("on it");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("awaits active descendants via agent.wait and returns synthesis after grace period", async () => {
     // First call: active run; second call (after agent.wait resolves): no active runs
     vi.mocked(listDescendantRunsForRequester)
