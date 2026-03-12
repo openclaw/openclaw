@@ -77,6 +77,14 @@ describe("filterMessagingToolMediaDuplicates", () => {
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
+
+  it("dedupes Windows drive-letter file URLs against local paths", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "file:///C:/tmp/photo one.jpg" }],
+      sentMediaUrls: ["C:\\tmp\\photo one.jpg", "C:/tmp/photo one.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
 });
 
 describe("shouldSuppressMessagingToolReplies", () => {
