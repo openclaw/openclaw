@@ -1,10 +1,21 @@
 import SwiftUI
 
 struct RootTabs: View {
+    // MARK: - Tab index enum
+
+    private enum Tab: Int {
+        case screen = 0
+        case voice = 1
+        case settings = 2
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
+    /// Observed via `@AppStorage` so the tab switch fires immediately,
+    /// even when the app is already in the foreground (e.g. triggered by Siri).
+    @AppStorage(OpenTalkModeIntent.pendingTalkModeKey) private var pendingTalkMode: Bool = false
     @State private var selectedTab: Int = 0
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
@@ -33,7 +44,7 @@ struct RootTabs: View {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
                     } else {
-                        self.selectedTab = 2
+                        self.selectedTab = Tab.settings.rawValue
                     }
                 })
                 .padding(.leading, 10)
@@ -73,7 +84,23 @@ struct RootTabs: View {
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
-            onOpenSettings: { self.selectedTab = 2 })
+            onOpenSettings: { self.selectedTab = Tab.settings.rawValue })
+        .task {
+            // Handle the case where the flag is already `true` when RootTabs first
+            // renders — e.g. the Action Button intent fired before the UI was built.
+            self.consumePendingTalkMode()
+        }
+        .onChange(of: self.pendingTalkMode) { _, _ in
+            // Handle changes while the app is running (foreground Siri, background wake).
+            self.consumePendingTalkMode()
+        }
+    }
+
+    /// Consumes the pending Talk Mode flag and navigates to the Voice tab if set.
+    private func consumePendingTalkMode() {
+        guard self.pendingTalkMode else { return }
+        self.pendingTalkMode = false
+        self.selectedTab = Tab.voice.rawValue
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
