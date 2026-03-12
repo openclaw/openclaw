@@ -201,7 +201,7 @@ async function resolveMatrixRoomsConfig(params: {
   return nextRoomsWithUsers;
 }
 
-async function resolveMatrixMonitorConfig(params: {
+export async function resolveMatrixMonitorConfig(params: {
   cfg: CoreConfig;
   runtime: RuntimeEnv;
   accountConfig: MatrixConfig;
@@ -214,7 +214,7 @@ async function resolveMatrixMonitorConfig(params: {
     cfg: params.cfg,
     runtime: params.runtime,
     label: "matrix dm allowlist",
-    list: params.accountConfig.dm?.allowFrom ?? [],
+    list: params.accountConfig.allowFrom ?? params.accountConfig.dm?.allowFrom ?? [],
   });
   const groupAllowFrom = await resolveMatrixUserAllowlist({
     cfg: params.cfg,
