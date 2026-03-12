@@ -29,7 +29,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  RESERVED_CHANNEL_IDS,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   isInterSessionChannel,
@@ -39,7 +38,12 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+} from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -71,6 +75,13 @@ const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function isInternalInterSessionCaller(client: GatewayRequestHandlerOptions["client"]): boolean {
+  return (
+    client?.connect?.client?.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND
+  );
 }
 
 async function runSessionResetFromAgent(params: {
@@ -233,13 +244,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const isKnownGatewayChannel = (raw: string): boolean => {
-      // Capture as a plain string before any type-guard narrowing, since
-      // GatewayMessageChannel includes (string & {}) and TypeScript would
-      // otherwise narrow the remainder to never after the type guard.
-      const lower: string = String(raw).toLowerCase();
-      return isGatewayMessageChannel(raw) || RESERVED_CHANNEL_IDS.has(lower);
-    };
+    const allowInterSessionSentinel = isInternalInterSessionCaller(client);
+    const isKnownGatewayChannel = (raw: string): boolean =>
+      isGatewayMessageChannel(raw) || (allowInterSessionSentinel && isInterSessionChannel(raw));
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -557,14 +564,13 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
-    // Allow internal sentinels (e.g. INTER_SESSION_CHANNEL) to propagate as
-    // the turn source so resolveLastChannelRaw can handle them correctly.
-    // External callers cannot reach this path with a sentinel: the channel hint
-    // validation above rejects any unknown channel that is not in RESERVED_CHANNEL_IDS,
-    // and RESERVED_CHANNEL_IDS are not in listGatewayMessageChannels().
+    // Only backend-internal gateway callers may propagate the inter-session
+    // sentinel so resolveLastChannelRaw can preserve an established external
+    // route. Public RPC callers must not inject sentinel channels here.
     const turnSourceMessageChannel =
       normalizedTurnSource &&
-      (isGatewayMessageChannel(normalizedTurnSource) || isInterSessionChannel(normalizedTurnSource))
+      (isGatewayMessageChannel(normalizedTurnSource) ||
+        (allowInterSessionSentinel && isInterSessionChannel(normalizedTurnSource)))
         ? normalizedTurnSource
         : undefined;
     const originMessageChannel =
