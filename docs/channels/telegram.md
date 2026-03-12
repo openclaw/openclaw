@@ -874,6 +874,8 @@ channels:
       - `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first`
+    - For unattended hosts that must confirm recovery after a restart/update, pair the transport settings above with a small host-level watchdog that checks `openclaw health --json` periodically and sends a one-shot Telegram recovery message only when health transitions from unhealthy -> healthy.
+    - Important implementation note for systemd timers/services: use the absolute OpenClaw binary path (for example `~/.local/bin/openclaw`) because user-local bin may be missing from the default timer/service PATH.
     - Validate DNS answers:
 
 ```bash
