@@ -584,7 +584,6 @@ export async function backupRestoreCommand(
       archive: restoreSource.archivePath,
       json: false,
     });
-    await ensureGatewayStopped(runtime, Boolean(opts.forceStop), Boolean(opts.json));
     workingDir =
       restoreSource.tempDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-")));
     await extractArchive({
@@ -605,6 +604,7 @@ export async function backupRestoreCommand(
       manifest,
       extractedRoot,
     });
+    await ensureGatewayStopped(runtime, Boolean(opts.forceStop), Boolean(opts.json));
     await applyRestoreOperations(operations);
 
     const result: BackupRestoreResult = {
