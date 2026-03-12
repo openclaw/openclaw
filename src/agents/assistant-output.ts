@@ -130,6 +130,7 @@ function getAssistantFallbackFingerprintState(state: AssistantOutputIdState, fin
 function resolveLiveAssistantFallbackMessageId(
   message: AgentMessage,
   state: AssistantOutputIdState,
+  occurrenceIndex: number,
 ) {
   if (!message || typeof message !== "object") {
     return "stream";
@@ -140,6 +141,12 @@ function resolveLiveAssistantFallbackMessageId(
   }
   const fingerprint = buildAssistantFallbackFingerprint(message);
   const fingerprintState = getAssistantFallbackFingerprintState(state, fingerprint);
+  const existingOccurrenceId = fingerprintState.messageIdsByOccurrence[occurrenceIndex];
+  if (existingOccurrenceId) {
+    fingerprintState.activeLiveMessageId = existingOccurrenceId;
+    state.messageIdsByObject.set(message as object, existingOccurrenceId);
+    return existingOccurrenceId;
+  }
   if (fingerprintState.activeLiveMessageId) {
     // Live reconciliation only ever tracks the current in-flight assistant turn,
     // so reusing the active id for an equivalent replacement object is safe here.
@@ -148,7 +155,7 @@ function resolveLiveAssistantFallbackMessageId(
   }
   const id = buildNextAssistantFallbackMessageId(state);
   fingerprintState.activeLiveMessageId = id;
-  fingerprintState.messageIdsByOccurrence.push(id);
+  fingerprintState.messageIdsByOccurrence[occurrenceIndex] = id;
   state.messageIdsByObject.set(message as object, id);
   return id;
 }
@@ -190,14 +197,10 @@ function seedAssistantFallbackFingerprintOccurrences(
 ) {
   const occurrences = new Map<string, number>();
   for (const message of messages.slice(0, upToIndexExclusive)) {
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    const fingerprint = getAssistantFallbackFingerprint(message);
-    if (!fingerprint) {
-      continue;
-    }
-    occurrences.set(fingerprint, (occurrences.get(fingerprint) ?? 0) + 1);
+    recordAssistantFallbackFingerprintOccurrence(
+      occurrences,
+      getAssistantFallbackFingerprint(message),
+    );
   }
   return occurrences;
 }
@@ -212,6 +215,19 @@ function recordAssistantFallbackFingerprintOccurrence(
   const occurrenceIndex = occurrences.get(fingerprint) ?? 0;
   occurrences.set(fingerprint, occurrenceIndex + 1);
   return occurrenceIndex;
+}
+
+function countAssistantFallbackFingerprintOccurrences(
+  messages: AgentMessage[],
+  fingerprint: string,
+) {
+  let count = 0;
+  for (const message of messages) {
+    if (getAssistantFallbackFingerprint(message) === fingerprint) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function resolveFinalizedAssistantFallbackMessageId(params: {
@@ -419,6 +435,7 @@ export function extractAssistantOutputSegments(
 export async function reconcileLiveAssistantCommentary(params: {
   idState?: AssistantOutputIdState;
   message: AgentMessage | null | undefined;
+  priorMessages?: AgentMessage[];
   seenSegmentIds: Set<string>;
   onCommentary?: (segment: AssistantOutputEntry) => void | Promise<void>;
 }) {
@@ -427,7 +444,14 @@ export async function reconcileLiveAssistantCommentary(params: {
   }
 
   const idState = params.idState ?? createAssistantOutputIdState();
-  const liveFallbackMessageId = resolveLiveAssistantFallbackMessageId(params.message, idState);
+  const liveFallbackFingerprint = getAssistantFallbackFingerprint(params.message);
+  const liveFallbackOccurrenceIndex =
+    liveFallbackFingerprint && params.priorMessages
+      ? countAssistantFallbackFingerprintOccurrences(params.priorMessages, liveFallbackFingerprint)
+      : 0;
+  const liveFallbackMessageId = liveFallbackFingerprint
+    ? resolveLiveAssistantFallbackMessageId(params.message, idState, liveFallbackOccurrenceIndex)
+    : undefined;
 
   const newOutputs: AssistantOutputEntry[] = [];
   for (const segment of extractAssistantOutputCandidates(params.message, {

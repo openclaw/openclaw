@@ -1661,6 +1661,7 @@ export async function runEmbeddedAttempt(
           const result = await reconcileLiveAssistantCommentary({
             idState: assistantOutputIdState,
             message: activeSession.agent.state.streamMessage as AgentMessage | null | undefined,
+            priorMessages: activeSession.messages,
             seenSegmentIds: seenLiveCommentaryIds,
             onCommentary: params.onCommentaryReply ? deliverLiveCommentary : undefined,
           });

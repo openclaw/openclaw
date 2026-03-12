@@ -611,6 +611,68 @@ describe("assistant output reconciliation", () => {
     expect(finalizedResult.newOutputs[0]?.segmentId).toBe(liveResult.newOutputs[0]?.segmentId);
   });
 
+  it("aligns live fallback ids with prior identical unsigned occurrences", async () => {
+    const idState = createAssistantOutputIdState();
+    const priorMessage = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+    const currentMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const liveResult = await reconcileLiveAssistantCommentary({
+      idState,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: currentMessage as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      priorMessages: [priorMessage] as any,
+      seenSegmentIds: new Set<string>(),
+    });
+    const finalizedResult = await reconcileAssistantOutputs({
+      idState,
+      messages: [
+        priorMessage,
+        {
+          ...currentMessage,
+          stopReason: "toolUse",
+        },
+      ] as unknown as AgentMessage[],
+      startIndex: 1,
+      seenSegmentIds: new Set<string>(),
+    });
+
+    expect(liveResult.newOutputs).toHaveLength(1);
+    expect(finalizedResult.newOutputs).toHaveLength(1);
+    expect(finalizedResult.newOutputs[0]?.segmentId).toBe(liveResult.newOutputs[0]?.segmentId);
+  });
+
   it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
