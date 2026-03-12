@@ -39,8 +39,18 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
+# Install Bun (required for build scripts). Retry the whole bootstrap flow to
+# tolerate transient 5xx failures from bun.sh/GitHub during CI image builds.
+RUN set -eux; \
+    for attempt in 1 2 3 4 5; do \
+      if curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL https://bun.sh/install | bash; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+    done
 ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
@@ -141,7 +151,15 @@ COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
-    corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && \
+    for attempt in 1 2 3 4 5; do \
+      if corepack prepare "$(node -p "require('./package.json').packageManager")" --activate; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 2)); \
+    done && \
     chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
