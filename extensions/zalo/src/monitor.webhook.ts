@@ -149,7 +149,6 @@ export async function handleZaloWebhookRequest(
           rateLimiter: webhookRateLimiter,
           rateLimitKey,
           nowMs,
-          requireJsonContentType: true,
         })
       ) {
         recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
@@ -164,6 +163,18 @@ export async function handleZaloWebhookRequest(
       });
       if (!target) {
         recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
+        return true;
+      }
+      // Preserve the historical 401-before-415 ordering for invalid secrets while still
+      // consuming rate-limit budget on unauthenticated guesses.
+      if (
+        !applyBasicWebhookRequestGuards({
+          req,
+          res,
+          requireJsonContentType: true,
+        })
+      ) {
+        recordWebhookStatus(target.runtime, path, res.statusCode);
         return true;
       }
       const body = await readJsonWebhookBodyOrReject({
