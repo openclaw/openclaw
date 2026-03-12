@@ -20,6 +20,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
+  type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -177,12 +178,14 @@ export function deriveSessionTitle(
 
 export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
-  const sessionCfg = cfg.session;
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const match = findStoreMatch(store, canonicalKey, sessionKey.trim());
+  const { storePath, store, match } = resolveGatewaySessionStoreLookup({
+    cfg,
+    key: sessionKey.trim(),
+    canonicalKey,
+    agentId,
+  });
   const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
   return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
 }
@@ -477,6 +480,101 @@ export function canonicalizeSpawnedByForAgent(
   return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
 }
 
+function buildGatewaySessionStoreScanTargets(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  agentId: string;
+}): string[] {
+  const targets = new Set<string>();
+  if (params.canonicalKey) {
+    targets.add(params.canonicalKey);
+  }
+  if (params.key && params.key !== params.canonicalKey) {
+    targets.add(params.key);
+  }
+  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
+    return [...targets];
+  }
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+  if (params.canonicalKey === agentMainKey) {
+    targets.add(`agent:${params.agentId}:main`);
+  }
+  return [...targets];
+}
+
+function resolveGatewaySessionStoreCandidates(
+  cfg: OpenClawConfig,
+  agentId: string,
+): SessionStoreTarget[] {
+  const storeConfig = cfg.session?.store;
+  const defaultTarget = {
+    agentId,
+    storePath: resolveStorePath(storeConfig, { agentId }),
+  };
+  if (!isStorePathTemplate(storeConfig)) {
+    return [defaultTarget];
+  }
+  const targets = new Map<string, SessionStoreTarget>();
+  targets.set(defaultTarget.storePath, defaultTarget);
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (target.agentId === agentId) {
+      targets.set(target.storePath, target);
+    }
+  }
+  return [...targets.values()];
+}
+
+function resolveGatewaySessionStoreLookup(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  agentId: string;
+  initialStore?: Record<string, SessionEntry>;
+}): {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  match: { entry: SessionEntry; key: string } | undefined;
+} {
+  const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const fallback = candidates[0] ?? {
+    agentId: params.agentId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
+  let selectedMatch = findStoreMatch(selectedStore, ...scanTargets);
+  let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
+
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const store = loadSessionStore(candidate.storePath);
+    const match = findStoreMatch(store, ...scanTargets);
+    if (!match) {
+      continue;
+    }
+    const updatedAt = match.entry.updatedAt ?? 0;
+    // Mirror combined-store merge behavior so follow-up mutations target the
+    // same backing store that won the listing merge when ids collide.
+    if (!selectedMatch || updatedAt >= selectedUpdatedAt) {
+      selectedStorePath = candidate.storePath;
+      selectedStore = store;
+      selectedMatch = match;
+      selectedUpdatedAt = updatedAt;
+    }
+  }
+
+  return {
+    storePath: selectedStorePath,
+    store: selectedStore,
+    match: selectedMatch,
+  };
+}
+
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -494,8 +592,13 @@ export function resolveGatewaySessionStoreTarget(params: {
     sessionKey: key,
   });
   const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
-  const storeConfig = params.cfg.session?.store;
-  const storePath = resolveStorePath(storeConfig, { agentId });
+  const { storePath, store } = resolveGatewaySessionStoreLookup({
+    cfg: params.cfg,
+    key,
+    canonicalKey,
+    agentId,
+    initialStore: params.store,
+  });
 
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
@@ -508,16 +611,14 @@ export function resolveGatewaySessionStoreTarget(params: {
     storeKeys.add(key);
   }
   if (params.scanLegacyKeys !== false) {
-    // Build a set of scan targets: all known keys plus the main alias key so we
-    // catch legacy entries stored under "agent:{id}:MAIN" when mainKey != "main".
-    const scanTargets = new Set(storeKeys);
-    const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-    if (canonicalKey === agentMainKey) {
-      scanTargets.add(`agent:${agentId}:main`);
-    }
     // Scan the on-disk store for case variants of every target to find
     // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
-    const store = params.store ?? loadSessionStore(storePath);
+    const scanTargets = buildGatewaySessionStoreScanTargets({
+      cfg: params.cfg,
+      key,
+      canonicalKey,
+      agentId,
+    });
     for (const seed of scanTargets) {
       for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
         storeKeys.add(legacyKey);
