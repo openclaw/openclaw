@@ -278,6 +278,53 @@ describe("ExecBrowserHelper", () => {
       expect(scriptArg).toContain("ctx.pages()");
       expect(scriptArg).toContain("ctx.newPage()");
     });
+
+    it("generated script contains page.route for request interception", async () => {
+      execFn.mockResolvedValueOnce(makeExecResult({ title: "Test", url: "https://test.com" }));
+      await helper.getPageInfo("c1", "exec-123");
+      const scriptArg = execFn.mock.calls[0][1][2];
+      expect(scriptArg).toContain("page.route(");
+      expect(scriptArg).toMatch(/page\.route\(.+\*\*\/\*/);
+    });
+
+    it("generated script contains _isBlockedURL function", async () => {
+      execFn.mockResolvedValueOnce(makeExecResult({ title: "Test", url: "https://test.com" }));
+      await helper.getPageInfo("c1", "exec-123");
+      const scriptArg = execFn.mock.calls[0][1][2];
+      expect(scriptArg).toContain("function _isBlockedURL(");
+      expect(scriptArg).toContain("function _isPrivateIP(");
+    });
+
+    it("generated script blocks metadata IP addresses", async () => {
+      execFn.mockResolvedValueOnce(makeExecResult({ title: "Test", url: "https://test.com" }));
+      await helper.getPageInfo("c1", "exec-123");
+      const scriptArg = execFn.mock.calls[0][1][2];
+      expect(scriptArg).toContain("169.254.169.254");
+      expect(scriptArg).toContain("fd00:ec2::254");
+      expect(scriptArg).toContain("100.100.100.200");
+      expect(scriptArg).toContain("metadata.google.internal");
+    });
+
+    it("generated script aborts blocked and continues allowed requests", async () => {
+      execFn.mockResolvedValueOnce(makeExecResult({ title: "Test", url: "https://test.com" }));
+      await helper.getPageInfo("c1", "exec-123");
+      const scriptArg = execFn.mock.calls[0][1][2];
+      // After shell escaping, single quotes become '\'' so check for the key identifiers
+      expect(scriptArg).toContain("route.abort(");
+      expect(scriptArg).toContain("blockedbyclient");
+      expect(scriptArg).toContain("route.continue()");
+    });
+
+    it("route interception is injected before body code in navigate scripts", async () => {
+      execFn.mockResolvedValueOnce(makeExecResult({ url: "https://example.com", title: "Test" }));
+      await helper.navigateBrowser("c1", "exec-123", "https://example.com");
+      const scriptArg = execFn.mock.calls[0][1][2];
+      const routeIdx = scriptArg.indexOf("page.route(");
+      const gotoIdx = scriptArg.indexOf("page.goto(");
+      expect(routeIdx).toBeGreaterThan(-1);
+      expect(gotoIdx).toBeGreaterThan(-1);
+      expect(routeIdx).toBeLessThan(gotoIdx);
+    });
   });
 
   describe("error handling", () => {

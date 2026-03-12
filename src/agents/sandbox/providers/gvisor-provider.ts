@@ -133,7 +133,7 @@ export class GVisorProvider implements ISandboxProvider, IBrowserCapable {
       log.debug(`Starting existing container ${containerName}`);
       await execDocker(["start", containerName]);
       // Reapply iptables rules — they don't survive container stop/start
-      await applyMetadataEgressBlock(containerName);
+      await applyMetadataEgressBlock(containerName, params.cfg.networkMode ?? DEFAULT_NETWORK_MODE);
       return containerName;
     }
 
@@ -177,7 +177,7 @@ export class GVisorProvider implements ISandboxProvider, IBrowserCapable {
     await execDocker(["start", containerName]);
 
     // Block egress to cloud metadata endpoints (SSRF defense-in-depth)
-    await applyMetadataEgressBlock(containerName);
+    await applyMetadataEgressBlock(containerName, networkMode);
 
     return containerName;
   }

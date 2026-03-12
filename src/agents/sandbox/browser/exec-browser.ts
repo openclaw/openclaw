@@ -113,11 +113,89 @@ export class ExecBrowserHelper {
   }
 
   /**
+   * Generate inline JavaScript for Playwright request interception that blocks
+   * SSRF attempts via redirects, subresource loads, and navigations to private
+   * or metadata IP addresses. This runs inside the container via node -e, so it
+   * must be self-contained plain JS with no imports.
+   */
+  private buildRouteInterceptor(): string {
+    return `
+  var _BLOCKED_HOSTS = ['169.254.169.254', 'fd00:ec2::254', '100.100.100.200', 'metadata.google.internal'];
+  var _BLOCKED_PROTOCOLS = ['file:', 'chrome:', 'chrome-extension:', 'data:', 'javascript:', 'vbscript:'];
+  var _PRIVATE_PREFIXES = ['127.', '10.', '0.'];
+
+  function _intToIPv4(n) {
+    return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.');
+  }
+
+  function _isPrivateIP(hostname) {
+    var h = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+    for (var i = 0; i < _PRIVATE_PREFIXES.length; i++) {
+      if (h.startsWith(_PRIVATE_PREFIXES[i])) return true;
+    }
+    if (h.startsWith('192.168.')) return true;
+    if (h.startsWith('172.')) {
+      var second = parseInt(h.split('.')[1], 10);
+      if (!isNaN(second) && second >= 16 && second <= 31) return true;
+    }
+    if (h.startsWith('169.254.')) return true;
+    if (/^\\d+$/.test(h)) {
+      var num = Number(h);
+      if (num >= 0 && num <= 0xffffffff) return _isPrivateIP(_intToIPv4(num));
+    }
+    if (/^0x[0-9a-fA-F]+$/.test(h)) {
+      var hex = parseInt(h, 16);
+      if (hex >= 0 && hex <= 0xffffffff) return _isPrivateIP(_intToIPv4(hex));
+    }
+    var v4Prefix = '::ffff:';
+    if (h.toLowerCase().startsWith(v4Prefix)) {
+      var suffix = h.slice(v4Prefix.length);
+      if (suffix.includes('.')) return _isPrivateIP(suffix);
+      var parts = suffix.split(':');
+      if (parts.length === 2) {
+        var n = (parseInt(parts[0], 16) << 16) | parseInt(parts[1], 16);
+        if (!isNaN(n)) return _isPrivateIP(_intToIPv4(n >>> 0));
+      }
+    }
+    if (h === '::1' || h === '::') return true;
+    if (h.includes(':')) {
+      if (/^f[cd]/i.test(h)) return true;
+      if (/^fe[89ab]/i.test(h)) return true;
+    }
+    return false;
+  }
+
+  function _isBlockedURL(urlString) {
+    try {
+      var u = new URL(urlString);
+      if (_BLOCKED_PROTOCOLS.indexOf(u.protocol) !== -1) return true;
+      if (_BLOCKED_HOSTS.indexOf(u.hostname) !== -1) return true;
+      if (u.hostname === 'localhost' || _isPrivateIP(u.hostname)) return true;
+    } catch (e) {
+      return true;
+    }
+    return false;
+  }
+
+  await page.route('**/*', async function(route) {
+    if (_isBlockedURL(route.request().url())) {
+      await route.abort('blockedbyclient');
+    } else {
+      await route.continue();
+    }
+  });
+`;
+  }
+
+  /**
    * Build a Node.js script that connects to an existing Playwright browser
    * session via CDP, gets the first page, and executes the provided body code.
    *
    * The body code has access to variables: `browser`, `page`, `session`.
    * It must assign the result to the `__result` variable.
+   *
+   * Includes SSRF route interception to block redirects and subresource loads
+   * to private/metadata IP addresses.
    */
   private connectScript(containerName: string, bodyCode: string): string {
     const sessionFile = this.sessionFilePath(containerName);
@@ -131,6 +209,7 @@ const { chromium } = require('playwright');
   const ctx = contexts.length > 0 ? contexts[0] : await browser.newContext();
   const pages = ctx.pages();
   const page = pages.length > 0 ? pages[0] : await ctx.newPage();
+  ${this.buildRouteInterceptor()}
   let __result;
   ${bodyCode}
   const output = ${JSON.stringify(RESULT_START)} + '\\n' + JSON.stringify(__result) + '\\n' + ${JSON.stringify(RESULT_END)};

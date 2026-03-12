@@ -44,18 +44,27 @@ export function buildNetworkFlag(mode: NetworkMode): string[] {
  * Requires NET_ADMIN capability (added via --cap-add=NET_ADMIN at create time)
  * or the container must have iptables available and permission to modify rules.
  *
- * Silently succeeds if iptables is not available (e.g., in --network=none mode
- * where there's no network to filter anyway).
+ * When networkMode is "none", skips silently — there is no network to filter.
+ * For all other network modes, throws if rules cannot be applied, preventing
+ * the sandbox from starting without SSRF protection.
  */
-export async function applyMetadataEgressBlock(containerName: string): Promise<void> {
+export async function applyMetadataEgressBlock(
+  containerName: string,
+  networkMode?: NetworkMode,
+): Promise<void> {
+  if (networkMode === "none") {
+    log.debug(`Skipping metadata egress block for ${containerName}: network mode is "none"`);
+    return;
+  }
+
   const rules: string[] = [];
   for (const target of METADATA_BLOCK_TARGETS) {
     if (target.includes(":")) {
       // IPv6
-      rules.push(`ip6tables -A OUTPUT -d ${target} -j DROP 2>/dev/null`);
+      rules.push(`ip6tables -A OUTPUT -d ${target} -j DROP`);
     } else {
       // IPv4
-      rules.push(`iptables -A OUTPUT -d ${target} -j DROP 2>/dev/null`);
+      rules.push(`iptables -A OUTPUT -d ${target} -j DROP`);
     }
   }
   // Also block DNS resolution of known metadata hostnames via iptables string match
@@ -70,27 +79,22 @@ export async function applyMetadataEgressBlock(containerName: string): Promise<v
   });
 
   if (result.code !== 0) {
-    log.warn(
-      `Metadata egress block may have failed for ${containerName} (exit ${result.code}). ` +
-        `SSRF defense may be inactive. Ensure NET_ADMIN capability is set.`,
+    throw new Error(
+      `Metadata egress block failed for ${containerName} (exit ${result.code}). ` +
+        `SSRF defense cannot be applied. Ensure NET_ADMIN capability is set. ` +
+        `stderr: ${result.stderr.toString().trim()}`,
     );
-    return;
   }
 
   // Verify the primary IPv4 metadata rule was actually applied
   const verifyResult = await execDockerRaw(
-    [
-      "exec",
-      containerName,
-      "sh",
-      "-c",
-      "iptables -C OUTPUT -d 169.254.169.254 -j DROP 2>/dev/null",
-    ],
+    ["exec", containerName, "sh", "-c", "iptables -C OUTPUT -d 169.254.169.254 -j DROP"],
     { allowFailure: true },
   );
   if (verifyResult.code !== 0) {
-    log.warn(
-      `Metadata egress verification failed for ${containerName}: iptables rule not found after apply.`,
+    throw new Error(
+      `Metadata egress verification failed for ${containerName}: iptables rule not found after apply. ` +
+        `Sandbox cannot start without SSRF protection.`,
     );
   }
 }

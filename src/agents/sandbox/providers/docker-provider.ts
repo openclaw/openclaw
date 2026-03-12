@@ -84,7 +84,7 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
     if (state.exists && !state.running) {
       // Container exists but stopped — restart it
       await execDocker(["start", containerName]);
-      await applyMetadataEgressBlock(containerName);
+      await applyMetadataEgressBlock(containerName, params.cfg.networkMode ?? DEFAULT_NETWORK_MODE);
       return containerName;
     }
 
@@ -101,7 +101,8 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
     createArgs.push("--cap-add=NET_ADMIN");
 
     // Network isolation (custom or default)
-    const networkFlags = buildNetworkFlag(params.cfg.networkMode ?? DEFAULT_NETWORK_MODE);
+    const networkMode = params.cfg.networkMode ?? DEFAULT_NETWORK_MODE;
+    const networkFlags = buildNetworkFlag(networkMode);
     createArgs.push(...networkFlags);
 
     // Environment variables with secret filtering
@@ -122,7 +123,7 @@ export class DockerProvider implements ISandboxProvider, IBrowserCapable {
     await execDocker(["start", containerName]);
 
     // Block egress to cloud metadata endpoints (SSRF defense-in-depth)
-    await applyMetadataEgressBlock(containerName);
+    await applyMetadataEgressBlock(containerName, networkMode);
 
     return containerName;
   }
