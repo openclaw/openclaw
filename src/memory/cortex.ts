@@ -185,11 +185,13 @@ export async function previewCortexContext(params: {
   maxChars?: number;
   status?: CortexStatus;
 }): Promise<CortexPreview> {
-  const status = requireCortexStatus(await resolveCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-    status: params.status,
-  }));
+  const status = requireCortexStatus(
+    await resolveCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: params.graphPath,
+      status: params.status,
+    }),
+  );
   const policy = params.policy ?? DEFAULT_POLICY;
   const maxChars = params.maxChars ?? DEFAULT_MAX_CHARS;
   try {
@@ -220,11 +222,13 @@ export async function listCortexMemoryConflicts(params: {
   minSeverity?: number;
   status?: CortexStatus;
 }): Promise<CortexMemoryConflict[]> {
-  const status = requireCortexStatus(await resolveCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-    status: params.status,
-  }));
+  const status = requireCortexStatus(
+    await resolveCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: params.graphPath,
+      status: params.status,
+    }),
+  );
   const args = ["memory", "conflicts", status.graphPath, "--format", "json"];
   if (typeof params.minSeverity === "number" && Number.isFinite(params.minSeverity)) {
     args.push("--severity", String(params.minSeverity));
@@ -258,11 +262,13 @@ export async function resolveCortexMemoryConflict(params: {
   commitMessage?: string;
   status?: CortexStatus;
 }): Promise<CortexMemoryResolveResult> {
-  const status = requireCortexStatus(await resolveCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-    status: params.status,
-  }));
+  const status = requireCortexStatus(
+    await resolveCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: params.graphPath,
+      status: params.status,
+    }),
+  );
   const args = [
     "memory",
     "resolve",
@@ -305,11 +311,13 @@ export async function syncCortexCodingContext(params: {
   platforms?: string[];
   status?: CortexStatus;
 }): Promise<CortexCodingSyncResult> {
-  const status = requireCortexStatus(await resolveCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-    status: params.status,
-  }));
+  const status = requireCortexStatus(
+    await resolveCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: params.graphPath,
+      status: params.status,
+    }),
+  );
   const policy = params.policy ?? DEFAULT_POLICY;
   const requestedPlatforms = params.platforms?.map((entry) => entry.trim()).filter(Boolean) ?? [];
   const platforms =
@@ -376,11 +384,13 @@ export async function ingestCortexMemoryFromText(params: {
   if (!text) {
     throw new Error("Cortex memory ingest requires non-empty text");
   }
-  const status = requireCortexStatus(await resolveCortexStatus({
-    workspaceDir: params.workspaceDir,
-    graphPath: params.graphPath,
-    status: params.status,
-  }));
+  const status = requireCortexStatus(
+    await resolveCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: params.graphPath,
+      status: params.status,
+    }),
+  );
   await fs.mkdir(path.dirname(status.graphPath), { recursive: true });
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cortex-ingest-"));
   const inputPath = path.join(tmpDir, "memory.txt");
