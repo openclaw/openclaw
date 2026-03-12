@@ -278,13 +278,12 @@ function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "a
   return "async";
 }
 
-async function syncPostCompactionSessionMemory(params: {
+async function runPostCompactionSessionMemorySync(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionFile: string;
-  mode: "off" | "async" | "await";
 }): Promise<void> {
-  if (params.mode === "off" || !params.config) {
+  if (!params.config) {
     return;
   }
   try {
@@ -306,18 +305,48 @@ async function syncPostCompactionSessionMemory(params: {
     const syncTask = manager.sync({
       reason: "post-compaction",
       force: resolvedMemory.sync.sessions.postCompactionForce,
-      sessionFiles: [params.sessionFile],
+      sessionFiles: [params.sessionFile.trim()],
     });
-    if (params.mode === "await") {
-      await syncTask;
-    } else {
-      void syncTask.catch((err) => {
-        log.warn(`memory sync failed (post-compaction): ${String(err)}`);
-      });
-    }
+    await syncTask;
   } catch (err) {
     log.warn(`memory sync skipped (post-compaction): ${String(err)}`);
   }
+}
+
+function syncPostCompactionSessionMemory(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionFile: string;
+  mode: "off" | "async" | "await";
+}): Promise<void> {
+  if (params.mode === "off" || !params.config) {
+    return Promise.resolve();
+  }
+
+  const syncTask = runPostCompactionSessionMemorySync({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+  });
+  if (params.mode === "await") {
+    return syncTask;
+  }
+  void syncTask;
+  return Promise.resolve();
+}
+
+async function runPostCompactionSideEffects(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionFile: string;
+}): Promise<void> {
+  emitSessionTranscriptUpdate(params.sessionFile);
+  await syncPostCompactionSessionMemory({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+    mode: resolvePostCompactionIndexSyncMode(params.config),
+  });
 }
 
 /**
@@ -861,12 +890,10 @@ export async function compactEmbeddedPiSessionDirect(
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
-        emitSessionTranscriptUpdate(params.sessionFile);
-        await syncPostCompactionSessionMemory({
+        await runPostCompactionSideEffects({
           config: params.config,
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
-          mode: resolvePostCompactionIndexSyncMode(params.config),
         });
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -1057,6 +1084,13 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext: params as Record<string, unknown>,
         });
+        if (result.ok && result.compacted) {
+          await runPostCompactionSideEffects({
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+          });
+        }
         if (result.ok && result.compacted && hookRunner?.hasHooks("after_compaction")) {
           try {
             await hookRunner.runAfterCompaction(

@@ -564,14 +564,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("fires post-compaction memory sync without awaiting it in async mode", async () => {
-    let resolveSync: (() => void) | undefined;
-    const syncGate = new Promise<void>((resolve) => {
-      resolveSync = resolve;
+    const sync = vi.fn(async () => {});
+    let resolveManager: ((value: { manager: { sync: typeof sync } }) => void) | undefined;
+    const managerGate = new Promise<{ manager: { sync: typeof sync } }>((resolve) => {
+      resolveManager = resolve;
     });
-    const sync = vi.fn(() => syncGate);
-    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    getMemorySearchManagerMock.mockImplementation(() => managerGate);
+    let settled = false;
 
-    const result = await compactEmbeddedPiSessionDirect({
+    const resultPromise = compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -588,13 +589,27 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       } as never,
     });
 
-    expect(result.ok).toBe(true);
-    expect(sync).toHaveBeenCalledWith({
-      reason: "post-compaction",
-      force: true,
+    await vi.waitFor(() => {
+      expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
     });
-    resolveSync?.();
-    await syncGate;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => {
+      expect(settled).toBe(true);
+    });
+    expect(sync).not.toHaveBeenCalled();
+    resolveManager?.({ manager: { sync } });
+    await managerGate;
+    await vi.waitFor(() => {
+      expect(sync).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        force: true,
+        sessionFiles: ["/tmp/session.jsonl"],
+      });
+    });
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", async () => {
@@ -691,8 +706,48 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     );
   });
 
+  it("emits a transcript update and post-compaction memory sync on the engine-owned path", async () => {
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+
+    try {
+      const result = await compactEmbeddedPiSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: "  /tmp/session.jsonl  ",
+        workspaceDir: "/tmp",
+        customInstructions: "focus on decisions",
+        enqueue: (task) => task(),
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                postIndexSync: "await",
+              },
+            },
+          },
+        } as never,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
+      expect(sync).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        force: true,
+        sessionFiles: ["/tmp/session.jsonl"],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("does not fire after_compaction when compaction fails", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
     contextEngineCompactMock.mockResolvedValue({
       ok: false,
       compacted: false,
@@ -712,6 +767,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(false);
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
   });
 
   it("catches and logs hook exceptions without aborting compaction", async () => {
