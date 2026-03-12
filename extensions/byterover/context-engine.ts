@@ -91,7 +91,12 @@ export class ByteRoverContextEngine implements ContextEngine {
         config: this.config,
         logger: this.logger,
         context,
-        detach: true, // Fire-and-forget so we don't block the turn
+        // --detach tells the brv daemon to queue curation work asynchronously.
+        // The CLI process itself exits immediately (~ms) after the daemon acknowledges
+        // the request, so the await here only waits for that quick handshake — not for
+        // the actual curation to complete. We still await to capture the JSON response
+        // (queued status, task ID) and to surface ENOENT / crash errors.
+        detach: true,
       });
       this.logger.debug?.(`afterTurn curate result: ${JSON.stringify(result.data?.status)}`);
     } catch (err) {
@@ -134,8 +139,9 @@ export class ByteRoverContextEngine implements ContextEngine {
       };
     }
 
-    // Race brv query against a deadline so we never exceed the agent ready timeout (15s).
-    // Default assembleTimeoutMs is 10s — leaves headroom for the runtime's own overhead.
+    // Abort-based deadline so we never exceed the agent ready timeout (15s).
+    // Default 10s — leaves headroom for the runtime's own overhead.
+    // The signal is passed to brvQuery → runBrv, which kills the child process on abort.
     const assembleTimeout = this.config.queryTimeoutMs
       ? Math.min(this.config.queryTimeoutMs, 10_000)
       : 10_000;
@@ -144,34 +150,41 @@ export class ByteRoverContextEngine implements ContextEngine {
       `assemble querying brv: "${query.slice(0, 100)}${query.length > 100 ? "..." : ""}" (timeout=${assembleTimeout}ms)`,
     );
     let systemPromptAddition: string | undefined;
+    const ac = new AbortController();
+    const deadline = setTimeout(() => ac.abort(), assembleTimeout);
     try {
-      const result = await Promise.race([
-        brvQuery({ config: this.config, logger: this.logger, query }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), assembleTimeout)),
-      ]);
+      const result = await brvQuery({
+        config: this.config,
+        logger: this.logger,
+        query,
+        signal: ac.signal,
+      });
 
-      if (result === null) {
+      const answer = result.data?.result ?? result.data?.content;
+      if (answer && answer.trim()) {
+        systemPromptAddition =
+          `<byterover-context>\n` +
+          `The following curated knowledge is from ByteRover context engine:\n\n` +
+          `${answer.trim()}\n` +
+          `</byterover-context>`;
+        this.logger.info(
+          `assemble injecting systemPromptAddition (${systemPromptAddition.length} chars)`,
+        );
+      } else {
+        this.logger.debug?.("assemble brv query returned empty result");
+      }
+    } catch (err) {
+      // Don't fail the prompt if brv query fails or times out
+      const msg = String(err);
+      if (msg.includes("aborted")) {
         this.logger.warn(
           `assemble brv query timed out after ${assembleTimeout}ms — proceeding without context`,
         );
       } else {
-        const answer = result.data?.result ?? result.data?.content;
-        if (answer && answer.trim()) {
-          systemPromptAddition =
-            `<byterover-context>\n` +
-            `The following curated knowledge is from ByteRover context engine:\n\n` +
-            `${answer.trim()}\n` +
-            `</byterover-context>`;
-          this.logger.info(
-            `assemble injecting systemPromptAddition (${systemPromptAddition.length} chars)`,
-          );
-        } else {
-          this.logger.debug?.("assemble brv query returned empty result");
-        }
+        this.logger.warn(`query failed (best-effort): ${msg}`);
       }
-    } catch (err) {
-      // Don't fail the prompt if brv query fails
-      this.logger.warn(`query failed (best-effort): ${String(err)}`);
+    } finally {
+      clearTimeout(deadline);
     }
 
     return {
