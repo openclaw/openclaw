@@ -27,9 +27,9 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { normalizeVerboseLevel } from "../thinking.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
@@ -338,15 +338,17 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    // Tool summaries are normally suppressed in group and native flows to reduce noise.
+    // Tool summaries are normally suppressed in group chat flows to reduce noise.
     // However, when the user has explicitly enabled verbose mode (/verbose on or /verbose full),
-    // we honour their intent and send tool results regardless of chat type.
+    // we honour their intent and deliver tool results even in group chats.
+    // Native command-source sessions remain suppressed regardless of verbose level.
     const resolvedVerboseLevel = normalizeVerboseLevel(
       String(sessionStoreEntry.entry?.verboseLevel ?? ""),
     );
     const verboseToolsEnabled = resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full";
-    const shouldSendToolSummaries =
-      (ctx.ChatType !== "group" && ctx.CommandSource !== "native") || verboseToolsEnabled;
+    const isGroupSuppressed = ctx.ChatType === "group" && !verboseToolsEnabled;
+    const isNativeSuppressed = ctx.CommandSource === "native";
+    const shouldSendToolSummaries = !isGroupSuppressed && !isNativeSuppressed;
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
