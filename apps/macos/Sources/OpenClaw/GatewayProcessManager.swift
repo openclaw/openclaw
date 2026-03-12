@@ -377,11 +377,8 @@ final class GatewayProcessManager {
 
     private func shouldAbortReadinessWait(for status: Status) -> Bool {
         guard case let .failed(message) = status else { return false }
-        // `enableLaunchdGateway` can mark startup as timed out after 6s, while callers
-        // may intentionally wait longer before giving up.
-        if self.lastFailureReason == "launchd start timeout" {
-            return false
-        }
+        // Only treat the active startup-timeout status as recoverable.
+        // Using prior failure metadata here can mask new fatal failures.
         return message != "Gateway did not start in time"
     }
 

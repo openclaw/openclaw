@@ -79,6 +79,41 @@ struct GatewayProcessManagerTests {
         #expect(await sendAttempts.value == 0)
     }
 
+    @Test func `stale launchd timeout reason does not bypass fatal fail-fast`() async throws {
+        let sendAttempts = SendAttemptCounter()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, _, _ in
+                        await sendAttempts.increment()
+                    })
+            })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let connection = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        let manager = GatewayProcessManager.shared
+        manager.setTestingConnection(connection)
+        manager.setTestingDesiredActive(true)
+        manager.setTestingStatus(.failed("openclaw CLI not found in PATH; install the CLI."))
+        manager.setTestingLastFailureReason("launchd start timeout")
+        defer {
+            manager.setTestingConnection(nil)
+            manager.setTestingDesiredActive(false)
+            manager.setTestingStatus(.stopped)
+            manager.setTestingLastFailureReason(nil)
+        }
+
+        let startedAt = Date()
+        let ready = await manager.waitForGatewayReady(timeout: 0.5)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(ready == false)
+        #expect(elapsed < 0.2)
+        #expect(await sendAttempts.value == 0)
+    }
+
     @Test func `continues probing when launchd startup timeout is recoverable`() async throws {
         let sendAttempts = SendAttemptCounter()
         let session = GatewayTestWebSocketSession(
