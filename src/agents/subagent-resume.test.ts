@@ -94,6 +94,18 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
+vi.mock("../config/agent-limits.js", () => ({
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 1,
+}));
+
+vi.mock("./subagent-announce.js", () => ({
+  buildSubagentSystemPrompt: vi.fn(() => "mocked-system-prompt"),
+}));
+
+vi.mock("./subagent-depth.js", () => ({
+  getSubagentDepthFromSessionStore: vi.fn(() => 1),
+}));
+
 // ---------------------------------------------------------------------------
 // Import the module under test (after mocks are set up)
 // ---------------------------------------------------------------------------

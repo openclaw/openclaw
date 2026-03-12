@@ -29,6 +29,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -42,6 +43,8 @@ import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-resume");
@@ -274,7 +277,6 @@ function scanSessionsDirForTranscriptCandidate(
 ): string | null {
   try {
     const files = fs.readdirSync(sessionsDir);
-    const now = Date.now();
     const candidates: string[] = [];
     for (const file of files) {
       if (!file.endsWith(".jsonl")) {
@@ -287,9 +289,11 @@ function scanSessionsDirForTranscriptCandidate(
         // On Linux filesystems that do not report birth-time, birthtimeMs equals
         // mtimeMs; in that case fall back to mtimeMs as a reasonable proxy.
         const fileCreatedAtMs = stat.birthtimeMs !== stat.mtimeMs ? stat.birthtimeMs : stat.mtimeMs;
-        const fileAgeMs = now - fileCreatedAtMs;
         const timeDiffMs = Math.abs(fileCreatedAtMs - targetCreatedAtMs);
-        if (fileAgeMs <= 60 * 60_000 && timeDiffMs <= toleranceMs) {
+        // No upper age bound: a run that started hours before a restart must
+        // still be recoverable.  The toleranceMs window relative to the
+        // registry entry's createdAt already constrains the match tightly.
+        if (timeDiffMs <= toleranceMs) {
           candidates.push(fullPath);
         }
       } catch {
@@ -603,6 +607,33 @@ export async function redispatchSubagentRunAfterRestart(
   }
 
   // Re-dispatch the original task to the child session.
+  // Reconstruct the full prompt contract that was used in the original dispatch
+  // (subagent-spawn.ts) so that the re-dispatched run behaves identically:
+  //   • childTaskMessage — wraps the task with [Subagent Context] / [Subagent Task] headers
+  //   • extraSystemPrompt — the full subagent system-prompt block from buildSubagentSystemPrompt
+  const cfg = loadConfig();
+  const maxSpawnDepth =
+    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const childDepth = getSubagentDepthFromSessionStore(childSessionKey, { cfg });
+  const childTaskMessage = [
+    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+    entry.spawnMode === "session"
+      ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
+      : undefined,
+    `[Subagent Task]: ${entry.task}`,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n\n");
+  const extraSystemPrompt = buildSubagentSystemPrompt({
+    requesterSessionKey: entry.requesterSessionKey,
+    requesterOrigin: entry.requesterOrigin,
+    childSessionKey,
+    label: entry.label,
+    task: entry.task,
+    childDepth,
+    maxSpawnDepth,
+  });
+
   const redispatchIdem = crypto.randomUUID();
   // Use a fresh UUID for newRunId so it is never confused with the idempotency
   // key, which is for deduplication only and is not a valid run ID.
@@ -616,12 +647,13 @@ export async function redispatchSubagentRunAfterRestart(
     const response = await callGateway<{ runId?: string }>({
       method: "agent",
       params: {
-        message: entry.task,
+        message: childTaskMessage,
         sessionKey: childSessionKey,
         idempotencyKey: redispatchIdem,
         deliver: false,
         lane: AGENT_LANE_SUBAGENT,
         timeout: entry.runTimeoutSeconds,
+        extraSystemPrompt,
         // Preserve original run's depth/parent context so the session tree
         // remains consistent after restart.
         spawnedBy: entry.requesterSessionKey,
