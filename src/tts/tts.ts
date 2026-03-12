@@ -999,9 +999,23 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const ttsStart = Date.now();
+  const mergedTtsConfig =
+    params.channel && params.accountId
+      ? mergeTtsConfig(
+          params.cfg.messages?.tts ?? {},
+          params.cfg.channels?.[params.channel]?.accounts?.[params.accountId]?.tts,
+        )
+      : params.cfg.messages?.tts;
+  const cfgWithAccountTts = {
+    ...params.cfg,
+    messages: {
+      ...params.cfg.messages,
+      tts: mergedTtsConfig,
+    },
+  };
   const result = await textToSpeech({
     text: textForAudio,
-    cfg: params.cfg,
+    cfg: cfgWithAccountTts,
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
