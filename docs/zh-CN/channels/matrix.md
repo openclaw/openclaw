@@ -165,6 +165,7 @@ E2EE 配置（启用端到端加密）：
 - 配置向导会提示输入房间允许列表（房间 ID、别名或名称），仅在精确且唯一匹配时解析名称。
 - 启动时，OpenClaw 将允许列表中的房间/用户名称解析为 ID 并记录映射；未解析的条目不会参与允许列表匹配。
 - 默认自动加入邀请；使用 `channels.matrix.autoJoin` 和 `channels.matrix.autoJoinAllowlist` 控制。
+- 在 `allowlist` 模式下，`channels.matrix.autoJoinAllowlist` 支持邀请者用户 ID、房间 ID、房间别名以及 `"*"`。
 - 要**禁止所有房间**，设置 `channels.matrix.groupPolicy: "disabled"`（或保持空的允许列表）。
 - 旧版键名：`channels.matrix.rooms`（与 `groups` 相同的结构）。
 
@@ -217,5 +218,5 @@ E2EE 配置（启用端到端加密）：
 - `channels.matrix.replyToMode`：话题/标签的 reply-to 模式。
 - `channels.matrix.mediaMaxMb`：入站/出站媒体上限（MB）。
 - `channels.matrix.autoJoin`：邀请处理（`always | allowlist | off`，默认：always）。
-- `channels.matrix.autoJoinAllowlist`：自动加入的允许房间 ID/别名。
+- `channels.matrix.autoJoinAllowlist`：自动加入的允许邀请者用户 ID、房间 ID、房间别名或 `"*"`。
 - `channels.matrix.actions`：每个操作的工具限制（reactions/messages/pins/memberInfo/channelInfo）。

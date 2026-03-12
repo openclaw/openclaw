@@ -85,7 +85,7 @@ export type MatrixConfig = {
   mediaMaxMb?: number;
   /** Auto-join invites (always|allowlist|off). Default: always. */
   autoJoin?: "always" | "allowlist" | "off";
-  /** Allowlist for auto-join invites (room IDs, aliases). */
+  /** Allowlist for auto-join invites (inviter user IDs, room IDs, aliases). */
   autoJoinAllowlist?: Array<string | number>;
   /** Direct message policy + allowlist overrides. */
   dm?: MatrixDmConfig;
