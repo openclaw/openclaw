@@ -119,8 +119,9 @@ export class OpenAITTSProvider {
       body.instructions = effectiveInstructions;
     }
 
+    let response: Response;
     try {
-      const response = await fetch("https://api.openai.com/v1/audio/speech", {
+      response = await fetch("https://api.openai.com/v1/audio/speech", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -129,22 +130,29 @@ export class OpenAITTSProvider {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30_000),
       });
-
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`OpenAI TTS failed: ${response.status} - ${error}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      return Buffer.from(arrayBuffer);
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith("OpenAI TTS failed:")) {
-        throw err;
-      }
       throw new Error(
         `OpenAI TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
+
+    if (!response.ok) {
+      const error = await response.text().catch(() => "");
+      throw new Error(`OpenAI TTS failed: ${response.status} - ${error}`);
+    }
+
+    let arrayBuffer: ArrayBuffer;
+    try {
+      arrayBuffer = await response.arrayBuffer();
+    } catch (err) {
+      throw new Error(
+        `OpenAI TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+
+    return Buffer.from(arrayBuffer);
   }
 
   /**
