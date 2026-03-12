@@ -348,6 +348,36 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("does not let unauthorized floods rate-limit authenticated traffic from the same remote address", async () => {
+    const unregister = registerTarget({ path: "/hook-preauth-split" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-preauth-split",
+          secret: "invalid-token", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
+
+        expect(saw429).toBe(true);
+
+        const validResponse = await fetch(`${baseUrl}/hook-preauth-split`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ event_name: "message.unsupported.received" }),
+        });
+
+        expect(validResponse.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
   it("still returns 401 before 415 when both secret and content-type are invalid", async () => {
     const unregister = registerTarget({ path: "/hook-auth-before-type" });
 
