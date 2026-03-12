@@ -112,6 +112,7 @@ describe("cliTTS", () => {
       expect.any(Array),
       expect.objectContaining({
         env: expect.objectContaining({
+          TTS_TEXT: "Hello",
           TTS_OUTPUT_PATH: "/tmp/out.opus",
           TTS_OUTPUT_FORMAT: "opus",
         }),

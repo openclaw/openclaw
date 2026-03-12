@@ -185,6 +185,14 @@ Use any command-line TTS tool. The CLI provider is useful for local TTS engines 
 - `{{TtsOutputPath}}` — Full path where audio output should be written
 - `{{TtsOutputFormat}}` — Output format (`pcm` for telephony, `opus` for voice note, `mp3` otherwise)
 
+**Environment variables:**
+
+- `TTS_TEXT` — The text to convert (same as `{{TtsText}}`)
+- `TTS_OUTPUT_PATH` — Output path (same as `{{TtsOutputPath}}`)
+- `TTS_OUTPUT_FORMAT` — Output format (same as `{{TtsOutputFormat}}`)
+
+Use environment variables instead of template variables if your CLI tool is a Windows batch wrapper (`.cmd`/`.bat`), since special characters like `&`, `%`, `|`, or newlines in user text can cause argument parsing failures. For example, text containing `R&D` would fail when passed via `{{TtsText}}` but works via `TTS_TEXT` env var.
+
 If the CLI command exits with non-zero code, OpenClaw automatically falls back to the next configured provider. You may need to enlarge `timeoutMs` if local CLI is slow.
 
 ### Custom limits + prefs path

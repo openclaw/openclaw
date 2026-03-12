@@ -329,7 +329,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     },
     cli: {
       command: raw.cli?.command?.trim() ?? "",
-      args: raw.cli?.args ?? [],
+      args: raw.cli?.args,
       sampleRate: raw.cli?.sampleRate,
     },
     prefsPath: raw.prefsPath,
