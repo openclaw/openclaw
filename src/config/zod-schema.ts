@@ -247,6 +247,14 @@ export const OpenClawSchema = z
         lastRunCommit: z.string().optional(),
         lastRunCommand: z.string().optional(),
         lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        rescueWatchdog: z
+          .object({
+            managed: z.boolean().optional(),
+            monitoredProfile: z.string().optional(),
+            agentId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

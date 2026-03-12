@@ -31,6 +31,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce onboarding steps when verifying setup regressions.",
   "wizard.lastRunMode":
     'Wizard execution mode recorded as "local" or "remote" for the most recent onboarding flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+  "wizard.rescueWatchdog":
+    "System-managed marker describing whether onboarding provisioned a dedicated rescue watchdog profile for this config. Keep this metadata intact so reruns can distinguish OpenClaw-managed rescue profiles from user-owned profiles.",
+  "wizard.rescueWatchdog.managed":
+    "Boolean marker set by onboarding when this profile is managed as a rescue watchdog. OpenClaw uses this to avoid overwriting user-created rescue-suffixed profiles during future onboarding runs.",
+  "wizard.rescueWatchdog.monitoredProfile":
+    "Primary profile name currently monitored by this rescue watchdog profile. Use this to verify watchdog ownership and to diagnose cross-profile configuration drift.",
+  "wizard.rescueWatchdog.agentId":
+    "Dedicated agent identifier used by the rescue watchdog cron job. Keep this stable so scheduled repair runs continue targeting the least-privileged watchdog agent instead of the default agent.",
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":
