@@ -4,6 +4,7 @@ import {
   monitorSingleAccount,
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
+  type FeishuStatusSink,
 } from "./monitor.account.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -18,6 +19,7 @@ export type MonitorFeishuOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  statusSink?: FeishuStatusSink;
 };
 
 export {
@@ -46,6 +48,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       account,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
+      statusSink: opts.statusSink,
     });
   }
 
@@ -83,6 +86,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        statusSink: opts.statusSink,
       }),
     );
   }
