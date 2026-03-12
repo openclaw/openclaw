@@ -123,6 +123,9 @@ export default defineConfig([
     }),
   ),
   nodeBuildConfig({
+    entry: { "gateway/server": "src/gateway/server.ts" },
+  }),
+  nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),
   nodeBuildConfig({
