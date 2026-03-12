@@ -231,3 +231,104 @@ function buildGatewayProbeWarning(
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
 }
+
+/**
+ * Structured result of memorySearch configuration diagnostics.
+ */
+export type MemorySearchDiagnosticResult = {
+  valid: boolean;
+  provider?: string;
+  issues: Array<{
+    field: string;
+    message: string;
+    fix?: string;
+  }>;
+};
+
+/**
+ * Validates memorySearch configuration and returns structured diagnostic output.
+ *
+ * Checks:
+ * - provider is defined (not "auto")
+ * - required keys exist:
+ *   - openai: apiKey, model
+ *   - ollama: host, model
+ *
+ * @returns Structured diagnostic result with issues and fix suggestions
+ */
+export function checkMemorySearch(cfg: OpenClawConfig): MemorySearchDiagnosticResult {
+  const agentId = resolveDefaultAgentId(cfg);
+  const resolved = resolveMemorySearchConfig(cfg, agentId);
+
+  // Memory search is explicitly disabled
+  if (!resolved) {
+    return {
+      valid: true,
+      issues: [],
+    };
+  }
+
+  const issues: MemorySearchDiagnosticResult["issues"] = [];
+
+  // Check if provider is "auto" - this should be resolved to a specific provider
+  if (resolved.provider === "auto") {
+    issues.push({
+      field: "provider",
+      message: 'memorySearch.provider is set to "auto" - no specific provider configured',
+      fix: `Set a specific provider: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider openai")} or ${formatCliCommand("openclaw config set agents.defaults.memorySearch.provider ollama")}`,
+    });
+    return {
+      valid: false,
+      provider: resolved.provider,
+      issues,
+    };
+  }
+
+  // Validate based on provider type
+  if (resolved.provider === "openai") {
+    // Check for apiKey
+    const hasApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
+    if (!hasApiKey) {
+      issues.push({
+        field: "remote.apiKey",
+        message: "openai provider requires apiKey to be configured",
+        fix: `Set OPENAI_API_KEY environment variable or configure via: ${formatCliCommand("openclaw configure --section model")}`,
+      });
+    }
+
+    // Check for model
+    if (!resolved.model || resolved.model.trim() === "") {
+      issues.push({
+        field: "model",
+        message: "openai provider requires a model to be specified",
+        fix: `Set a model: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model text-embedding-3-small")}`,
+      });
+    }
+  } else if (resolved.provider === "ollama") {
+    // Check for host
+    if (!resolved.remote?.baseUrl || resolved.remote.baseUrl.trim() === "") {
+      issues.push({
+        field: "remote.baseUrl",
+        message: "ollama provider requires host (baseUrl) to be configured",
+        fix: `Set the Ollama host: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.remote.baseUrl http://localhost:11434")}`,
+      });
+    }
+
+    // Check for model
+    if (!resolved.model || resolved.model.trim() === "") {
+      issues.push({
+        field: "model",
+        message: "ollama provider requires a model to be specified",
+        fix: `Set a model: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model nomic-embed-text")}`,
+      });
+    }
+  }
+  // For other providers (local, gemini, voyage, mistral), the existing noteMemorySearchHealth
+  // function handles the validation
+
+  return {
+    valid: issues.length === 0,
+    provider: resolved.provider,
+    issues,
+  };
+}

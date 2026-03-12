@@ -30,6 +30,7 @@ vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
 }));
 
+import { checkMemorySearch } from "./doctor-memory-search.js";
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
@@ -298,5 +299,380 @@ describe("detectLegacyWorkspaceDirs", () => {
     const detection = detectLegacyWorkspaceDirs({ workspaceDir });
     expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
     expect(detection.legacyDirs).toEqual([]);
+  });
+});
+
+describe("checkMemorySearch", () => {
+  const cfg = {} as OpenClawConfig;
+
+  beforeEach(() => {
+    resolveMemorySearchConfig.mockReset();
+  });
+
+  it("returns valid: true when memory search is disabled", () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it("returns invalid when provider is 'auto'", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      model: "",
+      local: {},
+      remote: {},
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(false);
+    expect(result.provider).toBe("auto");
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe("provider");
+    expect(result.issues[0].message).toContain('"auto"');
+    expect(result.issues[0].fix).toBeDefined();
+  });
+
+  it("returns invalid when openai provider is missing apiKey", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(false);
+    expect(result.provider).toBe("openai");
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe("remote.apiKey");
+    expect(result.issues[0].fix).toContain("OPENAI_API_KEY");
+  });
+
+  it("returns invalid when openai provider is missing model", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "",
+      local: {},
+      remote: { apiKey: "test-key" },
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe("model");
+  });
+
+  it("returns valid when openai has both apiKey and model", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: { apiKey: "test-key" },
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it("returns invalid when ollama provider is missing host", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      model: "nomic-embed-text",
+      local: {},
+      remote: {},
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(false);
+    expect(result.provider).toBe("ollama");
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe("remote.baseUrl");
+    expect(result.issues[0].fix).toContain("baseUrl");
+  });
+
+  it("returns invalid when ollama provider is missing model", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      model: "",
+      local: {},
+      remote: { baseUrl: "http://localhost:11434" },
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].field).toBe("model");
+  });
+
+  it("returns valid when ollama has both host and model", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      model: "nomic-embed-text",
+      local: {},
+      remote: { baseUrl: "http://localhost:11434" },
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it("returns valid when openai has SecretRef apiKey configured", () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {
+        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      enabled: true,
+      sources: ["memory"],
+      extraPaths: [],
+      multimodal: { enabled: false },
+      experimental: { sessionMemory: false },
+      fallback: "none",
+      store: { driver: "sqlite", path: "", vector: { enabled: true } },
+      chunking: { tokens: 400, overlap: 80 },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        watchDebounceMs: 1500,
+        intervalMinutes: 0,
+        sessions: { deltaBytes: 100000, deltaMessages: 50 },
+      },
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4,
+          mmr: { enabled: false, lambda: 0.7 },
+          temporalDecay: { enabled: false, halfLifeDays: 30 },
+        },
+      },
+      cache: { enabled: true },
+    });
+
+    const result = checkMemorySearch(cfg);
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 });
