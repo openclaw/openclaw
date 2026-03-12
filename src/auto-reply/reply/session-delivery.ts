@@ -142,10 +142,19 @@ export function resolveLastToRaw(params: {
   persistedLastChannel?: string;
   sessionKey?: string;
 }): string | undefined {
-  // Inter-session messages: preserve the receiver's established destination.
-  // The sender's to/accountId/threadId are irrelevant to the receiver's route.
+  // Inter-session messages: preserve the receiver's established destination,
+  // but only when the persisted channel is already external. If the channel
+  // resolver falls back to a session-key hint (e.g. discord derived from the
+  // key while persistedLastChannel is still webchat), returning a stale
+  // persistedLastTo would create a mismatched lastChannel/lastTo pair and route
+  // replies to an invalid destination. In that case return undefined so the
+  // caller can derive an appropriate target from the new channel.
   if (isInterSessionChannel(params.originatingChannelRaw)) {
-    return params.persistedLastTo;
+    const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+    if (isExternalRoutingChannel(persistedChannel)) {
+      return params.persistedLastTo;
+    }
+    return undefined;
   }
 
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
