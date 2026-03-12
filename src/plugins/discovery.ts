@@ -280,9 +280,38 @@ function isExtensionFile(filePath: string): boolean {
   return !filePath.endsWith(".d.ts");
 }
 
+/**
+ * Directories that should never be descended into during plugin/skill discovery.
+ * These contain dependency trees, build artifacts, or VCS metadata that are not
+ * valid plugin sources and can hold thousands of files — exhausting file
+ * descriptors on macOS and causing `spawn EBADF` gateway failures.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/2532
+ *      https://github.com/openclaw/openclaw/issues/11181
+ */
+const IGNORED_SCAN_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".cache",
+  ".tox",
+  "site-packages",
+  ".pnpm-store",
+  "browser_data",
+]);
+
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
   const normalized = dirName.trim().toLowerCase();
   if (!normalized) {
+    return true;
+  }
+  if (IGNORED_SCAN_DIRS.has(normalized)) {
     return true;
   }
   if (normalized.endsWith(".bak")) {
