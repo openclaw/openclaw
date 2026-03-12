@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
+  extractObservedOverflowTokenCount,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -461,6 +462,29 @@ describe("isLikelyContextOverflowError", () => {
   });
 });
 
+describe("extractObservedOverflowTokenCount", () => {
+  it("extracts provider-reported prompt token counts", () => {
+    expect(
+      extractObservedOverflowTokenCount(
+        '400 {"type":"error","error":{"message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
+      ),
+    ).toBe(277403);
+    expect(
+      extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens"),
+    ).toBe(12000);
+    expect(
+      extractObservedOverflowTokenCount(
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",
+      ),
+    ).toBe(145000);
+  });
+
+  it("returns undefined when overflow counts are not present", () => {
+    expect(extractObservedOverflowTokenCount("Prompt too large for this model")).toBeUndefined();
+    expect(extractObservedOverflowTokenCount("rate limit exceeded")).toBeUndefined();
+  });
+});
+
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
     expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
@@ -527,6 +551,23 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: MALFORMED_RESPONSE",
       "Unhandled stop reason: malformed_response",
       "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("matches network errno codes in serialized error messages", () => {
+    const samples = [
+      "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+      "Error: connect EHOSTUNREACH 10.0.0.1:443",
+      "Error: connect ENETUNREACH 10.0.0.1:443",
+      "Error: write EPIPE",
+      "Error: read ENETRESET",
+      "Error: connect EHOSTDOWN 192.168.1.1:443",
     ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
