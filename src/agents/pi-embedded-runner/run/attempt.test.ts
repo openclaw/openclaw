@@ -13,6 +13,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
+  wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -427,6 +428,137 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
+  });
+});
+
+describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
+  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
+    result: () => Promise<unknown>;
+    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+  } {
+    return {
+      async result() {
+        return params.resultMessage;
+      },
+      [Symbol.asyncIterator]() {
+        return (async function* () {
+          for (const event of params.events) {
+            yield event;
+          }
+        })();
+      },
+    };
+  }
+
+  async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
+    const wrappedFn = wrapStreamFnRepairMalformedToolCallArguments(baseFn as never);
+    return await wrappedFn({} as never, {} as never, {} as never);
+  }
+
+  it("repairs anthropic-compatible tool arguments when trailing junk follows valid JSON", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "xx",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(result).toBe(finalMessage);
+  });
+
+  it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp',
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+  });
+
+  it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"}oops',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
   });
 });
 
