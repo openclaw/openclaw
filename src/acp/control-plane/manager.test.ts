@@ -1422,4 +1422,72 @@ describe("AcpSessionManager", () => {
     // Only the event emitted before abort should have been dispatched.
     expect(dispatchedTexts).toEqual(["early"]);
   });
+
+  it("races abort signal against in-flight onEvent to prevent post-timeout event emission", async () => {
+    // Regression: the pre-check !combinedSignal.aborted prevents NEW onEvent calls
+    // after abort, but if the abort fires while onEvent is already awaiting, the
+    // callback runs to completion and subsequent events may still be dispatched.
+    // The race wraps the await so runTurn breaks out immediately when abort fires,
+    // without waiting for the in-flight callback to settle. refs #36860
+    const abortController = new AbortController();
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield { type: "text_delta" as const, text: "event-1" };
+      yield { type: "text_delta" as const, text: "event-2" };
+      yield { type: "done" as const };
+    });
+
+    // Deferred promise: simulates a slow onEvent that outlasts the abort.
+    let resolveSlowCallback!: () => void;
+    let slowCallbackSettled = false;
+    const slowCallbackDone = new Promise<void>((resolve) => {
+      resolveSlowCallback = () => {
+        slowCallbackSettled = true;
+        resolve();
+      };
+    });
+
+    let onEventCallCount = 0;
+    const manager = new AcpSessionManager();
+
+    await manager
+      .runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "hello",
+        mode: "prompt",
+        requestId: "r-inflight",
+        signal: abortController.signal,
+        onEvent: async (event) => {
+          onEventCallCount++;
+          if (event.type === "text_delta" && event.text === "event-1") {
+            // Abort fires while this callback is still awaiting — the race
+            // should break the event loop without waiting for slowCallbackDone.
+            abortController.abort();
+            await slowCallbackDone;
+          }
+        },
+      })
+      .catch(() => {
+        // runTurn may reject because the signal aborted — that is expected.
+      });
+
+    // runTurn resolved without waiting for the slow callback to settle.
+    expect(slowCallbackSettled).toBe(false);
+    // event-2 was never dispatched: the loop broke as soon as abort fired.
+    expect(onEventCallCount).toBe(1);
+
+    // Clean up the dangling promise to avoid leaked async.
+    resolveSlowCallback();
+  });
 });

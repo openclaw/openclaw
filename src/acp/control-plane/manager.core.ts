@@ -688,7 +688,31 @@ export class AcpSessionManager {
               );
             }
             if (input.onEvent && !combinedSignal.aborted) {
-              await input.onEvent(event);
+              // Race the in-flight callback against the abort signal so that if
+              // the ACP timeout fires while onEvent is awaiting, we break the
+              // event loop immediately rather than waiting for the callback to
+              // settle first.
+              let onEventAbortListener: (() => void) | undefined;
+              const onEventAbortPromise: Promise<never> = new Promise<never>((_, reject) => {
+                onEventAbortListener = () => reject(combinedSignal.reason);
+                combinedSignal.addEventListener("abort", onEventAbortListener, { once: true });
+              });
+              // Suppress unhandled-rejection if onEvent resolves before abort fires.
+              void onEventAbortPromise.catch(() => {});
+              try {
+                await Promise.race([input.onEvent(event), onEventAbortPromise]);
+              } catch (err) {
+                // Abort fired mid-callback: stop emitting events. The caller
+                // (withTimeout) already rejected; avoid cascading errors.
+                if (combinedSignal.aborted) {
+                  break;
+                }
+                throw err;
+              } finally {
+                if (onEventAbortListener) {
+                  combinedSignal.removeEventListener("abort", onEventAbortListener);
+                }
+              }
             }
           }
           if (streamError) {
