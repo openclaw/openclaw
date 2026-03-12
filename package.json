@@ -443,7 +443,8 @@
       "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.11",
-      "tough-cookie": "4.1.3"
+      "tough-cookie": "4.1.3",
+      "openclaw": ">=2026.3.11"
     },
     "onlyBuiltDependencies": [
       "@lydell/node-pty",
