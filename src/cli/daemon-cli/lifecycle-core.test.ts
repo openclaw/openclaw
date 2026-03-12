@@ -40,11 +40,12 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
 let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
-    ({ runServiceRestart, runServiceStop } = await import("./lifecycle-core.js"));
+    ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
   });
 
   beforeEach(() => {
@@ -191,6 +192,23 @@ describe("runServiceRestart token drift", () => {
 
     expect(result).toBe(true);
     expect(postRestartCheck).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+    expect(payload.result).toBe("scheduled");
+    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("emits scheduled when service start routes through a scheduled restart", async () => {
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.isLoaded).toHaveBeenCalledTimes(1);
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
     const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("scheduled");
