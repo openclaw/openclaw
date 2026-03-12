@@ -1163,6 +1163,32 @@ export async function runEmbeddedPiAgent(
               authRetryPending = true;
               continue;
             }
+            // Handle Claude/content-policy "sensitive" stop reason: return user-facing
+            // message and complete the run so polling does not stall (#43607).
+            if (/\b(?:unhandled\s+)?stop\s+reason:\s*sensitive\b/i.test(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text: "I cannot process this request as it contains content that violates our usage policies. Please rephrase your question.",
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt.systemPromptReport,
+                  aborted: false,
+                  stopReason: "sensitive",
+                },
+              };
+            }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {

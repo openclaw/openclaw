@@ -289,6 +289,13 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
   });
 
+  it("infers timeout from sensitive stop-reason message (#43607)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: sensitive" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: sensitive" })).toBe("timeout");
+  });
+
   it("infers timeout from connection/network error messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
