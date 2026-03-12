@@ -87,9 +87,9 @@ describe("getMissionControlRuns", () => {
         return {
           sessions: [
             {
-              key: "agent:angela:s-1",
-              label: "Angela campaign run",
-              agentId: "angela",
+              key: "agent:tonys-angels:s-1",
+              label: "Tony's Angels campaign run",
+              agentId: "tonys-angels",
               channel: "operator-control",
               updatedAt: Date.now() - 60_000,
               totalTokens: 120,
@@ -102,8 +102,8 @@ describe("getMissionControlRuns", () => {
         return {
           sessions: [
             {
-              key: "agent:angela:s-1",
-              agentId: "angela",
+              key: "agent:tonys-angels:s-1",
+              agentId: "tonys-angels",
               modelProvider: "anthropic",
               model: "claude-opus-4-6",
               usage: {
@@ -135,8 +135,8 @@ describe("getMissionControlRuns", () => {
     });
 
     expect(snapshot.history[0]).toMatchObject({
-      key: "agent:angela:s-1",
-      agentId: "angela",
+      key: "agent:tonys-angels:s-1",
+      agentId: "tonys-angels",
       totalTokens: 4321,
       totalCostUsd: 1.23,
       model: "anthropic/claude-opus-4-6",

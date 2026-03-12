@@ -2,15 +2,17 @@ import { describe, expect, it } from "vitest";
 import { computeAgentStats } from "../../mission-control-ui/src/lib/team-stats";
 import type { AgentRun, OperatorTaskRecord } from "../../mission-control-ui/src/types";
 
-function createTask(params: {
-  taskId?: string;
-  state?: OperatorTaskRecord["receipt"]["state"];
-  owner?: string;
-  failureCode?: string | null;
-  createdAt?: number;
-  updatedAt?: number;
-  outcome?: OperatorTaskRecord["outcome"];
-} = {}): OperatorTaskRecord {
+function createTask(
+  params: {
+    taskId?: string;
+    state?: OperatorTaskRecord["receipt"]["state"];
+    owner?: string;
+    failureCode?: string | null;
+    createdAt?: number;
+    updatedAt?: number;
+    outcome?: OperatorTaskRecord["outcome"];
+  } = {},
+): OperatorTaskRecord {
   const taskId = params.taskId ?? "task-1";
   return {
     envelope: {
@@ -22,7 +24,7 @@ function createTask(params: {
       target: {
         capability: "marketing",
         team_id: "marketing",
-        alias: "angela",
+        alias: "tonys-angels",
       },
       objective: "Ship campaign draft",
       tier: "STANDARD",
@@ -33,7 +35,7 @@ function createTask(params: {
       task_id: taskId,
       run_id: `run-${taskId}`,
       state: params.state ?? "completed",
-      owner: params.owner ?? "angela",
+      owner: params.owner ?? "tonys-angels",
       attempt: 0,
       created_at: params.createdAt ?? 1_700_000_000_000,
       updated_at: params.updatedAt ?? 1_700_000_060_000,
@@ -49,7 +51,7 @@ function createTask(params: {
 describe("mission control team stats", () => {
   it("counts receipt-only completions as success for external specialists", () => {
     const stats = computeAgentStats(
-      "angela",
+      "tonys-angels",
       [
         createTask({ taskId: "task-success", state: "completed" }),
         createTask({ taskId: "task-failure", state: "dead-letter", failureCode: "tool-timeout" }),
@@ -66,7 +68,7 @@ describe("mission control team stats", () => {
 
   it("keeps average completion time in milliseconds", () => {
     const stats = computeAgentStats(
-      "angela",
+      "tonys-angels",
       [
         createTask({
           taskId: "task-a",

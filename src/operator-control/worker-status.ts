@@ -1,3 +1,5 @@
+import { compileOperatorAgentRegistry } from "./agent-registry.js";
+
 function normalizeBaseUrl(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -71,7 +73,26 @@ export type OperatorAngelaStatusSnapshot = {
   authScheme: "bearer" | null;
   authEnv: string | null;
   authConfigured: boolean;
+  servedTeams: string[];
+  leadAliases: string[];
 };
+
+function resolveAngelaServedDomains(): Pick<
+  OperatorAngelaStatusSnapshot,
+  "servedTeams" | "leadAliases"
+> {
+  const registry = compileOperatorAgentRegistry();
+  const teams = registry.teams
+    .filter((team) => team.dispatchTransport === "angela-http")
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const leadAliases = Array.from(
+    new Set(teams.map((team) => team.lead?.trim()).filter((lead): lead is string => Boolean(lead))),
+  ).toSorted((left, right) => left.localeCompare(right));
+  return {
+    servedTeams: teams.map((team) => team.id),
+    leadAliases,
+  };
+}
 
 export function getOperatorWorkerStatus(): OperatorWorkerStatusSnapshot {
   const baseUrl = resolve2TonyBaseUrl();
@@ -90,6 +111,7 @@ export function getOperatorWorkerStatus(): OperatorWorkerStatusSnapshot {
 export function getOperatorAngelaStatus(): OperatorAngelaStatusSnapshot {
   const baseUrl = resolveAngelaBaseUrl();
   const sharedSecret = resolveAngelaSharedSecret();
+  const domains = resolveAngelaServedDomains();
   return {
     dispatchTransport: "angela-http",
     configured: Boolean(baseUrl),
@@ -97,5 +119,7 @@ export function getOperatorAngelaStatus(): OperatorAngelaStatusSnapshot {
     authScheme: "bearer",
     authEnv: "OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET",
     authConfigured: Boolean(sharedSecret),
+    servedTeams: domains.servedTeams,
+    leadAliases: domains.leadAliases,
   };
 }

@@ -1,6 +1,6 @@
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { getOperatorDebSyncStatus } from "./deb-sync.js";
 import { compileOperatorAgentRegistry } from "./agent-registry.js";
+import { getOperatorDebSyncStatus } from "./deb-sync.js";
 import { listOperatorMemory } from "./memory-store.js";
 import { getOperatorTaskStatusSummary, getOperatorTaskStorePath } from "./task-store.js";
 import { getOperatorAngelaStatus, getOperatorWorkerStatus } from "./worker-status.js";
@@ -31,6 +31,7 @@ export type OperatorControlStatusSnapshot = {
   mesh: {
     executionFleet: ReturnType<typeof getOperatorWorkerStatus>;
     projectOps: ReturnType<typeof getOperatorDebSyncStatus>;
+    domainOrchestrators: ReturnType<typeof getOperatorAngelaStatus>;
     marketing: ReturnType<typeof getOperatorAngelaStatus>;
   };
 };
@@ -68,6 +69,7 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
     mesh: {
       executionFleet: worker,
       projectOps: debSync,
+      domainOrchestrators: angela,
       marketing: angela,
     },
   };

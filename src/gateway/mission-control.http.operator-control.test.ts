@@ -185,7 +185,7 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
-  it("accepts Angela receipts on the shared operator callback route", async () => {
+  it("accepts delegated angela-http receipts on the shared operator callback route", async () => {
     await withStateDirEnv("openclaw-mc-operator-angela-http-", async () => {
       const createTask = await requestMissionControl({
         method: "POST",
@@ -195,7 +195,7 @@ describe.sequential("mission-control operator control routes", () => {
           idempotency_key: "idem-operator-angela-1",
           requester: { id: "tonya", kind: "operator" },
           target: { capability: "marketing", team_id: "marketing" },
-          objective: "Verify Angela receipt lifecycle",
+          objective: "Verify delegated receipt lifecycle",
           tier: "STANDARD",
           acceptance_criteria: ["task store contains completed marketing task"],
           timeout_s: 900,
@@ -217,7 +217,7 @@ describe.sequential("mission-control operator control routes", () => {
         url: "/mission-control/api/tasks/task-operator-angela-1",
         body: {
           state: "queued",
-          owner: "angela",
+          owner: "tonys-angels",
         },
       });
       expect(queueTask.statusCode).toBe(200);
@@ -233,7 +233,7 @@ describe.sequential("mission-control operator control routes", () => {
           attempt: 0,
           created_at: 1_700_000_000_000,
           updated_at: 1_700_000_000_100,
-          summary: "Angela completed operator task",
+          summary: "Tony's Angels completed operator task",
           result_status: "SUCCESS",
           output: {
             receipt: true,
@@ -244,7 +244,7 @@ describe.sequential("mission-control operator control routes", () => {
       expect(JSON.parse(String(patchTask.body))).toMatchObject({
         receipt: {
           state: "completed",
-          owner: "angela",
+          owner: "tonys-angels",
         },
       });
     });
@@ -296,9 +296,7 @@ describe.sequential("mission-control operator control routes", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toBe("http://deb.internal:3010/operator/events");
-      expect((init.headers as Record<string, string>).authorization).toBe(
-        "Bearer deb-sync-secret",
-      );
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer deb-sync-secret");
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
