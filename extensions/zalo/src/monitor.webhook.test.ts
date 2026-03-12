@@ -283,6 +283,7 @@ describe("handleZaloWebhookRequest", () => {
 
     try {
       await withServer(webhookRequestHandler, async (baseUrl) => {
+        let saw429 = false;
         for (let i = 0; i < 200; i += 1) {
           const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
             method: "POST",
@@ -292,10 +293,15 @@ describe("handleZaloWebhookRequest", () => {
             },
             body: "{}",
           });
-          expect(response.status).toBe(401);
+          expect([401, 429]).toContain(response.status);
+          if (response.status === 429) {
+            saw429 = true;
+            break;
+          }
         }
 
-        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(1);
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(2);
       });
     } finally {
       unregister();
@@ -311,6 +317,26 @@ describe("handleZaloWebhookRequest", () => {
           baseUrl,
           path: "/hook-query-rate",
           secret: "secret", // pragma: allowlist secret
+          withNonceQuery: true,
+        });
+
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rate limits unauthorized secret guesses before authentication succeeds", async () => {
+    const unregister = registerTarget({ path: "/hook-preauth-rate" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const saw429 = await postUntilRateLimited({
+          baseUrl,
+          path: "/hook-preauth-rate",
+          secret: "invalid-token", // pragma: allowlist secret
           withNonceQuery: true,
         });
 
