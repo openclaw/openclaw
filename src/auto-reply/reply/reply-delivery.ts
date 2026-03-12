@@ -8,6 +8,7 @@ import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.j
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
+export type ReplyDeliveryKind = "commentary" | "final";
 
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
@@ -59,6 +60,66 @@ export function normalizeReplyPayloadDirectives(params: {
 
 const hasRenderableMedia = (payload: ReplyPayload): boolean =>
   Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+
+export type NormalizedReplyDeliveryInfo = {
+  kind: ReplyDeliveryKind;
+  payload: ReplyPayload;
+  hasMedia: boolean;
+  isSilent: boolean;
+  shouldLog: boolean | undefined;
+  delivered: boolean;
+};
+
+export async function deliverNormalizedReplyPayload(params: {
+  payload: ReplyPayload;
+  kind: ReplyDeliveryKind;
+  currentMessageId?: string;
+  silentToken?: string;
+  trimLeadingWhitespace?: boolean;
+  parseMode?: ReplyDirectiveParseMode;
+  deliver: (payload: ReplyPayload, info: NormalizedReplyDeliveryInfo) => Promise<void> | void;
+  rememberSentText?: (
+    text: string | undefined,
+    info: NormalizedReplyDeliveryInfo,
+  ) => Promise<void> | void;
+  logDelivery?: (info: NormalizedReplyDeliveryInfo) => Promise<void> | void;
+}): Promise<NormalizedReplyDeliveryInfo> {
+  const normalized = normalizeReplyPayloadDirectives({
+    payload: params.payload,
+    currentMessageId: params.currentMessageId,
+    silentToken: params.silentToken,
+    trimLeadingWhitespace: params.trimLeadingWhitespace,
+    parseMode: params.parseMode,
+  });
+  const hasMedia = hasRenderableMedia(normalized.payload);
+  const shouldLog = normalized.payload.text ? true : undefined;
+
+  if (normalized.isSilent && !hasMedia) {
+    return {
+      kind: params.kind,
+      payload: normalized.payload,
+      hasMedia,
+      isSilent: true,
+      shouldLog,
+      delivered: false,
+    };
+  }
+
+  const info: NormalizedReplyDeliveryInfo = {
+    kind: params.kind,
+    payload: normalized.payload,
+    hasMedia,
+    isSilent: normalized.isSilent,
+    shouldLog,
+    delivered: true,
+  };
+
+  await params.deliver(normalized.payload, info);
+  await params.rememberSentText?.(normalized.payload.text, info);
+  await params.logDelivery?.(info);
+
+  return info;
+}
 
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;

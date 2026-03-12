@@ -212,6 +212,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("does not wire live commentary callbacks for telegram dispatch", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const [{ replyOptions }] = dispatchReplyWithBufferedBlockDispatcher.mock.calls as Array<
+      [{ replyOptions?: { onCommentaryReply?: unknown } }]
+    >;
+    expect(replyOptions?.onCommentaryReply).toBeUndefined();
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
