@@ -1,4 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock the gRPC client module to prevent transitive proto import resolution
+// (proto .js files are generated at build time and not present in source tree)
+vi.mock("./grpc/client.js", () => ({
+  createSandboxClient: vi.fn(() => ({
+    createSandbox: vi.fn(),
+    destroySandbox: vi.fn(),
+    sandboxStatus: vi.fn(),
+    listSandboxes: vi.fn(),
+  })),
+  createExecClient: vi.fn(() => ({ exec: vi.fn() })),
+  createHealthClient: vi.fn(() => ({ check: vi.fn() })),
+  createFileClient: vi.fn(() => ({})),
+}));
+
+vi.mock("./grpc/health.js", () => ({
+  checkFirecrackerHealth: vi.fn(),
+}));
+
 import { resolveProvider, resetProviderCache } from "./provider-resolver.js";
 import { DockerProvider } from "./providers/docker-provider.js";
 import { FirecrackerProvider } from "./providers/firecracker-provider.js";

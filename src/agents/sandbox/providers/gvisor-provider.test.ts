@@ -3,6 +3,7 @@ import type { ISandboxProvider, EnsureSandboxParams } from "../provider.js";
 import { isBrowserCapable } from "../provider.js";
 import type { SandboxConfig, SandboxBrowserConfig } from "../types.js";
 import { DockerProvider } from "./docker-provider.js";
+import { FirecrackerProvider } from "./firecracker-provider.js";
 import { GVisorProvider } from "./gvisor-provider.js";
 
 vi.mock("../docker.js", () => ({
@@ -14,6 +15,24 @@ vi.mock("../docker.js", () => ({
 
 vi.mock("../manage.js", () => ({
   listSandboxContainers: vi.fn(),
+}));
+
+// Mock the gRPC client module to prevent transitive proto import resolution
+// (proto .js files are generated at build time and not present in source tree)
+vi.mock("../grpc/client.js", () => ({
+  createSandboxClient: vi.fn(() => ({
+    createSandbox: vi.fn(),
+    destroySandbox: vi.fn(),
+    sandboxStatus: vi.fn(),
+    listSandboxes: vi.fn(),
+  })),
+  createExecClient: vi.fn(() => ({ exec: vi.fn() })),
+  createHealthClient: vi.fn(() => ({ check: vi.fn() })),
+  createFileClient: vi.fn(() => ({})),
+}));
+
+vi.mock("../grpc/health.js", () => ({
+  checkFirecrackerHealth: vi.fn(),
 }));
 
 // Suppress console output from the logger
@@ -597,6 +616,7 @@ describe("GVisorProvider integration with provider-resolver", () => {
   // to test integration without conflicting with module-level mocks
   const dockerHealthSpy = vi.spyOn(DockerProvider.prototype, "checkHealth");
   const gvisorHealthSpy = vi.spyOn(GVisorProvider.prototype, "checkHealth");
+  const firecrackerHealthSpy = vi.spyOn(FirecrackerProvider.prototype, "checkHealth");
 
   // Dynamically import resolver to get fresh module with mocks applied
   let resolveProvider: typeof import("../provider-resolver.js").resolveProvider;
@@ -610,6 +630,12 @@ describe("GVisorProvider integration with provider-resolver", () => {
     // Don't clear all mocks here -- just reset the spies we care about
     dockerHealthSpy.mockReset();
     gvisorHealthSpy.mockReset();
+    firecrackerHealthSpy.mockReset();
+    // Firecracker is highest priority -- default to unavailable so gVisor/Docker tests work
+    firecrackerHealthSpy.mockResolvedValue({
+      available: false,
+      message: "Firecracker not available (test default)",
+    });
   });
 
   afterEach(() => {
