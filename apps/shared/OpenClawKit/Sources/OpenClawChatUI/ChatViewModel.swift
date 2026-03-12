@@ -138,17 +138,18 @@ public final class OpenClawChatViewModel {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
         let sorted = self.sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let mainSessionKey = self.resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
         var included = Set<String>()
 
-        // Always show the main session first, even if it hasn't been updated recently.
-        if let main = sorted.first(where: { $0.key == "main" }) {
+        // Always show the resolved main session first, even if it hasn't been updated recently.
+        if let main = sorted.first(where: { $0.key == mainSessionKey }) {
             result.append(main)
             included.insert(main.key)
         } else {
-            result.append(self.placeholderSession(key: "main"))
-            included.insert("main")
+            result.append(self.placeholderSession(key: mainSessionKey))
+            included.insert(mainSessionKey)
         }
 
         for entry in sorted {
@@ -167,6 +168,12 @@ public final class OpenClawChatViewModel {
         }
 
         return result
+    }
+
+    private var resolvedMainSessionKey: String {
+        let trimmed = self.sessionDefaults?.mainSessionKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
     }
 
     public var showsModelPicker: Bool {

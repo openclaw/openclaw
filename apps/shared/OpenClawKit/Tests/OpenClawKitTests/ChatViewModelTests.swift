@@ -613,6 +613,54 @@ extension TestChatTransportState {
         #expect(keys == ["main", "custom"])
     }
 
+    @Test func sessionChoicesUseResolvedMainSessionKeyInsteadOfLiteralMain() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let recent = now - (30 * 60 * 1000)
+        let recentOlder = now - (90 * 60 * 1000)
+        let history = historyPayload(sessionKey: "Luke’s MacBook Pro", sessionId: "sess-main")
+        let sessions = OpenClawChatSessionsListResponse(
+            ts: now,
+            path: nil,
+            count: 2,
+            defaults: OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                mainSessionKey: "Luke’s MacBook Pro"),
+            sessions: [
+                OpenClawChatSessionEntry(
+                    key: "Luke’s MacBook Pro",
+                    kind: nil,
+                    displayName: "Luke’s MacBook Pro",
+                    surface: nil,
+                    subject: nil,
+                    room: nil,
+                    space: nil,
+                    updatedAt: recent,
+                    sessionId: nil,
+                    systemSent: nil,
+                    abortedLastRun: nil,
+                    thinkingLevel: nil,
+                    verboseLevel: nil,
+                    inputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: nil,
+                    modelProvider: nil,
+                    model: nil,
+                    contextTokens: nil),
+                sessionEntry(key: "recent-1", updatedAt: recentOlder),
+            ])
+
+        let (_, vm) = await makeViewModel(
+            sessionKey: "Luke’s MacBook Pro",
+            historyResponses: [history],
+            sessionsResponses: [sessions])
+        await MainActor.run { vm.load() }
+        try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
+
+        let keys = await MainActor.run { vm.sessionChoices.map(\.key) }
+        #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
+    }
+
     @Test func resetTriggerResetsSessionAndReloadsHistory() async throws {
         let before = historyPayload(
             messages: [
