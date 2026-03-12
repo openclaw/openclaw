@@ -43,6 +43,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -1008,6 +1009,7 @@ async function dispatchDiscordComponentEvent(params: {
       deliver: async (payload) => {
         const replyToId = replyReference.use();
         await deliverDiscordReply({
+          cfg: ctx.cfg,
           replies: [payload],
           target: deliverTarget,
           token,
@@ -1017,7 +1019,11 @@ async function dispatchDiscordComponentEvent(params: {
           replyToId,
           replyToMode,
           textLimit,
-          maxLinesPerMessage: ctx.discordConfig?.maxLinesPerMessage,
+          maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+            cfg: ctx.cfg,
+            discordConfig: ctx.discordConfig,
+            accountId,
+          }),
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
           mediaLocalRoots,

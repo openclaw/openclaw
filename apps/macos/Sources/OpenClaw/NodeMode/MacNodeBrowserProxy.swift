@@ -146,8 +146,8 @@ actor MacNodeBrowserProxy {
             request.setValue(password, forHTTPHeaderField: "x-openclaw-password")
         }
 
-        if method != "GET", let body = params.body?.value {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.fragmentsAllowed])
+        if method != "GET", let body = params.body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body.foundationValue, options: [.fragmentsAllowed])
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
 
