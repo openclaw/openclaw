@@ -68,6 +68,7 @@ export const TelegramTopicSchema = z
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowBots: z.boolean().optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
   })
@@ -83,6 +84,7 @@ export const TelegramGroupSchema = z
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowBots: z.boolean().optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   })
