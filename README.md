@@ -51,6 +51,18 @@ Use this fork if you run OpenClaw behind a reverse proxy — or if you want prop
 
 ---
 
+## Recommendations for OpenClaw Users
+
+**If using a reverse proxy:** Do not rely on the upstream v2026.3.11 patch alone.
+
+**Immediate Action:** Explicitly configure `gateway.controlUi.allowedOrigins` with your public URL(s). This is the most secure configuration on the upstream codebase.
+
+**Long-Term Solution:** Adopt a fork or patch that implements proxy-aware origin validation with trusted proxy gating, as described above.
+
+**The security of an agentic AI system depends on the correctness of its authentication boundaries.** Incomplete patches that force a choice between functionality and security are architectural failures, not solutions.
+
+---
+
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
