@@ -9,6 +9,20 @@ import type { ProviderConfig } from "./models-config.providers.js";
 
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
+  const kimiCodingModel: ProviderConfig["models"][number] = {
+    id: "k2p5",
+    name: "Kimi for Coding",
+    input: ["text", "image"],
+    reasoning: true,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 1_000_000,
+    maxTokens: 100_000,
+  };
 
   it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
@@ -67,34 +81,19 @@ describe("models-config merge helpers", () => {
   });
 
   it("preserves implicit provider headers when explicit config adds extra headers", () => {
-    const merged = mergeProviderModels(
-      {
-        baseUrl: "https://api.example.com",
-        api: "anthropic-messages",
-        headers: { "User-Agent": "claude-code/0.1.0" },
-        models: [
-          {
-            id: "k2p5",
-            name: "Kimi for Coding",
-            input: ["text", "image"],
-            reasoning: true,
-          },
-        ],
-      } as unknown as ProviderConfig,
-      {
-        baseUrl: "https://api.example.com",
-        api: "anthropic-messages",
-        headers: { "X-Kimi-Tenant": "tenant-a" },
-        models: [
-          {
-            id: "k2p5",
-            name: "Kimi for Coding",
-            input: ["text", "image"],
-            reasoning: true,
-          },
-        ],
-      } as unknown as ProviderConfig,
-    );
+    const implicitProvider: ProviderConfig = {
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      headers: { "User-Agent": "claude-code/0.1.0" },
+      models: [kimiCodingModel],
+    };
+    const explicitProvider: ProviderConfig = {
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      headers: { "X-Kimi-Tenant": "tenant-a" },
+      models: [kimiCodingModel],
+    };
+    const merged = mergeProviderModels(implicitProvider, explicitProvider);
 
     expect(merged.headers).toEqual({
       "User-Agent": "claude-code/0.1.0",

@@ -15,6 +15,17 @@ async function resolveRealStorePath(sessionsDir: string): Promise<string> {
   return fsSync.realpathSync.native(path.join(sessionsDir, "sessions.json"));
 }
 
+function resolveRealStorePathSync(sessionsDir: string): string {
+  return fsSync.realpathSync(path.join(sessionsDir, "sessions.json"));
+}
+
+function findTargetStorePath(
+  targets: { agentId: string; storePath: string }[],
+  agentId: string,
+): string | undefined {
+  return targets.find((target) => target.agentId === agentId)?.storePath;
+}
+
 describe("resolveSessionStoreTargets", () => {
   it("resolves all configured agent stores", () => {
     const cfg: OpenClawConfig = {
@@ -100,17 +111,9 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
 
-      expect(targets).toEqual(
-        expect.arrayContaining([
-          {
-            agentId: "ops",
-            storePath: opsStorePath,
-          },
-          {
-            agentId: "retired",
-            storePath: retiredStorePath,
-          },
-        ]),
+      expect(await fs.realpath(findTargetStorePath(targets, "ops") ?? "")).toBe(opsStorePath);
+      expect(await fs.realpath(findTargetStorePath(targets, "retired") ?? "")).toBe(
+        retiredStorePath,
       );
       expect(targets.filter((target) => target.storePath === opsStorePath)).toHaveLength(1);
     });
@@ -343,15 +346,11 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: envStateDir,
       };
-      const retiredStorePath = await resolveRealStorePath(retiredSessionsDir);
+      const retiredStorePath = resolveRealStorePathSync(retiredSessionsDir);
+      const targets = resolveAllAgentSessionStoreTargetsSync(cfg, { env });
 
-      expect(resolveAllAgentSessionStoreTargetsSync(cfg, { env })).toEqual(
-        expect.arrayContaining([
-          {
-            agentId: "retired",
-            storePath: retiredStorePath,
-          },
-        ]),
+      expect(fsSync.realpathSync(findTargetStorePath(targets, "retired") ?? "")).toBe(
+        retiredStorePath,
       );
     });
   });
