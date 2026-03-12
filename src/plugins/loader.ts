@@ -49,6 +49,7 @@ export type PluginLoadOptions = {
   mode?: "full" | "validate";
 };
 
+const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 32;
 const registryCache = new Map<string, PluginRegistry>();
 
 export function clearPluginLoaderCache(): void {
@@ -171,7 +172,33 @@ export const __testing = {
   listPluginSdkExportedSubpaths,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
+  maxPluginRegistryCacheEntries: MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
 };
+
+function getCachedPluginRegistry(cacheKey: string): PluginRegistry | undefined {
+  const cached = registryCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  // Refresh insertion order so frequently reused registries survive eviction.
+  registryCache.delete(cacheKey);
+  registryCache.set(cacheKey, cached);
+  return cached;
+}
+
+function setCachedPluginRegistry(cacheKey: string, registry: PluginRegistry): void {
+  if (registryCache.has(cacheKey)) {
+    registryCache.delete(cacheKey);
+  }
+  registryCache.set(cacheKey, registry);
+  while (registryCache.size > MAX_PLUGIN_REGISTRY_CACHE_ENTRIES) {
+    const oldestKey = registryCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    registryCache.delete(oldestKey);
+  }
+}
 
 function buildCacheKey(params: {
   workspaceDir?: string;
@@ -503,7 +530,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
-    const cached = registryCache.get(cacheKey);
+    const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
       activatePluginRegistry(cached, cacheKey);
       return cached;
@@ -863,7 +890,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
 
   if (cacheEnabled) {
-    registryCache.set(cacheKey, registry);
+    setCachedPluginRegistry(cacheKey, registry);
   }
   activatePluginRegistry(registry, cacheKey);
   return registry;

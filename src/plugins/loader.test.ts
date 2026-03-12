@@ -623,6 +623,47 @@ describe("loadOpenClawPlugins", () => {
     expect(third).toBe(second);
   });
 
+  it("evicts least recently used registries when the loader cache exceeds its cap", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-eviction",
+      filename: "cache-eviction.cjs",
+      body: `module.exports = { id: "cache-eviction", register() {} };`,
+    });
+    const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
+      makeTempDir(),
+    );
+
+    const loadWithStateDir = (stateDir: string) =>
+      loadOpenClawPlugins({
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        config: {
+          plugins: {
+            allow: ["cache-eviction"],
+            load: {
+              paths: [plugin.file],
+            },
+          },
+        },
+      });
+
+    const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
+    const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
+
+    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+
+    for (const stateDir of stateDirs.slice(2)) {
+      loadWithStateDir(stateDir);
+    }
+
+    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+    expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
+  });
+
   it("normalizes bundled plugin env overrides against the provided env", () => {
     const bundledDir = makeTempDir();
     const homeDir = path.dirname(bundledDir);
