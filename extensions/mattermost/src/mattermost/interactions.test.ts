@@ -2,7 +2,7 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
-import type { MattermostClient } from "./client.js";
+import type { MattermostClient, MattermostPost } from "./client.js";
 import {
   buildButtonAttachments,
   computeInteractionCallbackUrl,
@@ -738,6 +738,70 @@ describe("createMattermostInteractionHandler", () => {
     ]);
   });
 
+  it("forwards fetched post threading metadata to session and button callbacks", async () => {
+    const enqueueSystemEvent = vi.fn();
+    setMattermostRuntime({
+      system: {
+        enqueueSystemEvent,
+      },
+    } as unknown as Parameters<typeof setMattermostRuntime>[0]);
+    const context = { action_id: "approve", __openclaw_channel_id: "chan-1" };
+    const token = generateInteractionToken(context, "acct");
+    const resolveSessionKey = vi.fn().mockResolvedValue("session:thread:root-9");
+    const dispatchButtonClick = vi.fn();
+    const fetchedPost: MattermostPost = {
+      id: "post-1",
+      channel_id: "chan-1",
+      root_id: "root-9",
+      message: "Choose",
+      props: {
+        attachments: [{ actions: [{ id: "approve", name: "Approve" }] }],
+      },
+    };
+    const handler = createMattermostInteractionHandler({
+      client: {
+        request: async (_path: string, init?: { method?: string }) =>
+          init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
+      } as unknown as MattermostClient,
+      botUserId: "bot",
+      accountId: "acct",
+      resolveSessionKey,
+      dispatchButtonClick,
+    });
+
+    const req = createReq({
+      body: {
+        user_id: "user-1",
+        user_name: "alice",
+        channel_id: "chan-1",
+        post_id: "post-1",
+        context: { ...context, _token: token },
+      },
+    });
+    const res = createRes();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "chan-1",
+      userId: "user-1",
+      post: fetchedPost,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining('Mattermost button click: action="approve"'),
+      expect.objectContaining({ sessionKey: "session:thread:root-9" }),
+    );
+    expect(dispatchButtonClick).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "chan-1",
+        userId: "user-1",
+        postId: "post-1",
+        post: fetchedPost,
+      }),
+    );
+  });
+
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
     const context = { action_id: "mdlprov", __openclaw_channel_id: "chan-1" };
     const token = generateInteractionToken(context, "acct");
@@ -751,6 +815,7 @@ describe("createMattermostInteractionHandler", () => {
         request: async (path: string, init?: { method?: string }) => {
           requestLog.push({ path, method: init?.method });
           return {
+            id: "post-1",
             channel_id: "chan-1",
             message: "Choose",
             props: {
@@ -790,6 +855,7 @@ describe("createMattermostInteractionHandler", () => {
         actionId: "mdlprov",
         actionName: "Browse providers",
         originalMessage: "Choose",
+        post: expect.objectContaining({ id: "post-1" }),
         userName: "alice",
       }),
     );
