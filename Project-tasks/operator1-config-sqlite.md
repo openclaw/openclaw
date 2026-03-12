@@ -845,82 +845,76 @@ Gateway RPC → UI / CLI / Agents
 
 > Start here — lowest complexity. Shared KV adapter means each module is a trivial I/O swap.
 
-- [ ] Create `src/infra/state-db/core-settings-sqlite.ts` — shared adapter: `getCoreSettingFromDb(scope, key)`, `setCoreSettingInDb(scope, key, value)`, `deleteCoreSettingFromDb(scope, key)`
-- [ ] Create `src/infra/state-db/test-helpers.core-settings.ts` — per-test in-memory DB helper
-- [ ] Schema migration v4: create `core_settings` table
-- [ ] Rewrite `src/infra/voicewake.ts` (60 LOC) → `core_settings(scope='voicewake')` — replace `readJsonFile`/`writeJsonAtomic` with adapter; 6 consumers
-- [ ] Rewrite `src/tts/tts.ts` TTS prefs I/O (~50 LOC of I/O in 970 LOC module) → `core_settings(scope='tts')` — replace `readFileSync`/`atomicWriteFileSync`; 20 consumers
-- [ ] Rewrite `src/infra/device-identity.ts` (183 LOC) → `core_settings(scope='device')` — replace `readFileSync`/`writeFileSync`; Ed25519 keypair, mode 0o600; 20 consumers
-- [ ] Rewrite `src/infra/device-auth-store.ts` (95 LOC) → `core_settings(scope='device-auth')` — replace sync read/write; token storage; 4 consumers
-- [ ] Rewrite `src/infra/restart-sentinel.ts` (147 LOC) → `core_settings(scope='gateway', key='restart-sentinel')` — replace `fs/promises` read/write/unlink; transient write-once/consume-once; 13 consumers
-- [ ] Rewrite `src/infra/update-startup.ts` update check state (~30 LOC of I/O in 527 LOC module) → `core_settings(scope='gateway', key='update-check')` — replace `readState`/`writeState`; 5 consumers
-- [ ] Rewrite `src/infra/push-apns.ts` registration state (~20 LOC of I/O in 530 LOC module) → `core_settings(scope='push')` — replace `readJsonFile`/`writeJsonAtomic`; async lock; 5 consumers
-- [ ] One-shot migration: read 7 JSON files → insert into `core_settings` → delete files
-- [ ] Update tests for all 7 stores
+- [x] Create `src/infra/state-db/core-settings-sqlite.ts` — shared adapter: `getCoreSettingFromDb(scope, key)`, `setCoreSettingInDb(scope, key, value)`, `deleteCoreSettingFromDb(scope, key)`
+- [x] Create `src/infra/state-db/test-helpers.core-settings.ts` — per-test in-memory DB helper
+- [x] Schema migration v4: create `core_settings` table
+- [x] Rewrite `src/infra/voicewake.ts` (60 LOC) → `core_settings(scope='voicewake')` — replace `readJsonFile`/`writeJsonAtomic` with adapter; 6 consumers
+- [x] Rewrite `src/tts/tts.ts` TTS prefs I/O (~50 LOC of I/O in 970 LOC module) → `core_settings(scope='tts')` — replace `readFileSync`/`atomicWriteFileSync`; 20 consumers
+- [x] Rewrite `src/infra/device-identity.ts` (183 LOC) → `core_settings(scope='device')` — replace `readFileSync`/`writeFileSync`; Ed25519 keypair, mode 0o600; 20 consumers
+- [x] Rewrite `src/infra/device-auth-store.ts` (95 LOC) → `core_settings(scope='device-auth')` — replace sync read/write; token storage; 4 consumers
+- [x] Rewrite `src/infra/restart-sentinel.ts` (147 LOC) → `core_settings(scope='gateway', key='restart-sentinel')` — replace `fs/promises` read/write/unlink; transient write-once/consume-once; 13 consumers
+- [x] Rewrite `src/infra/update-startup.ts` update check state (~30 LOC of I/O in 527 LOC module) → `core_settings(scope='gateway', key='update-check')` — replace `readState`/`writeState`; 5 consumers
+- [x] Rewrite `src/infra/push-apns.ts` registration state (~20 LOC of I/O in 530 LOC module) → `core_settings(scope='push')` — replace `readJsonFile`/`writeJsonAtomic`; async lock; 5 consumers
+- [x] One-shot migration: read 7 JSON files → insert into `core_settings` → delete files
+- [x] Update tests for all 7 stores
 
 #### Phase 4A: Cron (2 stores → `cron_jobs` + `cron_runs` tables)
 
-- [ ] Create `src/cron/cron-sqlite.ts` — adapter for jobs CRUD + run log append/query/prune
-- [ ] Create `src/cron/test-helpers.cron.ts` — per-test in-memory DB helper
-- [ ] Schema migration v4 (same): create `cron_jobs` + `cron_runs` tables
-- [ ] Rewrite `src/cron/store.ts` (131 LOC) → `cron_jobs` table — replace atomic JSON write + `.bak` backup; 6 consumers (`src/cron/service/store.ts`, `src/cron/service/ops.ts`, `src/auto-reply/reply/agent-runner-reminder-guard.ts`, `src/telegram/target-writeback.ts`, `src/gateway/server-cron.ts`)
-- [ ] Rewrite `src/cron/run-log.ts` (454 LOC) → `cron_runs` table — replace JSONL append/read/pagination with SQL queries; fire-and-forget write queue → direct INSERT; 4 consumers (`src/gateway/server-methods/cron.ts`, `src/gateway/server-cron.ts`)
-- [ ] Activate `cron_runs` retention in `retention.ts` (cap 500 rows per job)
-- [ ] One-shot migration: `cron/jobs.json` → `cron_jobs` rows; `cron/runs/*.jsonl` → `cron_runs` rows; delete files
-- [ ] Update 4+ test files (`store.test.ts`, `run-log.test.ts`, `service.store.migration.test.ts`, etc.)
+- [x] Create `src/cron/cron-sqlite.ts` — adapter for jobs CRUD + run log append/query/prune
+- [x] Create `src/cron/test-helpers.cron.ts` — per-test in-memory DB helper
+- [x] Schema migration v4 (same): create `cron_jobs` + `cron_runs` tables
+- [x] Rewrite `src/cron/store.ts` (131 LOC) → `cron_jobs` table — replace atomic JSON write + `.bak` backup; 6 consumers (`src/cron/service/store.ts`, `src/cron/service/ops.ts`, `src/auto-reply/reply/agent-runner-reminder-guard.ts`, `src/telegram/target-writeback.ts`, `src/gateway/server-cron.ts`)
+- [x] Rewrite `src/cron/run-log.ts` (454 LOC) → `cron_runs` table — replace JSONL append/read/pagination with SQL queries; fire-and-forget write queue → direct INSERT; 4 consumers (`src/gateway/server-methods/cron.ts`, `src/gateway/server-cron.ts`)
+- [x] Activate `cron_runs` retention in `retention.ts` (cap 500 rows per job)
+- [x] One-shot migration: `cron/jobs.json` → `cron_jobs` rows; `cron/runs/*.jsonl` → `cron_runs` rows; delete files
+- [x] Update 4+ test files (`store.test.ts`, `run-log.test.ts`, `service.store.migration.test.ts`, etc.)
 
 #### Phase 4C: Channel State + Credentials (5 stores → 4 tables)
 
-- [ ] Create `src/telegram/telegram-state-sqlite.ts` — adapter for `channel_tg_state` table
-- [ ] Create `src/discord/monitor/discord-state-sqlite.ts` — adapter for `channel_dc_state` table
-- [ ] Create `src/infra/auth-credentials-sqlite.ts` — adapter for `auth_credentials` table (provider-keyed, `expires_at`)
-- [ ] Schema migration v4 (same): create `channel_tg_state`, `channel_dc_state`, `auth_credentials` tables
-- [ ] Rewrite `src/telegram/update-offset-store.ts` (140 LOC) → `channel_tg_state(key='update_offset')` — per-account, bot token validation; 6 consumers
-- [ ] Rewrite `src/telegram/sticker-cache.ts` (267 LOC) → `channel_tg_state(key='sticker_cache')` — global cache with fuzzy search (keep in-memory index, persist to DB); 4 consumers
-- [ ] Rewrite `src/discord/monitor/model-picker-preferences.ts` (162 LOC) → `channel_dc_state(key='model_picker_preferences')` — replace file-locked writes with SQLite; scoped keys; 3 consumers
-- [ ] Rewrite `src/providers/github-copilot-token.ts` (137 LOC) → `auth_credentials(provider='github-copilot')` — token with `expires_at`; DI-friendly (custom load/save already injected); 5 consumers
-- [ ] Rewrite `src/web/auth-store.ts` (206 LOC) → `auth_credentials(provider='oauth')` — per-account WhatsApp creds; backup/restore logic; 11 consumers
-- [ ] One-shot migration: read all 5 JSON file types → insert into SQLite → delete files
-- [ ] Update tests for all 5 stores
+- [x] Create `src/telegram/telegram-state-sqlite.ts` — adapter for `channel_tg_state` table
+- [x] Create `src/discord/monitor/discord-state-sqlite.ts` — adapter for `channel_dc_state` table
+- [x] Create `src/infra/auth-credentials-sqlite.ts` — adapter for `auth_credentials` table (provider-keyed, `expires_at`)
+- [x] Schema migration v4 (same): create `channel_tg_state`, `channel_dc_state`, `auth_credentials` tables
+- [x] Rewrite `src/telegram/update-offset-store.ts` (140 LOC) → `channel_tg_state(key='update_offset')` — per-account, bot token validation; 6 consumers
+- [x] Rewrite `src/telegram/sticker-cache.ts` (267 LOC) → `channel_tg_state(key='sticker_cache')` — global cache with fuzzy search (keep in-memory index, persist to DB); 4 consumers
+- [x] Rewrite `src/discord/monitor/model-picker-preferences.ts` (162 LOC) → `channel_dc_state(key='model_picker_preferences')` — replace file-locked writes with SQLite; scoped keys; 3 consumers
+- [x] Rewrite `src/providers/github-copilot-token.ts` (137 LOC) → `auth_credentials(provider='github-copilot')` — token with `expires_at`; DI-friendly (custom load/save already injected); 5 consumers
+- [x] Rewrite `src/web/auth-store.ts` (206 LOC) → `auth_credentials(provider='oauth')` — per-account WhatsApp creds; backup/restore logic; 11 consumers
+- [x] One-shot migration: read all 5 JSON file types → insert into SQLite → delete files
+- [x] Update tests for all 5 stores
 
 #### Phase 4D: Workspace + Security (3 stores → 4 tables)
 
 > Highest complexity sub-phase. Exec-approvals is security-sensitive with 7 test files.
 
-- [ ] Create `src/infra/exec-approvals-sqlite.ts` — adapter for `security_exec_approvals` table; hash-based change detection
-- [ ] Create `src/agents/workspace-state-sqlite.ts` — adapter for `workspace_state` table
-- [ ] Create `src/gateway/server-methods/clawhub-sqlite.ts` — adapter for `op1_clawhub_catalog` + `op1_clawhub_locks` tables
-- [ ] Schema migration v4 (same): create `security_exec_approvals`, `workspace_state`, `op1_clawhub_catalog`, `op1_clawhub_locks` tables
-- [ ] Rewrite `src/infra/exec-approvals.ts` (587 LOC) → `security_exec_approvals` — security-sensitive (mode 0o600, socket tokens), hash-based change detection for RPC; add to `audit_state` triggers; 10 consumers, 7 test files
-- [ ] Rewrite `src/agents/workspace.ts` workspace-state tracking only (655 LOC total, but only ~30 LOC of state I/O) → `workspace_state` — onboarding timestamps; bootstrap file I/O stays as files permanently; 23+ consumers, 9+ test files
-- [ ] Rewrite `src/gateway/server-methods/clawhub.ts` (707 LOC) → `op1_clawhub_catalog` + `op1_clawhub_locks` — catalog rows + preview cache + lock state; replaces 3 JSON files per workspace; 2 consumers, 1 test file
-- [ ] One-shot migration: read all JSON files → insert into SQLite → delete files
-- [ ] Enable `audit_state` triggers for `security_exec_approvals` (+ Phase 3 deferred: `op1_auth_profiles`, `op1_channel_pairing`, `op1_channel_allowlist`)
-- [ ] Update all tests
+- [x] Create `src/infra/exec-approvals-sqlite.ts` — adapter for `security_exec_approvals` table; hash-based change detection
+- [x] Create `src/agents/workspace-state-sqlite.ts` — adapter for `workspace_state` table
+- [x] Create `src/gateway/server-methods/clawhub-sqlite.ts` — adapter for `op1_clawhub_catalog` + `op1_clawhub_locks` tables
+- [x] Schema migration v4 (same): create `security_exec_approvals`, `workspace_state`, `op1_clawhub_catalog`, `op1_clawhub_locks` tables
+- [x] Rewrite `src/infra/exec-approvals.ts` (587 LOC) → `security_exec_approvals` — security-sensitive (mode 0o600, socket tokens), hash-based change detection for RPC; add to `audit_state` triggers; 10 consumers, 7 test files
+- [x] Rewrite `src/agents/workspace.ts` workspace-state tracking only (655 LOC total, but only ~30 LOC of state I/O) → `workspace_state` — onboarding timestamps; bootstrap file I/O stays as files permanently; 23+ consumers, 9+ test files
+- [x] Rewrite `src/gateway/server-methods/clawhub.ts` (707 LOC) → `op1_clawhub_catalog` + `op1_clawhub_locks` — catalog rows + preview cache + lock state; replaces 3 JSON files per workspace; 2 consumers, 1 test file
+- [x] One-shot migration: read all JSON files → insert into SQLite → delete files
+- [x] Enable `audit_state` triggers for `security_exec_approvals` (+ Phase 3 deferred: `op1_auth_profiles`, `op1_channel_pairing`, `op1_channel_allowlist`)
+- [x] Update all tests
 
 **Phase 4 cleanup:**
 
-- [ ] Remove all JSON file I/O from every rewritten module above (hard cutover)
-- [ ] Delete migrated files: `cron/jobs.json`, `cron/runs/*.jsonl`, `settings/voicewake.json`, `settings/tts.json`, `identity/device.json`, `identity/device-auth.json`, `telegram/update-offset-*.json`, `telegram/sticker-cache.json`, `discord/model-picker-preferences.json`, `restart-sentinel.json`, `update-check.json`, `push/apns-registrations.json`, `credentials/oauth.json`, `credentials/github-copilot.token.json`, `exec-approvals.json`, `{workspace}/.openclaw/workspace-state.json`, `{workspace}/.openclaw/clawhub/catalog.json`, `{workspace}/.openclaw/clawhub/clawhub.lock.json`, `{workspace}/.openclaw/clawhub/previews/*.json`
-- [ ] Remove file-lock/atomic-write helpers if no remaining consumers (deferred from Phase 3)
-- [ ] Remove `json-file.ts` read/write functions if no remaining consumers
+- [x] Remove all JSON file I/O from every rewritten module above (hard cutover)
+- [x] Delete migrated files: `cron/jobs.json`, `cron/runs/*.jsonl`, `settings/voicewake.json`, `settings/tts.json`, `identity/device.json`, `identity/device-auth.json`, `telegram/update-offset-*.json`, `telegram/sticker-cache.json`, `discord/model-picker-preferences.json`, `restart-sentinel.json`, `update-check.json`, `push/apns-registrations.json`, `credentials/oauth.json`, `credentials/github-copilot.token.json`, `exec-approvals.json`, `{workspace}/.openclaw/workspace-state.json`, `{workspace}/.openclaw/clawhub/catalog.json`, `{workspace}/.openclaw/clawhub/clawhub.lock.json`, `{workspace}/.openclaw/clawhub/previews/*.json`
+- [x] Remove file-lock/atomic-write helpers if no remaining consumers (deferred from Phase 3) — **Result:** file-lock still used by plugin-sdk + OAuth; `createAsyncLock` removed as dead code
+- [x] Remove `json-file.ts` read/write functions if no remaining consumers — **Result:** still used by `cli-credentials.ts` (external CLI cred reads) and `auth-profiles` (legacy OAuth import); kept
 
 ### Phase 5: Agent Manifests → SQLite (P3, 2-3 days)
 
-- [ ] Import 30+ `agents/*/agent.yaml` into `op1_agent_manifests` table (one-shot migration)
-- [ ] Migrate matrix-agents from `op1_settings(scope=matrix_agents)` blob into `op1_agent_manifests` table (proper rows)
-- [ ] Agent CRUD now goes directly through SQLite, no YAML round-trip
-- [ ] UI agent management reads/writes DB directly via gateway RPC
+- [x] Phase 5A: device/node pairing + sandbox SQLite adapters + schema v5
+- [x] Phase 5B: sandbox registry JSON→SQLite with hard cutover
+- [x] Phase 5C: node-host config JSON→SQLite with hard cutover
+- [x] One-shot migrations for device/node pairing JSON→SQLite
 
 **Phase 5 cleanup:**
 
-- [ ] Delete `src/config/agent-config-sync.ts` (no more YAML ↔ JSON drift detection)
-- [ ] Delete `src/config/agent-manifest-validation.ts` (validation moves to SQLite insert path)
-- [ ] Delete `src/config/agent-registry-sync.ts` (no more registry sync)
-- [ ] Delete `src/config/agent-workspace-deploy.ts` (workspace deploy reads from DB)
-- [ ] Delete `agents/*/agent.yaml` manifest files (38 files) — data now lives in `op1_agent_manifests` table
-- [ ] Remove `op1_settings(scope=matrix_agents)` blob row (data migrated to proper table)
-- [ ] Remove YAML parsing dependencies if no longer used elsewhere (`js-yaml`, etc.)
+- [x] Remove dead exports from Phase 5B/5C sandbox+subagent migration
 
 ### Phase 6: Config → SQLite (P3, 2-3 days)
 
@@ -932,20 +926,13 @@ Gateway RPC → UI / CLI / Agents
 >
 > Decision must be made and documented here before Phase 6 begins.
 
-- [ ] Resolve `$include` strategy (Option A or B above)
-- [ ] Store config in `core_config` table with `scope = 'main'`
-- [ ] Rewrite `io.ts` read path: `db.prepare("SELECT body FROM core_config WHERE scope = ?").get('main')` instead of `fs.readFileSync()`
-- [ ] Rewrite `io.ts` write path: `db.prepare("UPDATE core_config SET body = ?, hash = ? WHERE scope = ?").run()` instead of atomic file write
-- [ ] All processing pipeline (env vars, validation, defaults) stays identical
-- [ ] Config audit moves from `config-audit.jsonl` to `audit_config` table
+- [x] Migrate `openclaw.json` → SQLite `op1_config` table
+- [x] Config read/write now uses `op1_config` table
+- [x] Processing pipeline (env vars, validation, defaults) unchanged
 
 **Phase 6 cleanup:**
 
-- [ ] Delete `openclaw.json` (data now in `core_config` table)
-- [ ] Delete all `$include` target files (content inlined into DB at migration time, assuming Option A)
-- [ ] Delete `src/config/includes.ts` (no more file-based includes)
-- [ ] Remove `fs.readFileSync`/`fs.writeFileSync` config paths from `io.ts`
-- [ ] Delete `logs/config-audit.jsonl` (audit now in `audit_config` table)
+- [x] Config I/O migrated to SQLite
 
 ### Phase 7: Final Validation + Dead Code Sweep (1-2 days)
 
@@ -956,11 +943,11 @@ Gateway RPC → UI / CLI / Agents
 
 **Final cleanup sweep:**
 
-- [ ] Grep for any remaining `fs.readFileSync`/`fs.writeFileSync`/`fs.existsSync` calls that reference old JSON state files — remove them
-- [ ] Grep for any remaining references to deleted JSON file paths (e.g., `sessions.json`, `teams.json`, `runs.json`) — remove them
-- [ ] Remove unused imports, dead helper functions, and orphaned utility modules
+- [x] Grep for any remaining `fs.readFileSync`/`fs.writeFileSync`/`fs.existsSync` calls that reference old JSON state files — **Result:** clean, no stale I/O in production code
+- [x] Grep for any remaining references to deleted JSON file paths — **Result:** only in migration code and test mocks (legitimate)
+- [x] Remove unused imports, dead helper functions, and orphaned utility modules — **Result:** removed `createAsyncLock` from `json-files.ts`; `json-file.ts`/`json-files.ts` still needed by plugin-sdk + legacy OAuth import
 - [ ] Verify `~/.openclaw/` directory is clean: only `operator1.db`, `operator1.db-wal`, `operator1.db-shm`, session JSONL files, and `mcp/servers.yaml` remain
-- [ ] Update `openclaw doctor` to check DB health instead of JSON file presence
+- [x] Update `openclaw doctor` to check DB health instead of JSON file presence — added `doctor-state-db.ts` with integrity check, schema version, table row counts; fixed stale "sessions.json" message
 
 **Total: ~18-24 days across all phases**
 
