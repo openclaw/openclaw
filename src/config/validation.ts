@@ -243,71 +243,33 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
   const model = memorySearch.model;
   const remote = memorySearch.remote;
 
-  // Helper to check if apiKey is configured directly in config
-  // Note: Environment variable checking is done at runtime by resolveMemorySearchConfig
-  const hasApiKey = !!remote?.apiKey;
-
-  // Validate openai provider
-  if (provider === "openai") {
-    if (!hasApiKey) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=openai requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure OPENAI_API_KEY is available at runtime. " +
-          "Example: agents.defaults.memorySearch.remote.apiKey: $OPENAI_API_KEY",
-      });
-    }
-    // Model is optional - use provider default if not specified
-  }
+  // Note: API key validation is done at runtime by resolveMemorySearchConfig
+  // which handles various auth methods (config, environment, auth store).
+  // Config-level validation only checks for obviously invalid configurations.
 
   // Validate ollama provider - baseUrl is optional (uses default localhost)
   if (provider === "ollama") {
-    // baseUrl is optional - will use default http://localhost:11434
+    // Check for explicitly empty baseUrl (which would cause runtime errors)
+    if (remote?.baseUrl !== undefined) {
+      const baseUrl = remote.baseUrl;
+      if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) {
+        issues.push({
+          path: "agents.defaults.memorySearch",
+          message:
+            "memorySearch.provider=ollama requires a non-empty baseUrl when specified. " +
+            "Remove baseUrl to use the default http://localhost:11434",
+        });
+      }
+    }
     // Model is optional - will use provider default
   }
 
-  // Validate gemini provider
-  if (provider === "gemini") {
-    if (!hasApiKey) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=gemini requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure GEMINI_API_KEY is available at runtime. " +
-          "Example: agents.defaults.memorySearch.remote.apiKey: $GEMINI_API_KEY",
-      });
-    }
-    // Model is optional - use provider default if not specified
-  }
-
-  // Validate voyage provider
-  if (provider === "voyage") {
-    if (!hasApiKey) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=voyage requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure VOYAGE_API_KEY is available at runtime. " +
-          "Example: agents.defaults.memorySearch.remote.apiKey: $VOYAGE_API_KEY",
-      });
-    }
-    // Model is optional - use provider default if not specified
-  }
-
-  // Validate mistral provider
-  if (provider === "mistral") {
-    if (!hasApiKey) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=mistral requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure MISTRAL_API_KEY is available at runtime. " +
-          "Example: agents.defaults.memorySearch.remote.apiKey: $MISTRAL_API_KEY",
-      });
-    }
-    // Model is optional - use provider default if not specified
-  }
+  // For other providers (openai, gemini, voyage, mistral), we don't validate apiKey here
+  // because runtime credential resolution handles:
+  // - config-level apiKey
+  // - environment variables (OPENAI_API_KEY, etc.)
+  // - provider-level credentials from auth store
+  // Config-level validation would cause false negatives for valid configurations
 
   return issues;
 }
