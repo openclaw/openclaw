@@ -1050,7 +1050,20 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
+    // Detect slash commands before enforcing mention gate — commands like
+    // /reset, /new, /status should be processed even without a bot mention,
+    // matching the behavior of Discord and Telegram channels.
+    let hasCommandInGroup = false;
     if (requireMention && !ctx.mentionedBot) {
+      const core = getFeishuRuntime();
+      const commandProbeBody = normalizeFeishuCommandProbeBody(ctx.content);
+      hasCommandInGroup = core.channel.commands.shouldComputeCommandAuthorized(
+        commandProbeBody,
+        cfg,
+      );
+    }
+
+    if (requireMention && !ctx.mentionedBot && !hasCommandInGroup) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
