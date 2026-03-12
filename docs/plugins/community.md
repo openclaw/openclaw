@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **Ratelimit Retry** — Automatically retry agent conversations that fail due to provider rate limits (429, budget exhaustion). Queues failed sessions to disk and resumes them when the budget window resets.
+- **Ratelimit Retry** — Automatically retry agent conversations killed by provider rate limits (429, budget exhaustion) by queuing sessions to disk and resuming when the budget window resets.
   npm: `@cheapestinference/openclaw-ratelimit-retry`
   repo: `https://github.com/cheapestinference/openclaw-plugin-ratelimit-retry`
   install: `openclaw plugins install @cheapestinference/openclaw-ratelimit-retry`
