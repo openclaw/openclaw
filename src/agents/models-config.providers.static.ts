@@ -478,13 +478,13 @@ export function buildQianfanProvider(): ProviderConfig {
         maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "ernie-5.0-thinking-preview",
-        name: "ERNIE-5.0-Thinking-Preview",
+        id: ERNIE_DEFAULT_MODEL_ID,
+        name: "ERNIE 5.0 Thinking Preview",
         reasoning: true,
         input: ["text", "image"],
         cost: QIANFAN_DEFAULT_COST,
-        contextWindow: 119000,
-        maxTokens: 64000,
+        contextWindow: ERNIE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: ERNIE_DEFAULT_MAX_TOKENS,
       },
     ],
   };
