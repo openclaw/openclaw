@@ -22,6 +22,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -44,7 +45,9 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   if (unauthorized) {
     return unauthorized;
   }
-  const nonOwner = rejectNonOwnerCommand(params, "/config");
+  const allowInternalReadOnlyShow =
+    configCommand.action === "show" && isInternalMessageChannel(params.command.channel);
+  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/config");
   if (nonOwner) {
     return nonOwner;
   }
