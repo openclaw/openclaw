@@ -641,6 +641,34 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "bash safe\u200B.sh",
+        commandArgv: ["bash", "safe\u200B.sh"],
+        systemRunPlan: {
+          argv: ["bash", "safe\u200B.sh"],
+          cwd: "/real/cwd",
+          commandText: "bash safe\u200B.sh",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe("bash safe\\u{200B}.sh");
+    expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
+      "bash safe\u200B.sh",
+    );
+  });
+
   it("accepts resolve during broadcast", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
