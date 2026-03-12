@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunCronAgentTurnResult } from "../cron/isolated-agent.js";
 import {
   getCompiledOperatorTeam,
-  resolveOperatorAngelaDefaultAlias,
+  resolveOperatorDelegatedDefaultAlias,
 } from "../operator-control/agent-registry.js";
 import { angelaTaskEnvelopeSchema, type OperatorTaskState } from "../operator-control/contracts.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -15,18 +15,18 @@ import {
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
 
-export const ANGELA_MESSAGE_PATH = "/api/message";
+export const DELEGATED_MESSAGE_PATH = "/api/message";
 const DEFAULT_BODY_BYTES = 128 * 1024;
 
-type AngelaTaskEnvelope = ReturnType<typeof angelaTaskEnvelopeSchema.parse>;
+type DelegatedTaskEnvelope = ReturnType<typeof angelaTaskEnvelopeSchema.parse>;
 
-type AngelaTaskRunObserver = {
+type DelegatedTaskRunObserver = {
   onStarted: () => void;
   onFinished: (result: RunCronAgentTurnResult) => void;
   onError: (error: unknown) => void;
 };
 
-function describeTaskDomain(task: AngelaTaskEnvelope): string {
+function describeTaskDomain(task: DelegatedTaskEnvelope): string {
   if (task.team_id?.trim()) {
     return `${task.team_id.trim()} domain`;
   }
@@ -36,25 +36,25 @@ function describeTaskDomain(task: AngelaTaskEnvelope): string {
   return "operator";
 }
 
-function resolveAngelaSharedSecret(): string | null {
+function resolveDelegatedTransportSharedSecret(): string | null {
   const secret = process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
   return secret || null;
 }
 
-function resolveAngelaTargetAgentId(task: AngelaTaskEnvelope): string | null {
+function resolveDelegatedTargetAgentId(task: DelegatedTaskEnvelope): string | null {
   if (task.team_id?.trim()) {
     const team = getCompiledOperatorTeam(task.team_id);
     if (!team) {
       return null;
     }
   }
-  return resolveOperatorAngelaDefaultAlias({
+  return resolveOperatorDelegatedDefaultAlias({
     explicitAlias: task.alias ?? null,
     teamId: task.team_id ?? null,
   });
 }
 
-export function buildAngelaAgentMessage(task: AngelaTaskEnvelope): string {
+export function buildDelegatedAgentMessage(task: DelegatedTaskEnvelope): string {
   const contextLines = task.context_refs.map(
     (ref) => `- [${ref.kind}] ${ref.label ? `${ref.label}: ` : ""}${ref.value}`,
   );
@@ -89,7 +89,7 @@ export function buildAngelaAgentMessage(task: AngelaTaskEnvelope): string {
     .join("\n");
 }
 
-async function postAngelaReceipt(params: {
+async function postDelegatedReceipt(params: {
   callbackUrl: string;
   receipt: {
     schema: "AngelaTaskReceiptV1";
@@ -121,18 +121,20 @@ async function postAngelaReceipt(params: {
     });
     if (!response.ok) {
       params.log.warn(
-        `angela receipt callback rejected ${params.receipt.task_id}: ${response.status} ${response.statusText}`,
+        `delegated receipt callback rejected ${params.receipt.task_id}: ${response.status} ${response.statusText}`,
       );
     }
   } catch (error) {
-    params.log.warn(`angela receipt callback failed ${params.receipt.task_id}: ${String(error)}`);
+    params.log.warn(
+      `delegated receipt callback failed ${params.receipt.task_id}: ${String(error)}`,
+    );
   }
 }
 
 function mapResultToReceiptState(
   result: RunCronAgentTurnResult,
 ): Pick<
-  Awaited<Parameters<typeof postAngelaReceipt>[0]>["receipt"],
+  Awaited<Parameters<typeof postDelegatedReceipt>[0]>["receipt"],
   "state" | "failure_code" | "result_status" | "summary" | "output"
 > {
   if (result.status === "ok") {
@@ -172,12 +174,12 @@ function mapResultToReceiptState(
   };
 }
 
-export function createAngelaTaskRequestHandler(params: {
+export function createDelegatedTaskRequestHandler(params: {
   runTask: (params: {
-    task: AngelaTaskEnvelope;
+    task: DelegatedTaskEnvelope;
     targetAgentId: string;
     message: string;
-    observer: AngelaTaskRunObserver;
+    observer: DelegatedTaskRunObserver;
   }) => string;
   log: {
     warn: (message: string) => void;
@@ -186,7 +188,7 @@ export function createAngelaTaskRequestHandler(params: {
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (url.pathname !== ANGELA_MESSAGE_PATH) {
+    if (url.pathname !== DELEGATED_MESSAGE_PATH) {
       return false;
     }
 
@@ -195,7 +197,7 @@ export function createAngelaTaskRequestHandler(params: {
       return true;
     }
 
-    const expectedSecret = resolveAngelaSharedSecret();
+    const expectedSecret = resolveDelegatedTransportSharedSecret();
     if (expectedSecret && !safeEqualSecret(getBearerToken(req), expectedSecret)) {
       sendUnauthorized(res);
       return true;
@@ -207,7 +209,7 @@ export function createAngelaTaskRequestHandler(params: {
     }
 
     const task = angelaTaskEnvelopeSchema.parse(body);
-    const targetAgentId = resolveAngelaTargetAgentId(task);
+    const targetAgentId = resolveDelegatedTargetAgentId(task);
     if (!targetAgentId) {
       sendInvalidRequest(
         res,
@@ -224,13 +226,13 @@ export function createAngelaTaskRequestHandler(params: {
     const runId = params.runTask({
       task,
       targetAgentId,
-      message: buildAngelaAgentMessage(task),
+      message: buildDelegatedAgentMessage(task),
       observer: {
         onStarted: () => {
           if (!callbackUrl) {
             return;
           }
-          void postAngelaReceipt({
+          void postDelegatedReceipt({
             callbackUrl,
             log: params.log,
             receipt: {
@@ -262,7 +264,7 @@ export function createAngelaTaskRequestHandler(params: {
             return;
           }
           const mapped = mapResultToReceiptState(result);
-          void postAngelaReceipt({
+          void postDelegatedReceipt({
             callbackUrl,
             log: params.log,
             receipt: {
@@ -294,7 +296,7 @@ export function createAngelaTaskRequestHandler(params: {
           if (!callbackUrl) {
             return;
           }
-          void postAngelaReceipt({
+          void postDelegatedReceipt({
             callbackUrl,
             log: params.log,
             receipt: {

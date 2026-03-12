@@ -5,7 +5,7 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   compileOperatorAgentRegistry,
-  resolveOperatorAngelaDefaultAlias,
+  resolveOperatorDelegatedDefaultAlias,
 } from "./agent-registry.js";
 
 describe("compileOperatorAgentRegistry", () => {
@@ -200,12 +200,12 @@ describe("compileOperatorAgentRegistry", () => {
           ]),
         );
         expect(
-          resolveOperatorAngelaDefaultAlias({
+          resolveOperatorDelegatedDefaultAlias({
             teamId: "engineering",
             sourcePath,
           }),
         ).toBe("bobby-digital");
-        expect(resolveOperatorAngelaDefaultAlias({ sourcePath })).toBe("tonys-angels");
+        expect(resolveOperatorDelegatedDefaultAlias({ sourcePath })).toBe("tonys-angels");
       });
     });
   });

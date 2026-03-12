@@ -45,13 +45,13 @@ export type CompiledOperatorIdentityRecord = {
   leadTeamIds: string[];
 };
 
-export type CompiledOperatorAngelaRuntimeConfig = {
+export type CompiledOperatorDelegatedTransportConfig = {
   globalDefaultAlias: string | null;
 };
 
 export type CompiledOperatorRuntimeConfig = {
   transports: {
-    angelaHttp: CompiledOperatorAngelaRuntimeConfig;
+    angelaHttp: CompiledOperatorDelegatedTransportConfig;
   };
 };
 
@@ -474,7 +474,7 @@ export function getCompiledOperatorTeam(
   return findCompiledOperatorTeam(registry, teamId);
 }
 
-export function resolveOperatorAngelaDefaultAlias(params?: {
+export function resolveOperatorDelegatedDefaultAlias(params?: {
   explicitAlias?: string | null;
   teamId?: string | null;
   workspaceDir?: string;

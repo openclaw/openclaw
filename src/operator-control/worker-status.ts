@@ -24,11 +24,11 @@ export function resolve2TonySharedSecret(): string | null {
   return secret || null;
 }
 
-function resolveAngelaBaseUrl(): string | null {
+function resolveDelegatedTransportBaseUrl(): string | null {
   return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_ANGELA_URL);
 }
 
-function resolveAngelaSharedSecret(): string | null {
+function resolveDelegatedTransportSharedSecret(): string | null {
   const secret =
     process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
@@ -66,7 +66,7 @@ export type OperatorWorkerStatusSnapshot = {
   authConfigured: boolean;
 };
 
-export type OperatorAngelaStatusSnapshot = {
+export type OperatorDelegatedTransportStatusSnapshot = {
   dispatchTransport: "angela-http";
   configured: boolean;
   baseUrl: string | null;
@@ -79,8 +79,8 @@ export type OperatorAngelaStatusSnapshot = {
   defaultAliasByTeam: Record<string, string>;
 };
 
-function resolveAngelaServedDomains(): Pick<
-  OperatorAngelaStatusSnapshot,
+function resolveDelegatedTransportDomains(): Pick<
+  OperatorDelegatedTransportStatusSnapshot,
   "globalDefaultAlias" | "servedTeams" | "leadAliases" | "defaultAliasByTeam"
 > {
   const registry = compileOperatorAgentRegistry();
@@ -118,10 +118,10 @@ export function getOperatorWorkerStatus(): OperatorWorkerStatusSnapshot {
   };
 }
 
-export function getOperatorAngelaStatus(): OperatorAngelaStatusSnapshot {
-  const baseUrl = resolveAngelaBaseUrl();
-  const sharedSecret = resolveAngelaSharedSecret();
-  const domains = resolveAngelaServedDomains();
+export function getOperatorDelegatedTransportStatus(): OperatorDelegatedTransportStatusSnapshot {
+  const baseUrl = resolveDelegatedTransportBaseUrl();
+  const sharedSecret = resolveDelegatedTransportSharedSecret();
+  const domains = resolveDelegatedTransportDomains();
   return {
     dispatchTransport: "angela-http",
     configured: Boolean(baseUrl),

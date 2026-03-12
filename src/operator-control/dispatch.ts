@@ -1,5 +1,5 @@
 import { ZodError } from "zod";
-import { resolveOperatorAngelaDefaultAlias } from "./agent-registry.js";
+import { resolveOperatorDelegatedDefaultAlias } from "./agent-registry.js";
 import type { OperatorBlockerCode } from "./contracts.js";
 import { resolveOperatorRuntimeFreshness } from "./runtime-freshness.js";
 import { getOperatorTask, patchOperatorTask, submitOperatorTask } from "./task-store.js";
@@ -340,11 +340,11 @@ function resolveDebSharedSecret(): string | null {
   return secret || null;
 }
 
-function resolveAngelaBaseUrl(): string | null {
+function resolveDelegatedTransportBaseUrl(): string | null {
   return normalizeBaseUrl(process.env.OPENCLAW_OPERATOR_ANGELA_URL);
 }
 
-function resolveAngelaSharedSecret(): string | null {
+function resolveDelegatedTransportSharedSecret(): string | null {
   const secret =
     process.env.OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET?.trim() ||
     process.env.OPENCLAW_ANGELA_SHARED_SECRET?.trim();
@@ -388,7 +388,7 @@ function isAcceptedDebResponse(
   return readStringField(record, "status") === "accepted";
 }
 
-function isAcceptedAngelaResponse(payload: unknown): boolean {
+function isAcceptedDelegatedTransportResponse(payload: unknown): boolean {
   const record = asRecord(payload);
   if (!record) {
     return false;
@@ -567,7 +567,7 @@ function buildDebPayload(task: OperatorTaskRecord): {
   };
 }
 
-function buildAngelaPayload(task: OperatorTaskRecord): {
+function buildDelegatedTransportPayload(task: OperatorTaskRecord): {
   baseUrl: string;
   endpoint: string;
   init: RequestInit;
@@ -577,14 +577,14 @@ function buildAngelaPayload(task: OperatorTaskRecord): {
 } {
   const team = getResolvedOperatorTaskTeam(task.envelope);
   const dispatchConfig = resolveTeamDispatchConfig(team, {
-    baseUrl: resolveAngelaBaseUrl,
-    authToken: resolveAngelaSharedSecret,
+    baseUrl: resolveDelegatedTransportBaseUrl,
+    authToken: resolveDelegatedTransportSharedSecret,
   });
   const baseUrl = dispatchConfig.baseUrl;
   if (!baseUrl) {
-    throw new Error("Angela base URL not configured");
+    throw new Error("Delegated transport base URL not configured");
   }
-  const owner = resolveOperatorAngelaDefaultAlias({
+  const owner = resolveOperatorDelegatedDefaultAlias({
     explicitAlias: task.envelope.target.alias ?? null,
     teamId: task.envelope.target.team_id ?? null,
   });
@@ -821,14 +821,14 @@ async function dispatchToDeb(task: OperatorTaskRecord): Promise<DispatchResult> 
   };
 }
 
-async function dispatchToAngela(task: OperatorTaskRecord): Promise<DispatchResult> {
-  const request = buildAngelaPayload(task);
+async function dispatchToDelegatedTransport(task: OperatorTaskRecord): Promise<DispatchResult> {
+  const request = buildDelegatedTransportPayload(task);
   await assertHttpDelegateReady(
     request.delegateName,
     request.baseUrl,
     readAuthorizationHeader(request.init.headers),
     {
-      label: "Angela",
+      label: "Domain orchestrator",
       maxAgeEnv: "OPENCLAW_OPERATOR_ANGELA_MAX_AGE_HOURS",
       approvedRefsEnv: "OPENCLAW_OPERATOR_ANGELA_APPROVED_REFS",
       requireIdentityEnv: "OPENCLAW_OPERATOR_REQUIRE_ANGELA_IDENTITY",
@@ -836,7 +836,7 @@ async function dispatchToAngela(task: OperatorTaskRecord): Promise<DispatchResul
   );
   const response = await fetch(request.endpoint, request.init);
   const { payload, message } = await readJsonLikeResponse(response);
-  if (response.ok && isAcceptedAngelaResponse(payload)) {
+  if (response.ok && isAcceptedDelegatedTransportResponse(payload)) {
     patchOperatorTask(task.envelope.task_id, {
       state: request.successState,
       owner: request.owner,
@@ -868,9 +868,9 @@ function resolveDispatchFailureEndpoint(task: OperatorTaskRecord): string {
       }
     case "angela-http":
       try {
-        return buildAngelaPayload(task).endpoint;
+        return buildDelegatedTransportPayload(task).endpoint;
       } catch {
-        return `${resolveAngelaBaseUrl() ?? "<unconfigured>"}/api/message`;
+        return `${resolveDelegatedTransportBaseUrl() ?? "<unconfigured>"}/api/message`;
       }
     default:
       return `${resolve2TonyBaseUrl() ?? "<unconfigured>"}/task`;
@@ -897,7 +897,7 @@ export async function dispatchOperatorTask(taskId: string): Promise<DispatchResu
     case "deb-http":
       return await dispatchToDeb(task);
     case "angela-http":
-      return await dispatchToAngela(task);
+      return await dispatchToDelegatedTransport(task);
     default:
       return {
         attempted: false,

@@ -3,7 +3,7 @@ import { compileOperatorAgentRegistry } from "./agent-registry.js";
 import { getOperatorDebSyncStatus } from "./deb-sync.js";
 import { listOperatorMemory } from "./memory-store.js";
 import { getOperatorTaskStatusSummary, getOperatorTaskStorePath } from "./task-store.js";
-import { getOperatorAngelaStatus, getOperatorWorkerStatus } from "./worker-status.js";
+import { getOperatorDelegatedTransportStatus, getOperatorWorkerStatus } from "./worker-status.js";
 
 export type OperatorControlStatusSnapshot = {
   primaryOperator: "tonya";
@@ -31,8 +31,8 @@ export type OperatorControlStatusSnapshot = {
   mesh: {
     executionFleet: ReturnType<typeof getOperatorWorkerStatus>;
     projectOps: ReturnType<typeof getOperatorDebSyncStatus>;
-    domainOrchestrators: ReturnType<typeof getOperatorAngelaStatus>;
-    marketing: ReturnType<typeof getOperatorAngelaStatus>;
+    domainOrchestrators: ReturnType<typeof getOperatorDelegatedTransportStatus>;
+    marketing: ReturnType<typeof getOperatorDelegatedTransportStatus>;
   };
 };
 
@@ -42,7 +42,7 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
   const sharedMemory = listOperatorMemory({ limit: 1 });
   const worker = getOperatorWorkerStatus();
   const debSync = getOperatorDebSyncStatus();
-  const angela = getOperatorAngelaStatus();
+  const delegatedTransport = getOperatorDelegatedTransportStatus();
   return {
     primaryOperator: "tonya",
     fallbackOperator: "tony",
@@ -69,8 +69,8 @@ export function getOperatorControlStatus(): OperatorControlStatusSnapshot {
     mesh: {
       executionFleet: worker,
       projectOps: debSync,
-      domainOrchestrators: angela,
-      marketing: angela,
+      domainOrchestrators: delegatedTransport,
+      marketing: delegatedTransport,
     },
   };
 }

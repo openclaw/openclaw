@@ -7,7 +7,7 @@ vi.mock("./agent-registry.js", () => ({
 }));
 
 import { withEnvAsync } from "../test-utils/env.js";
-import { getOperatorAngelaStatus } from "./worker-status.js";
+import { getOperatorDelegatedTransportStatus } from "./worker-status.js";
 
 describe("operator worker status", () => {
   beforeEach(() => {
@@ -48,7 +48,7 @@ describe("operator worker status", () => {
         OPENCLAW_OPERATOR_ANGELA_URL: "http://tonya.internal:18789",
         OPENCLAW_OPERATOR_ANGELA_SHARED_SECRET: "shared-secret",
       },
-      async () => getOperatorAngelaStatus(),
+      async () => getOperatorDelegatedTransportStatus(),
     );
 
     expect(snapshot).toMatchObject({

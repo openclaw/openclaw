@@ -5,10 +5,12 @@ import { withEnvAsync } from "../test-utils/env.js";
 const { readJsonBodyOrErrorMock } = vi.hoisted(() => ({
   readJsonBodyOrErrorMock: vi.fn(),
 }));
-const { getCompiledOperatorTeamMock, resolveOperatorAngelaDefaultAliasMock } = vi.hoisted(() => ({
-  getCompiledOperatorTeamMock: vi.fn(),
-  resolveOperatorAngelaDefaultAliasMock: vi.fn(),
-}));
+const { getCompiledOperatorTeamMock, resolveOperatorDelegatedDefaultAliasMock } = vi.hoisted(
+  () => ({
+    getCompiledOperatorTeamMock: vi.fn(),
+    resolveOperatorDelegatedDefaultAliasMock: vi.fn(),
+  }),
+);
 
 vi.mock("./http-common.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./http-common.js")>();
@@ -20,16 +22,16 @@ vi.mock("./http-common.js", async (importOriginal) => {
 
 vi.mock("../operator-control/agent-registry.js", () => ({
   getCompiledOperatorTeam: getCompiledOperatorTeamMock,
-  resolveOperatorAngelaDefaultAlias: resolveOperatorAngelaDefaultAliasMock,
+  resolveOperatorDelegatedDefaultAlias: resolveOperatorDelegatedDefaultAliasMock,
 }));
 
-import { createAngelaTaskRequestHandler, ANGELA_MESSAGE_PATH } from "./angela-http.js";
+import { createDelegatedTaskRequestHandler, DELEGATED_MESSAGE_PATH } from "./angela-http.js";
 import { createGatewayRequest } from "./hooks-test-helpers.js";
 
 function createRequest(): IncomingMessage {
   return createGatewayRequest({
     method: "POST",
-    path: ANGELA_MESSAGE_PATH,
+    path: DELEGATED_MESSAGE_PATH,
     host: "127.0.0.1:18789",
   });
 }
@@ -66,18 +68,18 @@ function createResponse(): {
   };
 }
 
-describe("Angela HTTP task handler", () => {
+describe("delegated task request handler", () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     vi.restoreAllMocks();
     readJsonBodyOrErrorMock.mockReset();
     getCompiledOperatorTeamMock.mockReset();
-    resolveOperatorAngelaDefaultAliasMock.mockReset();
+    resolveOperatorDelegatedDefaultAliasMock.mockReset();
     getCompiledOperatorTeamMock.mockReturnValue({
       id: "marketing",
     });
-    resolveOperatorAngelaDefaultAliasMock.mockImplementation(
+    resolveOperatorDelegatedDefaultAliasMock.mockImplementation(
       ({ explicitAlias, teamId }: { explicitAlias?: string | null; teamId?: string | null }) => {
         if (explicitAlias?.trim()) {
           return explicitAlias.trim();
@@ -105,7 +107,7 @@ describe("Angela HTTP task handler", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const handler = createAngelaTaskRequestHandler({
+    const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: ({ observer }) => {
         observer.onStarted();
@@ -191,7 +193,7 @@ describe("Angela HTTP task handler", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const handler = createAngelaTaskRequestHandler({
+    const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: ({ observer }) => {
         observer.onFinished({
@@ -239,7 +241,7 @@ describe("Angela HTTP task handler", () => {
   });
 
   it("uses the configured team fallback alias when the request omits alias", async () => {
-    const handler = createAngelaTaskRequestHandler({
+    const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: () => "run-angela-engineering-1",
     });
@@ -275,14 +277,14 @@ describe("Angela HTTP task handler", () => {
     expect(JSON.parse(response.getBody())).toMatchObject({
       agentId: "bobby-digital",
     });
-    expect(resolveOperatorAngelaDefaultAliasMock).toHaveBeenCalledWith({
+    expect(resolveOperatorDelegatedDefaultAliasMock).toHaveBeenCalledWith({
       explicitAlias: null,
       teamId: "engineering",
     });
   });
 
   it("returns invalid_request when team fallback cannot be resolved", async () => {
-    const handler = createAngelaTaskRequestHandler({
+    const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: vi.fn(() => "run-angela-4"),
     });
@@ -303,7 +305,7 @@ describe("Angela HTTP task handler", () => {
       },
     });
     getCompiledOperatorTeamMock.mockReturnValue(null);
-    resolveOperatorAngelaDefaultAliasMock.mockReturnValue(null);
+    resolveOperatorDelegatedDefaultAliasMock.mockReturnValue(null);
 
     const req = createRequest();
     const response = createResponse();
@@ -316,7 +318,7 @@ describe("Angela HTTP task handler", () => {
   });
 
   it("rejects unauthenticated requests when the shared secret is configured", async () => {
-    const handler = createAngelaTaskRequestHandler({
+    const handler = createDelegatedTaskRequestHandler({
       log: { warn: vi.fn() },
       runTask: vi.fn(() => "run-angela-3"),
     });

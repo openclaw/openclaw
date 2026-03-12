@@ -590,7 +590,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
-  handleAngelaRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleDelegatedTaskRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -611,7 +611,7 @@ export function createGatewayHttpServer(opts: {
     openResponsesEnabled,
     openResponsesConfig,
     strictTransportSecurityHeader,
-    handleAngelaRequest,
+    handleDelegatedTaskRequest,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -661,7 +661,10 @@ export function createGatewayHttpServer(opts: {
         },
         {
           name: "angela-http",
-          run: () => (handleAngelaRequest ? handleAngelaRequest(req, res) : Promise.resolve(false)),
+          run: () =>
+            handleDelegatedTaskRequest
+              ? handleDelegatedTaskRequest(req, res)
+              : Promise.resolve(false),
         },
         {
           name: "tools-invoke",
