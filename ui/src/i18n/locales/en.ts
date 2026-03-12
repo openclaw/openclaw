@@ -2,7 +2,6 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
   common: {
-    version: "Version",
     health: "Health",
     ok: "OK",
     offline: "Offline",
@@ -147,10 +146,6 @@ export const en: TranslationMap = {
       refreshAll: "Refresh All",
       terminal: "Terminal",
     },
-    streamMode: {
-      active: "Stream mode — values redacted",
-      disable: "Disable",
-    },
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
@@ -158,7 +153,7 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional", // pragma: allowlist secret
+    passwordPlaceholder: "optional",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

@@ -2,7 +2,6 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const pt_BR: TranslationMap = {
   common: {
-    version: "Versão",
     health: "Saúde",
     ok: "OK",
     offline: "Offline",
@@ -12,7 +11,6 @@ export const pt_BR: TranslationMap = {
     disabled: "Desativado",
     na: "n/a",
     docs: "Docs",
-    theme: "Tema",
     resources: "Recursos",
     search: "Pesquisar",
   },
@@ -149,10 +147,6 @@ export const pt_BR: TranslationMap = {
       refreshAll: "Atualizar Tudo",
       terminal: "Terminal",
     },
-    streamMode: {
-      active: "Modo stream — valores ocultos",
-      disable: "Desativar",
-    },
     palette: {
       placeholder: "Digite um comando…",
       noResults: "Sem resultados",
@@ -160,7 +154,7 @@ export const pt_BR: TranslationMap = {
   },
   login: {
     subtitle: "Painel do Gateway",
-    passwordPlaceholder: "opcional", // pragma: allowlist secret
+    passwordPlaceholder: "opcional",
   },
   chat: {
     disconnected: "Desconectado do gateway.",

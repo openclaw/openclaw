@@ -37,7 +37,6 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       thinkingLevel?: string | null;
-      fastMode?: boolean | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
     },
@@ -52,11 +51,6 @@ const VERBOSE_LEVELS = [
   { value: "off", label: "off (explicit)" },
   { value: "on", label: "on" },
   { value: "full", label: "full" },
-] as const;
-const FAST_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "on", label: "on" },
-  { value: "off", label: "off" },
 ] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
@@ -312,7 +306,6 @@ export function renderSessions(props: SessionsProps) {
                 ${sortHeader("updated", "Updated")}
                 ${sortHeader("tokens", "Tokens")}
                 <th>Thinking</th>
-                <th>Fast</th>
                 <th>Verbose</th>
                 <th>Reasoning</th>
                 <th style="width: 60px;"></th>
@@ -323,7 +316,7 @@ export function renderSessions(props: SessionsProps) {
                 paginated.length === 0
                   ? html`
                       <tr>
-                        <td colspan="10" style="text-align: center; padding: 48px 16px; color: var(--muted)">
+                        <td colspan="9" style="text-align: center; padding: 48px 16px; color: var(--muted)">
                           No sessions found.
                         </td>
                       </tr>
@@ -397,8 +390,6 @@ function renderRow(
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
   const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
-  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
-  const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
@@ -470,23 +461,6 @@ function renderRow(
             (level) =>
               html`<option value=${level} ?selected=${thinking === level}>
                 ${level || "inherit"}
-              </option>`,
-          )}
-        </select>
-      </td>
-      <td>
-        <select
-          ?disabled=${disabled}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
-          @change=${(e: Event) => {
-            const value = (e.target as HTMLSelectElement).value;
-            onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
-          }}
-        >
-          ${fastLevels.map(
-            (level) =>
-              html`<option value=${level.value} ?selected=${fastMode === level.value}>
-                ${level.label}
               </option>`,
           )}
         </select>
