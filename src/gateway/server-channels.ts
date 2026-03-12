@@ -165,83 +165,86 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return;
     }
 
-    await Promise.all(
-      accountIds.map(async (id) => {
-        if (store.tasks.has(id)) {
-          return;
-        }
-        const account = plugin.config.resolveAccount(cfg, id);
-        const enabled = plugin.config.isEnabled
-          ? plugin.config.isEnabled(account, cfg)
-          : isAccountEnabled(account);
-        if (!enabled) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            enabled: false,
-            configured: true,
-            running: false,
-            restartPending: false,
-            lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
-          });
-          return;
-        }
+    const startAccountTask = async (id: string, delayMs = 0) => {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
 
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (!configured) {
-          setRuntime(channelId, id, {
-            accountId: id,
-            enabled: true,
-            configured: false,
-            running: false,
-            restartPending: false,
-            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
-          });
-          return;
-        }
+      if (store.tasks.has(id)) {
+        return;
+      }
+      const account = plugin.config.resolveAccount(cfg, id);
+      const enabled = plugin.config.isEnabled
+        ? plugin.config.isEnabled(account, cfg)
+        : isAccountEnabled(account);
+      if (!enabled) {
+        setRuntime(channelId, id, {
+          accountId: id,
+          enabled: false,
+          configured: true,
+          running: false,
+          restartPending: false,
+          lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
+        });
+        return;
+      }
 
-        const rKey = restartKey(channelId, id);
-        if (!preserveManualStop) {
-          manuallyStopped.delete(rKey);
-        }
-
-        const abort = new AbortController();
-        store.aborts.set(id, abort);
-        if (!preserveRestartAttempts) {
-          restartAttempts.delete(rKey);
-        }
+      let configured = true;
+      if (plugin.config.isConfigured) {
+        configured = await plugin.config.isConfigured(account, cfg);
+      }
+      if (!configured) {
         setRuntime(channelId, id, {
           accountId: id,
           enabled: true,
-          configured: true,
-          running: true,
+          configured: false,
+          running: false,
           restartPending: false,
-          lastStartAt: Date.now(),
-          lastError: null,
-          reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
+          lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
         });
+        return;
+      }
 
-        const log = channelLogs[channelId];
-        const task = startAccount({
-          cfg,
-          accountId: id,
-          account,
-          runtime: channelRuntimeEnvs[channelId],
-          abortSignal: abort.signal,
-          log,
-          getStatus: () => getRuntime(channelId, id),
-          setStatus: (next) => setRuntime(channelId, id, next),
-          ...(channelRuntime ? { channelRuntime } : {}),
-        });
-        const trackedPromise = Promise.resolve(task)
-          .catch((err) => {
-            const message = formatErrorMessage(err);
-            setRuntime(channelId, id, { accountId: id, lastError: message });
-            log.error?.(`[${id}] channel exited: ${message}`);
-          })
-          .finally(() => {
+      const rKey = restartKey(channelId, id);
+      if (!preserveManualStop) {
+        manuallyStopped.delete(rKey);
+      }
+
+      const abort = new AbortController();
+      store.aborts.set(id, abort);
+      if (!preserveRestartAttempts) {
+        restartAttempts.delete(rKey);
+      }
+      setRuntime(channelId, id, {
+        accountId: id,
+        enabled: true,
+        configured: true,
+        running: true,
+        restartPending: false,
+        lastStartAt: Date.now(),
+        lastError: null,
+        reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
+      });
+
+      const log = channelLogs[channelId];
+      const task = startAccount({
+        cfg,
+        accountId: id,
+        account,
+        runtime: channelRuntimeEnvs[channelId],
+        abortSignal: abort.signal,
+        log,
+        getStatus: () => getRuntime(channelId, id),
+        setStatus: (next) => setRuntime(channelId, id, next),
+        ...(channelRuntime ? { channelRuntime } : {}),
+      });
+      const trackedPromise = Promise.resolve(task)
+        .catch((err) => {
+          const message = formatErrorMessage(err);
+          setRuntime(channelId, id, { accountId: id, lastError: message });
+          log.error?.(`[${id}] channel exited: ${message}`);
+        })
+        .finally(() => {
             setRuntime(channelId, id, {
               accountId: id,
               running: false,
@@ -299,9 +302,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               store.aborts.delete(id);
             }
           });
-        store.tasks.set(id, trackedPromise);
-      }),
-    );
+      store.tasks.set(id, trackedPromise);
+    };
+
+    // Check if we should stagger Discord connections
+    const staggerMs =
+      channelId === "discord" && typeof cfg.channels?.discord?.connectStagger === "number"
+        ? cfg.channels.discord.connectStagger
+        : 0;
+
+    if (staggerMs > 0 && accountIds.length > 1) {
+      // Sequential startup with delays
+      for (let i = 0; i < accountIds.length; i++) {
+        const delayMs = i === 0 ? 0 : staggerMs;
+        await startAccountTask(accountIds[i]!, delayMs);
+      }
+    } else {
+      // Concurrent startup (original behavior)
+      await Promise.all(accountIds.map((id) => startAccountTask(id, 0)));
+    }
   };
 
   const startChannel = async (channelId: ChannelId, accountId?: string) => {
