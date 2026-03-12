@@ -117,7 +117,7 @@ describe("onboard rescue helpers", () => {
     });
     expect(config.agents?.defaults?.workspace).toBe("/tmp/workspace-rescue");
     expect(config.agents?.defaults?.heartbeat?.every).toBe("0m");
-    expect(config.cron).toBeUndefined();
+    expect(config.cron).toEqual({ enabled: true });
     expect(config.channels).toBeUndefined();
     expect(config.web).toBeUndefined();
     expect(config.wizard?.rescueWatchdog).toEqual({
