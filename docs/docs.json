@@ -1206,6 +1206,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/sandboxing",
+                      "gateway/windows-no-docker-hardening",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
                     ]
                   },

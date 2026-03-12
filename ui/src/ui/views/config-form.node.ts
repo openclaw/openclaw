@@ -105,6 +105,26 @@ export type ConfigSearchCriteria = {
   tags: string[];
 };
 
+export function resolveMapFieldPresentation(path: Array<string | number>) {
+  const last = path.at(-1);
+  if (last === "accounts") {
+    return {
+      label: "Accounts",
+      addLabel: "Add Account",
+      emptyLabel: "No accounts yet.",
+      keyPlaceholder: "Account alias",
+      defaultKeyPrefix: "account",
+    };
+  }
+  return {
+    label: "Custom entries",
+    addLabel: "Add Entry",
+    emptyLabel: "No custom entries.",
+    keyPlaceholder: "Key",
+    defaultKeyPrefix: "custom",
+  };
+}
+
 function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
   return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
 }
@@ -937,6 +957,7 @@ function renderMapField(params: {
   } = params;
   const anySchema = isAnySchema(schema);
   const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
+  const presentation = resolveMapFieldPresentation(path);
   const visibleEntries =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? entries.filter(([key, entryValue]) =>
@@ -953,7 +974,7 @@ function renderMapField(params: {
   return html`
     <div class="cfg-map">
       <div class="cfg-map__header">
-        <span class="cfg-map__label">Custom entries</span>
+        <span class="cfg-map__label">${presentation.label}</span>
         <button
           type="button"
           class="cfg-map__add"
@@ -961,24 +982,24 @@ function renderMapField(params: {
           @click=${() => {
             const next = { ...value };
             let index = 1;
-            let key = `custom-${index}`;
+            let key = `${presentation.defaultKeyPrefix}-${index}`;
             while (key in next) {
               index += 1;
-              key = `custom-${index}`;
+              key = `${presentation.defaultKeyPrefix}-${index}`;
             }
             next[key] = anySchema ? {} : defaultValue(schema);
             onPatch(path, next);
           }}
         >
           <span class="cfg-map__add-icon">${icons.plus}</span>
-          Add Entry
+          ${presentation.addLabel}
         </button>
       </div>
 
       ${
         visibleEntries.length === 0
           ? html`
-              <div class="cfg-map__empty">No custom entries.</div>
+              <div class="cfg-map__empty">${presentation.emptyLabel}</div>
             `
           : html`
         <div class="cfg-map__items">
@@ -992,7 +1013,7 @@ function renderMapField(params: {
                     <input
                       type="text"
                       class="cfg-input cfg-input--sm"
-                      placeholder="Key"
+                      placeholder=${presentation.keyPlaceholder}
                       .value=${key}
                       ?disabled=${disabled}
                       @change=${(e: Event) => {
