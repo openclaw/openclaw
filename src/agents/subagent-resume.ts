@@ -381,13 +381,21 @@ export async function rehydrateSessionStoreEntries(
       }
 
       // Build a minimal synthetic session-store entry.
+      // Derive the child's spawn depth from the requester's depth rather than
+      // hardcoding 1, so that recovered depth-2+ runs are classified correctly
+      // by getSubagentDepthFromSessionStore (which prefers stored spawnDepth
+      // over ancestry traversal).
+      const requesterSpawnDepth = getSubagentDepthFromSessionStore(entry.requesterSessionKey, {
+        cfg,
+      });
+      const childSpawnDepth = requesterSpawnDepth + 1;
       const sessionFile = path.relative(sessionsDir, transcriptPath);
       const synthetic: SessionEntry = {
         sessionId,
         updatedAt: targetCreatedAtMs,
         sessionFile,
         spawnedBy: entry.requesterSessionKey,
-        spawnDepth: 1,
+        spawnDepth: childSpawnDepth,
       };
 
       // Write the synthetic entry via updateSessionStore so that concurrent
@@ -578,130 +586,167 @@ export async function redispatchSubagentRunAfterRestart(
   onComplete: (runId: string, endedAt: number, outcome: { status: string }) => Promise<void>,
   suppressNotifications?: boolean,
 ): Promise<void> {
-  const childSessionKey = entry.childSessionKey?.trim();
-  if (!childSessionKey || !entry.task) {
-    defaultRuntime.log(
-      `[warn] subagent-resume: cannot redispatch run=${runId}: missing sessionKey or task`,
-    );
-    return;
-  }
-
-  // Notify the requester that recovery is in progress — skipped when
-  // suppressNotifications is true so that the recovery path does not fire
-  // user-visible chat messages before the recovered run completes.
-  if (!suppressNotifications) {
-    try {
-      await callGateway({
-        method: "chat.send",
-        params: {
-          sessionKey: entry.requesterSessionKey,
-          message: `[gateway restart recovery] Re-dispatching subagent task after restart (run ${runId}). The previous agent process was interrupted; starting fresh in the same session.`,
-          idempotencyKey: `restart-notify-${runId}`,
-          deliver: false,
-        },
-        timeoutMs: 5_000,
-      });
-    } catch {
-      // Best-effort notification — don't abort recovery if this fails.
+  // Track whether onComplete has been called so the finally block can guarantee
+  // it fires on every exit path (fix for resume-lock leak on early return or
+  // thrown error).
+  let onCompleteCalled = false;
+  const safeComplete = async (endedAt: number, outcome: { status: string }): Promise<void> => {
+    if (!onCompleteCalled) {
+      onCompleteCalled = true;
+      await onComplete(runId, endedAt, outcome);
     }
-  }
+  };
 
-  // Re-dispatch the original task to the child session.
-  // Reconstruct the full prompt contract that was used in the original dispatch
-  // (subagent-spawn.ts) so that the re-dispatched run behaves identically:
-  //   • childTaskMessage — wraps the task with [Subagent Context] / [Subagent Task] headers
-  //   • extraSystemPrompt — the full subagent system-prompt block from buildSubagentSystemPrompt
-  const cfg = loadConfig();
-  const maxSpawnDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  const childDepth = getSubagentDepthFromSessionStore(childSessionKey, { cfg });
-  const childTaskMessage = [
-    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
-    entry.spawnMode === "session"
-      ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
-      : undefined,
-    `[Subagent Task]: ${entry.task}`,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n\n");
-  const extraSystemPrompt = buildSubagentSystemPrompt({
-    requesterSessionKey: entry.requesterSessionKey,
-    requesterOrigin: entry.requesterOrigin,
-    childSessionKey,
-    label: entry.label,
-    task: entry.task,
-    childDepth,
-    maxSpawnDepth,
-  });
-
-  const redispatchIdem = crypto.randomUUID();
-  // Use a fresh UUID for newRunId so it is never confused with the idempotency
-  // key, which is for deduplication only and is not a valid run ID.
-  let newRunId: string = crypto.randomUUID();
   try {
-    log.info("restart recovery: re-dispatching task to child session", {
-      runId,
-      childSessionKey,
-      redispatchIdem,
-    });
-    const response = await callGateway<{ runId?: string }>({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        idempotencyKey: redispatchIdem,
-        deliver: false,
-        lane: AGENT_LANE_SUBAGENT,
-        timeout: entry.runTimeoutSeconds,
-        extraSystemPrompt,
-        // Preserve original run's depth/parent context so the session tree
-        // remains consistent after restart.
-        spawnedBy: entry.requesterSessionKey,
-      },
-      timeoutMs: 10_000,
-    });
-    if (typeof response?.runId === "string" && response.runId) {
-      newRunId = response.runId;
-    }
-  } catch (err) {
-    defaultRuntime.log(
-      `[warn] subagent-resume: redispatch agent call failed run=${runId}: ${String(err)}`,
-    );
-    return;
-  }
-
-  // Wait for the new dispatch to complete.
-  try {
-    const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-    const wait = await callGateway<{
-      status?: string;
-      startedAt?: number;
-      endedAt?: number;
-      error?: string;
-    }>({
-      method: "agent.wait",
-      params: { runId: newRunId, timeoutMs },
-      timeoutMs: timeoutMs + 10_000,
-    });
-    if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey || !entry.task) {
+      defaultRuntime.log(
+        `[warn] subagent-resume: cannot redispatch run=${runId}: missing sessionKey or task`,
+      );
       return;
     }
-    const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
-    const outcome =
-      wait.status === "error"
-        ? {
-            status: "error" as const,
-            error: typeof wait.error === "string" ? wait.error : undefined,
-          }
-        : wait.status === "timeout"
-          ? { status: "timeout" as const }
-          : { status: "ok" as const };
 
-    await onComplete(runId, endedAt, outcome);
-  } catch (err) {
-    defaultRuntime.log(
-      `[warn] subagent-resume: agent.wait for redispatch failed run=${runId}: ${String(err)}`,
-    );
+    // Notify the requester that recovery is in progress — skipped when
+    // suppressNotifications is true so that the recovery path does not fire
+    // user-visible chat messages before the recovered run completes.
+    if (!suppressNotifications) {
+      try {
+        await callGateway({
+          method: "chat.send",
+          params: {
+            sessionKey: entry.requesterSessionKey,
+            message: `[gateway restart recovery] Re-dispatching subagent task after restart (run ${runId}). The previous agent process was interrupted; starting fresh in the same session.`,
+            idempotencyKey: `restart-notify-${runId}`,
+            deliver: false,
+          },
+          timeoutMs: 5_000,
+        });
+      } catch {
+        // Best-effort notification — don't abort recovery if this fails.
+      }
+    }
+
+    // Re-dispatch the original task to the child session.
+    // Reconstruct the full prompt contract that was used in the original dispatch
+    // (subagent-spawn.ts) so that the re-dispatched run behaves identically:
+    //   • childTaskMessage — wraps the task with [Subagent Context] / [Subagent Task] headers
+    //   • extraSystemPrompt — restored verbatim from the stored entry when available so that
+    //     attachment-specific suffixes appended during the original spawn are preserved; only
+    //     falls back to buildSubagentSystemPrompt when no stored prompt is available
+    const cfg = loadConfig();
+    const maxSpawnDepth =
+      cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+    const childDepth = getSubagentDepthFromSessionStore(childSessionKey, { cfg });
+    const childTaskMessage = [
+      `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+      entry.spawnMode === "session"
+        ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
+        : undefined,
+      `[Subagent Task]: ${entry.task}`,
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n\n");
+
+    // Fix (comment 3): restore the original extraSystemPrompt verbatim from the
+    // stored session entry so that attachment suffixes are not lost.  Fall back to
+    // buildSubagentSystemPrompt only when the stored entry predates this field.
+    const extraSystemPrompt =
+      typeof entry.extraSystemPrompt === "string" && entry.extraSystemPrompt.trim()
+        ? entry.extraSystemPrompt
+        : buildSubagentSystemPrompt({
+            requesterSessionKey: entry.requesterSessionKey,
+            requesterOrigin: entry.requesterOrigin,
+            childSessionKey,
+            label: entry.label,
+            task: entry.task,
+            childDepth,
+            maxSpawnDepth,
+          });
+
+    const redispatchIdem = crypto.randomUUID();
+    // Use a fresh UUID for newRunId so it is never confused with the idempotency
+    // key, which is for deduplication only and is not a valid run ID.
+    let newRunId: string = crypto.randomUUID();
+    try {
+      log.info("restart recovery: re-dispatching task to child session", {
+        runId,
+        childSessionKey,
+        redispatchIdem,
+      });
+      const response = await callGateway<{ runId?: string }>({
+        method: "agent",
+        params: {
+          message: childTaskMessage,
+          sessionKey: childSessionKey,
+          idempotencyKey: redispatchIdem,
+          deliver: false,
+          lane: AGENT_LANE_SUBAGENT,
+          timeout: entry.runTimeoutSeconds,
+          extraSystemPrompt,
+          // Preserve original run's depth/parent context and workspace so the
+          // session tree and any relative-path file operations remain consistent
+          // after restart (fix for comment 1: include workspaceDir from entry).
+          spawnedBy: entry.requesterSessionKey,
+          workspaceDir: entry.workspaceDir,
+        },
+        timeoutMs: 10_000,
+      });
+      if (typeof response?.runId === "string" && response.runId) {
+        newRunId = response.runId;
+      }
+    } catch (err) {
+      defaultRuntime.log(
+        `[warn] subagent-resume: redispatch agent call failed run=${runId}: ${String(err)}`,
+      );
+      return;
+    }
+
+    // Wait for the new dispatch to complete.
+    try {
+      const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
+        method: "agent.wait",
+        params: { runId: newRunId, timeoutMs },
+        timeoutMs: timeoutMs + 10_000,
+      });
+      if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+        return;
+      }
+      const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+      const outcome =
+        wait.status === "error"
+          ? {
+              status: "error" as const,
+              error: typeof wait.error === "string" ? wait.error : undefined,
+            }
+          : wait.status === "timeout"
+            ? { status: "timeout" as const }
+            : { status: "ok" as const };
+
+      await safeComplete(endedAt, outcome);
+    } catch (err) {
+      defaultRuntime.log(
+        `[warn] subagent-resume: agent.wait for redispatch failed run=${runId}: ${String(err)}`,
+      );
+    }
+  } finally {
+    // Guarantee onComplete is always called even when an early return or
+    // unexpected error prevented the normal completion path from running.
+    // This ensures the resume lock is never permanently leaked (fix for comment 4).
+    if (!onCompleteCalled) {
+      try {
+        await onComplete(runId, Date.now(), { status: "error" });
+      } catch (err) {
+        defaultRuntime.log(
+          `[warn] subagent-resume: finally-path onComplete failed run=${runId}: ${String(err)}`,
+        );
+      }
+    }
   }
 }
 

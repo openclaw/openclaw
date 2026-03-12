@@ -642,7 +642,10 @@ describe("rehydrateSessionStoreEntries", () => {
     expect(injected).toBeDefined();
     expect(injected?.sessionId).toBe(sessionId);
     expect(injected?.spawnedBy).toBe(entry.requesterSessionKey);
-    expect(injected?.spawnDepth).toBe(1);
+    // spawnDepth is now computed as getSubagentDepthFromSessionStore(requester) + 1.
+    // The test mock returns 1 for all getSubagentDepthFromSessionStore calls, so the
+    // child depth is 1 + 1 = 2 (validates dynamic computation, not hardcoded 1).
+    expect(injected?.spawnDepth).toBe(2);
 
     // Cleanup the fixed path used by this test.
     try {
