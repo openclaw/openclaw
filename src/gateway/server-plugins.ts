@@ -41,7 +41,9 @@ const fallbackGatewayContextState = (() => {
 })();
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
+  // Fallback is used by plugin subagent dispatch when no per-request scope exists
+  // (e.g. Telegram polling, cron). server.impl keeps this context in sync after
+  // config hot-reload by mutating ctx.cron and ctx.cronStorePath in setState.
   fallbackGatewayContextState.context = ctx;
 }
 

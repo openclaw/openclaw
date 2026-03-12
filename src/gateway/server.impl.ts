@@ -967,6 +967,10 @@ export async function startGatewayServer(
             cronStorePath = cronState.storePath;
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
+            // Keep plugin fallback gateway context in sync so subagent dispatch from
+            // non-WS paths (Telegram, cron, etc.) uses the current cron after hot-reload.
+            gatewayRequestContext.cron = cron;
+            gatewayRequestContext.cronStorePath = cronStorePath;
           },
           startChannel,
           stopChannel,
