@@ -16,6 +16,7 @@ import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
+  resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "./net.js";
@@ -102,23 +103,6 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
-  });
-}
-
-export function resolveRequestClientIp(
-  req?: IncomingMessage,
-  trustedProxies?: string[],
-  allowRealIpFallback = false,
-): string | undefined {
-  if (!req) {
-    return undefined;
-  }
-  return resolveClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    realIp: headerValue(req.headers?.["x-real-ip"]),
-    trustedProxies,
-    allowRealIpFallback,
   });
 }
 
