@@ -530,6 +530,51 @@ describe("trusted-proxy auth", () => {
     expect(res.method).toBe("token");
   });
 
+  it("rejects shared-secret fallback for forwarded non-local requests", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "203.0.113.42",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_missing_header_x-forwarded-proto");
+  });
+
+  it("rejects local shared-secret fallback when loopback is not trusted", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: { token: "secret" },
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_untrusted_source");
+  });
+
   it("evaluates configured trusted-proxy headers before shared-secret fallback", async () => {
     const res = await authorizeGatewayConnect({
       auth: {
@@ -556,6 +601,28 @@ describe("trusted-proxy auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
     expect(res.user).toBe("nick@example.com");
+  });
+
+  it("returns shared-secret missing reason when fallback is eligible but credentials are absent", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        token: "secret",
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: ["127.0.0.1"],
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "127.0.0.1:19001",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
   });
 
   it("applies rate limiting before local shared-secret fallback", async () => {

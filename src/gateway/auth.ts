@@ -404,6 +404,10 @@ function authorizeSharedSecretFallback(params: SharedSecretAuthParams): GatewayA
     return { ok: true, method: "token" };
   }
 
+  if (auth.password || auth.token) {
+    return { ok: false, reason: auth.password ? "password_missing" : "token_missing" };
+  }
+
   return null;
 }
 
@@ -465,9 +469,17 @@ export async function authorizeGatewayConnect(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
 
+    const hasForwardedClientHeaders = Boolean(
+      req?.headers?.["x-forwarded-for"] ||
+      req?.headers?.["x-real-ip"] ||
+      req?.headers?.["x-forwarded-host"],
+    );
     const localLoopbackWithoutTrustedProxyHeaders =
       Boolean(req) &&
       isLoopbackAddress(req?.socket?.remoteAddress) &&
+      isTrustedProxyAddress(req?.socket?.remoteAddress, trustedProxies) &&
+      isLocalishHost(req?.headers?.host) &&
+      (!hasForwardedClientHeaders || localDirect) &&
       !hasConfiguredTrustedProxyHeaders(req, auth.trustedProxy);
     if (localLoopbackWithoutTrustedProxyHeaders) {
       if (limiter) {
