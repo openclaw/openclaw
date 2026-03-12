@@ -285,6 +285,7 @@ describe("memory search config", () => {
       deltaBytes: 100000,
       deltaMessages: 50,
       includeResetArchives: false,
+      postCompactionForce: true,
     });
   });
 

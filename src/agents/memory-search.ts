@@ -62,6 +62,7 @@ export type ResolvedMemorySearchConfig = {
       deltaBytes: number;
       deltaMessages: number;
       includeResetArchives: boolean;
+      postCompactionForce: boolean;
     };
   };
   query: {
@@ -254,6 +255,10 @@ function mergeConfig(
         overrides?.sync?.sessions?.includeResetArchives ??
         defaults?.sync?.sessions?.includeResetArchives ??
         DEFAULT_SESSION_INCLUDE_RESET_ARCHIVES,
+      postCompactionForce:
+        overrides?.sync?.sessions?.postCompactionForce ??
+        defaults?.sync?.sessions?.postCompactionForce ??
+        true,
     },
   };
   const query = {
@@ -321,6 +326,7 @@ function mergeConfig(
   );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+  const postCompactionForce = sync.sessions.postCompactionForce;
   return {
     enabled,
     sources,
@@ -343,6 +349,7 @@ function mergeConfig(
         deltaBytes,
         deltaMessages,
         includeResetArchives: Boolean(sync.sessions.includeResetArchives),
+        postCompactionForce,
       },
     },
     query: {

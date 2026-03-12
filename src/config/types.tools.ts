@@ -404,6 +404,8 @@ export type MemorySearchConfig = {
       deltaMessages?: number;
       /** Include reset transcript archives (`*.jsonl.reset.<timestamp>`) in session indexing. */
       includeResetArchives?: boolean;
+      /** Force session reindex after compaction-triggered transcript updates (default: true). */
+      postCompactionForce?: boolean;
     };
   };
   /** Query behavior. */
