@@ -18,6 +18,10 @@ This document is intentionally presentation- and runtime-facing. It should
 complement the task-control and orchestrator-specialist work rather than
 replace it.
 
+Implementation details for the first increment live in:
+
+- `docs/design/long-running-task-visibility-technical.md`
+
 ## Problem Statement
 
 Recent runtime behavior shows a recurring pattern:
