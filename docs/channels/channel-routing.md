@@ -17,6 +17,7 @@ host configuration.
 - **AccountId**: per‑channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
+  - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
 - **AgentId**: an isolated workspace + session store (“brain”).
 - **SessionKey**: the bucket key used to store context and control concurrency.
 
@@ -116,6 +117,11 @@ Session stores live under the state directory (default `~/.openclaw`):
 - JSONL transcripts live alongside the store
 
 You can override the store path via `session.store` and `{agentId}` templating.
+
+Gateway and ACP session discovery also scans disk-backed agent stores under the
+default `agents/` root and under templated `session.store` roots. Discovered
+stores must stay inside that resolved agent root and use a regular
+`sessions.json` file. Symlinks and out-of-root paths are ignored.
 
 ## WebChat behavior
 

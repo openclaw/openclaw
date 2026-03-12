@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { resolveSystemRunCommand } from "./system-run-command.js";
+import { resolveSystemRunCommandRequest } from "./system-run-command.js";
 
 type ContractFixture = {
   cases: ContractCase[];
@@ -28,7 +28,7 @@ const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as ContractFixt
 describe("system-run command contract fixtures", () => {
   for (const entry of fixture.cases) {
     test(entry.name, () => {
-      const result = resolveSystemRunCommand({
+      const result = resolveSystemRunCommandRequest({
         command: entry.command,
         rawCommand: entry.rawCommand,
       });
@@ -48,7 +48,7 @@ describe("system-run command contract fixtures", () => {
       if (!result.ok) {
         throw new Error(`unexpected validation failure: ${result.message}`);
       }
-      expect(result.cmdText).toBe(entry.expected.displayCommand);
+      expect(result.commandText).toBe(entry.expected.displayCommand);
     });
   }
 });
