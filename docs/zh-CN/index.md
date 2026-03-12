@@ -154,9 +154,7 @@ Gateway 网关启动后，打开浏览器控制界面。
   <Card title="远程访问" href="/zh-CN/gateway/remote" icon="globe">
     SSH 和 tailnet 访问模式。
   </Card>
-  <Card title="渠道" href="/zh-CN/channels/telegram" icon="message-square">
-    WhatsApp、Telegram、Discord 等渠道的具体设置。
-  </Card>
+  <Card title="安全" href="/zh-CN/gateway/authentication" icon="shield">
   <Card title="节点" href="/zh-CN/nodes" icon="smartphone">
     iOS 和 Android 节点的配对与 Canvas 功能。
   </Card>
