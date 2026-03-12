@@ -18,13 +18,129 @@ import {
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
+type FeishuStatusSink = (patch: {
+  connected?: boolean;
+  reconnectAttempts?: number;
+  lastConnectedAt?: number | null;
+  lastDisconnect?: {
+    at: number;
+    error?: string;
+  } | null;
+  lastError?: string | null;
+}) => void;
+
 export type MonitorTransportParams = {
   account: ResolvedFeishuAccount;
   accountId: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  statusSink?: FeishuStatusSink;
 };
+
+type FeishuWSLifecycleLogger = {
+  error: (...msg: unknown[]) => void | Promise<void>;
+  warn: (...msg: unknown[]) => void | Promise<void>;
+  info: (...msg: unknown[]) => void | Promise<void>;
+  debug: (...msg: unknown[]) => void | Promise<void>;
+  trace: (...msg: unknown[]) => void | Promise<void>;
+};
+
+function formatLoggerArgs(args: unknown[]): string {
+  return args
+    .map((part) => {
+      if (typeof part === "string") {
+        return part;
+      }
+      try {
+        return JSON.stringify(part);
+      } catch {
+        return String(part);
+      }
+    })
+    .join(" ")
+    .trim();
+}
+
+export function createFeishuWsLifecycleLogger(params: {
+  accountId: string;
+  runtime?: RuntimeEnv;
+  statusSink?: FeishuStatusSink;
+}): FeishuWSLifecycleLogger {
+  const { accountId, runtime, statusSink } = params;
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+  let reconnectAttempts = 0;
+
+  const updateConnected = (connected: boolean, next?: { error?: string | null }) => {
+    const now = Date.now();
+    if (connected) {
+      reconnectAttempts = 0;
+      statusSink?.({
+        connected: true,
+        reconnectAttempts,
+        lastConnectedAt: now,
+        lastDisconnect: null,
+        lastError: null,
+      });
+      return;
+    }
+    reconnectAttempts += 1;
+    statusSink?.({
+      connected: false,
+      reconnectAttempts,
+      lastDisconnect: {
+        at: now,
+        ...(next?.error ? { error: next.error } : {}),
+      },
+      ...(next?.error === undefined ? {} : { lastError: next.error }),
+    });
+  };
+
+  return {
+    info: (...args: unknown[]) => {
+      log(...args);
+      const text = formatLoggerArgs(args);
+      if (!text.includes("[ws]")) {
+        return;
+      }
+      if (text.includes("ws client ready")) {
+        updateConnected(true);
+        return;
+      }
+      if (text.includes("reconnect")) {
+        updateConnected(false);
+      }
+    },
+    warn: (...args: unknown[]) => {
+      log(...args);
+    },
+    debug: (...args: unknown[]) => {
+      log(...args);
+      const text = formatLoggerArgs(args);
+      if (text.includes("[ws]") && text.includes("reconnect success")) {
+        updateConnected(true);
+      }
+    },
+    trace: (...args: unknown[]) => {
+      log(...args);
+    },
+    error: (...args: unknown[]) => {
+      error(...args);
+      const text = formatLoggerArgs(args);
+      if (!text.includes("[ws]")) {
+        return;
+      }
+      if (
+        text.includes("ws connect failed") ||
+        text.includes("connect failed") ||
+        text.includes("ws error")
+      ) {
+        updateConnected(false, { error: text });
+      }
+    },
+  };
+}
 
 export async function monitorWebSocket({
   account,
@@ -32,11 +148,14 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
 
-  const wsClient = createFeishuWSClient(account);
+  const wsClient = createFeishuWSClient(account, {
+    logger: createFeishuWsLifecycleLogger({ accountId, runtime, statusSink }),
+  });
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
@@ -48,6 +167,13 @@ export async function monitorWebSocket({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping`);
+      statusSink?.({
+        connected: false,
+        lastDisconnect: {
+          at: Date.now(),
+          error: "abort signal received",
+        },
+      });
       cleanup();
       resolve();
     };
