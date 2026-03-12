@@ -3,6 +3,7 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
+  "diagnostics.queue",
   "doctor.memory.status",
   "logs.tail",
   "channels.status",

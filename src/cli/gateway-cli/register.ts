@@ -3,6 +3,8 @@ import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
 import { readBestEffortConfig } from "../../config/config.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
+import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import type { QueueDiagnosticsSnapshot } from "../../infra/queue-diagnostics.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import { resolveWideAreaDiscoveryDomain } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -86,6 +88,70 @@ function renderCostUsageSummary(summary: CostUsageSummary, days: number, rich: b
   return lines;
 }
 
+function formatAgeLabel(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  return formatDurationPrecise(Math.max(0, value), { decimals: 1 });
+}
+
+function renderQueueDiagnostics(snapshot: QueueDiagnosticsSnapshot, rich: boolean): string[] {
+  const lines = [
+    colorize(rich, theme.heading, "Gateway Queue Diagnostics"),
+    `${colorize(rich, theme.muted, "Summary:")} ${snapshot.summary.active} active · ${snapshot.summary.queued} queued · ${snapshot.summary.lanes} lanes · ${snapshot.summary.sessions} sessions`,
+  ];
+
+  if (snapshot.summary.stuckSessions > 0) {
+    lines.push(
+      `${colorize(rich, theme.warn, "Stuck sessions:")} ${snapshot.summary.stuckSessions} (threshold ${formatAgeLabel(snapshot.stuckSessionWarnMs)})`,
+    );
+  }
+
+  if (snapshot.lanes.length === 0) {
+    lines.push(colorize(rich, theme.muted, "No active or queued lanes."));
+  } else {
+    lines.push(colorize(rich, theme.heading, "Lanes"));
+    for (const lane of snapshot.lanes) {
+      const parts = [
+        lane.lane,
+        `${lane.active}/${lane.maxConcurrent} active`,
+        `${lane.queued} queued`,
+      ];
+      if (lane.draining) {
+        parts.push("draining");
+      }
+      if (lane.oldestQueuedAgeMs != null) {
+        parts.push(`oldest queued ${formatAgeLabel(lane.oldestQueuedAgeMs)}`);
+      }
+      if (lane.oldestActiveAgeMs != null) {
+        parts.push(`oldest active ${formatAgeLabel(lane.oldestActiveAgeMs)}`);
+      }
+      lines.push(`- ${parts.join(" · ")}`);
+    }
+  }
+
+  if (snapshot.sessions.length > 0) {
+    lines.push(colorize(rich, theme.heading, "Sessions"));
+    for (const session of snapshot.sessions) {
+      const parts = [
+        session.sessionKey ?? session.sessionId ?? "unknown",
+        session.state,
+        `queueDepth ${session.queueDepth}`,
+        `age ${formatAgeLabel(session.lastActivityAgeMs)}`,
+      ];
+      if (session.lane) {
+        parts.push(`lane ${session.lane}`);
+      }
+      if (session.stuck) {
+        parts.push(colorize(rich, theme.warn, "stuck"));
+      }
+      lines.push(`- ${parts.join(" · ")}`);
+    }
+  }
+
+  return lines;
+}
+
 export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
@@ -97,6 +163,10 @@ export function registerGatewayCli(program: Command) {
           `\n${theme.heading("Examples:")}\n${formatHelpExamples([
             ["openclaw gateway run", "Run the gateway in the foreground."],
             ["openclaw gateway status", "Show service status and probe reachability."],
+            [
+              "openclaw gateway diagnostics queue --json",
+              "Show live lane and session queue state.",
+            ],
             ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
             ["openclaw gateway call health", "Call a gateway RPC method directly."],
           ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
@@ -186,6 +256,36 @@ export function registerGatewayCli(program: Command) {
             }
           }
         });
+      }),
+  );
+
+  const diagnostics = gateway
+    .command("diagnostics")
+    .description("Inspect live Gateway diagnostics");
+
+  gatewayCallOpts(
+    diagnostics
+      .command("queue")
+      .description("Fetch queue and session lane diagnostics")
+      .option("--all", "Include idle lanes and tracked idle session states", false)
+      .action(async (opts, command) => {
+        await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const config = await readBestEffortConfig();
+          const result = (await callGatewayCli(
+            "diagnostics.queue",
+            { ...rpcOpts, config },
+            { all: opts.all === true },
+          )) as QueueDiagnosticsSnapshot;
+          if (rpcOpts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const rich = isRich();
+          for (const line of renderQueueDiagnostics(result, rich)) {
+            defaultRuntime.log(line);
+          }
+        }, "Gateway diagnostics queue failed");
       }),
   );
 
