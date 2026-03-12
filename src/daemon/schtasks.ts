@@ -316,11 +316,13 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
-  await execSchtasks(["/End", "/TN", taskName]);
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
+  const sig = { signal };
+  await execSchtasks(["/End", "/TN", taskName], sig);
+  const res = await execSchtasks(["/Run", "/TN", taskName], sig);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }

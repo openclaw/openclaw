@@ -253,8 +253,9 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
 
 async function execSystemctl(
   args: string[],
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, options?.signal ? { signal: options.signal } : {});
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -387,6 +388,7 @@ function shouldFallbackToMachineUserScope(detail: string): boolean {
 async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
+  options?: { signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const machineUser = resolveSystemctlMachineScopeUser(env);
   const sudoUser = env.SUDO_USER?.trim();
@@ -395,11 +397,14 @@ async function execSystemctlUser(
   if (sudoUser && sudoUser !== "root" && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      return await execSystemctl([...machineScopeArgs, ...args]);
+      return await execSystemctl([...machineScopeArgs, ...args], options);
     }
   }
 
-  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  const directResult = await execSystemctl(
+    [...resolveSystemctlDirectUserScopeArgs(), ...args],
+    options,
+  );
   if (directResult.code === 0) {
     return directResult;
   }
@@ -413,7 +418,7 @@ async function execSystemctlUser(
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args]);
+  return await execSystemctl([...machineScopeArgs, ...args], options);
 }
 
 export async function isSystemdUserServiceAvailable(
@@ -541,6 +546,7 @@ export async function uninstallSystemdService({
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  signal?: AbortSignal;
   action: "stop" | "restart";
   label: string;
 }) {
@@ -548,7 +554,7 @@ async function runSystemdServiceAction(params: {
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  const res = await execSystemctlUser(env, [params.action, unitName]);
+  const res = await execSystemctlUser(env, [params.action, unitName], { signal: params.signal });
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
@@ -558,10 +564,12 @@ async function runSystemdServiceAction(params: {
 export async function stopSystemdService({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<void> {
   await runSystemdServiceAction({
     stdout,
     env,
+    signal,
     action: "stop",
     label: "Stopped systemd service",
   });
@@ -570,10 +578,12 @@ export async function stopSystemdService({
 export async function restartSystemdService({
   stdout,
   env,
+  signal,
 }: GatewayServiceControlArgs): Promise<void> {
   await runSystemdServiceAction({
     stdout,
     env,
+    signal,
     action: "restart",
     label: "Restarted systemd service",
   });
