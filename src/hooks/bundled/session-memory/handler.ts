@@ -139,6 +139,31 @@ function stripResetSuffix(fileName: string): string {
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }
 
+/**
+ * Extract session creation timestamp from the first line of a session file.
+ * Returns null if the file cannot be read, parsed, or the timestamp is invalid.
+ */
+async function getSessionCreatedAt(sessionFilePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const firstLine = content.split("\n")[0];
+    if (!firstLine) {
+      return null;
+    }
+    const entry = JSON.parse(firstLine);
+    if (entry.type === "session" && typeof entry.timestamp === "string") {
+      // Validate the timestamp is a parseable date
+      const parsed = new Date(entry.timestamp);
+      if (!isNaN(parsed.getTime())) {
+        return entry.timestamp;
+      }
+    }
+  } catch {
+    // Ignore read/parse errors
+  }
+  return null;
+}
+
 async function findPreviousSessionFile(params: {
   sessionsDir: string;
   currentSessionFile?: string;
@@ -226,10 +251,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
-    const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
-
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
@@ -269,6 +290,48 @@ const saveSessionToMemory: HookHandler = async (event) => {
     });
 
     const sessionFile = currentSessionFile || undefined;
+
+    // Determine the date and time for the memory file:
+    // Prefer the session's creation timestamp from the session file header,
+    // fallback to the event timestamp if no session file is available.
+    // The HHMM slug (for filename uniqueness) always uses event.timestamp to avoid collisions.
+    const now = new Date(event.timestamp);
+    let dateStr: string;
+    let timeStr: string;
+    let sessionCreatedAt: string | null = null;
+
+    if (sessionFile) {
+      sessionCreatedAt = await getSessionCreatedAt(sessionFile);
+      // If base file is empty (rotated), check the reset fallback files
+      if (!sessionCreatedAt) {
+        const dir = path.dirname(sessionFile);
+        const base = path.basename(sessionFile);
+        try {
+          const siblingFiles = await fs.readdir(dir);
+          const resetCandidates = siblingFiles
+            .filter((name) => name.startsWith(`${base}.reset.`))
+            .toSorted()
+            .toReversed();
+          for (const candidate of resetCandidates) {
+            sessionCreatedAt = await getSessionCreatedAt(path.join(dir, candidate));
+            if (sessionCreatedAt) {
+              break;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (sessionCreatedAt) {
+      const sessionDate = new Date(sessionCreatedAt);
+      dateStr = sessionDate.toISOString().split("T")[0];
+      timeStr = sessionDate.toISOString().split("T")[1].split(".")[0];
+    } else {
+      dateStr = now.toISOString().split("T")[0];
+      timeStr = now.toISOString().split("T")[1].split(".")[0];
+    }
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -318,9 +381,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
       filename,
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
-
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
