@@ -90,6 +90,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
@@ -800,6 +801,18 @@ export async function compactEmbeddedPiSessionDirect(
             compacted: false,
             reason: "no real conversation messages",
           };
+        }
+
+        // Compaction makes its own LLM call to summarize the conversation.
+        // Anthropic requires thinking/redacted_thinking blocks in the latest
+        // assistant message to be byte-identical — but the serialization pipeline
+        // can corrupt them. Since compaction is summarizing (not continuing), strip
+        // ALL thinking blocks so the compaction LLM call won't be rejected.
+        if (transcriptPolicy.preserveSignatures) {
+          const withoutThinking = dropThinkingBlocks(session.messages);
+          if (withoutThinking !== session.messages) {
+            session.agent.replaceMessages(withoutThinking);
+          }
         }
 
         const compactStartedAt = Date.now();

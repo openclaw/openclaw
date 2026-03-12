@@ -32,7 +32,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, stripThinkingFromNonLatestAssistant } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -549,9 +549,17 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(sanitizedImages)
+  // Anthropic requires thinking/redacted_thinking blocks in the latest assistant
+  // message to be byte-identical. The serialization pipeline (sanitizeSurrogates,
+  // compaction, etc.) can corrupt them. Strip from non-latest messages (Anthropic
+  // allows omission there) to prevent corruption; the latest message's blocks are
+  // preserved for the API call.
+  const strippedNonLatest = policy.preserveSignatures
+    ? stripThinkingFromNonLatestAssistant(sanitizedImages)
     : sanitizedImages;
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(strippedNonLatest)
+    : strippedNonLatest;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
   });
