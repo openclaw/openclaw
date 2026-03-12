@@ -1,11 +1,13 @@
 import { isDevMode } from "../globals.js";
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
+import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 type HostEnvSecurityPolicy = {
   blockedKeys: string[];
   blockedOverrideKeys?: string[];
+  blockedOverridePrefixes?: string[];
   blockedPrefixes: string[];
 };
 
@@ -19,6 +21,9 @@ export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze(
 );
 export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze(
   (HOST_ENV_SECURITY_POLICY.blockedOverrideKeys ?? []).map((key) => key.toUpperCase()),
+);
+export const HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES: readonly string[] = Object.freeze(
+  (HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes ?? []).map((prefix) => prefix.toUpperCase()),
 );
 export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   "TERM",
@@ -69,7 +74,11 @@ export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   if (!key) {
     return false;
   }
-  return HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(key.toUpperCase());
+  const upper = key.toUpperCase();
+  if (HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(upper)) {
+    return true;
+  }
+  return HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
 export function sanitizeHostExecEnv(params?: {
@@ -107,7 +116,7 @@ export function sanitizeHostExecEnv(params?: {
   }
 
   if (!overrides) {
-    return merged;
+    return markOpenClawExecEnv(merged);
   }
 
   for (const [rawKey, value] of Object.entries(overrides)) {
@@ -130,7 +139,7 @@ export function sanitizeHostExecEnv(params?: {
     merged[key] = value;
   }
 
-  return merged;
+  return markOpenClawExecEnv(merged);
 }
 
 export function sanitizeSystemRunEnvOverrides(params?: {

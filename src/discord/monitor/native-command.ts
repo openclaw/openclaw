@@ -20,6 +20,7 @@ import {
 } from "../../acp/persistent-bindings.route.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
@@ -36,11 +37,11 @@ import {
   resolveCommandArgMenu,
   serializeCommandArgs,
 } from "../../auto-reply/commands-registry.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { resolveStoredModelOverride } from "../../auto-reply/reply/model-selection.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
@@ -51,12 +52,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import { withTimeout } from "../../utils/with-timeout.js";
 import { loadWebMedia } from "../../web/media.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -65,7 +65,6 @@ import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
-  resolveDiscordOwnerAllowFrom,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -85,12 +84,57 @@ import {
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
+import { buildDiscordNativeCommandContext } from "./native-command-context.js";
+import {
+  resolveDiscordBoundConversationRoute,
+  resolveDiscordEffectiveRoute,
+} from "./route-resolution.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
+
+function resolveDiscordNativeCommandAllowlistAccess(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  sender: { id: string; name?: string; tag?: string };
+  chatType: "direct" | "group" | "thread" | "channel";
+  conversationId?: string;
+}) {
+  const commandsAllowFrom = params.cfg.commands?.allowFrom;
+  if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
+    return { configured: false, allowed: false } as const;
+  }
+  const configured =
+    Array.isArray(commandsAllowFrom.discord) || Array.isArray(commandsAllowFrom["*"]);
+  if (!configured) {
+    return { configured: false, allowed: false } as const;
+  }
+
+  const from =
+    params.chatType === "direct"
+      ? `discord:${params.sender.id}`
+      : `discord:${params.chatType}:${params.conversationId ?? "unknown"}`;
+  const auth = resolveCommandAuthorization({
+    ctx: {
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      AccountId: params.accountId ?? undefined,
+      ChatType: params.chatType,
+      From: from,
+      SenderId: params.sender.id,
+      SenderUsername: params.sender.name,
+      SenderTag: params.sender.tag,
+    },
+    cfg: params.cfg,
+    // We only want explicit commands.allowFrom authorization here.
+    commandAuthorized: false,
+  });
+  return { configured: true, allowed: auth.isAuthorizedSender } as const;
+}
 
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
@@ -407,36 +451,26 @@ async function resolveDiscordModelPickerRoute(params: {
     threadParentId = parentInfo.id;
   }
 
-  const route = resolveAgentRoute({
-    cfg,
-    channel: "discord",
-    accountId,
-    guildId: interaction.guild?.id ?? undefined,
-    memberRoleIds,
-    peer: {
-      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? (interaction.user?.id ?? rawChannelId) : rawChannelId,
-    },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
-  });
-
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
     : undefined;
-  const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
-  return boundSessionKey
-    ? {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: boundAgentId ?? route.agentId,
-      }
-    : route;
+  return resolveDiscordBoundConversationRoute({
+    cfg,
+    accountId,
+    guildId: interaction.guild?.id ?? undefined,
+    memberRoleIds,
+    isDirectMessage,
+    isGroupDm,
+    directUserId: interaction.user?.id ?? rawChannelId,
+    conversationId: rawChannelId,
+    parentConversationId: threadParentId,
+    boundSessionKey: threadBinding?.targetSessionKey,
+  });
 }
 
 function resolveDiscordModelPickerCurrentModel(params: {
   cfg: ReturnType<typeof loadConfig>;
-  route: ReturnType<typeof resolveAgentRoute>;
+  route: ResolvedAgentRoute;
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
 }): string {
   const fallback = buildDiscordModelPickerCurrentModel(
@@ -896,6 +930,11 @@ async function handleDiscordModelPickerInteraction(
       return;
     }
 
+    // The session store write happens asynchronously after the command dispatch
+    // completes. Give it a short window to flush before reading back the persisted
+    // value, otherwise the check races the write and reports a false mismatch.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
       route,
@@ -1297,6 +1336,23 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     allowNameMatching,
   });
+  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    accountId,
+    sender: {
+      id: sender.id,
+      name: sender.name,
+      tag: sender.tag,
+    },
+    chatType: isDirectMessage
+      ? "direct"
+      : isThreadChannel
+        ? "thread"
+        : interaction.guild
+          ? "channel"
+          : "group",
+    conversationId: rawChannelId || undefined,
+  });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
     guildEntries: discordConfig?.guilds,
@@ -1418,10 +1474,20 @@ async function dispatchDiscordCommandInteraction(params: {
     });
     const authorizers = useAccessGroups
       ? [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
+          },
           { configured: ownerAllowList != null, allowed: ownerOk },
           { configured: hasAccessRestrictions, allowed: memberAllowed },
         ]
-      : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
+      : [
+          {
+            configured: commandsAllowFromAccess.configured,
+            allowed: commandsAllowFromAccess.allowed,
+          },
+          { configured: hasAccessRestrictions, allowed: memberAllowed },
+        ];
     commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
       useAccessGroups,
       authorizers,
@@ -1506,7 +1572,7 @@ async function dispatchDiscordCommandInteraction(params: {
       textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
         fallbackLimit: 2000,
       }),
-      maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
       preferFollowUp,
       chunkMode: resolveChunkMode(cfg, "discord", accountId),
     });
@@ -1533,17 +1599,18 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
-  const route = resolveAgentRoute({
+  const route = resolveDiscordBoundConversationRoute({
     cfg,
-    channel: "discord",
     accountId,
     guildId: interaction.guild?.id ?? undefined,
     memberRoleIds,
-    peer: {
-      kind: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      id: isDirectMessage ? user.id : channelId,
-    },
-    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
+    isDirectMessage,
+    isGroupDm,
+    directUserId: user.id,
+    conversationId: channelId,
+    parentConversationId: threadParentId,
+    // Configured ACP routes apply after raw route resolution, so do not pass
+    // bound/configured overrides here.
   });
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   const configuredRoute =
@@ -1571,81 +1638,46 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
   }
-  const configuredBoundSessionKey = configuredRoute?.boundSessionKey ?? "";
+  const configuredBoundSessionKey = configuredRoute?.boundSessionKey?.trim() || undefined;
   const boundSessionKey = threadBinding?.targetSessionKey?.trim() || configuredBoundSessionKey;
-  const boundAgentId = boundSessionKey ? resolveAgentIdFromSessionKey(boundSessionKey) : undefined;
-  const effectiveRoute = boundSessionKey
-    ? {
-        ...route,
-        sessionKey: boundSessionKey,
-        agentId: boundAgentId ?? route.agentId,
-        ...(configuredBinding ? { matchedBy: "binding.channel" as const } : {}),
-      }
-    : (configuredRoute?.route ?? route);
-  const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
-  const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
+  const effectiveRoute = resolveDiscordEffectiveRoute({
+    route,
+    boundSessionKey,
+    configuredRoute,
+    matchedBy: configuredBinding ? "binding.channel" : undefined,
+  });
+  const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+    agentId: effectiveRoute.agentId,
+    sessionPrefix,
+    userId: user.id,
+    targetSessionKey: effectiveRoute.sessionKey,
+    boundSessionKey,
+  });
+  const ctxPayload = buildDiscordNativeCommandContext({
+    prompt,
+    commandArgs: commandArgs ?? {},
+    sessionKey,
+    commandTargetSessionKey,
+    accountId: effectiveRoute.accountId,
+    interactionId,
+    channelId,
+    threadParentId,
+    guildName: interaction.guild?.name,
+    channelTopic: channel && "topic" in channel ? (channel.topic ?? undefined) : undefined,
     channelConfig,
     guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
     allowNameMatching,
-  });
-  const ctxPayload = finalizeInboundContext({
-    Body: prompt,
-    BodyForAgent: prompt,
-    RawBody: prompt,
-    CommandBody: prompt,
-    CommandArgs: commandArgs,
-    From: isDirectMessage
-      ? `discord:${user.id}`
-      : isGroupDm
-        ? `discord:group:${channelId}`
-        : `discord:channel:${channelId}`,
-    To: `slash:${user.id}`,
-    SessionKey: boundSessionKey ?? `agent:${effectiveRoute.agentId}:${sessionPrefix}:${user.id}`,
-    CommandTargetSessionKey: boundSessionKey ?? effectiveRoute.sessionKey,
-    AccountId: effectiveRoute.accountId,
-    ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-    ConversationLabel: conversationLabel,
-    GroupSubject: isGuild ? interaction.guild?.name : undefined,
-    GroupSystemPrompt: isGuild
-      ? (() => {
-          const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-            (entry): entry is string => Boolean(entry),
-          );
-          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-        })()
-      : undefined,
-    UntrustedContext: isGuild
-      ? (() => {
-          const channelTopic =
-            channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
-          const untrustedChannelMetadata = buildUntrustedChannelMetadata({
-            source: "discord",
-            label: "Discord channel topic",
-            entries: [channelTopic],
-          });
-          return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
-        })()
-      : undefined,
-    OwnerAllowFrom: ownerAllowFrom,
-    SenderName: user.globalName ?? user.username,
-    SenderId: user.id,
-    SenderUsername: user.username,
-    SenderTag: sender.tag,
-    Provider: "discord" as const,
-    Surface: "discord" as const,
-    WasMentioned: true,
-    MessageSid: interactionId,
-    MessageThreadId: isThreadChannel ? channelId : undefined,
-    Timestamp: Date.now(),
-    CommandAuthorized: commandAuthorized,
-    CommandSource: "native" as const,
-    // Native slash contexts use To=slash:<user> for interaction routing.
-    // For follow-up delivery (for example subagent completion announces),
-    // preserve the real Discord target separately.
-    OriginatingChannel: "discord" as const,
-    OriginatingTo: isDirectMessage ? `user:${user.id}` : `channel:${channelId}`,
-    ThreadParentId: isThreadChannel ? threadParentId : undefined,
+    commandAuthorized,
+    isDirectMessage,
+    isGroupDm,
+    isGuild,
+    isThreadChannel,
+    user: {
+      id: user.id,
+      username: user.username,
+      globalName: user.globalName,
+    },
+    sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
@@ -1675,7 +1707,7 @@ async function dispatchDiscordCommandInteraction(params: {
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
-            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
             preferFollowUp: preferFollowUp || didReply,
             chunkMode: resolveChunkMode(cfg, "discord", accountId),
           });

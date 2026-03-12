@@ -369,22 +369,26 @@ export async function resolveGatewayConnection(
     };
   }
 
-  if (gatewayAuthMode === "token") {
-    const localToken =
-      explicitAuth.token || envToken
-        ? { value: explicitAuth.token ?? envToken }
-        : await resolveConfiguredSecretInputString({
-            value: config.gateway?.auth?.token,
-            path: "gateway.auth.token",
-            env,
-            config,
-          });
-    const token = explicitAuth.token ?? envToken ?? localToken.value;
+  const resolveToken = async () => {
+    const localToken = explicitAuth.token
+      ? { value: explicitAuth.token }
+      : await resolveConfiguredSecretInputString({
+          value: config.gateway?.auth?.token,
+          path: "gateway.auth.token",
+          env,
+          config,
+        });
+    const token = explicitAuth.token ?? localToken.value ?? envToken;
     if (!token) {
       throwGatewayAuthResolutionError(
         localToken.unresolvedRefReason ?? "Missing gateway auth token.",
       );
     }
+    return token;
+  };
+
+  if (gatewayAuthMode === "token") {
+    const token = await resolveToken();
     return {
       url,
       token,
@@ -405,7 +409,7 @@ export async function resolveGatewayConnection(
           env,
           config,
         });
-    const password = passwordCandidate ?? localPassword.value;
+    const password = explicitAuth.password ?? localPassword.value ?? envPassword;
     if (!password) {
       throwGatewayAuthResolutionError(
         localPassword.unresolvedRefReason ?? "Missing gateway auth password.",
@@ -418,21 +422,7 @@ export async function resolveGatewayConnection(
     };
   }
 
-  const localToken =
-    explicitAuth.token || envToken
-      ? { value: explicitAuth.token ?? envToken }
-      : await resolveConfiguredSecretInputString({
-          value: config.gateway?.auth?.token,
-          path: "gateway.auth.token",
-          env,
-          config,
-        });
-  const token = explicitAuth.token ?? envToken ?? localToken.value;
-  if (!token) {
-    throwGatewayAuthResolutionError(
-      localToken.unresolvedRefReason ?? "Missing gateway auth token.",
-    );
-  }
+  const token = await resolveToken();
   return {
     url,
     token,

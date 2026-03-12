@@ -19,6 +19,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   isDangerousNameMatchingEnabled,
+  parseStrictPositiveInteger,
   registerPluginHttpRoute,
   resolveControlCommandGate,
   readStoreAllowFromForDmPolicy,
@@ -69,6 +70,7 @@ import {
 import {
   createDedupeCache,
   formatInboundFromLabel,
+  normalizeMention,
   resolveThreadSessionKeys,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
@@ -140,15 +142,6 @@ function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
       },
     }
   );
-}
-
-function normalizeMention(text: string, mention: string | undefined): string {
-  if (!mention) {
-    return text.trim();
-  }
-  const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`@${escaped}\\b`, "gi");
-  return text.replace(re, " ").replace(/\s+/g, " ").trim();
 }
 
 function isSystemPost(post: MattermostPost): boolean {
@@ -270,6 +263,17 @@ export function evaluateMattermostMentionGate(
     dropReason: null,
   };
 }
+
+export function resolveMattermostReplyRootId(params: {
+  threadRootId?: string;
+  replyToId?: string;
+}): string | undefined {
+  const threadRootId = params.threadRootId?.trim();
+  if (threadRootId) {
+    return threadRootId;
+  }
+  return params.replyToId?.trim() || undefined;
+}
 type MattermostMediaInfo = {
   path: string;
   contentType?: string;
@@ -348,9 +352,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       // The gateway sets OPENCLAW_GATEWAY_PORT when it boots, but the config file may still contain
       // a different port.
       const envPortRaw = process.env.OPENCLAW_GATEWAY_PORT?.trim();
-      const envPort = envPortRaw ? Number.parseInt(envPortRaw, 10) : NaN;
-      const slashGatewayPort =
-        Number.isFinite(envPort) && envPort > 0 ? envPort : (cfg.gateway?.port ?? 18789);
+      const envPort = parseStrictPositiveInteger(envPortRaw);
+      const slashGatewayPort = envPort ?? cfg.gateway?.port ?? 18789;
 
       const slashCallbackUrl = resolveCallbackUrl({
         config: slashConfig,
@@ -743,7 +746,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         out.push({
           path: saved.path,
           contentType,
-          kind: core.media.mediaKindFromMime(contentType),
+          kind: core.media.mediaKindFromMime(contentType) ?? "unknown",
         });
       } catch (err) {
         logger.debug?.(`mattermost: failed to download file ${fileId}: ${String(err)}`);
@@ -1651,7 +1654,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
               await sendMessageMattermost(to, chunk, {
                 accountId: account.accountId,
-                replyToId: threadRootId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId,
+                  replyToId: payload.replyToId,
+                }),
               });
             }
           } else {
@@ -1662,7 +1668,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, caption, {
                 accountId: account.accountId,
                 mediaUrl,
-                replyToId: threadRootId,
+                replyToId: resolveMattermostReplyRootId({
+                  threadRootId,
+                  replyToId: payload.replyToId,
+                }),
               });
             }
           }

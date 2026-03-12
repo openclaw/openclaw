@@ -17,3 +17,14 @@ export function mapBasicAllowlistResolutionEntries(
     note: entry.note,
   }));
 }
+
+export async function mapAllowlistResolutionInputs<T>(params: {
+  inputs: string[];
+  mapInput: (input: string) => Promise<T> | T;
+}): Promise<T[]> {
+  const results: T[] = [];
+  for (const input of params.inputs) {
+    results.push(await params.mapInput(input));
+  }
+  return results;
+}
