@@ -388,8 +388,7 @@ async function extractFileBlocks(params: {
     const textSample = decodeTextSample(bufferResult?.buffer);
     // Do not coerce real PDFs into text/plain via printable-byte heuristics.
     // PDFs have a dedicated extraction path in extractFileContentFromSource.
-    const allowTextHeuristic =
-      normalizedRawMime !== "application/pdf" && !isBinaryMediaMime(normalizedRawMime);
+    const allowTextHeuristic = normalizedRawMime !== "application/pdf";
     const textLike =
       allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
