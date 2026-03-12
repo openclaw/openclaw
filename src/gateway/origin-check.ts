@@ -9,17 +9,23 @@ type OriginCheckResult =
 
 function parseOrigin(
   originRaw?: string,
-): { origin: string; host: string; hostname: string } | null {
+): { origin: string; host: string; hostname: string; raw: string } | null {
   const trimmed = (originRaw ?? "").trim();
   if (!trimmed || trimmed === "null") {
     return null;
   }
   try {
     const url = new URL(trimmed);
+    const raw = trimmed.toLowerCase();
+    // Non-standard schemes (e.g. tauri://, capacitor://) produce a "null" origin
+    // from the URL parser. Preserve the raw input for allowlist matching so
+    // configured entries like "tauri://localhost" can still match.
+    const origin = url.origin === "null" ? raw : url.origin.toLowerCase();
     return {
-      origin: url.origin.toLowerCase(),
+      origin,
       host: url.host.toLowerCase(),
       hostname: url.hostname.toLowerCase(),
+      raw,
     };
   } catch {
     return null;

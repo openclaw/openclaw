@@ -100,4 +100,46 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it("accepts non-standard scheme origins (tauri://) via raw string fallback", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net",
+      origin: "tauri://localhost",
+      allowedOrigins: ["tauri://localhost"],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("allowlist");
+    }
+  });
+
+  it("accepts non-standard scheme origins (capacitor://) via raw string fallback", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net",
+      origin: "capacitor://localhost",
+      allowedOrigins: ["capacitor://localhost"],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.matchedBy).toBe("allowlist");
+    }
+  });
+
+  it("rejects non-standard scheme origins not in allowlist", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net",
+      origin: "tauri://localhost",
+      allowedOrigins: ["https://control.example.com"],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("matches non-standard scheme origins case-insensitively", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.tailnet.ts.net",
+      origin: "Tauri://Localhost",
+      allowedOrigins: ["tauri://localhost"],
+    });
+    expect(result.ok).toBe(true);
+  });
 });
