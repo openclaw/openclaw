@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeGatewayTokenInput,
   openUrl,
-  resolveResetTargets,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  resolveResetTargets,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 

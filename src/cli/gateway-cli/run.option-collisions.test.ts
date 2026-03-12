@@ -3,6 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({

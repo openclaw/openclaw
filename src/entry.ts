@@ -116,6 +116,7 @@ if (
       }
       process.exit(code ?? 1);
     });
+
     child.once("error", (error) => {
       console.error(
         "[openclaw] Failed to respawn CLI:",

@@ -74,18 +74,18 @@ function shouldGuardTrailingArgsFromProfileParsing(args: string[]): boolean {
 
     if (
       ARBITRARY_ARG_COMMAND_PATHS.some(
-        (path) =>
-          path.length === commandTokens.length &&
-          path.every((part, idx) => part === commandTokens[idx]),
+        (commandPath) =>
+          commandPath.length === commandTokens.length &&
+          commandPath.every((part, idx) => part === commandTokens[idx]),
       )
     ) {
       return true;
     }
 
     const couldStillMatch = ARBITRARY_ARG_COMMAND_PATHS.some(
-      (path) =>
-        commandTokens.length <= path.length &&
-        commandTokens.every((part, idx) => path[idx] === part),
+      (commandPath) =>
+        commandTokens.length <= commandPath.length &&
+        commandTokens.every((part, idx) => commandPath[idx] === part),
     );
     if (!couldStillMatch) {
       return false;
