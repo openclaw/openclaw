@@ -282,6 +282,8 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  /** When provided, targetIds of tabs opened via this tool are tracked here for cleanup. */
+  openedTabTracker?: Set<string>;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -423,16 +425,27 @@ export function createBrowserTool(opts?: {
               profile,
               body: { url: targetUrl },
             });
+            // Track opened tab for automatic cleanup when the run ends
+            const tid = (result as { targetId?: string })?.targetId;
+            if (tid && opts?.openedTabTracker) {
+              opts.openedTabTracker.add(tid);
+            }
             return jsonResult(result);
           }
-          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
-          trackSessionBrowserTab({
-            sessionKey: opts?.agentSessionKey,
-            targetId: opened.targetId,
-            baseUrl,
-            profile,
-          });
-          return jsonResult(opened);
+          {
+            const tab = await browserOpenTab(baseUrl, targetUrl, { profile });
+            trackSessionBrowserTab({
+              sessionKey: opts?.agentSessionKey,
+              targetId: tab.targetId,
+              baseUrl,
+              profile,
+            });
+            // Track opened tab for automatic cleanup when the run ends
+            if (tab.targetId && opts?.openedTabTracker) {
+              opts.openedTabTracker.add(tab.targetId);
+            }
+            return jsonResult(tab);
+          }
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -465,6 +478,10 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: { kind: "close" },
                 });
+            // Remove from tracker so it won't be double-closed on run cleanup
+            if (targetId) {
+              opts?.openedTabTracker?.delete(targetId);
+            }
             return jsonResult(result);
           }
           if (targetId) {
@@ -475,6 +492,8 @@ export function createBrowserTool(opts?: {
               baseUrl,
               profile,
             });
+            // Remove from tracker so it won't be double-closed on run cleanup
+            opts?.openedTabTracker?.delete(targetId);
           } else {
             await browserAct(baseUrl, { kind: "close" }, { profile });
           }

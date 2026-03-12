@@ -8,6 +8,7 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { browserCloseTab } from "../../../browser/client.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -848,9 +849,11 @@ export async function runEmbeddedAttempt(
     });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const openedBrowserTabs = new Set<string>();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
+          openedBrowserTabTracker: openedBrowserTabs,
           agentId: sessionAgentId,
           exec: {
             ...params.execOverrides,
@@ -1790,6 +1793,7 @@ export async function runEmbeddedAttempt(
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
+
         } catch (err) {
           promptError = err;
           promptErrorSource = "prompt";
@@ -2014,6 +2018,19 @@ export async function runEmbeddedAttempt(
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
+
+        // Close browser tabs opened during this run to prevent leaked headless tabs
+        if (openedBrowserTabs.size > 0) {
+          log.debug(
+            `closing ${openedBrowserTabs.size} browser tab(s) opened during run: runId=${params.runId}`,
+          );
+          for (const targetId of openedBrowserTabs) {
+            browserCloseTab(undefined, targetId).catch((err) => {
+              log.debug(`failed to close browser tab ${targetId}: ${String(err)}`);
+            });
+          }
+          openedBrowserTabs.clear();
+        }
       }
 
       const lastAssistant = messagesSnapshot
