@@ -39,13 +39,15 @@ import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
  * actual timeout so locks don't linger for hours after a crash while still
  * giving legitimate long-running executions headroom.
  */
-const STUCK_RUN_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+const STUCK_RUN_BUFFER_MS = 5 * 60_000; // 5 minutes
 
 /**
  * Fallback stuck-run threshold for jobs whose timeout resolver returns
- * `undefined` (e.g. agent-turn jobs with `timeoutSeconds <= 0`).
+ * `undefined` (e.g. agent-turn jobs with `timeoutSeconds <= 0` meaning
+ * "no execution timeout").  Kept at 2 hours to preserve the previous
+ * safety window for intentionally long-running jobs.
  */
-const STUCK_RUN_FALLBACK_MS = 30 * 60 * 1000; // 30 minutes
+const STUCK_RUN_FALLBACK_MS = 2 * 60 * 60_000; // 2 hours
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
