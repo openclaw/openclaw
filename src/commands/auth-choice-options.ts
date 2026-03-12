@@ -44,7 +44,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "sglang",
     label: "SGLang",
-    hint: "self-hosted server",
+    hint: "fast self-hosted server",
     choices: ["sglang"],
   },
   {
