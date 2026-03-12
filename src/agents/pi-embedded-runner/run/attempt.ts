@@ -575,6 +575,25 @@ function repairToolCallArgumentsInMessage(
   typedBlock.arguments = repairedArgs;
 }
 
+function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  const block = content[contentIndex];
+  if (!block || typeof block !== "object") {
+    return;
+  }
+  const typedBlock = block as { type?: unknown; arguments?: unknown };
+  if (!isToolCallBlockType(typedBlock.type)) {
+    return;
+  }
+  typedBlock.arguments = {};
+}
+
 function repairMalformedToolCallArgumentsInMessage(
   message: unknown,
   repairedArgsByIndex: Map<number, Record<string, unknown>>,
@@ -655,6 +674,10 @@ function wrapStreamRepairMalformedToolCallArguments(
                       `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
+                } else {
+                  repairedArgsByIndex.delete(event.contentIndex);
+                  clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
+                  clearToolCallArgumentsInMessage(event.message, event.contentIndex);
                 }
               }
             }
