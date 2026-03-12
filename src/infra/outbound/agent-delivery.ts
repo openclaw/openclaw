@@ -4,6 +4,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
+  RESERVED_CHANNEL_IDS,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   normalizeMessageChannel,
@@ -87,6 +88,16 @@ export function resolveAgentDeliveryPlan(params: {
   });
 
   const resolvedChannel = (() => {
+    // Hard-reject internal sentinel channels. INTER_SESSION_CHANNEL is excluded
+    // from listGatewayMessageChannels() so external callers are already blocked,
+    // but defend here too in case the channel reaches delivery via another path.
+    if (
+      requestedChannel &&
+      RESERVED_CHANNEL_IDS.has(requestedChannel.toLowerCase()) &&
+      requestedChannel !== INTERNAL_MESSAGE_CHANNEL
+    ) {
+      return INTERNAL_MESSAGE_CHANNEL;
+    }
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
     }

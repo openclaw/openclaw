@@ -133,10 +133,13 @@ export type GatewayMessageChannel =
   | InternalMessageChannel
   | InterSessionChannel;
 
+// NOTE: INTER_SESSION_CHANNEL is intentionally excluded from the runtime list.
+// It exists in the GatewayMessageChannel type so internal tools can use it,
+// but it must not be accepted from external RPC callers or the delivery path.
+// isGatewayMessageChannel("inter_session") → false by design.
 export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),
   INTERNAL_MESSAGE_CHANNEL,
-  INTER_SESSION_CHANNEL,
 ];
 
 export const listGatewayAgentChannelAliases = (): string[] =>
