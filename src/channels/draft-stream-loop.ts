@@ -17,6 +17,13 @@ export function createDraftStreamLoop(params: {
   let inFlightPromise: Promise<void | boolean> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  const launchFlush = () => {
+    void flush().catch(() => {
+      // Explicit flush/waitForInFlight callers observe failures directly.
+      // Background flushes must not leak unhandled rejections.
+    });
+  };
+
   const flush = async () => {
     if (timer) {
       clearTimeout(timer);
@@ -57,7 +64,7 @@ export function createDraftStreamLoop(params: {
     }
     const delay = Math.max(0, params.throttleMs - (Date.now() - lastSentAt));
     timer = setTimeout(() => {
-      void flush();
+      launchFlush();
     }, delay);
   };
 
@@ -72,7 +79,7 @@ export function createDraftStreamLoop(params: {
         return;
       }
       if (!timer && Date.now() - lastSentAt >= params.throttleMs) {
-        void flush();
+        launchFlush();
         return;
       }
       schedule();

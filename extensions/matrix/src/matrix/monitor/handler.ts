@@ -1,6 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  createDraftStreamLoop,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
@@ -15,7 +16,6 @@ import {
   type RuntimeEnv,
   type RuntimeLogger,
 } from "openclaw/plugin-sdk/matrix";
-import { createDraftStreamLoop } from "../../../../../src/channels/draft-stream-loop.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -737,7 +737,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const clearReasoningDraft = async () => {
         reasoningDraftState.stopUpdates = true;
         reasoningDraftLoop.stop();
-        await reasoningDraftLoop.waitForInFlight();
+        try {
+          await reasoningDraftLoop.waitForInFlight();
+        } catch (err) {
+          logVerboseMessage(`matrix reasoning draft in-flight update failed: ${String(err)}`);
+        }
         if (!reasoningDraftState.messageId) {
           return;
         }
