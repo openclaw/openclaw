@@ -1469,6 +1469,79 @@ describe("runWithModelFallback", () => {
       );
     });
 
+    it("forwards partialExecution from failed attempt to next candidate", async () => {
+      const cfg = makeCfg();
+      const partialExec = {
+        hadToolExecution: true as const,
+        toolNames: ["send_message"],
+        didSendViaMessagingTool: true,
+      };
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("timeout", {
+            reason: "timeout",
+            partialExecution: partialExec,
+          }),
+        )
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({ previousPartialExecution: partialExec }),
+      );
+    });
+
+    it("preserves earlier partialExecution when later attempt has none", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-5",
+              fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-4.1-mini"],
+            },
+          },
+        },
+      });
+      const partialExec = {
+        hadToolExecution: true as const,
+        toolNames: ["send_message"],
+        didSendViaMessagingTool: true,
+      };
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("timeout", {
+            reason: "timeout",
+            partialExecution: partialExec,
+          }),
+        )
+        .mockRejectedValueOnce(new FailoverError("rate limited", { reason: "rate_limit" }))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(3);
+      // Third call should still have the partialExecution from the first failure
+      expect(run.mock.calls[2]?.[2]).toEqual(
+        expect.objectContaining({ previousPartialExecution: partialExec }),
+      );
+    });
+
     it("forwards timeout reason after a timeout failure", async () => {
       const cfg = makeCfg();
       const run = vi
