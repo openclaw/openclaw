@@ -346,24 +346,16 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 30_000);
   });
 
-  it("omits timeout for typing stop", async () => {
+  it("uses sdk typing stop semantics", async () => {
     const setTyping = vi.fn().mockResolvedValue(undefined);
-    const doRequest = vi.fn().mockResolvedValue(undefined);
     const client = {
       setTyping,
-      doRequest,
       getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
 
     await sendTypingMatrix("!room:example.org", false, undefined, client);
 
-    expect(setTyping).not.toHaveBeenCalled();
-    expect(doRequest).toHaveBeenCalledTimes(1);
-    expect(doRequest).toHaveBeenCalledWith(
-      "PUT",
-      "/_matrix/client/v3/rooms/!room%3Aexample.org/typing/%40bot%3Aexample.org",
-      null,
-      { typing: false },
-    );
+    expect(setTyping).toHaveBeenCalledTimes(1);
+    expect(setTyping).toHaveBeenCalledWith("!room:example.org", false, 30_000);
   });
 });

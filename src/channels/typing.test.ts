@@ -215,6 +215,34 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("does not restart keepalive when stop wins during an in-flight start", async () => {
+    await withFakeTimers(async () => {
+      let resolveStart: (() => void) | undefined;
+      const { start, stop, callbacks } = createTypingHarness({
+        start: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveStart = resolve;
+            }),
+        ),
+      });
+
+      const inFlightStart = callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      callbacks.onIdle?.();
+      await flushMicrotasks();
+      expect(stop).toHaveBeenCalledTimes(1);
+
+      resolveStart?.();
+      await inFlightStart;
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ========== TTL Safety Tests ==========
   describe("TTL safety", () => {
     it("auto-stops typing after maxDurationMs", async () => {

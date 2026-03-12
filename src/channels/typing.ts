@@ -87,7 +87,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       keepaliveLoop.stop();
       clearTtlTimer();
       await fireStart();
-      if (startGuard.isTripped()) {
+      if (closed || startGuard.isTripped()) {
         return;
       }
       keepaliveLoop.start();
