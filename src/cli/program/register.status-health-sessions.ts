@@ -124,16 +124,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   const sessionsCmd = program
     .command("sessions")
-    .description("Manage conversation sessions")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
-    );
-
-  // List subcommand (default: runs when no subcommand is given)
-  sessionsCmd
-    .command("list", { isDefault: true })
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
@@ -155,7 +145,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
         )}`,
     )
-    .action(async (opts: Record<string, unknown>) => {
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
+    )
+    .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       await sessionsCommand(
         {
