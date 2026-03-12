@@ -3,6 +3,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
+  const restart = vi.fn(async () => undefined) as unknown as GatewayService["restart"];
   return {
     label: "systemd",
     loadedText: "enabled",
@@ -10,7 +11,7 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
     install: vi.fn(async () => {}),
     uninstall: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
-    restart: vi.fn(async () => {}),
+    restart,
     isLoaded: vi.fn(async () => false),
     readCommand: vi.fn(async () => null),
     readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
