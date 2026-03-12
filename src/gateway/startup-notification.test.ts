@@ -113,7 +113,7 @@ describe("startup-notification", () => {
       vi.mocked(resolveOutboundTarget).mockReturnValue({ ok: true, to: "123456" } as never);
       vi.mocked(resolveMainSessionKey).mockReturnValue("test-session");
       vi.mocked(buildOutboundSessionContext).mockReturnValue({} as never);
-      vi.mocked(deliverOutboundPayloads).mockResolvedValue(undefined);
+      vi.mocked(deliverOutboundPayloads).mockResolvedValue([]);
 
       const cfg = createMockConfig({});
       const result = await sendNotificationToTarget({
@@ -128,7 +128,7 @@ describe("startup-notification", () => {
     it("sends correct payload to deliverOutboundPayloads", async () => {
       vi.mocked(normalizeChannelId).mockReturnValue("telegram");
       vi.mocked(resolveOutboundTarget).mockReturnValue({ ok: true, to: "123456" } as never);
-      vi.mocked(deliverOutboundPayloads).mockResolvedValue(undefined);
+      vi.mocked(deliverOutboundPayloads).mockResolvedValue([]);
 
       const cfg = createMockConfig({});
       await sendNotificationToTarget({
@@ -200,7 +200,7 @@ describe("startup-notification", () => {
     it("uses provided message in payload", async () => {
       vi.mocked(normalizeChannelId).mockReturnValue("telegram");
       vi.mocked(resolveOutboundTarget).mockReturnValue({ ok: true, to: "123456" } as never);
-      vi.mocked(deliverOutboundPayloads).mockResolvedValue(undefined);
+      vi.mocked(deliverOutboundPayloads).mockResolvedValue([]);
 
       const customMessage = "Custom notification message";
       const cfg = createMockConfig({});
