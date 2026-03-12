@@ -893,6 +893,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const statResult = await statRegularFile(absPath);
     if (statResult.missing) {
+      // Fall back to `qmd get` which can resolve slugified paths.
+      if (relPath.startsWith("qmd/")) {
+        const qmdText = await this.getQmdDoc(relPath);
+        if (qmdText !== null) {
+          return { text: qmdText, path: relPath };
+        }
+      }
       return { text: "", path: relPath };
     }
     if (params.from !== undefined || params.lines !== undefined) {
@@ -1792,6 +1799,23 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     return !path.isAbsolute(relativePath);
+  }
+
+  private async getQmdDoc(relPath: string): Promise<string | null> {
+    const [, collection, ...rest] = relPath.split("/");
+    if (!collection || rest.length === 0) {
+      return null;
+    }
+    const uri = `qmd://${collection}/${rest.join("/")}`;
+    try {
+      const result = await this.runQmd(["get", uri], {
+        timeoutMs: this.qmd.limits.timeoutMs,
+      });
+      const text = result.stdout?.trim();
+      return text || null;
+    } catch {
+      return null;
+    }
   }
 
   private resolveReadPath(relPath: string): string {
