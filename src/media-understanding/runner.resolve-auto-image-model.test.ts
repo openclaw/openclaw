@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { type ModelCatalogEntry } from "../agents/model-catalog.js";
 
 const resolveApiKeyForProviderMock = vi.fn(async () => "ok");
-const loadModelCatalogMock = vi.fn(async () => []);
+const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
 const findModelInCatalogMock = vi.fn(
-  (
-    catalog: Array<{ provider: string; id: string; input?: string[] }>,
-    provider: string,
-    modelId: string,
-  ) =>
+  (catalog: ModelCatalogEntry[], provider: string, modelId: string) =>
     catalog.find(
       (entry) =>
         entry.provider.toLowerCase() === provider.toLowerCase() &&
