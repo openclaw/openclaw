@@ -175,6 +175,12 @@ class MemoryDB {
     };
   }
 
+  async storeRaw(entry: MemoryEntry): Promise<MemoryEntry> {
+    await this.ensureInitialized();
+    await this.table!.add([entry]);
+    return entry;
+  }
+
   async count(): Promise<number> {
     await this.ensureInitialized();
     return this.table!.countRows();
@@ -543,24 +549,19 @@ const memoryPlugin = {
           ),
         }),
         async execute(_toolCallId, params) {
-          const {
-            text,
-            category = "other",
-            importance = 0.7,
-            memoryId,
-          } = params as {
+          const { text, category, importance, memoryId } = params as {
             text: string;
             category?: MemoryEntry["category"];
             importance?: number;
             memoryId?: string;
           };
 
-          const vector = await embeddings.embed(text);
-
           // ------------------------------------------------------------------
           // MODE 1: Search-only (no memoryId)
+          // Embed first, then search — no existence check needed here.
           // ------------------------------------------------------------------
           if (!memoryId) {
+            const vector = await embeddings.embed(text);
             const results = await db.search(vector, 3, 0.1);
             const matches = results.map((r) => ({
               id: r.entry.id,
@@ -588,6 +589,8 @@ const memoryPlugin = {
 
           // ------------------------------------------------------------------
           // MODE 2: Atomic replace (memoryId provided)
+          // Check existence BEFORE calling embeddings.embed() so that a typo
+          // or stale ID returns immediately without a wasted API call (Fix 3).
           // ------------------------------------------------------------------
           const existing = await db.getById(memoryId);
           if (!existing) {
@@ -597,6 +600,13 @@ const memoryPlugin = {
             };
           }
 
+          // Inherit category and importance from the existing entry when the
+          // caller does not supply them, so a text-only update never silently
+          // resets metadata to defaults (Fix 2).
+          const resolvedCategory = category ?? existing.category;
+          const resolvedImportance = importance ?? existing.importance;
+
+          const vector = await embeddings.embed(text);
           const oldTextPreview = existing.text.slice(0, 80);
 
           // Delete the old entry
@@ -607,31 +617,45 @@ const memoryPlugin = {
           let rollbackWarning: string | undefined;
 
           try {
-            newEntry = await db.store({ text, vector, importance, category });
+            newEntry = await db.store({
+              text,
+              vector,
+              importance: resolvedImportance,
+              category: resolvedCategory,
+            });
           } catch (insertErr) {
-            // Best-effort rollback: restore the original
+            // Best-effort rollback: restore the original entry with its
+            // original ID so callers are never left with a stale reference
+            // to a non-existent ID (Fix 1).
             try {
-              await db.store({
-                text: existing.text,
-                vector: existing.vector,
-                importance: existing.importance,
-                category: existing.category,
-              });
-              rollbackWarning = `Insert failed; original restored. Insert error: ${String(insertErr)}`;
+              await db.storeRaw(existing);
+              rollbackWarning = `Insert failed; original restored with original ID ${existing.id}. Insert error: ${String(insertErr)}`;
             } catch (rollbackErr) {
               rollbackWarning = `Insert failed AND rollback failed (DATA LOSS POSSIBLE). Insert: ${String(insertErr)}. Rollback: ${String(rollbackErr)}`;
             }
             return {
               content: [{ type: "text", text: `Replace failed: ${rollbackWarning}` }],
-              details: { operation: "error", error: "insert_failed", rollbackWarning },
+              details: {
+                operation: "error",
+                error: "insert_failed",
+                rollbackWarning,
+                // Always expose the restored ID so callers can verify it.
+                // When storeRaw succeeds this equals the original memoryId.
+                restored_id: existing.id,
+              },
             };
           }
 
-          // Compute similarity between old and new vectors.
-          // OpenAI embeddings are L2-normalised, so dot product ≈ cosine similarity.
+          // Compute similarity using 1/(1+L2) — the same metric used by
+          // memory_recall and db.search — so search results and audit log
+          // are directly comparable (Fix 4).
           let similarity: number | null = null;
           if (existing.vector.length === vector.length) {
-            similarity = existing.vector.reduce((sum, v, i) => sum + v * (vector[i] ?? 0), 0);
+            const l2sq = existing.vector.reduce((sum, v, i) => {
+              const diff = v - (vector[i] ?? 0);
+              return sum + diff * diff;
+            }, 0);
+            similarity = 1 / (1 + Math.sqrt(l2sq));
           }
 
           // Append to audit log

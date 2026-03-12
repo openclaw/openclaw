@@ -509,33 +509,38 @@ describe("memory plugin e2e", () => {
       const originalHome = process.env.HOME;
       process.env.HOME = tmpDir;
 
-      const mockApi = buildMockApi({
-        dbPath,
-        embeddingsCreate,
-        vectorSearch,
-        queryWhere,
-        tableAdd,
-        tableDelete,
-        registeredTools,
-      });
       // oxlint-disable-next-line typescript/no-explicit-any
-      memoryPlugin.register(mockApi as any);
+      let result: any;
+      try {
+        const mockApi = buildMockApi({
+          dbPath,
+          embeddingsCreate,
+          vectorSearch,
+          queryWhere,
+          tableAdd,
+          tableDelete,
+          registeredTools,
+        });
+        // oxlint-disable-next-line typescript/no-explicit-any
+        memoryPlugin.register(mockApi as any);
 
-      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
-      expect(refreshTool).toBeDefined();
+        const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+        expect(refreshTool).toBeDefined();
 
-      const result = await refreshTool.execute("test-refresh-replace", {
-        text: "Updated memory text with new information",
-        category: "fact",
-        importance: 0.9,
-        memoryId: existingId,
-      });
-
-      // Restore HOME
-      if (originalHome !== undefined) {
-        process.env.HOME = originalHome;
-      } else {
-        delete process.env.HOME;
+        result = await refreshTool.execute("test-refresh-replace", {
+          text: "Updated memory text with new information",
+          category: "fact",
+          importance: 0.9,
+          memoryId: existingId,
+        });
+      } finally {
+        // Restore HOME in finally so it is always cleaned up even if execute()
+        // or an expect() inside the block throws (Fix 5).
+        if (originalHome !== undefined) {
+          process.env.HOME = originalHome;
+        } else {
+          delete process.env.HOME;
+        }
       }
 
       expect(result.details.operation).toBe("replaced");
@@ -637,6 +642,10 @@ describe("memory plugin e2e", () => {
       // Verify nothing was written or deleted
       expect(tableAdd).not.toHaveBeenCalled();
       expect(tableDelete).not.toHaveBeenCalled();
+
+      // Verify the embedding API was not called — a stale/invalid memoryId
+      // should short-circuit before incurring an embedding round-trip (Fix 3).
+      expect(embeddingsCreate).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("openai");
       vi.doUnmock("@lancedb/lancedb");
@@ -728,12 +737,99 @@ describe("memory plugin e2e", () => {
       // Verify add was called twice: once for new entry (failed), once for rollback (succeeded)
       expect(tableAdd).toHaveBeenCalledTimes(2);
 
-      // Second add call should restore original content
+      // Second add call should restore original content with original ID (Fix 1)
       // oxlint-disable-next-line typescript/no-explicit-any
       const rollbackAddCall = (tableAdd.mock.calls as any[][][])[1][0][0];
       expect(rollbackAddCall.text).toBe(existingEntry.text);
       expect(rollbackAddCall.importance).toBe(existingEntry.importance);
       expect(rollbackAddCall.category).toBe(existingEntry.category);
+      // The rollback must preserve the original ID so callers are never left
+      // with a stale reference to a non-existent row.
+      expect(rollbackAddCall.id).toBe(existingEntry.id);
+
+      // The return value must expose the restored ID for the caller (Fix 1).
+      expect(result.details.restored_id).toBe(existingEntry.id);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("@lancedb/lancedb");
+      vi.resetModules();
+    }
+  });
+
+  test("memory_refresh replace inherits category and importance from existing when not provided", async () => {
+    const existingId = "eeeeeeee-0000-0000-0000-000000000001";
+    const existingEntry = {
+      id: existingId,
+      text: "Old memory text",
+      vector: [0.1, 0.2, 0.3],
+      importance: 0.9, // non-default, to verify it is inherited
+      category: "decision" as const, // non-default, to verify it is inherited
+      createdAt: 1000,
+    };
+
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.15, 0.25, 0.35] }],
+    }));
+    const tableAdd = vi.fn(async () => undefined);
+    const tableDelete = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => [existingEntry]);
+    const queryWhere = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({
+      limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("@lancedb/lancedb", () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          query: vi.fn(() => ({ where: queryWhere })),
+          countRows: vi.fn(async () => 1),
+          add: tableAdd,
+          delete: tableDelete,
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = buildMockApi({
+        dbPath,
+        embeddingsCreate,
+        vectorSearch,
+        queryWhere,
+        tableAdd,
+        tableDelete,
+        registeredTools,
+      });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+
+      const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
+      expect(refreshTool).toBeDefined();
+
+      // Call with only text — omit category and importance entirely (Fix 2).
+      const result = await refreshTool.execute("test-refresh-inherit", {
+        text: "Updated text only — no category or importance supplied",
+        memoryId: existingId,
+      });
+
+      expect(result.details.operation).toBe("replaced");
+
+      // The new entry must carry over the original category and importance.
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const addCall = (tableAdd.mock.calls as any[][][])[0][0][0];
+      expect(addCall.text).toBe("Updated text only — no category or importance supplied");
+      expect(addCall.category).toBe("decision"); // inherited from existingEntry
+      expect(addCall.importance).toBe(0.9); // inherited from existingEntry
     } finally {
       vi.doUnmock("openai");
       vi.doUnmock("@lancedb/lancedb");
