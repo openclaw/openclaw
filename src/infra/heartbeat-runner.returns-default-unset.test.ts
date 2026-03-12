@@ -1018,6 +1018,7 @@ describe("runHeartbeatOnce", () => {
     reason?: "interval" | "wake";
     queueCronEvent?: boolean;
     replyText?: string;
+    cfgOverrides?: Partial<OpenClawConfig>;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
     const storePath = path.join(tmpDir, "sessions.json");
@@ -1041,7 +1042,7 @@ describe("runHeartbeatOnce", () => {
       await fs.mkdir(path.join(workspaceDir, "HEARTBEAT.md"), { recursive: true });
     }
 
-    const cfg: OpenClawConfig = {
+    const cfgBase: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: workspaceDir,
@@ -1051,6 +1052,9 @@ describe("runHeartbeatOnce", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     };
+    const cfg: OpenClawConfig = params.cfgOverrides
+      ? { ...cfgBase, ...params.cfgOverrides }
+      : cfgBase;
     const sessionKey = resolveMainSessionKey(cfg);
     await fs.writeFile(
       storePath,
@@ -1083,7 +1087,7 @@ describe("runHeartbeatOnce", () => {
     return { res, replySpy, sendWhatsApp, workspaceDir };
   }
 
-  it("adds explicit workspace HEARTBEAT.md path guidance to heartbeat prompts", async () => {
+  it("adds explicit workspace HEARTBEAT.md path guidance to default heartbeat prompts", async () => {
     const { res, replySpy, sendWhatsApp, workspaceDir } = await runHeartbeatFileScenario({
       fileState: "actionable",
       reason: "interval",
@@ -1097,6 +1101,35 @@ describe("runHeartbeatOnce", () => {
       const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
       expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
       expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("does not mutate a custom heartbeat prompt", async () => {
+    const customPrompt =
+      "Read HEARTBEAT.md if it exists (workspace context). Use the system prompt only.";
+    const { res, replySpy } = await runHeartbeatFileScenario({
+      fileState: "actionable",
+      reason: "interval",
+      replyText: "Checked logs and PRs",
+      cfgOverrides: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              prompt: customPrompt,
+            },
+          },
+        },
+      },
+    });
+    try {
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      expect(calledCtx.Body).toContain(customPrompt);
+      expect(calledCtx.Body).not.toContain("Do not read docs/heartbeat.md.");
+      expect(calledCtx.Body).not.toContain("use workspace file");
     } finally {
       replySpy.mockRestore();
     }

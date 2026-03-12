@@ -563,7 +563,15 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
 };
 
-function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
+function appendHeartbeatWorkspacePathHint(params: {
+  prompt: string;
+  workspaceDir: string;
+  shouldAppend: boolean;
+}): string {
+  const { prompt, workspaceDir, shouldAppend } = params;
+  if (!shouldAppend) {
+    return prompt;
+  }
   if (!/heartbeat\.md/i.test(prompt)) {
     return prompt;
   }
@@ -600,7 +608,20 @@ function resolveHeartbeatRunPrompt(params: {
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  const configuredPromptRaw =
+    params.heartbeat?.prompt ?? params.cfg.agents?.defaults?.heartbeat?.prompt;
+  const effectivePrompt = resolveHeartbeatPromptText(configuredPromptRaw);
+  const defaultPrompt = resolveHeartbeatPromptText(undefined);
+  const isUsingDefaultPrompt = effectivePrompt === defaultPrompt;
+
+  const prompt = appendHeartbeatWorkspacePathHint({
+    prompt: basePrompt,
+    workspaceDir: params.workspaceDir,
+    // Only append the hint when using the built-in default heartbeat prompt.
+    // If the user configured a custom prompt, do not mutate it.
+    // Also: treat empty-string overrides as a request to fall back to the default.
+    shouldAppend: isUsingDefaultPrompt && !hasExecCompletion && !hasCronEvents,
+  });
 
   return { prompt, hasExecCompletion, hasCronEvents };
 }
