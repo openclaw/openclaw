@@ -1,0 +1,64 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { MsgContext } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
+import { buildStatusReply } from "./commands.js";
+import { applyInlineDirectivesFastLane, type InlineDirectives } from "./directive-handling.js";
+import type { createModelSelectionState } from "./model-selection.js";
+import type { TypingController } from "./typing.js";
+type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+export type ApplyDirectiveResult = {
+    kind: "reply";
+    reply: ReplyPayload | ReplyPayload[] | undefined;
+} | {
+    kind: "continue";
+    directives: InlineDirectives;
+    provider: string;
+    model: string;
+    contextTokens: number;
+    directiveAck?: ReplyPayload;
+    perMessageQueueMode?: InlineDirectives["queueMode"];
+    perMessageQueueOptions?: {
+        debounceMs?: number;
+        cap?: number;
+        dropPolicy?: InlineDirectives["dropPolicy"];
+    };
+};
+export declare function applyInlineDirectiveOverrides(params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig;
+    agentId: string;
+    agentDir: string;
+    agentCfg: AgentDefaults;
+    sessionEntry: SessionEntry;
+    sessionStore: Record<string, SessionEntry>;
+    sessionKey: string;
+    storePath?: string;
+    sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];
+    isGroup: boolean;
+    allowTextCommands: boolean;
+    command: Parameters<typeof buildStatusReply>[0]["command"];
+    directives: InlineDirectives;
+    messageProviderKey: string;
+    elevatedEnabled: boolean;
+    elevatedAllowed: boolean;
+    elevatedFailures: Array<{
+        gate: string;
+        key: string;
+    }>;
+    defaultProvider: string;
+    defaultModel: string;
+    aliasIndex: Parameters<typeof applyInlineDirectivesFastLane>[0]["aliasIndex"];
+    provider: string;
+    model: string;
+    modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+    initialModelLabel: string;
+    formatModelSwitchEvent: (label: string, alias?: string) => string;
+    resolvedElevatedLevel: ElevatedLevel;
+    defaultActivation: () => ReturnType<Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"]>;
+    contextTokens: number;
+    effectiveModelDirective?: string;
+    typing: TypingController;
+}): Promise<ApplyDirectiveResult>;
+export {};

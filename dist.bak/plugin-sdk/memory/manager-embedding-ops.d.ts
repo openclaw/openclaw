@@ -1,0 +1,42 @@
+import { type MemoryFileEntry } from "./internal.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
+export declare abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+    protected abstract batchFailureCount: number;
+    protected abstract batchFailureLastError?: string;
+    protected abstract batchFailureLastProvider?: string;
+    protected abstract batchFailureLock: Promise<void>;
+    private buildEmbeddingBatches;
+    private loadEmbeddingCache;
+    private upsertEmbeddingCache;
+    protected pruneEmbeddingCacheIfNeeded(): void;
+    private embedChunksInBatches;
+    protected computeProviderKey(): string;
+    private embedChunksWithBatch;
+    private collectCachedEmbeddings;
+    private buildBatchCustomId;
+    private buildBatchRequests;
+    private applyBatchEmbeddings;
+    private buildEmbeddingBatchRunnerOptions;
+    private embedChunksWithProviderBatch;
+    private embedChunksWithVoyageBatch;
+    private embedChunksWithOpenAiBatch;
+    private embedChunksWithGeminiBatch;
+    protected embedBatchWithRetry(texts: string[]): Promise<number[][]>;
+    private isRetryableEmbeddingError;
+    private resolveEmbeddingTimeout;
+    protected embedQueryWithTimeout(text: string): Promise<number[]>;
+    protected withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T>;
+    private withBatchFailureLock;
+    private resetBatchFailureCount;
+    private recordBatchFailure;
+    private isBatchTimeoutError;
+    private runBatchWithTimeoutRetry;
+    private runBatchWithFallback;
+    protected getIndexConcurrency(): number;
+    protected indexFile(entry: MemoryFileEntry | SessionFileEntry, options: {
+        source: MemorySource;
+        content?: string;
+    }): Promise<void>;
+}
