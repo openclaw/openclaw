@@ -19,6 +19,7 @@ import {
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -125,6 +126,47 @@ const DENO_RUN_OPTIONS_WITH_VALUE = new Set([
   "-L",
 ]);
 
+const NODE_OPTIONS_WITH_FILE_VALUE = new Set([
+  "-r",
+  "--experimental-loader",
+  "--import",
+  "--loader",
+  "--require",
+]);
+
+const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
+  "--init-file",
+  "--rcfile",
+  "--startup-script",
+  "-o",
+]);
+
+const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
+  "--cache",
+  "--package",
+  "--prefix",
+  "--script-shell",
+  "--userconfig",
+  "--workspace",
+  "-p",
+  "-w",
+]);
+
+const NPM_EXEC_FLAG_OPTIONS = new Set([
+  "--no",
+  "--quiet",
+  "--ws",
+  "--workspaces",
+  "--yes",
+  "-q",
+  "-y",
+]);
+
+type FileOperandCollection = {
+  hits: number[];
+  sawOptionValueFile: boolean;
+};
+
 function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -225,8 +267,127 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
       current = shellMultiplexerUnwrap.argv;
       continue;
     }
+    const packageManagerUnwrap = unwrapKnownPackageManagerExecInvocation(current);
+    if (packageManagerUnwrap) {
+      baseIndex += current.length - packageManagerUnwrap.length;
+      current = packageManagerUnwrap;
+      continue;
+    }
     return { argv: current, baseIndex };
   }
+}
+
+function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | null {
+  const executable = normalizePackageManagerExecToken(argv[0] ?? "");
+  switch (executable) {
+    case "npm":
+      return unwrapNpmExecInvocation(argv);
+    case "npx":
+    case "bunx":
+      return unwrapDirectPackageExecInvocation(argv);
+    case "pnpm":
+      return unwrapPnpmExecInvocation(argv);
+    default:
+      return null;
+  }
+}
+
+function normalizePackageManagerExecToken(token: string): string {
+  const normalized = normalizeExecutableToken(token);
+  if (!normalized) {
+    return normalized;
+  }
+  return normalized.replace(/\.(?:c|m)?js$/i, "");
+}
+
+function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token !== "exec" || idx + 1 >= argv.length) {
+        return null;
+      }
+      const tail = argv.slice(idx + 1);
+      return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
+    }
+    if ((token === "-C" || token === "--dir" || token === "--filter") && !token.includes("=")) {
+      idx += 2;
+      continue;
+    }
+    idx += 1;
+  }
+  return null;
+}
+
+function unwrapDirectPackageExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      return argv.slice(idx);
+    }
+    const [flag] = token.toLowerCase().split("=", 2);
+    if (flag === "-c" || flag === "--call") {
+      return null;
+    }
+    if (NPM_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (NPM_EXEC_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unwrapNpmExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (token !== "exec") {
+        return null;
+      }
+      idx += 1;
+      break;
+    }
+    if (
+      (token === "-C" || token === "--prefix" || token === "--userconfig") &&
+      !token.includes("=")
+    ) {
+      idx += 2;
+      continue;
+    }
+    idx += 1;
+  }
+  if (idx >= argv.length) {
+    return null;
+  }
+  const tail = argv.slice(idx);
+  if (tail[0] === "--") {
+    return tail.length > 1 ? tail.slice(1) : null;
+  }
+  return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
 function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
@@ -254,6 +415,13 @@ function resolvePosixShellScriptOperandIndex(argv: string[]): number | null {
       return null;
     }
     if (!afterDoubleDash && token.startsWith("-")) {
+      const [flag] = token.toLowerCase().split("=", 2);
+      if (POSIX_SHELL_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!token.includes("=")) {
+          i += 1;
+        }
+        continue;
+      }
       continue;
     }
     return i;
@@ -330,7 +498,8 @@ function collectExistingFileOperandIndexes(params: {
   argv: string[];
   startIndex: number;
   cwd: string | undefined;
-}): number[] {
+  optionsWithFileValue?: ReadonlySet<string>;
+}): FileOperandCollection {
   let afterDoubleDash = false;
   const hits: number[] = [];
   for (let i = params.startIndex; i < params.argv.length; i += 1) {
@@ -349,28 +518,45 @@ function collectExistingFileOperandIndexes(params: {
       continue;
     }
     if (token === "-") {
-      return [];
+      return { hits: [], sawOptionValueFile: false };
     }
     if (token.startsWith("-")) {
+      const [flag, inlineValue] = token.split("=", 2);
+      if (params.optionsWithFileValue?.has(flag.toLowerCase())) {
+        if (inlineValue && resolvesToExistingFileSync(inlineValue, params.cwd)) {
+          hits.push(i);
+          return { hits, sawOptionValueFile: true };
+        }
+        const nextToken = params.argv[i + 1]?.trim() ?? "";
+        if (!inlineValue && nextToken && resolvesToExistingFileSync(nextToken, params.cwd)) {
+          hits.push(i + 1);
+          return { hits, sawOptionValueFile: true };
+        }
+      }
       continue;
     }
     if (resolvesToExistingFileSync(token, params.cwd)) {
       hits.push(i);
     }
   }
-  return hits;
+  return { hits, sawOptionValueFile: false };
 }
 
 function resolveGenericInterpreterScriptOperandIndex(params: {
   argv: string[];
   cwd: string | undefined;
+  optionsWithFileValue?: ReadonlySet<string>;
 }): number | null {
-  const hits = collectExistingFileOperandIndexes({
+  const collection = collectExistingFileOperandIndexes({
     argv: params.argv,
     startIndex: 1,
     cwd: params.cwd,
+    optionsWithFileValue: params.optionsWithFileValue,
   });
-  return hits.length === 1 ? hits[0] : null;
+  if (collection.sawOptionValueFile) {
+    return null;
+  }
+  return collection.hits.length === 1 ? collection.hits[0] : null;
 }
 
 function resolveBunScriptOperandIndex(params: {
@@ -462,16 +648,39 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   const genericIndex = resolveGenericInterpreterScriptOperandIndex({
     argv: unwrapped.argv,
     cwd,
+    optionsWithFileValue:
+      executable === "node" || executable === "nodejs" ? NODE_OPTIONS_WITH_FILE_VALUE : undefined,
   });
   return genericIndex === null ? null : unwrapped.baseIndex + genericIndex;
+}
+
+function shellPayloadNeedsStableBinding(shellCommand: string, cwd: string | undefined): boolean {
+  const argv = splitShellArgs(shellCommand);
+  if (!argv || argv.length === 0) {
+    return false;
+  }
+  const snapshot = resolveMutableFileOperandSnapshotSync({
+    argv,
+    cwd,
+    shellCommand: null,
+  });
+  if (!snapshot.ok) {
+    return true;
+  }
+  if (snapshot.snapshot) {
+    return true;
+  }
+  const firstToken = argv[0]?.trim() ?? "";
+  return resolvesToExistingFileSync(firstToken, cwd);
 }
 
 function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   argv: string[];
   shellCommand: string | null;
+  cwd: string | undefined;
 }): boolean {
   if (params.shellCommand !== null) {
-    return false;
+    return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
@@ -495,6 +704,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
       requiresStableInterpreterApprovalBindingWithShellCommand({
         argv: params.argv,
         shellCommand: params.shellCommand,
+        cwd: params.cwd,
       })
     ) {
       return {
