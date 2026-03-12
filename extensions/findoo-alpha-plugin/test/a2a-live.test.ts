@@ -4,7 +4,7 @@
  * Tests real A2A communication with the remote strategy-agent (43.128.100.43:5085).
  * Requires network access to PRD server.
  *
- * Run: LIVE=1 npx vitest run extensions/findoo-plugin/test/a2a-live.test.ts
+ * Run: LIVE=1 npx vitest run extensions/findoo-alpha-plugin/test/a2a-live.test.ts
  */
 import { describe, expect, it } from "vitest";
 import { A2AClient } from "../src/a2a-client.js";

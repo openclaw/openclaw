@@ -67,11 +67,14 @@ export class PendingTaskTracker {
       status: "submitted",
     };
     this.tasks.set(taskId, task);
-    this.log("info", `[findoo-tracker] tracking stream for ${taskId}: "${query.slice(0, 60)}"`);
+    this.log(
+      "info",
+      `[findoo-alpha-tracker] tracking stream for ${taskId}: "${query.slice(0, 60)}"`,
+    );
 
     // Consume stream in background (fire-and-forget)
     this.consumeStream(task, stream).catch((err) => {
-      this.log("warn", `[findoo-tracker] stream error for ${taskId}: ${err}`);
+      this.log("warn", `[findoo-alpha-tracker] stream error for ${taskId}: ${err}`);
     });
 
     return task;
@@ -95,7 +98,7 @@ export class PendingTaskTracker {
       status: "submitted",
     };
     this.tasks.set(taskId, task);
-    this.log("info", `[findoo-tracker] submitted task ${taskId}: "${query.slice(0, 60)}"`);
+    this.log("info", `[findoo-alpha-tracker] submitted task ${taskId}: "${query.slice(0, 60)}"`);
     return task;
   }
 
@@ -105,7 +108,7 @@ export class PendingTaskTracker {
       task.status = "timeout";
       this.tasks.delete(taskId);
     }
-    this.log("info", "[findoo-tracker] stopped");
+    this.log("info", "[findoo-alpha-tracker] stopped");
   }
 
   getPending(): PendingTask[] {
@@ -119,11 +122,11 @@ export class PendingTaskTracker {
     const timeoutTimer = setTimeout(() => {
       task.status = "timeout";
       this.tasks.delete(task.taskId);
-      this.log("warn", `[findoo-tracker] task ${task.taskId} timed out`);
+      this.log("warn", `[findoo-alpha-tracker] task ${task.taskId} timed out`);
       try {
         this.onFailed(task, "Analysis timed out after " + Math.round(this.timeoutMs / 1000) + "s");
       } catch (e) {
-        this.log("warn", `[findoo-tracker] onFailed callback error: ${e}`);
+        this.log("warn", `[findoo-alpha-tracker] onFailed callback error: ${e}`);
       }
       // Try to close the stream
       stream.return(undefined as unknown as A2AStreamEvent).catch(() => {});
@@ -147,7 +150,7 @@ export class PendingTaskTracker {
             (event.raw as Record<string, unknown>)?.error ??
             event.status?.message ??
             "Unknown error";
-          this.log("info", `[findoo-tracker] task ${task.taskId} error`);
+          this.log("info", `[findoo-alpha-tracker] task ${task.taskId} error`);
           this.onFailed(task, typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg));
           return;
         }
@@ -168,7 +171,7 @@ export class PendingTaskTracker {
           clearTimeout(timeoutTimer);
           task.status = "completed";
           this.tasks.delete(task.taskId);
-          this.log("info", `[findoo-tracker] task ${task.taskId} completed via stream`);
+          this.log("info", `[findoo-alpha-tracker] task ${task.taskId} completed via stream`);
           // Use lastMessage (has actual content) over final event raw (only metadata)
           const resultPayload = lastMessage ? { ...event.raw, message: lastMessage } : event.raw;
           this.onCompleted(task, resultPayload);
@@ -181,7 +184,7 @@ export class PendingTaskTracker {
       if (lastEvent) {
         task.status = "completed";
         this.tasks.delete(task.taskId);
-        this.log("info", `[findoo-tracker] task ${task.taskId} stream ended (no final flag)`);
+        this.log("info", `[findoo-alpha-tracker] task ${task.taskId} stream ended (no final flag)`);
         const resultPayload = lastMessage
           ? { ...lastEvent.raw, message: lastMessage }
           : lastEvent.raw;
@@ -189,7 +192,7 @@ export class PendingTaskTracker {
       } else {
         task.status = "failed";
         this.tasks.delete(task.taskId);
-        this.log("warn", `[findoo-tracker] task ${task.taskId} stream empty`);
+        this.log("warn", `[findoo-alpha-tracker] task ${task.taskId} stream empty`);
         this.onFailed(task, "Stream ended without events");
       }
     } catch (err) {
@@ -197,7 +200,7 @@ export class PendingTaskTracker {
       task.status = "failed";
       this.tasks.delete(task.taskId);
       const msg = err instanceof Error ? err.message : String(err);
-      this.log("warn", `[findoo-tracker] task ${task.taskId} stream error: ${msg}`);
+      this.log("warn", `[findoo-alpha-tracker] task ${task.taskId} stream error: ${msg}`);
       this.onFailed(task, msg);
     }
   }

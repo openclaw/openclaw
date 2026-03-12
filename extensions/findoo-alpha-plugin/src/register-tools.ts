@@ -38,7 +38,7 @@ export function registerTools(
   api.registerTool({
     name: "fin_analyze",
     description:
-      "Findoo 专业金融分析 Agent（37 skills）。所有金融问题优先使用此工具，仅简单报价/单数据点查询（'茅台多少钱'/'BTC价格'）才用 fin_stock/fin_crypto 直查。" +
+      "Findoo Alpha 专业金融分析 Agent（37 skills）。所有金融问题优先使用此工具，仅简单报价/单数据点查询（'茅台多少钱'/'BTC价格'）才用 fin_stock/fin_crypto 直查。" +
       "覆盖：分析诊断、估值判断、策略设计、回测验证、筛选推荐、龙虎榜/游资/资金流监控、风险评估、报告生成。" +
       "市场：A股/美股/港股/加密/宏观/衍生品/ETF。支持多轮对话(thread_id)。" +
       "深度分析任务异步提交，完成后自动推送结果到对话。",

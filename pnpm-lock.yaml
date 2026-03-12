@@ -431,7 +431,7 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/findoo-plugin:
+  extensions/findoo-alpha-plugin:
     dependencies:
       '@sinclair/typebox':
         specifier: 0.34.48

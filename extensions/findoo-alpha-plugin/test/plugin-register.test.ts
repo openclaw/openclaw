@@ -2,7 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import findooPlugin from "../index.js";
 
-describe("findoo-plugin registration", () => {
+describe("findoo-alpha-plugin registration", () => {
   function createMockApi(): OpenClawPluginApi & {
     tools: Map<string, unknown>;
     services: Map<string, unknown>;
@@ -36,8 +36,8 @@ describe("findoo-plugin registration", () => {
   }
 
   it("has correct metadata", () => {
-    expect(findooPlugin.id).toBe("findoo-plugin");
-    expect(findooPlugin.name).toBe("Findoo");
+    expect(findooPlugin.id).toBe("findoo-alpha-plugin");
+    expect(findooPlugin.name).toBe("Findoo Alpha");
     expect(findooPlugin.kind).toBe("financial");
   });
 

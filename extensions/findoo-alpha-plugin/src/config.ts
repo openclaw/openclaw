@@ -55,6 +55,6 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
     pollIntervalMs:
       Number.isFinite(pollInterval) && pollInterval >= 5000 ? Math.floor(pollInterval) : 15_000,
     taskTimeoutMs:
-      Number.isFinite(taskTimeout) && taskTimeout >= 60_000 ? Math.floor(taskTimeout) : 600_000,
+      Number.isFinite(taskTimeout) && taskTimeout >= 60_000 ? Math.floor(taskTimeout) : 1_200_000,
   };
 }

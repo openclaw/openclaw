@@ -1,7 +1,7 @@
 {
-  "id": "findoo-plugin",
-  "name": "Findoo",
-  "description": "Bridge to LangGraph strategy-agent via A2A protocol — financial analysis, strategy design, risk assessment, portfolio management.",
+  "id": "findoo-alpha-plugin",
+  "name": "Findoo Alpha",
+  "description": "Alpha discovery bridge to LangGraph strategy-agent via A2A protocol — financial analysis, strategy design, risk assessment, portfolio management.",
   "kind": "financial",
   "version": "2026.3.12",
   "skills": ["./skills"],

@@ -5,8 +5,8 @@ import { extractSummary, PendingTaskTracker } from "./src/pending-task-tracker.j
 import { registerTools } from "./src/register-tools.js";
 
 const findooPlugin = {
-  id: "findoo-plugin",
-  name: "Findoo",
+  id: "findoo-alpha-plugin",
+  name: "Findoo Alpha",
   description:
     "Bridge to LangGraph strategy-agent via A2A protocol — " +
     "37 professional financial analysis skills covering A-shares, US/HK equities, crypto, macro, and risk.",
@@ -25,8 +25,8 @@ const findooPlugin = {
       return;
     }
 
-    log.info(`findoo-plugin: connecting to ${config.strategyAgentUrl}`);
-    log.info(`findoo-plugin: assistant ${config.strategyAssistantId}`);
+    log.info(`findoo-alpha: connecting to ${config.strategyAgentUrl}`);
+    log.info(`findoo-alpha: assistant ${config.strategyAssistantId}`);
 
     // Shared A2AClient instance (used by both tools and tracker)
     const a2a = new A2AClient(config.strategyAgentUrl, config.strategyAssistantId);
@@ -37,14 +37,14 @@ const findooPlugin = {
     })
       .then((r) => {
         if (r.ok) {
-          log.info("findoo-plugin: strategy-agent is reachable ✓");
+          log.info("findoo-alpha: strategy-agent is reachable ✓");
         } else {
-          log.warn(`findoo-plugin: strategy-agent returned ${r.status}`);
+          log.warn(`findoo-alpha: strategy-agent returned ${r.status}`);
         }
       })
       .catch((err) => {
         log.warn(
-          `findoo-plugin: strategy-agent unreachable (${err instanceof Error ? err.message : err}). Tools will retry on use.`,
+          `findoo-alpha: strategy-agent unreachable (${err instanceof Error ? err.message : err}). Tools will retry on use.`,
         );
       });
 
@@ -90,11 +90,11 @@ const findooPlugin = {
       });
 
       log.info(
-        `findoo-plugin: task tracker ready (timeout=${config.taskTimeoutMs}ms, stream-based)`,
+        `findoo-alpha: task tracker ready (timeout=${config.taskTimeoutMs}ms, stream-based)`,
       );
     } else {
       log.info(
-        "findoo-plugin: enqueueSystemEvent not available, tracker disabled (async results won't be pushed)",
+        "findoo-alpha: enqueueSystemEvent not available, tracker disabled (async results won't be pushed)",
       );
     }
 
