@@ -1449,6 +1449,62 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("does not auto-load workspace-discovered plugins unless explicitly trusted", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
+    fs.mkdirSync(workspaceExtDir, { recursive: true });
+    writePlugin({
+      id: "workspace-helper",
+      body: `module.exports = { id: "workspace-helper", register() {} };`,
+      dir: workspaceExtDir,
+      filename: "index.cjs",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
+    expect(workspacePlugin?.origin).toBe("workspace");
+    expect(workspacePlugin?.status).toBe("disabled");
+    expect(workspacePlugin?.error).toContain("workspace plugin (disabled by default)");
+  });
+
+  it("loads workspace-discovered plugins when plugins.allow explicitly trusts them", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
+    fs.mkdirSync(workspaceExtDir, { recursive: true });
+    writePlugin({
+      id: "workspace-helper",
+      body: `module.exports = { id: "workspace-helper", register() {} };`,
+      dir: workspaceExtDir,
+      filename: "index.cjs",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["workspace-helper"],
+        },
+      },
+    });
+
+    const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
+    expect(workspacePlugin?.origin).toBe("workspace");
+    expect(workspacePlugin?.status).toBe("loaded");
+  });
+
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
