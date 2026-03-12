@@ -28,6 +28,7 @@ import {
   buildDoubaoProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildMerlinProvider,
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
   buildModelStudioProvider,
@@ -47,6 +48,7 @@ import {
 export {
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildMerlinProvider,
   buildNvidiaProvider,
   buildModelStudioProvider,
   buildQianfanProvider,
@@ -675,6 +677,24 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   })),
 ];
 
+const MERLIN_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
+  async (ctx) => {
+    const email = ctx.env.MERLIN_EMAIL?.trim();
+    const password = ctx.env.MERLIN_PASSWORD?.trim();
+    const refreshToken = ctx.env.MERLIN_REFRESH_TOKEN?.trim();
+    if ((!email || !password) && !refreshToken) {
+      return undefined;
+    }
+    return {
+      merlin: {
+        ...buildMerlinProvider(),
+        // Use a sentinel apiKey so the model registry picks it up.
+        apiKey: email ?? "merlin-refresh-token",
+      },
+    };
+  },
+];
+
 const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   async (ctx) => {
     const envKey = resolveEnvApiKeyVarName("minimax-portal", ctx.env);
@@ -851,6 +871,9 @@ export async function resolveImplicitProviders(
     mergeImplicitProviderSet(providers, await loader(context));
   }
   for (const loader of PAIRED_IMPLICIT_PROVIDER_LOADERS) {
+    mergeImplicitProviderSet(providers, await loader(context));
+  }
+  for (const loader of MERLIN_IMPLICIT_PROVIDER_LOADERS) {
     mergeImplicitProviderSet(providers, await loader(context));
   }
   mergeImplicitProviderSet(providers, await resolveCloudflareAiGatewayImplicitProvider(context));

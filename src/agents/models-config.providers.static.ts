@@ -530,6 +530,169 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+const MERLIN_BASE_URL = "https://www.getmerlin.in/arcane/api";
+const MERLIN_DEFAULT_CONTEXT_WINDOW = 128_000;
+const MERLIN_DEFAULT_MAX_TOKENS = 8192;
+const MERLIN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildMerlinProvider(): ProviderConfig {
+  return {
+    baseUrl: MERLIN_BASE_URL,
+    api: "merlin",
+    models: [
+      {
+        id: "gemini-3.0-flash",
+        name: "Gemini 3 Flash",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3.1-pro",
+        name: "Gemini 3.1 Pro",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3.1-flash-lite",
+        name: "Gemini 3.1 Flash Lite",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-5.2",
+        name: "GPT 5.2",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-5-mini",
+        name: "GPT 5 Mini",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-oss-120b",
+        name: "GPT OSS 120B",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "grok-4.1-fast",
+        name: "Grok 4.1 Fast",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "grok-4",
+        name: "Grok 4",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-4.6-opus",
+        name: "Claude 4.6 Opus",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: 200_000,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "kimi-k2.5-thinking",
+        name: "Kimi K2.5 Thinking",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "minimax-m2.5",
+        name: "MiniMax M2.5",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "glm-5",
+        name: "GLM 5",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: 200_000,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-haiku-4.5",
+        name: "Claude Haiku 4.5",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: 200_000,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-5.2-high-reasoning",
+        name: "GPT 5.2 High Reasoning",
+        reasoning: true,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-sonnet-4.5",
+        name: "Claude Sonnet 4.5",
+        reasoning: false,
+        input: ["text"],
+        cost: MERLIN_DEFAULT_COST,
+        contextWindow: 200_000,
+        maxTokens: MERLIN_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildKilocodeProvider(): ProviderConfig {
   return {
     baseUrl: KILOCODE_BASE_URL,

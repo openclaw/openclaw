@@ -51,6 +51,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { createConfiguredMerlinStreamFn } from "../../merlin-stream.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1506,9 +1507,15 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
+      // Merlin AI: custom SSE streaming via getmerlin.in API.
+      if (params.model.api === "merlin") {
+        const merlinStreamFn = createConfiguredMerlinStreamFn({ model: params.model });
+        activeSession.agent.streamFn = merlinStreamFn;
+        ensureCustomApiRegistered(params.model.api, merlinStreamFn);
+      }
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
-      if (params.model.api === "ollama") {
+      else if (params.model.api === "ollama") {
         // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =

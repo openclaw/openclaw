@@ -38,6 +38,7 @@ import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { createConfiguredMerlinStreamFn } from "../merlin-stream.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
@@ -647,7 +648,9 @@ export async function compactEmbeddedPiSessionDirect(
         resourceLoader,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
-      if (model.api === "ollama") {
+      if (model.api === "merlin") {
+        ensureCustomApiRegistered(model.api, createConfiguredMerlinStreamFn({ model }));
+      } else if (model.api === "ollama") {
         const providerBaseUrl =
           typeof params.config?.models?.providers?.[model.provider]?.baseUrl === "string"
             ? params.config.models.providers[model.provider]?.baseUrl
