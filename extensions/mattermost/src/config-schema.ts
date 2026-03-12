@@ -45,7 +45,6 @@ const MattermostAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     replyToMode: z.enum(["off", "first", "all"]).optional(),
     responsePrefix: z.string().optional(),
-    replyToMode: z.enum(["off", "first", "all"]).optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
