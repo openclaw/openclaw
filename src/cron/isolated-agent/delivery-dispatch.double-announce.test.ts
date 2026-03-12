@@ -217,9 +217,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         payloads: [{ text: "Detailed child result, everything finished successfully." }],
       }),
     );
-    // The initial attempt preserves the write-ahead queue for crash-recovery;
-    // skipQueue is only set on retry attempts.
-    expect(deliverOutboundPayloads).not.toHaveBeenCalledWith(
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ skipQueue: true }),
     );
   });
@@ -310,7 +308,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(false);
   });
 
-  it("text delivery initial attempt preserves write-ahead queue for crash-recovery", async () => {
+  it("text delivery always bypasses the write-ahead queue", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
@@ -322,23 +320,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
 
-    // The first attempt through retryTransientDirectCronDelivery should NOT
-    // set skipQueue, so recoverPendingDeliveries can replay after a crash.
-    // Only subsequent retry attempts skip the queue to prevent duplicates.
-    // See: https://github.com/openclaw/openclaw/issues/40545
     expect(deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
         to: "123456",
         payloads: [{ text: "Daily digest ready." }],
+        skipQueue: true,
       }),
-    );
-    expect(deliverOutboundPayloads).not.toHaveBeenCalledWith(
-      expect.objectContaining({ skipQueue: true }),
     );
   });
 
-  it("structured/thread delivery (non-retryTransient path) keeps write-ahead queue", async () => {
+  it("structured/thread delivery also bypasses the write-ahead queue", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
@@ -349,14 +341,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    // Non-retrying path should NOT set skipQueue, preserving crash-recovery
-    // via recoverPendingDeliveries.
     expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.not.objectContaining({ skipQueue: true }),
+      expect.objectContaining({ skipQueue: true }),
     );
   });
 
-  it("transient retry delivers exactly once: initial keeps queue, retry skips queue", async () => {
+  it("transient retry delivers exactly once with skipQueue on both attempts", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
@@ -365,8 +355,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       .mockRejectedValueOnce(new Error("gateway timeout"))
       .mockResolvedValueOnce([{ ok: true } as never]);
 
-    // Enable fast retries for test speed.
-    process.env.OPENCLAW_TEST_FAST = "1";
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     try {
       const params = makeBaseParams({ synthesizedText: "Retry test." });
       const state = await dispatchCronDelivery(params);
@@ -377,12 +366,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
 
       const calls = vi.mocked(deliverOutboundPayloads).mock.calls;
-      // First attempt: queue preserved for crash-recovery (no skipQueue).
-      expect(calls[0][0]).toEqual(expect.not.objectContaining({ skipQueue: true }));
-      // Retry attempt: queue skipped to prevent duplicate sends.
+      expect(calls[0][0]).toEqual(expect.objectContaining({ skipQueue: true }));
       expect(calls[1][0]).toEqual(expect.objectContaining({ skipQueue: true }));
     } finally {
-      delete process.env.OPENCLAW_TEST_FAST;
+      vi.unstubAllEnvs();
     }
   });
 });
