@@ -152,6 +152,15 @@ export function buildInlineProviderModels(
   });
 }
 
+function shouldUpgradeExactRegistryRowWithForwardCompat(
+  provider: string,
+  modelId: string,
+): boolean {
+  return (
+    normalizeProviderId(provider) === "openai-codex" && modelId.trim().toLowerCase() === "gpt-5.4"
+  );
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -160,13 +169,28 @@ export function resolveModelWithRegistry(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
   if (model) {
+    const effectiveModel =
+      forwardCompat === undefined ||
+      !shouldUpgradeExactRegistryRowWithForwardCompat(provider, modelId)
+        ? model
+        : ({
+            ...model,
+            api: forwardCompat.api ?? model.api,
+            baseUrl: forwardCompat.baseUrl ?? model.baseUrl,
+            reasoning: forwardCompat.reasoning ?? model.reasoning,
+            input: forwardCompat.input ?? model.input,
+            contextWindow: forwardCompat.contextWindow ?? model.contextWindow,
+            maxTokens: forwardCompat.maxTokens ?? model.maxTokens,
+            compat: forwardCompat.compat ?? model.compat,
+          } as Model<Api>);
     return normalizeResolvedModel({
       provider,
       model: applyConfiguredProviderOverrides({
-        discoveredModel: model,
+        discoveredModel: effectiveModel,
         providerConfig,
         modelId,
       }),
@@ -185,7 +209,6 @@ export function resolveModelWithRegistry(params: {
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
   // Otherwise, configured providers can default to a generic API and break specific transports.
-  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
   if (forwardCompat) {
     return normalizeResolvedModel({
       provider,
