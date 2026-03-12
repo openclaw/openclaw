@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelInboundDebouncer,
+  shouldFlushDirectTextInbound,
   shouldDebounceTextInbound,
 } from "./inbound-debounce-policy.js";
 
@@ -19,6 +20,16 @@ describe("shouldDebounceTextInbound", () => {
     expect(shouldDebounceTextInbound({ text: "hello there", cfg, allowDebounce: false })).toBe(
       false,
     );
+  });
+});
+
+describe("shouldFlushDirectTextInbound", () => {
+  it("marks control commands as priority even when debounce is otherwise disabled", () => {
+    const cfg = {} as Parameters<typeof shouldFlushDirectTextInbound>[0]["cfg"];
+
+    expect(shouldFlushDirectTextInbound({ text: "/stop", cfg })).toBe(true);
+    expect(shouldFlushDirectTextInbound({ text: "hello there", cfg })).toBe(false);
+    expect(shouldFlushDirectTextInbound({ text: "   ", cfg })).toBe(false);
   });
 });
 

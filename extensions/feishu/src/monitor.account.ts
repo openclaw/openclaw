@@ -335,6 +335,8 @@ function registerEventHandlers(
       }
       return !core.channel.text.hasControlCommand(text, cfg);
     },
+    shouldFlushDirectWhenPending: (event) =>
+      core.channel.text.hasControlCommand(resolveDebounceText(event), cfg),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

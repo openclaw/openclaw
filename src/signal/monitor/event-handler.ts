@@ -17,6 +17,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   createChannelInboundDebouncer,
+  shouldFlushDirectTextInbound,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
@@ -339,6 +340,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
+    shouldFlushDirectWhenPending: (entry) =>
+      shouldFlushDirectTextInbound({
+        text: entry.bodyText,
+        cfg: deps.cfg,
+      }),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

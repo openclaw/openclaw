@@ -1,5 +1,6 @@
 import {
   createChannelInboundDebouncer,
+  shouldFlushDirectTextInbound,
   shouldDebounceTextInbound,
 } from "../../channels/inbound-debounce-policy.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -102,6 +103,11 @@ export function createSlackMessageHandler(params: {
     channel: "slack",
     buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
     shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
+    shouldFlushDirectWhenPending: (entry) =>
+      shouldFlushDirectTextInbound({
+        text: stripSlackMentionsForCommandDetection(entry.message.text ?? ""),
+        cfg: ctx.cfg,
+      }),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

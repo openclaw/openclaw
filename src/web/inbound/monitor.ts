@@ -34,6 +34,8 @@ export async function monitorWebInbox(options: {
   debounceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
+  /** Optional priority predicate for items that should bypass unresolved debounce buffers. */
+  shouldFlushDirectWhenPending?: (msg: WebInboundMessage) => boolean;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -81,6 +83,7 @@ export async function monitorWebInbox(options: {
       return `${msg.accountId}:${conversationKey}:${senderKey}`;
     },
     shouldDebounce: options.shouldDebounce,
+    shouldFlushDirectWhenPending: options.shouldFlushDirectWhenPending,
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

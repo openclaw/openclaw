@@ -191,6 +191,7 @@ export async function monitorWebChannel(
       }
       return !hasControlCommand(msg.body, cfg);
     };
+    const shouldFlushDirectWhenPending = (msg: WebInboundMsg) => hasControlCommand(msg.body, cfg);
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
@@ -200,6 +201,7 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      shouldFlushDirectWhenPending,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();

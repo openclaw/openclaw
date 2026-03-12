@@ -1,6 +1,7 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -238,6 +239,10 @@ export const registerTelegramHandlers = ({
         return false;
       }
       return entry.allMedia.length === 0;
+    },
+    shouldFlushDirectWhenPending: (entry) => {
+      const text = entry.msg.text ?? entry.msg.caption ?? "";
+      return hasControlCommand(text, cfg, { botUsername: entry.botUsername });
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

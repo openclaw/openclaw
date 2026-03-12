@@ -46,6 +46,7 @@ export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
+  shouldFlushDirectWhenPending?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
   maxKeys?: number;
   maxFlushRetries?: number;
@@ -232,6 +233,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         const fullyFlushed = await flushKeyInternal(key);
         const pending = buffers.get(key);
         if (!fullyFlushed && pending) {
+          if (params.shouldFlushDirectWhenPending?.(item)) {
+            // Priority items like control commands should not be trapped behind a failing buffer.
+            await flushDirect([item]);
+            return;
+          }
           // Preserve ordering by appending non-debounced items behind unresolved buffered work.
           pending.items.push(item);
           trimBufferToLimit(key, pending);

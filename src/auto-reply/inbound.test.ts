@@ -618,6 +618,63 @@ describe("createInboundDebouncer", () => {
     }
   });
 
+  it("flushes priority non-debounced items directly when a key is stuck retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const errors: Array<{ err: unknown; items: string[] }> = [];
+
+      const debouncer = createInboundDebouncer<{
+        key: string;
+        id: string;
+        debounce: boolean;
+        priority: boolean;
+      }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        shouldDebounce: (item) => item.debounce,
+        shouldFlushDirectWhenPending: (item) => item.priority,
+        maxFlushRetries: 3,
+        retryBackoffFactor: 1,
+        maxRetryDelayMs: 10,
+        onFlush: async (items) => {
+          const ids = items.map((entry) => entry.id);
+          if (ids.includes("buffered")) {
+            throw new Error("temporary lock contention");
+          }
+          delivered.push(ids);
+        },
+        onError: (err, items) => {
+          errors.push({ err, items: items.map((entry) => entry.id) });
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "buffered", debounce: true, priority: false });
+      await vi.advanceTimersByTimeAsync(10); // First buffered flush fails.
+
+      await debouncer.enqueue({ key: "a", id: "/stop", debounce: false, priority: true });
+
+      expect(delivered).toEqual([["/stop"]]);
+      expect(
+        errors.some(
+          (entry) =>
+            entry.items.includes("/stop") ||
+            (entry.err as { code?: string }).code === "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED",
+        ),
+      ).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(20); // Remaining buffered retries exhaust and drop only the old batch.
+
+      expect(errors.at(-1)?.items).toEqual(["buffered"]);
+      expect(errors.at(-1)?.err).toMatchObject({
+        code: "INBOUND_DEBOUNCE_MAX_RETRIES_EXCEEDED",
+      });
+      expect(delivered).toEqual([["/stop"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears stale retry timers before dropping an exhausted key", async () => {
     vi.useFakeTimers();
     try {

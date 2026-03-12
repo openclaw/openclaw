@@ -161,6 +161,8 @@ export function createBlueBubblesDebounceRegistry(params: {
           // (e.g., text+image arriving as separate webhooks for the same messageId)
           return true;
         },
+        shouldFlushDirectWhenPending: (entry) =>
+          core.channel.text.hasControlCommand(entry.message.text, config),
         onFlush: async (entries) => {
           if (entries.length === 0) {
             return;
