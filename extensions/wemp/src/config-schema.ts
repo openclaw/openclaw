@@ -1,5 +1,3 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
-
 const dmSchema = {
   type: "object",
   properties: {
@@ -168,4 +166,7 @@ export const WempConfigSchema = {
   additionalProperties: false,
 };
 
-export const wempConfigSchema = buildChannelConfigSchema(WempConfigSchema);
+// WempConfigSchema is a plain JSON Schema object; use it directly instead of
+// buildChannelConfigSchema (which expects a Zod schema and falls back to
+// { additionalProperties: true } for plain objects, breaking validation).
+export const wempConfigSchema = { schema: WempConfigSchema };

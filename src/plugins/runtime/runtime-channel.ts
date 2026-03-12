@@ -34,21 +34,21 @@ import {
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
-import { routeReply } from "../../auto-reply/reply/route-reply.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { routeReply } from "../../auto-reply/reply/route-reply.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { recordInboundSession } from "../../channels/session.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
+import { loadConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { loadConfig } from "../../config/config.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -143,7 +143,9 @@ function resolveDispatchTarget(
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   return {
     dispatchInbound: async (params) => {
-      const channel = String(params.channel || "").trim().toLowerCase();
+      const channel = String(params.channel || "")
+        .trim()
+        .toLowerCase();
       if (!channel) {
         throw new Error("runtime.channel.dispatchInbound requires channel");
       }
@@ -157,10 +159,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         throw new Error("runtime.channel.dispatchInbound requires userId/chatId");
       }
       const senderId = String(params.senderId ?? params.userId ?? "").trim() || undefined;
-      const fromBase =
-        senderId ??
-        String(params.chatId ?? params.userId ?? originatingTo)
-          .trim();
+      const fromBase = senderId ?? String(params.chatId ?? params.userId ?? originatingTo).trim();
       const toBase = String(params.chatId ?? params.userId ?? originatingTo).trim();
       const messageId = String(params.messageId ?? "").trim() || undefined;
       const timestamp =
@@ -168,7 +167,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
           ? params.timestamp
           : undefined;
       const text = String(params.text ?? "");
-      const cfg = await loadConfig();
+      const cfg = loadConfig();
       const ctx = finalizeInboundContext({
         Body: text,
         RawBody: text,
@@ -179,7 +178,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         SessionKey: sessionKey,
         AccountId: params.accountId,
         ChatType: chatType,
-        ConversationLabel: String(params.chatId ?? params.userId ?? originatingTo).trim() || undefined,
+        ConversationLabel:
+          String(params.chatId ?? params.userId ?? originatingTo).trim() || undefined,
         SenderId: senderId,
         SenderName: params.senderName,
         SenderUsername: params.senderUsername,
@@ -233,7 +233,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
             });
             if (!routed.ok) {
               throw new Error(
-                routed.error ?? `runtime.channel.dispatchInbound failed to route reply for ${channel}`,
+                routed.error ??
+                  `runtime.channel.dispatchInbound failed to route reply for ${channel}`,
               );
             }
           },

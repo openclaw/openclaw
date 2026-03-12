@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWempAccount, validateResolvedWempAccount, validateWempChannelConfig } from "./config.js";
+import {
+  resolveWempAccount,
+  validateResolvedWempAccount,
+  validateWempChannelConfig,
+} from "./config.js";
 
 async function loadConfigWithFallbackValidator() {
   vi.resetModules();
@@ -7,12 +11,13 @@ async function loadConfigWithFallbackValidator() {
     const actual = await vi.importActual<typeof import("node:module")>("node:module");
     return {
       ...actual,
-      createRequire: () => ((id: string) => {
-        if (id === "ajv") {
-          throw new Error("ajv unavailable for fallback validator test");
-        }
-        return actual.createRequire(import.meta.url)(id);
-      }) as any,
+      createRequire: () =>
+        ((id: string) => {
+          if (id === "ajv") {
+            throw new Error("ajv unavailable for fallback validator test");
+          }
+          return actual.createRequire(import.meta.url)(id);
+        }) as any,
     };
   });
   return import("./config.js");
@@ -40,31 +45,34 @@ describe("wemp config", () => {
   });
 
   it("resolveWempAccount supports account-level overrides", () => {
-    const resolved = resolveWempAccount({
-      channels: {
-        wemp: {
-          enabled: true,
-          appId: "app-root",
-          appSecret: "secret-root",
-          token: "token-root",
-          routing: {
-            pairedAgent: "main",
-            unpairedAgent: "wemp-kf",
-          },
-          accounts: {
-            brandA: {
-              appId: "app-a",
-              appSecret: "secret-a",
-              token: "token-a",
-              routing: {
-                pairedAgent: "agent-a",
-                unpairedAgent: "kf-a",
+    const resolved = resolveWempAccount(
+      {
+        channels: {
+          wemp: {
+            enabled: true,
+            appId: "app-root",
+            appSecret: "secret-root",
+            token: "token-root",
+            routing: {
+              pairedAgent: "main",
+              unpairedAgent: "wemp-kf",
+            },
+            accounts: {
+              brandA: {
+                appId: "app-a",
+                appSecret: "secret-a",
+                token: "token-a",
+                routing: {
+                  pairedAgent: "agent-a",
+                  unpairedAgent: "kf-a",
+                },
               },
             },
           },
         },
       },
-    }, "brandA");
+      "brandA",
+    );
 
     expect(resolved.accountId).toBe("brandA");
     expect(resolved.appId).toBe("app-a");
@@ -77,9 +85,6 @@ describe("wemp config", () => {
       channels: {
         wemp: {
           enabled: true,
-          appId: "app-root",
-          appSecret: "secret-root",
-          token: "token-root",
           accounts: {
             brandA: {
               appId: "app-a",
@@ -98,18 +103,21 @@ describe("wemp config", () => {
   });
 
   it("validateResolvedWempAccount includes account context and fix hints for missing fields", () => {
-    const resolved = resolveWempAccount({
-      channels: {
-        wemp: {
-          enabled: true,
-          accounts: {
-            brandA: {
-              enabled: true,
+    const resolved = resolveWempAccount(
+      {
+        channels: {
+          wemp: {
+            enabled: true,
+            accounts: {
+              brandA: {
+                enabled: true,
+              },
             },
           },
         },
       },
-    }, "brandA");
+      "brandA",
+    );
 
     const issues = validateResolvedWempAccount(resolved);
     const appIdIssue = issues.find((item) => item.includes("appId missing"));
@@ -213,7 +221,9 @@ describe("wemp config", () => {
         } as any,
       },
     });
-    const extraIssue = issues.find((item) => item.includes("schema must NOT have additional properties"));
+    const extraIssue = issues.find((item) =>
+      item.includes("schema must NOT have additional properties"),
+    );
     expect(extraIssue).toBeTruthy();
     expect(extraIssue).toContain("field=channels.wemp.unknownFlag");
     expect(extraIssue).toContain("remove unsupported field channels.wemp.unknownFlag");
@@ -227,7 +237,8 @@ describe("wemp config fallback schema validator", () => {
   });
 
   it("reports required errors for menu items", async () => {
-    const { validateWempChannelConfig: validateWithFallback } = await loadConfigWithFallbackValidator();
+    const { validateWempChannelConfig: validateWithFallback } =
+      await loadConfigWithFallbackValidator();
     const issues = validateWithFallback({
       channels: {
         wemp: {
@@ -245,14 +256,17 @@ describe("wemp config fallback schema validator", () => {
       },
     });
 
-    const requiredIssue = issues.find((item) => item.includes("schema must have required property 'type'"));
+    const requiredIssue = issues.find((item) =>
+      item.includes("schema must have required property 'type'"),
+    );
     expect(requiredIssue).toBeTruthy();
     expect(requiredIssue).toContain("field=channels.wemp.features.menu.items.0.type");
     expect(requiredIssue).toContain("set channels.wemp.features.menu.items.0.type");
   });
 
   it("reports enum errors for invalid dm.policy", async () => {
-    const { validateWempChannelConfig: validateWithFallback } = await loadConfigWithFallbackValidator();
+    const { validateWempChannelConfig: validateWithFallback } =
+      await loadConfigWithFallbackValidator();
     const issues = validateWithFallback({
       channels: {
         wemp: {
@@ -267,14 +281,17 @@ describe("wemp config fallback schema validator", () => {
       },
     });
 
-    const enumIssue = issues.find((item) => item.includes("schema must be equal to one of the allowed values"));
+    const enumIssue = issues.find((item) =>
+      item.includes("schema must be equal to one of the allowed values"),
+    );
     expect(enumIssue).toBeTruthy();
     expect(enumIssue).toContain("field=channels.wemp.dm.policy");
     expect(enumIssue).toContain("set channels.wemp.dm.policy to one of allowed values");
   });
 
   it("reports nested additionalProperties errors in accounts schema", async () => {
-    const { validateWempChannelConfig: validateWithFallback } = await loadConfigWithFallbackValidator();
+    const { validateWempChannelConfig: validateWithFallback } =
+      await loadConfigWithFallbackValidator();
     const issues = validateWithFallback({
       channels: {
         wemp: {
@@ -298,9 +315,13 @@ describe("wemp config fallback schema validator", () => {
       },
     });
 
-    const nestedExtraIssue = issues.find((item) => item.includes("channels.wemp.accounts.branda.routing.extraRoute"));
+    const nestedExtraIssue = issues.find((item) =>
+      item.includes("channels.wemp.accounts.branda.routing.extraRoute"),
+    );
     expect(nestedExtraIssue).toBeTruthy();
     expect(nestedExtraIssue).toContain("schema must NOT have additional properties");
-    expect(nestedExtraIssue).toContain("remove unsupported field channels.wemp.accounts.branda.routing.extraRoute");
+    expect(nestedExtraIssue).toContain(
+      "remove unsupported field channels.wemp.accounts.branda.routing.extraRoute",
+    );
   });
 });

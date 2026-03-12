@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { ChannelPlugin, ChannelGatewayContext, ChannelStatusIssue, OpenClawConfig } from "openclaw/plugin-sdk";
+import type {
+  ChannelPlugin,
+  ChannelGatewayContext,
+  ChannelStatusIssue,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk";
 import {
   PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
@@ -7,16 +12,6 @@ import {
   setAccountEnabledInConfigSection,
   deleteAccountFromConfigSection,
 } from "openclaw/plugin-sdk";
-import { wempConfigSchema } from "./config-schema.js";
-import { listWempAccountIds, resolveDefaultWempAccountId, resolveWempAccount, validateResolvedWempAccount, validateWempChannelConfig } from "./config.js";
-import { defaultRuntime, markRuntimeConnected, markRuntimeError, mergeRuntimeSnapshot } from "./status.js";
-import { resolveDmPolicy, collectWarnings } from "./security.js";
-import {
-  registerWempWebhook,
-  unregisterWempWebhook,
-  unregisterWempWebhookByAccountId,
-} from "./webhook.js";
-import { sendText } from "./outbound.js";
 import {
   getAccessToken,
   uploadTempMedia,
@@ -25,6 +20,15 @@ import {
   sendCustomVideoMessage,
   sendCustomVoiceMessage,
 } from "./api.js";
+import { wempConfigSchema } from "./config-schema.js";
+import {
+  listWempAccountIds,
+  resolveDefaultWempAccountId,
+  resolveWempAccount,
+  validateResolvedWempAccount,
+  validateWempChannelConfig,
+} from "./config.js";
+import { flushHandoffNotificationsToExternal } from "./features/handoff-notify.js";
 import {
   applyWechatMenuConfig,
   buildAccountConfigSignature,
@@ -32,20 +36,35 @@ import {
   normalizeMenuFeature,
   type MenuFeatureConfig,
 } from "./features/menu.js";
-import { createWempOnboarding } from "./onboarding.js";
-import { flushPairingNotificationsToExternal } from "./pairing.js";
-import { flushHandoffNotificationsToExternal } from "./features/handoff-notify.js";
-import { clearWempRuntime, setWempRuntime } from "./runtime.js";
 import { attachOpenClawLogBridge, detachOpenClawLogBridge } from "./log.js";
+import { createWempOnboarding } from "./onboarding.js";
+import { sendText } from "./outbound.js";
+import { flushPairingNotificationsToExternal } from "./pairing.js";
+import { clearWempRuntime, setWempRuntime } from "./runtime.js";
+import { resolveDmPolicy, collectWarnings } from "./security.js";
+import {
+  defaultRuntime,
+  markRuntimeConnected,
+  markRuntimeError,
+  mergeRuntimeSnapshot,
+} from "./status.js";
 import { withTimeoutStatus } from "./timeout.js";
-import { toRecord } from "./utils.js";
 import type { ResolvedWempAccount } from "./types.js";
+import { toRecord } from "./utils.js";
+import {
+  registerWempWebhook,
+  unregisterWempWebhook,
+  unregisterWempWebhookByAccountId,
+} from "./webhook.js";
 
 const activeAccounts = new Set<string>();
-const appliedAccountStateByAccount = new Map<string, {
-  signature: string;
-  account: ResolvedWempAccount;
-}>();
+const appliedAccountStateByAccount = new Map<
+  string,
+  {
+    signature: string;
+    account: ResolvedWempAccount;
+  }
+>();
 const stopAccountHandlersByAccount = new Map<string, () => void>();
 
 interface MenuSyncState {
@@ -55,8 +74,14 @@ interface MenuSyncState {
 }
 
 const menuSyncStateByAccount = new Map<string, MenuSyncState>();
-const PAIRING_NOTIFY_PUMP_INTERVAL_MS = Math.max(1_000, Number(process.env.WEMP_PAIRING_NOTIFY_PUMP_INTERVAL_MS || 5_000));
-const HANDOFF_NOTIFY_PUMP_INTERVAL_MS = Math.max(1_000, Number(process.env.WEMP_HANDOFF_NOTIFY_PUMP_INTERVAL_MS || 5_000));
+const PAIRING_NOTIFY_PUMP_INTERVAL_MS = Math.max(
+  1_000,
+  Number(process.env.WEMP_PAIRING_NOTIFY_PUMP_INTERVAL_MS || 5_000),
+);
+const HANDOFF_NOTIFY_PUMP_INTERVAL_MS = Math.max(
+  1_000,
+  Number(process.env.WEMP_HANDOFF_NOTIFY_PUMP_INTERVAL_MS || 5_000),
+);
 let pairingNotifyPumpTimer: ReturnType<typeof setInterval> | null = null;
 let handoffNotifyPumpTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -186,11 +211,12 @@ function isBlockedIpv6Host(hostname: string): boolean {
   if (normalized === "::" || normalized === "::1") return true;
   if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
   if (
-    normalized.startsWith("fe8")
-    || normalized.startsWith("fe9")
-    || normalized.startsWith("fea")
-    || normalized.startsWith("feb")
-  ) return true;
+    normalized.startsWith("fe8") ||
+    normalized.startsWith("fe9") ||
+    normalized.startsWith("fea") ||
+    normalized.startsWith("feb")
+  )
+    return true;
   if (normalized.startsWith("::ffff:")) {
     const mappedIpv4 = normalized.slice("::ffff:".length);
     return isBlockedIpv4Host(mappedIpv4);
@@ -203,7 +229,8 @@ function isBlockedLocalHostname(hostname: string): boolean {
   if (!normalized) return true;
   if (normalized === "localhost" || normalized.endsWith(".localhost")) return true;
   if (normalized.endsWith(".local")) return true;
-  if (normalized === "host.docker.internal" || normalized === "gateway.docker.internal") return true;
+  if (normalized === "host.docker.internal" || normalized === "gateway.docker.internal")
+    return true;
   return false;
 }
 
@@ -221,7 +248,9 @@ function validateOutboundMediaUrl(input: string): URL {
   if (parsed.protocol !== "https:") {
     throw new Error(`wemp_media_url_rejected:unsupported_protocol:${parsed.protocol}`);
   }
-  const hostname = String(parsed.hostname || "").trim().toLowerCase();
+  const hostname = String(parsed.hostname || "")
+    .trim()
+    .toLowerCase();
   if (!hostname) {
     throw new Error("wemp_media_url_rejected:missing_host");
   }
@@ -241,18 +270,24 @@ function validateOutboundMediaUrl(input: string): URL {
 }
 
 function normalizeContentType(contentType: string): string {
-  return String(contentType || "").split(";")[0]!.trim().toLowerCase();
+  return String(contentType || "")
+    .split(";")[0]!
+    .trim()
+    .toLowerCase();
 }
 
 function inferMediaTypeFromPathname(pathname: string): WempOutboundMediaType | null {
   const fileName = pathname.split("/").pop() || "";
   const suffix = fileName.includes(".") ? fileName.split(".").pop() : "";
-  const ext = String(suffix || "").trim().toLowerCase();
+  const ext = String(suffix || "")
+    .trim()
+    .toLowerCase();
   if (!ext) return null;
   if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext)) return "image";
   if (["amr", "mp3", "wav", "m4a", "aac", "ogg", "opus"].includes(ext)) return "voice";
   if (["mp4", "mov", "mkv", "avi", "webm"].includes(ext)) return "video";
-  if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip"].includes(ext)) return "file";
+  if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "zip"].includes(ext))
+    return "file";
   return null;
 }
 
@@ -300,7 +335,10 @@ async function sendCustomMediaMessage(
   return sendCustomImageMessage(account, target, mediaId);
 }
 
-async function probeWempAccount(account: ResolvedWempAccount, timeoutMs: number): Promise<{
+async function probeWempAccount(
+  account: ResolvedWempAccount,
+  timeoutMs: number,
+): Promise<{
   ok: boolean;
   timedOut: boolean;
   elapsedMs: number;
@@ -324,14 +362,16 @@ async function probeWempAccount(account: ResolvedWempAccount, timeoutMs: number)
   };
 }
 
-function collectWempStatusIssues(accounts: Array<{
-  accountId?: string;
-  enabled?: boolean;
-  configured?: boolean;
-  running?: boolean;
-  connected?: boolean;
-  lastError?: string | null;
-}>): ChannelStatusIssue[] {
+function collectWempStatusIssues(
+  accounts: Array<{
+    accountId?: string;
+    enabled?: boolean;
+    configured?: boolean;
+    running?: boolean;
+    connected?: boolean;
+    lastError?: string | null;
+  }>,
+): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const account of accounts) {
     const accountId = String(account.accountId || "default");
@@ -408,8 +448,10 @@ function syncMenuForAccount(account: ResolvedWempAccount, ctx: AccountLifecycleC
   const accountSignature = buildAccountConfigSignature(account);
   const menuSignature = buildMenuConfigSignature(menuFeature);
   const previousMenuSyncState = menuSyncStateByAccount.get(account.accountId);
-  const accountConfigChanged = !previousMenuSyncState || previousMenuSyncState.accountSignature !== accountSignature;
-  const menuConfigChanged = !previousMenuSyncState || previousMenuSyncState.menuSignature !== menuSignature;
+  const accountConfigChanged =
+    !previousMenuSyncState || previousMenuSyncState.accountSignature !== accountSignature;
+  const menuConfigChanged =
+    !previousMenuSyncState || previousMenuSyncState.menuSignature !== menuSignature;
   const shouldSyncMenu = menuFeature.enabled
     ? accountConfigChanged || menuConfigChanged
     : Boolean(previousMenuSyncState && menuConfigChanged);
@@ -508,10 +550,15 @@ function activateAccountRuntime(
   phase: "startAccount" | "reloadAccount",
 ): void {
   const runtimeCandidate = ctx.runtime || ctx;
-  if (runtimeCandidate && typeof (runtimeCandidate as Record<string, unknown>).channel === "object") {
+  if (
+    runtimeCandidate &&
+    typeof (runtimeCandidate as Record<string, unknown>).channel === "object"
+  ) {
     setWempRuntime(runtimeCandidate as import("openclaw/plugin-sdk").PluginRuntime);
   } else {
-    ctx.log?.warn?.(`[wemp:${account.accountId}] runtime dispatchInbound unavailable on ${phase} context`);
+    ctx.log?.warn?.(
+      `[wemp:${account.accountId}] runtime dispatchInbound unavailable on ${phase} context`,
+    );
   }
   const registered = registerWempWebhook(account);
   mergeRuntimeSnapshot(account.accountId, ctx.getStatus());
@@ -601,11 +648,15 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
           ...next,
           channels: {
             ...next.channels,
-            wemp: { ...(next.channels as Record<string, unknown>)?.wemp as Record<string, unknown>, ...accountPatch },
+            wemp: {
+              ...((next.channels as Record<string, unknown>)?.wemp as Record<string, unknown>),
+              ...accountPatch,
+            },
           },
         };
       }
-      const existingWemp = (next.channels as Record<string, unknown>)?.wemp as Record<string, unknown> ?? {};
+      const existingWemp =
+        ((next.channels as Record<string, unknown>)?.wemp as Record<string, unknown>) ?? {};
       const existingAccounts = (existingWemp.accounts ?? {}) as Record<string, unknown>;
       return {
         ...next,
@@ -616,7 +667,10 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
             enabled: true,
             accounts: {
               ...existingAccounts,
-              [accountId]: { ...(existingAccounts[accountId] as Record<string, unknown>), ...accountPatch },
+              [accountId]: {
+                ...(existingAccounts[accountId] as Record<string, unknown>),
+                ...accountPatch,
+              },
             },
           },
         },
@@ -652,10 +706,40 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
       configured: account.configured,
       webhookPath: account.webhookPath,
     }),
-    setAccountEnabled: ({ cfg, accountId, enabled }: { cfg: OpenClawConfig; accountId: string; enabled: boolean }) =>
-      setAccountEnabledInConfigSection({ cfg, channelKey: "wemp", accountId, enabled }),
-    deleteAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-      deleteAccountFromConfigSection({ cfg, channelKey: "wemp", accountId }),
+    setAccountEnabled: ({
+      cfg,
+      accountId,
+      enabled,
+    }: {
+      cfg: OpenClawConfig;
+      accountId: string;
+      enabled: boolean;
+    }) => {
+      const isDefault = !accountId || accountId === "default";
+      const channels = cfg.channels as Record<string, unknown> | undefined;
+      const base = (channels?.wemp ?? {}) as Record<string, unknown>;
+      if (isDefault) {
+        // "default" account maps to the top-level wemp config
+        return {
+          ...cfg,
+          channels: { ...cfg.channels, wemp: { ...base, enabled } },
+        } as OpenClawConfig;
+      }
+      return setAccountEnabledInConfigSection({ cfg, sectionKey: "wemp", accountId, enabled });
+    },
+    deleteAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
+      const isDefault = !accountId || accountId === "default";
+      const channels = cfg.channels as Record<string, unknown> | undefined;
+      const base = (channels?.wemp ?? {}) as Record<string, unknown>;
+      if (isDefault) {
+        // "Deleting" the default account disables the top-level config
+        return {
+          ...cfg,
+          channels: { ...cfg.channels, wemp: { ...base, enabled: false } },
+        } as OpenClawConfig;
+      }
+      return deleteAccountFromConfigSection({ cfg, sectionKey: "wemp", accountId });
+    },
     resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) => {
       const account = resolveWempAccount(cfg, accountId ?? undefined);
       return account.dm.allowFrom;
@@ -674,7 +758,17 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
       if (!target) return { ok: false as const, error: new Error("empty target openId") };
       return { ok: true as const, to: target };
     },
-    sendText: async ({ cfg, to, text, accountId }: { cfg: OpenClawConfig; to: string; text: string; accountId?: string | null }) => {
+    sendText: async ({
+      cfg,
+      to,
+      text,
+      accountId,
+    }: {
+      cfg: OpenClawConfig;
+      to: string;
+      text: string;
+      accountId?: string | null;
+    }) => {
       const account = resolveWempAccount(cfg, accountId ?? undefined);
       const result = await sendText(account, to, text);
       if (!result.ok) {
@@ -686,7 +780,19 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         messageId: buildTextReceiptMessageId(result),
       };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId }: { cfg: OpenClawConfig; to: string; text: string; mediaUrl?: string; accountId?: string | null }) => {
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      accountId,
+    }: {
+      cfg: OpenClawConfig;
+      to: string;
+      text: string;
+      mediaUrl?: string;
+      accountId?: string | null;
+    }) => {
       const account = resolveWempAccount(cfg, accountId ?? undefined);
       let mediaOnlyMessageId: string | null = null;
       if (mediaUrl) {
@@ -695,7 +801,9 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         try {
           mediaResponse = await fetch(validatedUrl.toString(), { redirect: "error" });
         } catch (error) {
-          throw new Error(`wemp_media_download_failed:${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(
+            `wemp_media_download_failed:${error instanceof Error ? error.message : String(error)}`,
+          );
         }
         if (!mediaResponse.ok) {
           throw new Error(`wemp_media_download_failed:http_${mediaResponse.status}`);
@@ -709,7 +817,9 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         const filename = resolveOutboundFilename(validatedUrl.pathname, mediaType);
         const uploaded = await uploadTempMedia(account, mediaType, bytes, filename);
         if (!uploaded.ok) {
-          throw new Error(`wemp_media_upload_failed:${uploaded.errcode ?? "unknown"}:${uploaded.errmsg ?? "unknown"}`);
+          throw new Error(
+            `wemp_media_upload_failed:${uploaded.errcode ?? "unknown"}:${uploaded.errmsg ?? "unknown"}`,
+          );
         }
         const mediaId = uploaded.data?.media_id;
         if (!mediaId) {
@@ -718,7 +828,9 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
 
         const sent = await sendCustomMediaMessage(account, to, mediaType, mediaId);
         if (!sent.ok) {
-          throw new Error(`wemp_media_send_failed:${sent.errcode ?? "unknown"}:${sent.errmsg ?? "unknown"}`);
+          throw new Error(
+            `wemp_media_send_failed:${sent.errcode ?? "unknown"}:${sent.errmsg ?? "unknown"}`,
+          );
         }
         const upstreamMediaId = extractMessageIdFromData(sent.data);
         mediaOnlyMessageId = upstreamMediaId
@@ -784,9 +896,13 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         }
         return new Promise<void>((resolve) => {
           resolver = resolve;
-          ctx.abortSignal.addEventListener("abort", () => {
-            runCleanup();
-          }, { once: true });
+          ctx.abortSignal.addEventListener(
+            "abort",
+            () => {
+              runCleanup();
+            },
+            { once: true },
+          );
         });
       };
 
@@ -847,7 +963,9 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
             ...connectedSnapshot,
             ...errorSnapshot,
           });
-          ctx.log?.warn?.(`[wemp:${accountId}] ${rollbackMessage}; restored webhook ${registered.path}`);
+          ctx.log?.warn?.(
+            `[wemp:${accountId}] ${rollbackMessage}; restored webhook ${registered.path}`,
+          );
           return;
         }
         unregisterWempWebhookByAccountId(accountId);
@@ -918,7 +1036,15 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         };
       }
     },
-    buildAccountSnapshot: ({ account, runtime, probe }: { account: ResolvedWempAccount; runtime?: unknown; probe?: unknown }) => {
+    buildAccountSnapshot: ({
+      account,
+      runtime,
+      probe,
+    }: {
+      account: ResolvedWempAccount;
+      runtime?: unknown;
+      probe?: unknown;
+    }) => {
       const mergedRuntime = mergeRuntimeSnapshot(account.accountId, runtime);
       return {
         accountId: account.accountId,
