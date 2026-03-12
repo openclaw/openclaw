@@ -8,6 +8,7 @@ import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { inspectPortUsage } from "../infra/ports.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
@@ -304,6 +305,46 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
   return detail.includes("not running");
 }
 
+/**
+ * Wait for a TCP port to be released (not listening) on Windows.
+ * Polls the port until it's free or the timeout expires.
+ *
+ * This is necessary because after killing a process, Windows may keep the
+ * port in TIME_WAIT state for 30-120 seconds, causing EADDRINUSE errors
+ * when trying to restart a service on the same port.
+ */
+async function waitForPortFree(
+  port: number,
+  timeoutMs: number = 30000,
+  intervalMs: number = 200,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let elapsed = 0;
+
+  while (Date.now() < deadline) {
+    try {
+      const portUsage = await inspectPortUsage(port);
+      if (portUsage.status !== "busy" || portUsage.listeners.length === 0) {
+        // Port is free
+        return;
+      }
+    } catch {
+      // inspectPortUsage failed, assume port might be free and continue
+      return;
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    elapsed += intervalMs;
+  }
+
+  // Timeout reached - port still in use
+  throw new Error(
+    `Port ${port} still in use after ${timeoutMs}ms waiting for release. ` +
+      `This may indicate a stale process is holding the port.`,
+  );
+}
+
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
@@ -320,7 +361,24 @@ export async function restartScheduledTask({
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
+  const port = parseInt((env ?? process.env).OPENCLAW_GATEWAY_PORT || "18789", 10);
+
+  // 1. End the scheduled task
   await execSchtasks(["/End", "/TN", taskName]);
+
+  // 2. Wait for the port to be released (Windows TIME_WAIT delay)
+  // This prevents EADDRINUSE errors when the new instance tries to bind
+  try {
+    await waitForPortFree(port, 30000, 200);
+  } catch (err) {
+    // Log warning but continue - the restart may still succeed if the
+    // port is released shortly after or if the error is a false positive
+    stdout.write(
+      `${formatLine("Warning", String((err as Error).message))}\n`,
+    );
+  }
+
+  // 3. Start new instance
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
