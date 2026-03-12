@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathExists } from "../utils.js";
+import { applyPathPrepend } from "./path-prepend.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -18,6 +19,60 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+
+async function resolvePortableGitPathPrepend(
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<string[]> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+  const localAppData = env?.LOCALAPPDATA?.trim() || process.env.LOCALAPPDATA?.trim();
+  if (!localAppData) {
+    return [];
+  }
+  const portableGitRoot = path.join(localAppData, "OpenClaw", "deps", "portable-git");
+  const candidates = [
+    path.join(portableGitRoot, "mingw64", "bin"),
+    path.join(portableGitRoot, "usr", "bin"),
+    path.join(portableGitRoot, "cmd"),
+    path.join(portableGitRoot, "bin"),
+  ];
+  const existing: string[] = [];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      existing.push(candidate);
+    }
+  }
+  return existing;
+}
+
+function applyWindowsPackageInstallEnv(env: Record<string, string>) {
+  if (process.platform !== "win32") {
+    return;
+  }
+  env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
+  env.NPM_CONFIG_FUND = "false";
+  env.NPM_CONFIG_AUDIT = "false";
+  env.NPM_CONFIG_SCRIPT_SHELL = "cmd.exe";
+  env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
+}
+
+export async function createGlobalInstallEnv(
+  env?: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  const pathPrepend = await resolvePortableGitPathPrepend(env);
+  if (pathPrepend.length === 0 && process.platform !== "win32") {
+    return env;
+  }
+  const merged = Object.fromEntries(
+    Object.entries(env ?? process.env)
+      .filter(([, value]) => value != null)
+      .map(([key, value]) => [key, String(value)]),
+  ) as Record<string, string>;
+  applyPathPrepend(merged, pathPrepend);
+  applyWindowsPackageInstallEnv(merged);
+  return merged;
+}
 
 async function tryRealpath(targetPath: string): Promise<string> {
   try {
