@@ -576,6 +576,104 @@ describe("runEmbeddedPiAgent tool-result payload preservation", () => {
       ]);
     });
   });
+
+  it("preserves tool-result metadata in final payloads when the caller is not streaming them", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "Approval required.",
+              channelData: {
+                execApproval: {
+                  approvalId: "117ba06d-1111-2222-3333-444444444444",
+                  approvalSlug: "117ba06d",
+                  allowedDecisions: ["allow-once", "allow-always", "deny"],
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-metadata",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-metadata",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "117ba06d-1111-2222-3333-444444444444",
+              approvalSlug: "117ba06d",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        },
+      ]);
+    });
+  });
+
+  it("does not re-emit buffered tool-result payloads when the caller already streamed them", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const onToolResult = vi.fn();
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "generated image",
+              mediaUrls: ["https://example.com/generated.png"],
+            },
+          ],
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-streamed",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-streamed",
+        onToolResult,
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "ok",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          isError: undefined,
+          replyToId: undefined,
+          replyToTag: false,
+          replyToCurrent: false,
+          audioAsVoice: false,
+        },
+      ]);
+      expect(onToolResult).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {

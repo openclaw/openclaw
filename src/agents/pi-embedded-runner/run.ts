@@ -1519,7 +1519,8 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
-          const payloads = [...attempt.toolResultPayloads, ...assistantPayloads];
+          const bufferedToolResultPayloads = params.onToolResult ? [] : attempt.toolResultPayloads;
+          const payloads = [...bufferedToolResultPayloads, ...assistantPayloads];
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so

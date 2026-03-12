@@ -8,6 +8,7 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -2184,8 +2185,7 @@ export async function runEmbeddedAttempt(
         });
       };
 
-      const toolResultPayloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }> =
-        [];
+      const toolResultPayloads: ReplyPayload[] = [];
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -2197,20 +2197,30 @@ export async function runEmbeddedAttempt(
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: (payload) => {
-          const entry: { text?: string; mediaUrl?: string; mediaUrls?: string[] } = {};
-          if (typeof payload.text === "string" && payload.text.trim()) {
-            entry.text = payload.text;
-          }
-          if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()) {
-            entry.mediaUrl = payload.mediaUrl;
-          }
-          if (Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0) {
-            entry.mediaUrls = payload.mediaUrls;
-          }
+          const entry: ReplyPayload = {
+            ...payload,
+            text:
+              typeof payload.text === "string" && payload.text.trim() ? payload.text : undefined,
+            mediaUrl:
+              typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
+                ? payload.mediaUrl
+                : undefined,
+            mediaUrls:
+              Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0
+                ? payload.mediaUrls
+                : undefined,
+          };
           if (
             entry.text !== undefined ||
             entry.mediaUrl !== undefined ||
-            entry.mediaUrls !== undefined
+            entry.mediaUrls !== undefined ||
+            entry.channelData !== undefined ||
+            entry.audioAsVoice === true ||
+            entry.replyToId !== undefined ||
+            entry.replyToTag !== undefined ||
+            entry.replyToCurrent !== undefined ||
+            entry.isError === true ||
+            entry.isReasoning === true
           ) {
             toolResultPayloads.push(entry);
           }
