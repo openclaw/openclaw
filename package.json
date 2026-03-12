@@ -420,7 +420,7 @@
     "node-llama-cpp": "3.16.2"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.16.0"
   },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
