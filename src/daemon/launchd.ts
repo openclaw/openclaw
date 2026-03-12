@@ -357,13 +357,95 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
+const RESTART_PID_WAIT_TIMEOUT_MS = 10_000;
+const RESTART_PID_WAIT_INTERVAL_MS = 200;
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Poll until the process exits or the timeout elapses.
+ * Returns true if the process exited within the timeout, false if it is
+ * still alive after the deadline.
+ */
+async function waitForPidExit(pid: number): Promise<boolean> {
+  if (!Number.isFinite(pid) || pid <= 1) {
+    return true;
+  }
+  const deadline = Date.now() + RESTART_PID_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ESRCH" || code === "EPERM") {
+        return true;
+      }
+      return true;
+    }
+    await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
+  }
+  return false;
+}
+
+/**
+ * Ensure the process is dead: wait for it to exit gracefully, then
+ * SIGKILL if it is still running after the timeout.
+ * Returns true if the process is confirmed gone, false if SIGKILL also
+ * failed (e.g. permission denied or the PID was already recycled).
+ */
+async function ensurePidGone(pid: number): Promise<boolean> {
+  const exited = await waitForPidExit(pid);
+  if (exited) {
+    return true;
+  }
+
+  // Process is still alive after SIGTERM timeout — send SIGKILL.
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // ESRCH means it exited between our check and the kill call — that is fine.
+    return true;
+  }
+
+  // Give the OS a moment to reap the process after SIGKILL.
+  const killDeadline = Date.now() + 3_000;
+  while (Date.now() < killDeadline) {
+    await sleepMs(100);
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
+
+  // Capture the PID before bootout so we can wait for the process to exit.
+  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
+  const currentPid =
+    runtime.code === 0
+      ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
+      : undefined;
+
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
   }
+
+  // Wait for the process to actually exit; SIGKILL as fallback.
+  if (typeof currentPid === "number") {
+    await ensurePidGone(currentPid);
+  }
+
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
