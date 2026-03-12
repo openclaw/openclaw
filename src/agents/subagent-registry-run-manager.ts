@@ -53,6 +53,7 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  extraSystemPrompt?: string;
 };
 
 export function createSubagentRunManager(params: {
@@ -336,6 +337,7 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      extraSystemPrompt: registerParams.extraSystemPrompt,
     };
     params.runs.set(runId, entry);
     try {

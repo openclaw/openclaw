@@ -41,4 +41,11 @@ export type SubagentRunRecord = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  /**
+   * The full extraSystemPrompt that was passed to the initial agent dispatch,
+   * including any attachment-specific suffix appended after buildSubagentSystemPrompt.
+   * Stored so that restart-recovery redispatch can restore the original prompt verbatim
+   * rather than rebuilding it (which would omit attachment suffixes).
+   */
+  extraSystemPrompt?: string;
 };
