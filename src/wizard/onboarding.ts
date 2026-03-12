@@ -531,8 +531,9 @@ export async function runOnboardingWizard(
     });
   }
 
-  // Web scraping provider setup (after search so Firecrawl auth state is known).
-  if (!opts.skipSearch) {
+  // Web scraping provider setup (runs after search so Firecrawl auth state is known,
+  // but always runs — even when search is skipped the user can still pick a scrape provider).
+  {
     const { setupFetch } = await import("../commands/onboard-fetch.js");
     nextConfig = await setupFetch(nextConfig, prompter, {
       quickstartDefaults: flow === "quickstart",
