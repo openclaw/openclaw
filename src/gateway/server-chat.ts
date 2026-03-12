@@ -22,9 +22,14 @@ function resolveHeartbeatAckMaxChars(): number {
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
   const primary = getAgentRunContext(runId);
-  if (primary?.isHeartbeat) {
+
+  // If primary run is NOT a heartbeat, this is an interactive user message
+  // Don't hide output - user is actively communicating
+  if (!primary?.isHeartbeat) {
     return primary;
   }
+
+  // Primary IS a heartbeat - check sourceRunId for context
   if (sourceRunId && sourceRunId !== runId) {
     const source = getAgentRunContext(sourceRunId);
     if (source?.isHeartbeat) {
