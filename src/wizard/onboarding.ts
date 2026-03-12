@@ -1,6 +1,5 @@
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -15,6 +14,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
