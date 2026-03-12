@@ -34,6 +34,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { ensureAuthProfileStore } from "../../auth-profiles.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -50,6 +51,7 @@ import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { createGigachatStreamFn } from "../../gigachat-stream.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -1519,6 +1521,26 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = ollamaStreamFn;
         ensureCustomApiRegistered(params.model.api, ollamaStreamFn);
+      } else if (normalizeProviderId(params.provider) === "gigachat") {
+        const providerConfig = params.config?.models?.providers?.[params.provider];
+        const baseUrl =
+          (typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined) ??
+          (typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined) ??
+          process.env.GIGACHAT_BASE_URL?.trim() ??
+          "https://gigachat.devices.sberbank.ru/api/v1";
+
+        // Read GigaChat-specific config from auth profile credential metadata.
+        const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+        const gigachatCred = gigachatStore.profiles["gigachat:default"];
+        const gigachatMeta = gigachatCred?.type === "api_key" ? gigachatCred.metadata : undefined;
+
+        const gigachatStreamFn = createGigachatStreamFn({
+          baseUrl,
+          authMode: (gigachatMeta?.authMode as "oauth" | "basic") ?? "oauth",
+          insecureTls: gigachatMeta?.insecureTls === "true",
+          scope: gigachatMeta?.scope,
+        });
+        activeSession.agent.streamFn = gigachatStreamFn;
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
         if (wsApiKey) {

@@ -213,6 +213,30 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
   };
 }
 
+export const GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1";
+export const GIGACHAT_DEFAULT_MODEL_ID = "GigaChat-2-Max";
+export const GIGACHAT_DEFAULT_MODEL_REF = `gigachat/${GIGACHAT_DEFAULT_MODEL_ID}`;
+export const GIGACHAT_DEFAULT_CONTEXT_WINDOW = 128000;
+export const GIGACHAT_DEFAULT_MAX_TOKENS = 8192;
+export const GIGACHAT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildGigachatModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: GIGACHAT_DEFAULT_MODEL_ID,
+    name: "GigaChat 2 Max",
+    reasoning: false,
+    input: ["text"],
+    cost: GIGACHAT_DEFAULT_COST,
+    contextWindow: GIGACHAT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,
+  };
+}
+
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {
     id: KILOCODE_DEFAULT_MODEL_ID,

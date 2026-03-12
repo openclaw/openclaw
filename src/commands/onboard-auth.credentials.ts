@@ -16,6 +16,7 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export {
+  GIGACHAT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   MODELSTUDIO_DEFAULT_MODEL_REF,
@@ -527,7 +528,20 @@ export async function setMistralApiKey(
   });
 }
 
-export async function setKilocodeApiKey(
+export async function setGigachatApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+  metadata?: Record<string, string>,
+) {
+  upsertAuthProfile({
+    profileId: "gigachat:default",
+    credential: buildApiKeyCredential("gigachat", key, metadata, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export function setKilocodeApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,

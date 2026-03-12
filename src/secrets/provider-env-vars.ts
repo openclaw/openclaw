@@ -21,6 +21,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   qianfan: ["QIANFAN_API_KEY"],
   xai: ["XAI_API_KEY"],
   mistral: ["MISTRAL_API_KEY"],
+  gigachat: ["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"],
   kilocode: ["KILOCODE_API_KEY"],
   modelstudio: ["MODELSTUDIO_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],

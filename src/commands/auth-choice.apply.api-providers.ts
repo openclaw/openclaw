@@ -28,6 +28,8 @@ import {
   applyKimiCodeProviderConfig,
   applyLitellmConfig,
   applyLitellmProviderConfig,
+  applyGigachatConfig,
+  applyGigachatProviderConfig,
   applyMistralConfig,
   applyMistralProviderConfig,
   applyMoonshotConfig,
@@ -56,6 +58,7 @@ import {
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  GIGACHAT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -68,6 +71,7 @@ import {
   setKilocodeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
+  setGigachatApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeGoApiKey,
@@ -107,6 +111,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   together: "together-api-key",
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
+  gigachat: "gigachat-oauth",
   opencode: "opencode-zen",
   "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
@@ -742,6 +747,176 @@ export async function applyAuthChoiceApiProviders(
 
   if (authChoice === "huggingface-api-key") {
     return applyAuthChoiceHuggingface({ ...params, authChoice });
+  }
+
+  // Scope selected during personal/business flow, passed to gigachat-basic if needed
+  let gigachatBasicScope: string | undefined;
+
+  if (
+    authChoice === "gigachat-personal" ||
+    authChoice === "gigachat-business" ||
+    authChoice === "gigachat-oauth" ||
+    authChoice === "gigachat-api-key"
+  ) {
+    const isPersonal =
+      authChoice === "gigachat-personal" ||
+      authChoice === "gigachat-oauth" ||
+      authChoice === "gigachat-api-key";
+    const accountLabel = isPersonal ? "Personal" : "Business";
+
+    // For business, ask billing type first, then auth method.
+    // For personal, scope is fixed (GIGACHAT_API_PERS).
+    let gigachatScope: string;
+    if (isPersonal) {
+      gigachatScope = "GIGACHAT_API_PERS";
+    } else {
+      const billingChoice = String(
+        await params.prompter.select({
+          message: "Select billing type",
+          options: [
+            { value: "GIGACHAT_API_B2B", label: "Prepaid" },
+            { value: "GIGACHAT_API_CORP", label: "Postpaid" },
+          ],
+        }),
+      );
+      gigachatScope = billingChoice;
+    }
+
+    const selectedAuth = String(
+      await params.prompter.select({
+        message: `Select ${accountLabel} authentication method`,
+        options: [
+          { value: "oauth", label: "OAuth", hint: "credentials key → access token (recommended)" },
+          { value: "basic", label: "Basic auth", hint: "username + password + custom URL" },
+        ],
+      }),
+    );
+
+    if (selectedAuth === "basic") {
+      authChoice = "gigachat-basic";
+      gigachatBasicScope = gigachatScope;
+    } else {
+      const gigachatMetadata: Record<string, string> = {
+        authMode: "oauth",
+        scope: gigachatScope,
+        insecureTls: "true",
+      };
+
+      await ensureApiKeyFromOptionEnvOrPrompt({
+        token: params.opts?.token,
+        provider: "gigachat",
+        tokenProvider: normalizedTokenProvider,
+        secretInputMode: requestedSecretInputMode,
+        config: nextConfig,
+        expectedProviders: ["gigachat"],
+        envLabel: "GIGACHAT_CREDENTIALS",
+        promptMessage: "Enter GigaChat credentials key (from developers.sber.ru/studio)",
+        setCredential: async (apiKey, mode) => {
+          await setGigachatApiKey(
+            apiKey,
+            params.agentDir,
+            { secretInputMode: mode ?? requestedSecretInputMode },
+            gigachatMetadata,
+          );
+        },
+        noteMessage: [
+          `GigaChat ${accountLabel} (OAuth, ${gigachatScope}).`,
+          "Your credentials key will be exchanged for an access token automatically.",
+          "Get your key at: https://developers.sber.ru/studio/",
+        ].join("\n"),
+        noteTitle: `GigaChat (${accountLabel})`,
+        // GigaChat credentials are base64-encoded (end with "==") — the default
+        // normalizeApiKeyInput false-matches the trailing "=" as a shell assignment.
+        normalize: (value) => String(value ?? "").trim(),
+        validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+        prompter: params.prompter,
+      });
+
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId: "gigachat:default",
+        provider: "gigachat",
+        mode: "api_key",
+      });
+      await applyProviderDefaultModel({
+        defaultModel: GIGACHAT_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyGigachatConfig,
+        applyProviderConfig: applyGigachatProviderConfig,
+        noteDefault: GIGACHAT_DEFAULT_MODEL_REF,
+      });
+
+      return { config: nextConfig, agentModelOverride };
+    }
+  }
+
+  if (authChoice === "gigachat-basic") {
+    const envBaseUrl = process.env.GIGACHAT_BASE_URL?.trim() ?? "";
+    const envUser = process.env.GIGACHAT_USER?.trim() ?? "";
+    const envPassword = process.env.GIGACHAT_PASSWORD?.trim() ?? "";
+
+    let baseUrl = envBaseUrl;
+    if (!baseUrl) {
+      const baseUrlValue = await params.prompter.text({
+        message: "Enter GigaChat base URL",
+        initialValue: "https://gigachat.ift.sberdevices.ru/v1",
+        validate: (val) => (String(val ?? "").trim() ? undefined : "Base URL is required"),
+      });
+      baseUrl = String(baseUrlValue ?? "").trim();
+    }
+
+    let username = envUser;
+    if (!username) {
+      const usernameValue = await params.prompter.text({
+        message: "Enter GigaChat username",
+        validate: (val) => (String(val ?? "").trim() ? undefined : "Username is required"),
+      });
+      username = String(usernameValue ?? "").trim();
+    }
+
+    let password = envPassword;
+    if (!password) {
+      const passwordValue = await params.prompter.text({
+        message: "Enter GigaChat password",
+        validate: (val) => (String(val ?? "").trim() ? undefined : "Password is required"),
+      });
+      password = String(passwordValue ?? "").trim();
+    }
+
+    const basicMetadata: Record<string, string> = {
+      authMode: "basic",
+      insecureTls: "true",
+      ...(gigachatBasicScope ? { scope: gigachatBasicScope } : {}),
+    };
+
+    await setGigachatApiKey(
+      `${username}:${password}`,
+      params.agentDir,
+      { secretInputMode: requestedSecretInputMode },
+      basicMetadata,
+    );
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "gigachat:default",
+      provider: "gigachat",
+      mode: "api_key",
+    });
+    await applyProviderDefaultModel({
+      defaultModel: GIGACHAT_DEFAULT_MODEL_REF,
+      applyDefaultConfig: (cfg) => applyGigachatConfig(cfg, { baseUrl }),
+      applyProviderConfig: (cfg) => applyGigachatProviderConfig(cfg, { baseUrl }),
+      noteDefault: GIGACHAT_DEFAULT_MODEL_REF,
+    });
+
+    await params.prompter.note(
+      [
+        "GigaChat (Basic auth).",
+        `Base URL: ${baseUrl}`,
+        `Username: ${username}`,
+        ...(gigachatBasicScope ? [`Scope: ${gigachatBasicScope}`] : []),
+      ].join("\n"),
+      "GigaChat configured",
+    );
+
+    return { config: nextConfig, agentModelOverride };
   }
 
   return null;

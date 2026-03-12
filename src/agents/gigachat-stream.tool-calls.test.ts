@@ -1,0 +1,153 @@
+import { Readable } from "node:stream";
+import { describe, expect, it, vi } from "vitest";
+
+const updateToken = vi.fn(async () => {});
+const request = vi.fn();
+
+vi.mock("gigachat", () => {
+  class MockGigaChat {
+    _client = { request };
+    _accessToken = { access_token: "test-token" };
+
+    updateToken = updateToken;
+  }
+
+  return { GigaChat: MockGigaChat };
+});
+
+import { createGigachatStreamFn } from "./gigachat-stream.js";
+
+function createSseStream(lines: string[]): Readable {
+  return Readable.from(lines.map((line) => `${line}\n`));
+}
+
+describe("createGigachatStreamFn tool calling", () => {
+  it("round-trips sanitized tool names for streamed function calls", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream([
+        'data: {"choices":[{"delta":{"function_call":{"name":"llm_task"}}}]}',
+        'data: {"choices":[{"delta":{"function_call":{"arguments":"{\\"prompt\\":\\"hi\\"}"}}}]}',
+        "data: [DONE]",
+      ]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(updateToken).toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          functions: [
+            expect.objectContaining({
+              name: "llm_task",
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(event.role).toBe("assistant");
+    expect(event.stopReason).toBe("toolUse");
+    expect(event.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "llm-task",
+        arguments: { prompt: "hi" },
+      }),
+    ]);
+  });
+
+  it("sanitizes historical assistant/tool result names in the outbound request", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "llm-task",
+                arguments: { prompt: "hi" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolName: "llm-task",
+            content: "ok",
+          },
+        ],
+        tools: [
+          {
+            name: "llm-task",
+            description: "Run a task",
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { apiKey: "token" } as never,
+    );
+
+    const event = await stream.result();
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "assistant",
+              function_call: expect.objectContaining({ name: "llm_task" }),
+            }),
+            expect.objectContaining({
+              role: "function",
+              name: "llm_task",
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(event.content).toEqual([{ type: "text", text: "done" }]);
+  });
+});

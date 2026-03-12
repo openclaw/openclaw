@@ -118,6 +118,9 @@ importers:
       file-type:
         specifier: 21.3.1
         version: 21.3.1
+      gigachat:
+        specifier: ^0.0.18
+        version: 0.0.18
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
@@ -4609,6 +4612,9 @@ packages:
 
   getpass@0.1.7:
     resolution: {integrity: sha512-0fzj9JxOLfJ+XGLhR8ze3unN0KZCgZwiSSDz168VERjK8Wl8kVSdcu2kspd4s4wtAa1y/qrVRiAA0WclVsu0ng==}
+
+  gigachat@0.0.18:
+    resolution: {integrity: sha512-xolIdUv1DfX4KdvFNXy5rvDHnhb+Mao1jJS4Tk1aMELiMPsUDsWCPEl9VJU35A2HiUOt/RZcri6jDQhhMpEpuw==}
 
   gitignore-to-glob@0.3.0:
     resolution: {integrity: sha512-mk74BdnK7lIwDHnotHddx1wsjMOFIThpLY3cPNniJ/2fA/tlLzHnFxIdR+4sLOu5KGgQJdij4kjJ2RoUNnCNMA==}
@@ -11850,6 +11856,13 @@ snapshots:
   getpass@0.1.7:
     dependencies:
       assert-plus: 1.0.0
+
+  gigachat@0.0.18:
+    dependencies:
+      axios: 1.13.5
+      uuid: 11.1.0
+    transitivePeerDependencies:
+      - debug
 
   gitignore-to-glob@0.3.0: {}
 

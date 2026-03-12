@@ -22,6 +22,9 @@ describe("buildAuthChoiceOptions", () => {
     for (const value of [
       "github-copilot",
       "token",
+      "gigachat-api-key",
+      "gigachat-personal",
+      "gigachat-business",
       "zai-api-key",
       "xiaomi-api-key",
       "minimax-api",
@@ -104,5 +107,17 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(ollamaGroup).toBeDefined();
     expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
+  });
+
+  it("shows GigaChat in grouped provider selection", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const gigachatGroup = groups.find((group) => group.value === "gigachat");
+
+    expect(gigachatGroup).toBeDefined();
+    expect(gigachatGroup?.options.some((opt) => opt.value === "gigachat-personal")).toBe(true);
+    expect(gigachatGroup?.options.some((opt) => opt.value === "gigachat-business")).toBe(true);
   });
 });

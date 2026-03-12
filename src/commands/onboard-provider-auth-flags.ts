@@ -5,6 +5,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "anthropicApiKey"
   | "openaiApiKey"
   | "mistralApiKey"
+  | "gigachatApiKey"
   | "openrouterApiKey"
   | "kilocodeApiKey"
   | "aiGatewayApiKey"
@@ -60,6 +61,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--mistral-api-key",
     cliOption: "--mistral-api-key <key>",
     description: "Mistral API key",
+  },
+  {
+    optionKey: "gigachatApiKey",
+    authChoice: "gigachat-api-key",
+    cliFlag: "--gigachat-api-key",
+    cliOption: "--gigachat-api-key <key>",
+    description: "GigaChat credentials key",
   },
   {
     optionKey: "openrouterApiKey",

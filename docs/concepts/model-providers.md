@@ -100,6 +100,28 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
+### GigaChat
+
+- Provider: `gigachat`
+- Auth:
+  - OAuth-style credentials via `GIGACHAT_CREDENTIALS`
+  - Basic auth flow supported during onboarding
+- Example model: `gigachat/GigaChat-2-Max`
+- CLI:
+  - `openclaw onboard --auth-choice gigachat-personal`
+  - `openclaw onboard --auth-choice gigachat-business`
+  - `openclaw onboard --gigachat-api-key <credentials>`
+- Notes:
+  - OpenClaw uses a dedicated GigaChat runtime path because the provider does not support the full OpenAI-compatible tool/schema surface.
+  - Tool definitions may be simplified before being sent to GigaChat.
+  - Custom base URL and Basic auth flows are supported for environments that require them.
+
+```json5
+{
+  agents: { defaults: { model: { primary: "gigachat/GigaChat-2-Max" } } },
+}
+```
+
 ### Google Gemini (API key)
 
 - Provider: `google`
@@ -163,6 +185,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
+- GigaChat: `gigachat` (`GIGACHAT_CREDENTIALS`; Basic auth also supported via onboarding)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 

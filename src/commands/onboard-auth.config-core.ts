@@ -32,6 +32,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
+  GIGACHAT_DEFAULT_MODEL_REF,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -61,11 +62,14 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
+  buildGigachatModelDefinition,
   buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
   buildModelStudioModelDefinition,
+  GIGACHAT_BASE_URL,
+  GIGACHAT_DEFAULT_MODEL_ID,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
@@ -435,6 +439,36 @@ export function applyMistralProviderConfig(cfg: OpenClawConfig): OpenClawConfig 
 export function applyMistralConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMistralProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
+}
+
+export function applyGigachatProviderConfig(
+  cfg: OpenClawConfig,
+  opts?: { baseUrl?: string },
+): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[GIGACHAT_DEFAULT_MODEL_REF] = {
+    ...models[GIGACHAT_DEFAULT_MODEL_REF],
+    alias: models[GIGACHAT_DEFAULT_MODEL_REF]?.alias ?? "GigaChat",
+  };
+
+  const defaultModel = buildGigachatModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "gigachat",
+    api: "openai-completions",
+    baseUrl: opts?.baseUrl ?? GIGACHAT_BASE_URL,
+    defaultModel,
+    defaultModelId: GIGACHAT_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyGigachatConfig(
+  cfg: OpenClawConfig,
+  opts?: { baseUrl?: string },
+): OpenClawConfig {
+  const next = applyGigachatProviderConfig(cfg, opts);
+  return applyAgentDefaultModelPrimary(next, GIGACHAT_DEFAULT_MODEL_REF);
 }
 
 export { KILOCODE_BASE_URL };

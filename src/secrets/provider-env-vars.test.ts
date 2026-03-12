@@ -31,4 +31,13 @@ describe("provider env vars", () => {
     expect(env.Github_Token).toBeUndefined();
     expect(env.OPENCLAW_API_KEY).toBe("keep-me");
   });
+
+  it("includes GigaChat credential env vars in the known secret lists", () => {
+    expect(listKnownSecretEnvVarNames()).toEqual(
+      expect.arrayContaining(["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"]),
+    );
+    expect(listKnownProviderAuthEnvVarNames()).toEqual(
+      expect.arrayContaining(["GIGACHAT_CREDENTIALS", "GIGACHAT_PASSWORD"]),
+    );
+  });
 });

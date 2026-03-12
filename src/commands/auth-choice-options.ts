@@ -84,6 +84,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["mistral-api-key"],
   },
   {
+    value: "gigachat",
+    label: "GigaChat",
+    hint: "OAuth + Basic auth",
+    choices: ["gigachat-personal", "gigachat-business"],
+  },
+  {
     value: "volcengine",
     label: "Volcano Engine",
     hint: "API key",
@@ -216,6 +222,8 @@ const PROVIDER_AUTH_CHOICE_OPTION_LABELS: Partial<Record<AuthChoice, string>> = 
   "cloudflare-ai-gateway-api-key": "Cloudflare AI Gateway",
   "opencode-zen": "OpenCode Zen catalog",
   "opencode-go": "OpenCode Go catalog",
+  "gigachat-personal": "GigaChat Personal",
+  "gigachat-business": "GigaChat Business",
 };
 
 function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
@@ -328,6 +336,16 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     value: "modelstudio-api-key",
     label: "Coding Plan API Key for Global/Intl (subscription)",
     hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
+  },
+  {
+    value: "gigachat-personal",
+    label: "GigaChat Personal",
+    hint: "Individual developer account (OAuth)",
+  },
+  {
+    value: "gigachat-business",
+    label: "GigaChat Business",
+    hint: "Corporate account (OAuth or Basic auth)",
   },
   { value: "custom-api-key", label: "Custom Provider" },
 ];

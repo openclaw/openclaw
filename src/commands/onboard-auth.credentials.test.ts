@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   setByteplusApiKey,
   setCloudflareAiGatewayConfig,
+  setGigachatApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenaiApiKey,
@@ -229,5 +230,36 @@ describe("onboard auth credentials secret refs", () => {
     expect(parsed.profiles?.["opencode-go:default"]).toMatchObject({
       keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
     });
+  });
+
+  it("stores GigaChat metadata alongside an env-backed key ref", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-gigachat-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.GIGACHAT_CREDENTIALS = "gigachat-env-secret"; // pragma: allowlist secret
+
+    await setGigachatApiKey(
+      "gigachat-env-secret",
+      env.agentDir,
+      { secretInputMode: "ref" },
+      {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+        insecureTls: "false",
+      },
+    );
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown; metadata?: unknown }>;
+    }>(env.agentDir);
+
+    expect(parsed.profiles?.["gigachat:default"]).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "GIGACHAT_CREDENTIALS" },
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+        insecureTls: "false",
+      },
+    });
+    expect(parsed.profiles?.["gigachat:default"]?.key).toBeUndefined();
   });
 });
