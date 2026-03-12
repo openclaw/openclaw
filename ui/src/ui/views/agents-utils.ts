@@ -251,6 +251,27 @@ export function resolveEffectiveModelFallbacks(
   return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
 }
 
+export function buildPrimaryModelConfig(
+  primary: string,
+  existingModel?: unknown,
+): string | { primary: string; fallbacks?: string[] } {
+  const trimmedPrimary = primary.trim();
+  if (!trimmedPrimary) {
+    return "";
+  }
+  if (!existingModel || typeof existingModel !== "object" || Array.isArray(existingModel)) {
+    return trimmedPrimary;
+  }
+  const fallbacks = resolveModelFallbacks(existingModel);
+  if (fallbacks) {
+    return {
+      primary: trimmedPrimary,
+      fallbacks,
+    };
+  }
+  return trimmedPrimary;
+}
+
 function addModelId(target: Set<string>, value: unknown) {
   if (typeof value !== "string") {
     return;

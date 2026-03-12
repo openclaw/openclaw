@@ -69,6 +69,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import {
+  buildPrimaryModelConfig,
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
@@ -713,6 +714,22 @@ export function renderApp(state: AppViewState) {
                 },
                 onConfigReload: () => loadConfig(state),
                 onConfigSave: () => saveAgentsConfig(state),
+                onDefaultModelChange: (modelId) => {
+                  const basePath = ["agents", "defaults", "model"];
+                  if (!modelId) {
+                    removeConfigFormValue(state, basePath);
+                    return;
+                  }
+                  const currentConfig = getCurrentConfigValue() as {
+                    agents?: { defaults?: { model?: unknown } };
+                  } | null;
+                  const existing = currentConfig?.agents?.defaults?.model;
+                  updateConfigFormValue(
+                    state,
+                    basePath,
+                    buildPrimaryModelConfig(modelId, existing),
+                  );
+                },
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
@@ -780,16 +797,11 @@ export function renderApp(state: AppViewState) {
                     ? (list[index] as { model?: unknown })
                     : undefined;
                   const existing = entry?.model;
-                  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                    const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                    const next = {
-                      primary: modelId,
-                      ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                    };
-                    updateConfigFormValue(state, basePath, next);
-                  } else {
-                    updateConfigFormValue(state, basePath, modelId);
-                  }
+                  updateConfigFormValue(
+                    state,
+                    basePath,
+                    buildPrimaryModelConfig(modelId, existing),
+                  );
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
