@@ -30,6 +30,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /**
+   * Suppress prompt-mutating hook context (prepend/system append) for this attempt.
+   * Used as overflow-recovery fallback when external memory injections are too large.
+   */
+  suppressPromptHookContext?: boolean;
 };
 
 export type EmbeddedRunAttemptResult = {

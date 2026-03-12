@@ -133,11 +133,40 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedPiAgent(baseParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
+  });
+
+  it("retries once with prompt hook context suppressed before giving context_overflow", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0]).toMatchObject({
+      suppressPromptHookContext: false,
+    });
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]).toMatchObject({
+      suppressPromptHookContext: true,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "[context-overflow-recovery] Retrying with prompt hook context injection suppressed",
+    );
+    expect(result.meta.error?.kind).toBe("context_overflow");
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
@@ -177,6 +206,7 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
@@ -206,8 +236,8 @@ describe("overflow compaction in run loop", () => {
 
     // Compaction attempted 3 times (max)
     expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
-    // 4 attempts: 3 overflow+compact+retry cycles + final overflow → error
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    // 5 attempts: 3 overflow+compact+retry cycles + final overflow + suppress fallback attempt
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(5);
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
