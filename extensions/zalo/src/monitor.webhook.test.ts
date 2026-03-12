@@ -348,6 +348,27 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
+  it("still returns 401 before 415 when both secret and content-type are invalid", async () => {
+    const unregister = registerTarget({ path: "/hook-auth-before-type" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-auth-before-type`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
+            "content-type": "text/plain",
+          },
+          body: "not-json",
+        });
+
+        expect(response.status).toBe(401);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
   it("scopes DM pairing store reads and writes to accountId", async () => {
     const { core, readAllowFromStore, upsertPairingRequest } = createPairingAuthCore({
       pairingCreated: false,
