@@ -1,6 +1,6 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,7 +12,8 @@ function resolveWindowsBash() {
     process.env.GIT_BASH_PATH,
     process.env.ProgramW6432 && path.join(process.env.ProgramW6432, "Git", "bin", "bash.exe"),
     process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Git", "bin", "bash.exe"),
-    process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Git", "usr", "bin", "bash.exe"),
+    process.env.ProgramFiles &&
+      path.join(process.env.ProgramFiles, "Git", "usr", "bin", "bash.exe"),
     process.env["ProgramFiles(x86)"] &&
       path.join(process.env["ProgramFiles(x86)"], "Git", "bin", "bash.exe"),
     process.env["ProgramFiles(x86)"] &&
@@ -28,10 +29,7 @@ function resolveWindowsBash() {
   return null;
 }
 
-const shell =
-  process.platform === "win32"
-    ? resolveWindowsBash() ?? "bash"
-    : "bash";
+const shell = process.platform === "win32" ? (resolveWindowsBash() ?? "bash") : "bash";
 
 const result = spawnSync(shell, [scriptPath], {
   cwd: rootDir,
