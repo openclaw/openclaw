@@ -57,24 +57,33 @@ export function startRpcDaemon() {
             return;
           }
 
-          const cmd = resolveCommand(args);
+          const cmd = resolveCommand(sessionKey, args);
           if (!cmd) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(
               JSON.stringify({
-                stderr: `Unknown command: openclaw-tool ${args.join(" ")}\n`,
+                stderr: `Unknown command: openclaw-tool ${args.join(" ")}\n(Make sure the tool is available in your current agent context)\n`,
                 exitCode: 1,
               }),
             );
             return;
           }
 
-          // Instantiate the tool
-          const tool = cmd.toolDef.factory({ agentSessionKey: sessionKey });
-          const toolParams = cmd.toolDef.parseArgs(cmd.commandArgs);
+          // The tool is already instantiated for this session
+          const tool = cmd.tool;
+          const toolParams = cmd.commandArgs;
+
+          // Merge stdin if it exists (assuming the tool takes a "content" or "text" param, this is naive but works for some)
+          if (
+            payload.stdin &&
+            typeof payload.stdin === "string" &&
+            payload.stdin.trim().length > 0
+          ) {
+            toolParams["content"] = payload.stdin;
+          }
 
           // Execute (toolCallId is arbitrary for our CLI)
-          const result = await tool.execute("cli-runner", toolParams);
+          const result = await tool.execute("cli-runner", toolParams, undefined, undefined);
 
           // Result formatting
           let stdout = "";

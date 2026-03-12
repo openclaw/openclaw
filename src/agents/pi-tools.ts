@@ -611,8 +611,30 @@ export function createOpenClawCodingTools(options?: {
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
 
+  // ==========================================
+  // OpenClaw-Tool CLI-Centric Interception
+  // ==========================================
+  let finalTools = withAbort;
+  if (options?.sessionKey) {
+    const { stashSessionTools } = require("./cli-runner/registry.js");
+    stashSessionTools(options.sessionKey, finalTools);
+
+    // Filter out tools that should only be accessed via CLI
+    // We keep essential low-level tools (exec, fs) and let the CLI handle the rest.
+    const essentialToolNames = new Set([
+      "exec",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "process",
+      "bash",
+    ]);
+    finalTools = finalTools.filter((tool) => essentialToolNames.has(tool.name));
+  }
+
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return finalTools;
 }

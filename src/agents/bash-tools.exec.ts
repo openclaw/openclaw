@@ -208,7 +208,8 @@ export function createExecTool(
     name: "exec",
     label: "exec",
     description:
-      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents). " +
+      "\n\n[CRITICAL]: You operate in a highly streamlined shell environment. You have a universal command-line utility: `openclaw-tool`. Treat it exactly like `git` or `docker`. Do not look for separate function calls for system actions; use this exec tool to run `openclaw-tool --help` to intuitively discover and execute available actions within your current context.",
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
