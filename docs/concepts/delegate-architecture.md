@@ -18,7 +18,7 @@ A **delegate** is an OpenClaw agent that:
 - Has its **own identity** (email address, display name, calendar).
 - Acts **on behalf of** one or more humans — never pretends to be them.
 - Operates under **explicit permissions** granted by the organization's identity provider.
-- Follows **standing orders** (see [Standing Orders](/automation/standing-orders)) that define what it may do autonomously vs. what requires human approval.
+- Follows **standing orders** — rules defined in the agent's `AGENTS.md` that specify what it may do autonomously vs. what requires human approval (see [Cron Jobs](/automation/cron-jobs) for scheduled execution).
 
 The delegate model maps directly to how executive assistants work: they have their own credentials, send mail "on behalf of" their principal, and follow a defined scope of authority.
 
@@ -72,7 +72,7 @@ The delegate operates **autonomously** on a schedule, executing standing orders 
 
 This tier combines Tier 2 permissions with [Cron Jobs](/automation/cron-jobs) and standing orders.
 
-> **Security warning**: Tier 3 requires careful configuration of hard blocks — actions the agent must never take regardless of instruction. See [Standing Orders](/automation/standing-orders) for the approval gate pattern.
+> **Security warning**: Tier 3 requires careful configuration of hard blocks — actions the agent must never take regardless of instruction. Define these in the delegate's `SOUL.md` and `AGENTS.md` (see [Security guardrails](#security-guardrails) below).
 
 ## Setting up a delegate
 
@@ -274,7 +274,7 @@ A complete delegate configuration for an organizational assistant that handles e
 }
 ```
 
-The delegate's `AGENTS.md` defines its autonomous authority (see [Standing Orders](/automation/standing-orders)), and cron jobs drive its daily schedule (see [Cron Jobs](/automation/cron-jobs)).
+The delegate's `AGENTS.md` defines its autonomous authority — what it may do without asking, what requires approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
 ## Scaling pattern
 
