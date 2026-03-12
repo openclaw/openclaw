@@ -35,7 +35,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
   for (const session of sessions) {
     const usage = session.usage;
     const messageCounts = getMessageCountsWithFallback(usage);
-    if (!messageCounts || messageCounts.total === 0) {
+    if (!usage || !messageCounts || messageCounts.total === 0) {
       continue;
     }
     const start = usage.firstActivity ?? session.updatedAt;
