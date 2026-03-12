@@ -2,6 +2,7 @@ import type { ReplyToMode } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.telegram.js";
 import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { clearTelegramDispatchActive, markTelegramDispatchActive } from "./active-dispatches.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -10,6 +11,7 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 
 /** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
@@ -55,53 +57,63 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
     replyMedia?: TelegramMediaRef[],
   ) => {
-    const context = await buildTelegramMessageContext({
-      primaryCtx,
-      allMedia,
-      replyMedia,
-      storeAllowFrom,
-      options,
-      bot,
-      cfg,
-      account,
-      historyLimit,
-      groupHistories,
-      dmPolicy,
-      allowFrom,
-      groupAllowFrom,
-      ackReactionScope,
-      logger,
-      resolveGroupActivation,
-      resolveGroupRequireMention,
-      resolveTelegramGroupConfig,
-      sendChatActionHandler,
-    });
-    if (!context) {
-      return;
-    }
+    // Track this dispatch so sequentialize can bypass per-chat serialization
+    // for follow-up messages when steer mode is active.
+    const seqKey = getTelegramSequentialKey(primaryCtx);
+    markTelegramDispatchActive(seqKey);
     try {
-      await dispatchTelegramMessage({
-        context,
+      const context = await buildTelegramMessageContext({
+        primaryCtx,
+        allMedia,
+        replyMedia,
+        storeAllowFrom,
+        options,
         bot,
         cfg,
-        runtime,
-        replyToMode,
-        streamMode,
-        textLimit,
-        telegramCfg,
-        opts,
+        account,
+        historyLimit,
+        groupHistories,
+        dmPolicy,
+        allowFrom,
+        groupAllowFrom,
+        ackReactionScope,
+        logger,
+        resolveGroupActivation,
+        resolveGroupRequireMention,
+        resolveTelegramGroupConfig,
+        sendChatActionHandler,
       });
-    } catch (err) {
-      runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
-      try {
-        await bot.api.sendMessage(
-          context.chatId,
-          "Something went wrong while processing your request. Please try again.",
-          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
-        );
-      } catch {
-        // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
+      if (!context) {
+        return;
       }
+      try {
+        await dispatchTelegramMessage({
+          context,
+          bot,
+          cfg,
+          runtime,
+          replyToMode,
+          streamMode,
+          textLimit,
+          telegramCfg,
+          opts,
+        });
+      } catch (err) {
+        runtime.error?.(danger(`telegram message processing failed: ${String(err)}`));
+        try {
+          await bot.api.sendMessage(
+            context.chatId,
+            "Something went wrong while processing your request. Please try again.",
+            context.threadSpec?.id != null
+              ? { message_thread_id: context.threadSpec.id }
+              : undefined,
+          );
+        } catch {
+          // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
+        }
+      }
+    } finally {
+      clearTelegramDispatchActive(seqKey);
     }
   };
 };

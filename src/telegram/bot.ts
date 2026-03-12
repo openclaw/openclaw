@@ -5,6 +5,7 @@ import { Bot } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
+import { normalizeQueueMode } from "../auto-reply/reply/queue/normalize.js";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -28,6 +29,7 @@ import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { isTelegramDispatchActive } from "./active-dispatches.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -236,7 +238,26 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
   });
 
-  bot.use(sequentialize(getTelegramSequentialKey));
+  // Resolve whether steer mode is configured for Telegram (global or per-channel).
+  // When active, the sequentialize key is modified so follow-up messages can be
+  // processed concurrently — enabling the steer check in get-reply-run.ts to
+  // see the first run as active and inject the second message via agent.steer().
+  const telegramQueueMode =
+    normalizeQueueMode(
+      (cfg.messages?.queue?.byChannel as Record<string, string | undefined> | undefined)?.telegram,
+    ) ?? normalizeQueueMode(cfg.messages?.queue?.mode);
+  const isSteerMode = telegramQueueMode === "steer" || telegramQueueMode === "steer-backlog";
+
+  bot.use(
+    sequentialize((ctx) => {
+      const key = getTelegramSequentialKey(ctx);
+      if (isSteerMode && isTelegramDispatchActive(key)) {
+        const uid = resolveTelegramUpdateId(ctx) ?? Date.now();
+        return `${key}:steer:${uid}`;
+      }
+      return key;
+    }),
+  );
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
