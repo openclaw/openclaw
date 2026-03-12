@@ -185,7 +185,7 @@ Use any command-line TTS tool. The CLI provider is useful for local TTS engines 
 - `{{TtsOutputPath}}` — Full path where audio output should be written
 - `{{TtsOutputFormat}}` — Output format (`pcm` for telephony, `opus` for voice note, `mp3` otherwise)
 
-If the CLI command exit with non-zero code, OpenClaw automatically falls back to the next configured provider. You may need to enlarge `timeoutMs` if local CLI is slow.
+If the CLI command exits with non-zero code, OpenClaw automatically falls back to the next configured provider. You may need to enlarge `timeoutMs` if local CLI is slow.
 
 ### Custom limits + prefs path
 
