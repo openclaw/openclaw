@@ -201,12 +201,13 @@ describe("applyAuthChoiceOpenAI", () => {
     const env = await setupAuthTestEnv("openclaw-openai-");
     lifecycle.setStateDir(env.stateDir);
     await writeCodexCliAuth(env.stateDir, { accountId: "acct-123" });
+    const callbackExpires = Date.now() + 60_000;
 
     vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
       provider: "openai-codex",
       access: "callback-access",
       refresh: "callback-refresh",
-      expires: Date.now() + 60_000,
+      expires: callbackExpires,
       accountId: "acct-123",
       email: "callback@example.com",
     });
@@ -236,11 +237,15 @@ describe("applyAuthChoiceOpenAI", () => {
     });
 
     const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, { access?: string; refresh?: string; accountId?: string }>;
+      profiles?: Record<
+        string,
+        { access?: string; refresh?: string; expires?: number; accountId?: string }
+      >;
     }>(env.agentDir);
     expect(parsed.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
       access: "file-access",
       refresh: "file-refresh",
+      expires: callbackExpires,
       accountId: "acct-123",
     });
   });

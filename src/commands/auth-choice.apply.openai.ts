@@ -79,7 +79,7 @@ async function resolveOpenAICodexWriteCredentials(
     ...callbackCreds,
     access: codexCliCreds.access,
     refresh: codexCliCreds.refresh,
-    expires: codexCliCreds.expires,
+    // auth.json only gives us a file-mtime-based expiry heuristic; keep the callback metadata.
     ...(cliAccountId ? { accountId: cliAccountId } : {}),
   };
 }
