@@ -64,6 +64,18 @@ describe("validateBrowserURL", () => {
     expect(() => validateBrowserURL("http://192.168.1.1/")).toThrow("Blocked");
   });
 
+  it("rejects CGN range 100.64.0.0/10", () => {
+    expect(() => validateBrowserURL("http://100.64.0.1/")).toThrow("Blocked");
+  });
+
+  it("rejects CGN range 100.127.255.254", () => {
+    expect(() => validateBrowserURL("http://100.127.255.254/")).toThrow("Blocked");
+  });
+
+  it("allows non-CGN 100.128.0.1", () => {
+    expect(() => validateBrowserURL("http://100.128.0.1/")).not.toThrow();
+  });
+
   // -------------------------------------------------------------------------
   // Valid public URLs
   // -------------------------------------------------------------------------

@@ -6,7 +6,7 @@
  * Both DockerProvider and GVisorProvider delegate browser automation here.
  * The helper generates self-contained Node.js scripts that:
  *   1. Use Playwright's chromium API inside the container
- *   2. Output JSON results wrapped in ---PW_RESULT--- / ---PW_END--- markers
+ *   2. Output JSON results wrapped in nonce-based markers (anti-spoofing)
  *   3. Embed user values via JSON.stringify (never raw shell interpolation)
  */
 
@@ -34,9 +34,20 @@ const NAVIGATE_TIMEOUT_BUFFER = 5_000;
 const DEFAULT_VIEWPORT_WIDTH = 1280;
 const DEFAULT_VIEWPORT_HEIGHT = 720;
 
-/** Stdout markers to isolate JSON output from Node.js/Playwright noise. */
-const RESULT_START = "---PW_RESULT---";
-const RESULT_END = "---PW_END---";
+/**
+ * Generate a per-invocation nonce-based marker to prevent untrusted page
+ * content from spoofing the result boundary. Each call returns a unique
+ * pair so collisions with page output are infeasible.
+ */
+function generateMarkers(): { start: string; end: string } {
+  const nonce = Array.from({ length: 16 }, () => Math.floor(Math.random() * 36).toString(36)).join(
+    "",
+  );
+  return {
+    start: `---PW_RESULT_${nonce}---`,
+    end: `---PW_END_${nonce}---`,
+  };
+}
 
 export class ExecBrowserHelper {
   private readonly execFn: ExecFn;
@@ -67,16 +78,16 @@ export class ExecBrowserHelper {
   }
 
   /**
-   * Extract JSON from stdout. Prefers content between PW markers; falls back
+   * Extract JSON from stdout using the provided markers. Falls back
    * to parsing the entire string. Throws descriptive error on failure.
    */
-  private parseResult<T>(stdout: string): T {
-    const startIdx = stdout.indexOf(RESULT_START);
-    const endIdx = stdout.lastIndexOf(RESULT_END);
+  private parseResult<T>(stdout: string, markers: { start: string; end: string }): T {
+    const startIdx = stdout.indexOf(markers.start);
+    const endIdx = stdout.lastIndexOf(markers.end);
 
     let jsonStr: string;
     if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-      jsonStr = stdout.substring(startIdx + RESULT_START.length, endIdx).trim();
+      jsonStr = stdout.substring(startIdx + markers.start.length, endIdx).trim();
     } else {
       jsonStr = stdout.trim();
     }
@@ -119,7 +130,11 @@ export class ExecBrowserHelper {
    * The body code has access to variables: `browser`, `page`, `session`.
    * It must assign the result to the `__result` variable.
    */
-  private connectScript(containerName: string, bodyCode: string): string {
+  private connectScript(
+    containerName: string,
+    bodyCode: string,
+    markers: { start: string; end: string },
+  ): string {
     const sessionFile = this.sessionFilePath(containerName);
     return `
 const fs = require('fs');
@@ -133,7 +148,7 @@ const { chromium } = require('playwright');
   const page = pages.length > 0 ? pages[0] : await ctx.newPage();
   let __result;
   ${bodyCode}
-  const output = ${JSON.stringify(RESULT_START)} + '\\n' + JSON.stringify(__result) + '\\n' + ${JSON.stringify(RESULT_END)};
+  const output = ${JSON.stringify(markers.start)} + '\\n' + JSON.stringify(__result) + '\\n' + ${JSON.stringify(markers.end)};
   process.stdout.write(output);
   await browser.disconnect();
 })().catch(e => { process.stderr.write(e.message); process.exit(1); });
@@ -181,6 +196,7 @@ const { chromium } = require('playwright');
     );
 
     // Wait briefly for Chromium to start, then read session file
+    const markers = generateMarkers();
     const catScript = `
 const fs = require('fs');
 (async () => {
@@ -190,7 +206,7 @@ const fs = require('fs');
       const data = fs.readFileSync(${JSON.stringify(sessionFile)}, 'utf8');
       const session = JSON.parse(data);
       if (session.wsEndpoint && session.pid) {
-        const output = ${JSON.stringify(RESULT_START)} + '\\n' + JSON.stringify(session) + '\\n' + ${JSON.stringify(RESULT_END)};
+        const output = ${JSON.stringify(markers.start)} + '\\n' + JSON.stringify(session) + '\\n' + ${JSON.stringify(markers.end)};
         process.stdout.write(output);
         return;
       }
@@ -204,7 +220,7 @@ const fs = require('fs');
 
     const stdout = await this.runScript(containerName, catScript, DEFAULT_LAUNCH_TIMEOUT);
 
-    const session = this.parseResult<{ wsEndpoint: string; pid: number }>(stdout);
+    const session = this.parseResult<{ wsEndpoint: string; pid: number }>(stdout, markers);
     return { sessionId: `exec-${session.pid}` };
   }
 
@@ -219,6 +235,7 @@ const fs = require('fs');
 
     const navTimeout = timeoutMs ?? 30_000;
     const execTimeout = navTimeout + NAVIGATE_TIMEOUT_BUFFER;
+    const markers = generateMarkers();
 
     const body = `
   await page.goto(${JSON.stringify(url)}, { timeout: ${navTimeout} });
@@ -227,11 +244,18 @@ const fs = require('fs');
 
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       execTimeout,
     );
 
-    return this.parseResult<{ url: string; title: string }>(stdout);
+    const result = this.parseResult<{ url: string; title: string }>(stdout, markers);
+
+    // Post-navigation SSRF check: validate the final URL after any redirects.
+    if (result.url !== url) {
+      validateBrowserURL(result.url);
+    }
+
+    return result;
   }
 
   async clickBrowser(containerName: string, _sessionId: string, selector: string): Promise<void> {
@@ -239,10 +263,10 @@ const fs = require('fs');
   await page.click(${JSON.stringify(selector)});
   __result = { ok: true };
 `;
-
+    const markers = generateMarkers();
     await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
   }
@@ -257,10 +281,10 @@ const fs = require('fs');
   await page.fill(${JSON.stringify(selector)}, ${JSON.stringify(text)});
   __result = { ok: true };
 `;
-
+    const markers = generateMarkers();
     await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
   }
@@ -276,14 +300,14 @@ const fs = require('fs');
   const buf = await page.screenshot({ fullPage: ${fullPage} });
   __result = { data: buf.toString('base64') };
 `;
-
+    const markers = generateMarkers();
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
 
-    const parsed = this.parseResult<{ data: string }>(stdout);
+    const parsed = this.parseResult<{ data: string }>(stdout, markers);
     return { data: Buffer.from(parsed.data, "base64") };
   }
 
@@ -292,14 +316,14 @@ const fs = require('fs');
   const evalResult = await page.evaluate(${JSON.stringify(expression)});
   __result = { result: String(evalResult) };
 `;
-
+    const markers = generateMarkers();
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
 
-    const parsed = this.parseResult<{ result: string }>(stdout);
+    const parsed = this.parseResult<{ result: string }>(stdout, markers);
     return parsed.result;
   }
 
@@ -315,13 +339,14 @@ const fs = require('fs');
   __result = { text, html };
 `;
 
+    const markers = generateMarkers();
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
 
-    return this.parseResult<{ text: string; html: string }>(stdout);
+    return this.parseResult<{ text: string; html: string }>(stdout, markers);
   }
 
   async waitForSelector(
@@ -341,14 +366,14 @@ const fs = require('fs');
     __result = { found: false };
   }
 `;
-
+    const markers = generateMarkers();
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       execTimeout,
     );
 
-    const parsed = this.parseResult<{ found: boolean }>(stdout);
+    const parsed = this.parseResult<{ found: boolean }>(stdout, markers);
     return parsed.found;
   }
 
@@ -356,14 +381,14 @@ const fs = require('fs');
     const body = `
   __result = { title: await page.title(), url: page.url() };
 `;
-
+    const markers = generateMarkers();
     const stdout = await this.runScript(
       containerName,
-      this.connectScript(containerName, body),
+      this.connectScript(containerName, body, markers),
       DEFAULT_LAUNCH_TIMEOUT,
     );
 
-    return this.parseResult<BrowserPageInfo>(stdout);
+    return this.parseResult<BrowserPageInfo>(stdout, markers);
   }
 
   async closeBrowser(containerName: string, _sessionId: string): Promise<void> {
