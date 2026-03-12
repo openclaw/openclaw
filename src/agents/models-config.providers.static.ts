@@ -429,6 +429,24 @@ export function buildOpenrouterProvider(): ProviderConfig {
         contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
         maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
+      {
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        reasoning: true,
+        input: ["text"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: 1048576,
+        maxTokens: 65536,
+      },
+      {
+        id: "openrouter/healer-alpha",
+        name: "Healer Alpha",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: 262144,
+        maxTokens: 65536,
+      },
     ],
   };
 }
