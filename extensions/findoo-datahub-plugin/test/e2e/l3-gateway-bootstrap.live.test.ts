@@ -2,7 +2,7 @@
  * L3 — Gateway Bootstrap E2E
  *
  * Verifies findoo-datahub-plugin loads correctly in a gateway-like environment:
- *   1. Plugin registers all 12 tools
+ *   1. Plugin registers all 13 tools
  *   2. Plugin registers both services (fin-data-provider, fin-regime-detector)
  *   3. Tools are callable and return well-formed responses
  *   4. Services are consumable by other extensions
@@ -116,11 +116,11 @@ describe.skipIf(SKIP)("L3 — Gateway Bootstrap E2E", { timeout: 120_000 }, () =
       expect(findooDatahubPlugin.kind).toBe("financial");
     });
 
-    it("1.2 registers exactly 12 tools", () => {
-      expect(tools.size).toBe(12);
+    it("1.2 registers exactly 13 tools", () => {
+      expect(tools.size).toBe(13);
     });
 
-    it("1.3 all 12 tool names match specification", () => {
+    it("1.3 all 13 tool names match specification", () => {
       const expected = [
         "fin_stock",
         "fin_index",
@@ -134,6 +134,7 @@ describe.skipIf(SKIP)("L3 — Gateway Bootstrap E2E", { timeout: 120_000 }, () =
         "fin_ta",
         "fin_etf",
         "fin_data_markets",
+        "fin_currency",
       ];
       for (const name of expected) {
         expect(tools.has(name), `Missing tool: ${name}`).toBe(true);
@@ -233,7 +234,7 @@ describe.skipIf(SKIP)("L3 — Gateway Bootstrap E2E", { timeout: 120_000 }, () =
       const tool = tools.get("fin_data_markets")!;
       const raw = await tool.execute("fmt-4", {});
       const res = parseResult(raw);
-      expect(res).toHaveProperty("datahub");
+      expect(res).toHaveProperty("connected");
       expect(res).toHaveProperty("markets");
       expect(res).toHaveProperty("categories");
       expect(res.endpoints).toBe(172);
@@ -263,8 +264,10 @@ describe.skipIf(SKIP)("L3 — Gateway Bootstrap E2E", { timeout: 120_000 }, () =
       (ctx.api as unknown as { pluginConfig: Record<string, unknown> }).pluginConfig = {};
       await findooDatahubPlugin.register(ctx.api);
 
-      const warnLog = ctx.logs.find((l) => l.level === "warn" && l.msg.includes("no API key"));
-      expect(warnLog).toBeDefined();
+      const errorLog = ctx.logs.find(
+        (l) => l.level === "error" && l.msg.includes("API key is required"),
+      );
+      expect(errorLog).toBeDefined();
 
       // Restore
       Object.assign(process.env, saved);
@@ -276,7 +279,7 @@ describe.skipIf(SKIP)("L3 — Gateway Bootstrap E2E", { timeout: 120_000 }, () =
       const ctx = createGatewayApi(tmpDir2, { datahubApiKey: undefined });
       (ctx.api as unknown as { pluginConfig: Record<string, unknown> }).pluginConfig = {};
       await findooDatahubPlugin.register(ctx.api);
-      expect(ctx.tools.size).toBe(12);
+      expect(ctx.tools.size).toBe(13);
       expect(ctx.services.size).toBe(2);
       rmSync(tmpDir2, { recursive: true, force: true });
     });

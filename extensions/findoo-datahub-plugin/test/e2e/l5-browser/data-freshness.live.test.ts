@@ -347,8 +347,8 @@ describe.skipIf(SKIP)("L5 — Data Freshness E2E (Live)", { timeout: 120_000 }, 
   // === 6. Gateway HTTP Route Integration ===
 
   describe("6. Gateway HTTP route integration", () => {
-    it("6.1 gateway /api/health is reachable", async () => {
-      const resp = await fetch(`${GATEWAY_URL}/api/health`, {
+    it("6.1 gateway /health is reachable", async () => {
+      const resp = await fetch(`${GATEWAY_URL}/health`, {
         signal: AbortSignal.timeout(5_000),
       });
       expect(resp.status).toBe(200);

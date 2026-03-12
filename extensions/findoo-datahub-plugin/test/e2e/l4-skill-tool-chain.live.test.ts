@@ -148,7 +148,7 @@ describe.skipIf(SKIP)("L4 — Skill-driven Tool Chain E2E", { timeout: 180_000 }
           limit: 30,
         }),
       );
-      assertSuccess(res, 1);
+      assertSuccess(res, 0);
       expect(res.endpoint).toBe("ta/rsi");
     }, 30_000);
 

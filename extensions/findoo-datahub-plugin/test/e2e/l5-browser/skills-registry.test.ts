@@ -93,7 +93,7 @@ describe.skipIf(SKIP)("L5 — Skills Registry (Browser E2E)", { timeout: 60_000 
   beforeAll(async () => {
     // Verify gateway is reachable
     try {
-      const health = await fetch(`${GATEWAY_URL}/api/health`, {
+      const health = await fetch(`${GATEWAY_URL}/health`, {
         signal: AbortSignal.timeout(5_000),
       });
       if (!health.ok) throw new Error(`Gateway health check failed: ${health.status}`);
