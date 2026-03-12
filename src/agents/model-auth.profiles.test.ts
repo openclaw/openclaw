@@ -230,6 +230,51 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolves marker-style OpenRouter provider apiKey from config env vars", async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openrouter",
+        store: { version: 1, profiles: {} },
+        cfg: {
+          env: {
+            vars: {
+              OPENROUTER_API_KEY: "sk-or-v1-config-only", // pragma: allowlist secret
+            },
+          },
+          models: {
+            providers: {
+              openrouter: {
+                apiKey: "OPENROUTER_API_KEY",
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("sk-or-v1-config-only");
+      expect(resolved.source).toBe("models.json");
+    });
+  });
+
+  it("does not use unresolved OpenRouter env marker as a literal api key", async () => {
+    await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "openrouter",
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                openrouter: {
+                  apiKey: "OPENROUTER_API_KEY",
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow('No API key found for provider "openrouter".');
+    });
+  });
+
   it("resolves synthetic local auth key for configured ollama provider without apiKey", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
       const resolved = await resolveApiKeyForProvider({
