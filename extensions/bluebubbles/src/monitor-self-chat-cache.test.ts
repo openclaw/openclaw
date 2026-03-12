@@ -86,6 +86,34 @@ describe("BlueBubbles self-chat cache", () => {
     ).toBe(true);
   });
 
+  it("enforces the cache cap even when cleanup is throttled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    for (let i = 0; i < 513; i += 1) {
+      rememberBlueBubblesSelfChatCopy({
+        ...directLookup,
+        body: `burst-${i}`,
+        timestamp: i,
+      });
+    }
+
+    expect(
+      hasBlueBubblesSelfChatCopy({
+        ...directLookup,
+        body: "burst-0",
+        timestamp: 0,
+      }),
+    ).toBe(false);
+    expect(
+      hasBlueBubblesSelfChatCopy({
+        ...directLookup,
+        body: "burst-512",
+        timestamp: 512,
+      }),
+    ).toBe(true);
+  });
+
   it("does not collide long texts that differ only in the middle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
