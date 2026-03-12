@@ -356,7 +356,7 @@ describe("mattermostPlugin", () => {
       );
     });
 
-    it("uses threadId as fallback when replyToId is absent", async () => {
+    it("uses threadId as fallback when replyToId is absent (sendText)", async () => {
       const sendText = mattermostPlugin.outbound?.sendText;
       if (!sendText) {
         return;
@@ -372,6 +372,30 @@ describe("mattermostPlugin", () => {
       expect(sendMessageMattermostMock).toHaveBeenCalledWith(
         "channel:CHAN1",
         "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
+    it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
+      const sendMedia = mattermostPlugin.outbound?.sendMedia;
+      if (!sendMedia) {
+        return;
+      }
+
+      await sendMedia({
+        to: "channel:CHAN1",
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "default",
+        threadId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "caption",
         expect.objectContaining({
           accountId: "default",
           replyToId: "post-root",
