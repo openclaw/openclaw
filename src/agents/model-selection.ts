@@ -1,7 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
+} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+} from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -44,6 +53,9 @@ export function normalizeProviderId(provider: string): string {
   }
   if (normalized === "opencode-zen") {
     return "opencode";
+  }
+  if (normalized === "opencode-go-auth") {
+    return "opencode-go";
   }
   if (normalized === "qwen") {
     return "qwen-portal";
@@ -302,8 +314,9 @@ export function resolveConfiguredModelRef(params: {
       }
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      const safeTrimmed = sanitizeForLog(trimmed);
       log.warn(
-        `Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+        `Model "${safeTrimmed}" specified without provider. Falling back to "anthropic/${safeTrimmed}". Please use "anthropic/${safeTrimmed}" in your config.`,
       );
       return { provider: "anthropic", model: trimmed };
     }
@@ -316,6 +329,11 @@ export function resolveConfiguredModelRef(params: {
     if (resolved) {
       return resolved.ref;
     }
+
+    // User specified a model but it could not be resolved — warn before falling back.
+    const safe = sanitizeForLog(trimmed);
+    const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
+    log.warn(`Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`);
   }
   // Before falling back to the hardcoded default, check if the default provider
   // is actually available. If it isn't but other providers are configured, prefer
@@ -372,6 +390,16 @@ export function resolveDefaultModelForAgent(params: {
   });
 }
 
+function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
+  if (params.agentId) {
+    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+    if (override !== undefined) {
+      return override;
+    }
+  }
+  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+}
+
 export function resolveSubagentConfiguredModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -409,6 +437,7 @@ export function buildAllowedModelSet(params: {
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
+  agentId?: string;
 }): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
@@ -456,6 +485,25 @@ export function buildAllowedModelSet(params: {
         name: parsed.model,
         provider: parsed.provider,
       });
+    }
+  }
+
+  for (const fallback of resolveAllowedFallbacks({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  })) {
+    const parsed = parseModelRef(String(fallback), params.defaultProvider);
+    if (parsed) {
+      const key = modelKey(parsed.provider, parsed.model);
+      allowedKeys.add(key);
+
+      if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+        syntheticCatalogEntries.set(key, {
+          id: parsed.model,
+          name: parsed.model,
+          provider: parsed.provider,
+        });
+      }
     }
   }
 

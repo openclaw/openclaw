@@ -498,9 +498,14 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
+    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
     const timestamp = normalized.timestamp || Date.now();
 
-    if (!currentGroup || currentGroup.role !== role) {
+    if (
+      !currentGroup ||
+      currentGroup.role !== role ||
+      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+    ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
@@ -508,6 +513,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
+        senderLabel,
         messages: [{ message: item.message, key: item.key }],
         timestamp,
         isStreaming: false,

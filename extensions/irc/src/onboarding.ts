@@ -1,9 +1,11 @@
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  patchScopedAccountConfig,
   promptChannelAccessConfig,
   resolveAccountIdForConfigure,
+  setTopLevelChannelAllowFrom,
+  setTopLevelChannelDmPolicyWithAllowFrom,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type DmPolicy,
@@ -58,64 +60,30 @@ function updateIrcAccountConfig(
   accountId: string,
   patch: Partial<IrcAccountConfig>,
 ): CoreConfig {
-  const current = cfg.channels?.irc ?? {};
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        irc: {
-          ...current,
-          ...patch,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...current,
-        accounts: {
-          ...current.accounts,
-          [accountId]: {
-            ...current.accounts?.[accountId],
-            ...patch,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch,
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  }) as CoreConfig;
 }
 
 function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.irc?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "irc",
+    dmPolicy,
+  }) as CoreConfig;
 }
 
 function setIrcAllowFrom(cfg: CoreConfig, allowFrom: string[]): CoreConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      irc: {
-        ...cfg.channels?.irc,
-        allowFrom,
-      },
-    },
-  };
+  return setTopLevelChannelAllowFrom({
+    cfg,
+    channel: "irc",
+    allowFrom,
+  }) as CoreConfig;
 }
 
 function setIrcNickServ(

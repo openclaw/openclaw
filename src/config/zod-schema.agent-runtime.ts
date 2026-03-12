@@ -278,8 +278,8 @@ export const ToolsWebSearchSchema = z
     perplexity: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        // Legacy Sonar/OpenRouter fields — kept for backward compatibility
-        // so existing configs don't fail validation. Ignored at runtime.
+        // Legacy Sonar/OpenRouter compatibility fields.
+        // Setting either opts Perplexity back into the chat-completions path.
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -305,6 +305,12 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    brave: z
+      .object({
+        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
       })
       .strict()
       .optional(),
@@ -547,6 +553,16 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
+    multimodal: z
+      .object({
+        enabled: z.boolean().optional(),
+        modalities: z
+          .array(z.union([z.literal("image"), z.literal("audio"), z.literal("all")]))
+          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),
@@ -593,6 +609,7 @@ export const MemorySearchSchema = z
       ])
       .optional(),
     model: z.string().optional(),
+    outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),

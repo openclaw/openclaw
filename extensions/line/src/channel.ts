@@ -1,4 +1,10 @@
 import {
+  collectAllowlistProviderRestrictSendersWarnings,
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/compat";
+import {
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
@@ -6,8 +12,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -28,6 +32,35 @@ const meta = {
   blurb: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
   systemImage: "message.fill",
 };
+
+const lineConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+  resolveAllowFrom: (account: ResolvedLineAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map((entry) => entry.replace(/^line:(?:user:)?/i, "")),
+});
+
+const lineConfigBase = createScopedChannelConfigBase<ResolvedLineAccount, OpenClawConfig>({
+  sectionKey: "line",
+  listAccountIds: (cfg) => getLineRuntime().channel.line.listLineAccountIds(cfg),
+  resolveAccount: (cfg, accountId) =>
+    getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+  defaultAccountId: (cfg) => getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
+  clearBaseFields: ["channelSecret", "tokenFile", "secretFile"],
+});
+
+const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>({
+  channelKey: "line",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  approveHint: "openclaw pairing approve line <code>",
+  normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
+});
 
 function patchLineAccountConfig(
   cfg: OpenClawConfig,
@@ -99,40 +132,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   reload: { configPrefixes: ["channels.line"] },
   configSchema: buildChannelConfigSchema(LineConfigSchema),
   config: {
-    listAccountIds: (cfg) => getLineRuntime().channel.line.listLineAccountIds(cfg),
-    resolveAccount: (cfg, accountId) =>
-      getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
-    defaultAccountId: (cfg) => getLineRuntime().channel.line.resolveDefaultLineAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) => {
-      const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
-      return patchLineAccountConfig(cfg, lineConfig, accountId, { enabled });
-    },
-    deleteAccount: ({ cfg, accountId }) => {
-      const lineConfig = (cfg.channels?.line ?? {}) as LineConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        // oxlint-disable-next-line no-unused-vars
-        const { channelSecret, tokenFile, secretFile, ...rest } = lineConfig;
-        return {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            line: rest,
-          },
-        };
-      }
-      const accounts = { ...lineConfig.accounts };
-      delete accounts[accountId];
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          line: {
-            ...lineConfig,
-            accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
-          },
-        },
-      };
-    },
+    ...lineConfigBase,
     isConfigured: (account) =>
       Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
     describeAccount: (account) => ({
@@ -142,51 +142,21 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (
-        getLineRuntime().channel.line.resolveLineAccount({ cfg, accountId: accountId ?? undefined })
-          .config.allowFrom ?? []
-      ).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => {
-          // LINE sender IDs are case-sensitive; keep original casing.
-          return entry.replace(/^line:(?:user:)?/i, "");
-        }),
+    ...lineConfigAccessors,
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        (cfg.channels?.line as LineConfig | undefined)?.accounts?.[resolvedAccountId],
-      );
-      const basePath = useAccountPath
-        ? `channels.line.accounts.${resolvedAccountId}.`
-        : "channels.line.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
-        allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: "openclaw pairing approve line <code>",
-        normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
-      };
-    },
+    resolveDmPolicy: resolveLineDmPolicy,
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.line !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        surface: "LINE groups",
+        openScope: "any member in groups",
+        groupPolicyPath: "channels.line.groupPolicy",
+        groupAllowFromPath: "channels.line.groupAllowFrom",
+        mentionGated: false,
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.`,
-      ];
     },
   },
   groups: {

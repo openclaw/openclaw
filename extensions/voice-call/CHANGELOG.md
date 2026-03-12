@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026.3.11
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.3.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.3.9
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.3.8-beta.1
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.3.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.3.7
 
 ### Changes

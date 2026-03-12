@@ -39,6 +39,10 @@ export {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  applyModelStudioConfig,
+  applyModelStudioConfigCn,
+  applyModelStudioProviderConfig,
+  applyModelStudioProviderConfigCn,
   KILOCODE_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {
@@ -57,6 +61,10 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
+} from "./onboard-auth.config-opencode-go.js";
+export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
@@ -73,6 +81,7 @@ export {
   setMinimaxApiKey,
   setMistralApiKey,
   setMoonshotApiKey,
+  setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -84,6 +93,7 @@ export {
   setVolcengineApiKey,
   setZaiApiKey,
   setXaiApiKey,
+  setModelStudioApiKey,
   writeOAuthCredentials,
   HUGGINGFACE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -92,6 +102,7 @@ export {
   TOGETHER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKilocodeModelDefinition,

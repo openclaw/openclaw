@@ -1,11 +1,17 @@
 import {
+  buildAccountScopedDmSecurityPolicy,
+  collectAllowlistProviderRestrictSendersWarnings,
+  createScopedAccountConfigAccessors,
+  formatNormalizedAllowFromEntries,
+} from "openclaw/plugin-sdk/compat";
+import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
+  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatPairingApproveHint,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -21,6 +27,7 @@ import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
+  resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
@@ -32,6 +39,7 @@ import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
+import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
@@ -154,7 +162,9 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     }
 
     const message = typeof params.message === "string" ? params.message : "";
-    const replyToId = typeof params.replyToId === "string" ? params.replyToId : undefined;
+    // Match the shared runner semantics: trim empty reply IDs away before
+    // falling back from replyToId to replyTo on direct plugin calls.
+    const replyToId = readMattermostReplyToId(params);
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
@@ -198,6 +208,18 @@ const meta = {
   quickstartAllowFrom: true,
 } as const;
 
+function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
+  const readNormalizedValue = (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  };
+
+  return readNormalizedValue(params.replyToId) ?? readNormalizedValue(params.replyTo);
+}
+
 function normalizeAllowEntry(entry: string): string {
   return entry
     .trim()
@@ -217,6 +239,16 @@ function formatAllowEntry(entry: string): string {
   }
   return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
 }
+
+const mattermostConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveMattermostAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: formatAllowEntry,
+    }),
+});
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
@@ -240,6 +272,16 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+  },
+  threading: {
+    resolveReplyToMode: ({ cfg, accountId, chatType }) => {
+      const account = resolveMattermostAccount({ cfg, accountId: accountId ?? "default" });
+      const kind =
+        chatType === "direct" || chatType === "group" || chatType === "channel"
+          ? chatType
+          : "channel";
+      return resolveMattermostReplyToMode(account, kind);
+    },
   },
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
@@ -271,42 +313,31 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       botTokenSource: account.botTokenSource,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveMattermostAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-        String(entry),
-      ),
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom.map((entry) => formatAllowEntry(String(entry))).filter(Boolean),
+    ...mattermostConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(cfg.channels?.mattermost?.accounts?.[resolvedAccountId]);
-      const basePath = useAccountPath
-        ? `channels.mattermost.accounts.${resolvedAccountId}.`
-        : "channels.mattermost.";
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "mattermost",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
         allowFrom: account.config.allowFrom ?? [],
-        policyPath: `${basePath}dmPolicy`,
-        allowFromPath: basePath,
-        approveHint: formatPairingApproveHint("mattermost"),
+        policyPathSuffix: "dmPolicy",
         normalizeEntry: (raw) => normalizeAllowEntry(raw),
-      };
+      });
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
         providerConfigPresent: cfg.channels?.mattermost !== undefined,
-        groupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
+        configuredGroupPolicy: account.config.groupPolicy,
+        surface: "Mattermost channels",
+        openScope: "any member",
+        groupPolicyPath: "channels.mattermost.groupPolicy",
+        groupAllowFromPath: "channels.mattermost.groupAllowFrom",
       });
-      if (groupPolicy !== "open") {
-        return [];
-      }
-      return [
-        `- Mattermost channels: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.mattermost.groupPolicy="allowlist" + channels.mattermost.groupAllowFrom to restrict senders.`,
-      ];
     },
   },
   groups: {
@@ -324,6 +355,21 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     targetResolver: {
       looksLikeId: looksLikeMattermostTargetId,
       hint: "<channelId|user:ID|channel:ID>",
+      resolveTarget: async ({ cfg, accountId, input }) => {
+        const resolved = await resolveMattermostOpaqueTarget({
+          input,
+          cfg,
+          accountId,
+        });
+        if (!resolved) {
+          return null;
+        }
+        return {
+          to: resolved.to,
+          kind: resolved.kind,
+          source: "directory",
+        };
+      },
     },
   },
   outbound: {
@@ -468,8 +514,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
-      ctx.setStatus({
-        accountId: account.accountId,
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
+      statusSink({
         baseUrl: account.baseUrl,
         botTokenSource: account.botTokenSource,
       });
@@ -481,7 +530,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
       });
     },
   },

@@ -158,20 +158,22 @@ describe("resolveGatewayConnection", () => {
     expect(result.url).toBe("ws://127.0.0.1:18800");
   });
 
-  it("uses OPENCLAW_GATEWAY_TOKEN for local mode", async () => {
+  it("uses config auth token for local mode when both config and env tokens are set", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.token).toBe("config-token");
+    });
+  });
+
+  it("falls back to OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
       const result = await resolveGatewayConnection({});
       expect(result.token).toBe("env-token");
     });
-  });
-
-  it("falls back to config auth token when env token is missing", async () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
-
-    const result = await resolveGatewayConnection({});
-    expect(result.token).toBe("config-token");
   });
 
   it("uses local password auth when gateway.auth.mode is unset and password-only is configured", async () => {

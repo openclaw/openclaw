@@ -3,8 +3,8 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite struct GatewayChannelShutdownTests {
-    @Test func shutdownPreventsReconnectLoopFromReceiveFailure() async throws {
+struct GatewayChannelShutdownTests {
+    @Test func `shutdown prevents reconnect loop from receive failure`() async throws {
         let session = GatewayTestWebSocketSession()
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),

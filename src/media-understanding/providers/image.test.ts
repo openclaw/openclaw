@@ -4,7 +4,7 @@ const completeMock = vi.fn();
 const minimaxUnderstandImageMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn(async () => {});
 const getApiKeyForModelMock = vi.fn(async () => ({
-  apiKey: "oauth-test",
+  apiKey: "oauth-test", // pragma: allowlist secret
   source: "test",
   mode: "oauth",
 }));
@@ -82,7 +82,7 @@ describe("describeImageWithModel", () => {
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
     expect(minimaxUnderstandImageMock).toHaveBeenCalledWith({
-      apiKey: "oauth-test",
+      apiKey: "oauth-test", // pragma: allowlist secret
       prompt: "Describe the image.",
       imageDataUrl: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       modelBaseUrl: "https://api.minimax.io/anthropic",
@@ -129,5 +129,105 @@ describe("describeImageWithModel", () => {
     });
     expect(completeMock).toHaveBeenCalledOnce();
     expect(minimaxUnderstandImageMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
+    const findMock = vi.fn((provider: string, modelId: string) => {
+      expect(provider).toBe("google");
+      expect(modelId).toBe("gemini-3-flash-preview");
+      return {
+        provider: "google",
+        id: "gemini-3-flash-preview",
+        input: ["text", "image"],
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      };
+    });
+    discoverModelsMock.mockReturnValue({ find: findMock });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "flash ok" }],
+    });
+
+    const { describeImageWithModel } = await import("./image.js");
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "google",
+      model: "gemini-3.1-flash-preview",
+      profile: "google:default",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "flash ok",
+      model: "gemini-3-flash-preview",
+    });
+    expect(findMock).toHaveBeenCalledOnce();
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "google:default",
+      }),
+    );
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
+    const findMock = vi.fn((provider: string, modelId: string) => {
+      expect(provider).toBe("google");
+      expect(modelId).toBe("gemini-3.1-flash-lite-preview");
+      return {
+        provider: "google",
+        id: "gemini-3.1-flash-lite-preview",
+        input: ["text", "image"],
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      };
+    });
+    discoverModelsMock.mockReturnValue({ find: findMock });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-3.1-flash-lite-preview",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "flash lite ok" }],
+    });
+
+    const { describeImageWithModel } = await import("./image.js");
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "google",
+      model: "gemini-3.1-flash-lite",
+      profile: "google:default",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "flash lite ok",
+      model: "gemini-3.1-flash-lite-preview",
+    });
+    expect(findMock).toHaveBeenCalledOnce();
+    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "google:default",
+      }),
+    );
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 });

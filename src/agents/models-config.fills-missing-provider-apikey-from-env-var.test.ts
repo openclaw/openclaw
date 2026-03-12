@@ -65,7 +65,7 @@ async function runCustomProviderMergeTest(params: {
     baseUrl: string;
     apiKey: string;
     api: string;
-    models: Array<{ id: string; name: string; input: string[] }>;
+    models: Array<{ id: string; name: string; input: string[]; api?: string }>;
   };
   existingProviderKey?: string;
   configProviderKey?: string;
@@ -234,12 +234,49 @@ describe("models-config", () => {
       const parsed = await runCustomProviderMergeTest({
         seedProvider: {
           baseUrl: "https://agent.example/v1",
-          apiKey: "AGENT_KEY",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
           api: "openai-responses",
           models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
         },
         existingProviderKey: "custom",
         configProviderKey: " custom ",
+      });
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("replaces stale merged baseUrl when the provider api changes", async () => {
+    await withTempHome(async () => {
+      const parsed = await runCustomProviderMergeTest({
+        seedProvider: {
+          baseUrl: "https://agent.example/v1",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          api: "openai-completions",
+          models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+        },
+      });
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("replaces stale merged baseUrl when only model-level apis change", async () => {
+    await withTempHome(async () => {
+      const parsed = await runCustomProviderMergeTest({
+        seedProvider: {
+          baseUrl: "https://agent.example/v1",
+          apiKey: "AGENT_KEY", // pragma: allowlist secret
+          api: "",
+          models: [
+            {
+              id: "agent-model",
+              name: "Agent model",
+              input: ["text"],
+              api: "openai-completions",
+            },
+          ],
+        },
       });
       expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
       expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
@@ -372,7 +409,7 @@ describe("models-config", () => {
     });
   });
 
-  it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
+  it("refreshes moonshot capabilities while preserving explicit token limits", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
         const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
@@ -397,8 +434,8 @@ describe("models-config", () => {
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
         expect(kimi?.input).toEqual(["text", "image"]);
         expect(kimi?.reasoning).toBe(false);
-        expect(kimi?.contextWindow).toBe(256000);
-        expect(kimi?.maxTokens).toBe(8192);
+        expect(kimi?.contextWindow).toBe(1024);
+        expect(kimi?.maxTokens).toBe(256);
         // Preserve explicit user pricing overrides when refreshing capabilities.
         expect(kimi?.cost?.input).toBe(123);
         expect(kimi?.cost?.output).toBe(456);
@@ -414,7 +451,7 @@ describe("models-config", () => {
             providers: {
               openai: {
                 baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-plaintext-should-not-appear", // already resolved by loadConfig
+                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; already resolved by loadConfig
                 api: "openai-completions",
                 models: [
                   {
@@ -440,6 +477,51 @@ describe("models-config", () => {
     });
   });
 
+  it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {
+    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+      await withTempHome(async () => {
+        await writeAgentModelsJson({
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
+            },
+          },
+        });
+        const cfg: OpenClawConfig = {
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "gpt-4.1",
+                    name: "GPT-4.1",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 16384,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await ensureOpenClawModelsJson(cfg);
+        const result = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+      });
+    });
+  });
+
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
@@ -461,6 +543,31 @@ describe("models-config", () => {
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
         expect(kimi?.contextWindow).toBe(350000);
         expect(kimi?.maxTokens).toBe(16384);
+      });
+    });
+  });
+
+  it("falls back to implicit token limits when explicit values are invalid", async () => {
+    await withTempHome(async () => {
+      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+        const cfg = createMoonshotConfig({ contextWindow: 0, maxTokens: -1 });
+
+        await ensureOpenClawModelsJson(cfg);
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<
+            string,
+            {
+              models?: Array<{
+                id: string;
+                contextWindow?: number;
+                maxTokens?: number;
+              }>;
+            }
+          >;
+        }>();
+        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+        expect(kimi?.contextWindow).toBe(256000);
+        expect(kimi?.maxTokens).toBe(8192);
       });
     });
   });

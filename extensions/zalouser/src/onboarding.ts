@@ -5,13 +5,14 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/zalouser";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
+  patchScopedAccountConfig,
   promptChannelAccessConfig,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
@@ -36,56 +37,24 @@ function setZalouserAccountScopedConfig(
   defaultPatch: Record<string, unknown>,
   accountPatch: Record<string, unknown> = defaultPatch,
 ): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          ...defaultPatch,
-        },
-      },
-    } as OpenClawConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            ...accountPatch,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: defaultPatch,
+    accountPatch,
+  }) as OpenClawConfig;
 }
 
 function setZalouserDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  } as OpenClawConfig;
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "zalouser",
+    dmPolicy,
+  }) as OpenClawConfig;
 }
 
 async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {

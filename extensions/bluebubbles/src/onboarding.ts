@@ -7,11 +7,12 @@ import type {
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DEFAULT_ACCOUNT_ID,
-  addWildcardAllowFrom,
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
+  patchScopedAccountConfig,
   resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
 } from "openclaw/plugin-sdk/bluebubbles";
 import {
   listBlueBubblesAccountIds,
@@ -26,19 +27,11 @@ import { normalizeBlueBubblesServerUrl } from "./types.js";
 const channel = "bluebubbles" as const;
 
 function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.bluebubbles?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      bluebubbles: {
-        ...cfg.channels?.bluebubbles,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  };
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "bluebubbles",
+    dmPolicy,
+  });
 }
 
 function setBlueBubblesAllowFrom(
@@ -46,34 +39,14 @@ function setBlueBubblesAllowFrom(
   accountId: string,
   allowFrom: string[],
 ): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        bluebubbles: {
-          ...cfg.channels?.bluebubbles,
-          allowFrom,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      bluebubbles: {
-        ...cfg.channels?.bluebubbles,
-        accounts: {
-          ...cfg.channels?.bluebubbles?.accounts,
-          [accountId]: {
-            ...cfg.channels?.bluebubbles?.accounts?.[accountId],
-            allowFrom,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: { allowFrom },
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  });
 }
 
 function parseBlueBubblesAllowFromInput(raw: string): string[] {

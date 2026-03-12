@@ -1,4 +1,9 @@
 import { resolveGatewayLogPaths } from "./launchd.js";
+import { toPosixPath } from "./output.js";
+
+function toDarwinDisplayPath(value: string): string {
+  return toPosixPath(value).replace(/^[A-Za-z]:/, "");
+}
 
 export function buildPlatformRuntimeLogHints(params: {
   platform?: NodeJS.Platform;
@@ -11,8 +16,8 @@ export function buildPlatformRuntimeLogHints(params: {
   if (platform === "darwin") {
     const logs = resolveGatewayLogPaths(env);
     return [
-      `Launchd stdout (if installed): ${logs.stdoutPath}`,
-      `Launchd stderr (if installed): ${logs.stderrPath}`,
+      `Launchd stdout (if installed): ${toDarwinDisplayPath(logs.stdoutPath)}`,
+      `Launchd stderr (if installed): ${toDarwinDisplayPath(logs.stderrPath)}`,
     ];
   }
   if (platform === "linux") {

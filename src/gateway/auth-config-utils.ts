@@ -1,7 +1,6 @@
 import type { GatewayAuthConfig, OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 
 export function withGatewayAuthPassword(cfg: OpenClawConfig, password: string): OpenClawConfig {
   return {
@@ -57,13 +56,14 @@ export async function resolveGatewayPasswordSecretRef(params: {
   ) {
     return params.cfg;
   }
-  const resolved = await resolveSecretRefValues([ref], {
+  const value = await resolveRequiredConfiguredSecretRefInputString({
     config: params.cfg,
     env: params.env,
+    value: authPassword,
+    path: "gateway.auth.password",
   });
-  const value = resolved.get(secretRefKey(ref));
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  if (!value) {
+    return params.cfg;
   }
-  return withGatewayAuthPassword(params.cfg, value.trim());
+  return withGatewayAuthPassword(params.cfg, value);
 }
