@@ -825,7 +825,7 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(true);
   });
 
-  it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
+  it("suppresses provenance warning for plugins explicitly listed in plugins.allow", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
@@ -845,6 +845,41 @@ describe("loadOpenClawPlugins", () => {
         config: {
           plugins: {
             allow: ["rogue"],
+          },
+        },
+      });
+
+      const rogue = registry.plugins.find((entry) => entry.id === "rogue");
+      expect(rogue?.status).toBe("loaded");
+      expect(
+        warnings.some(
+          (msg) =>
+            msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("warns when loaded non-bundled plugin has no install/load-path provenance and is not in allow list", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      fs.mkdirSync(globalDir, { recursive: true });
+      writePlugin({
+        id: "rogue",
+        body: `module.exports = { id: "rogue", register() {} };`,
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
           },
         },
       });
