@@ -25,7 +25,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      const { allowAny, allowedCatalog } = buildAllowedModelSet({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
@@ -34,7 +34,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       // filter the full catalog to providers that have at least one auth
       // profile so the picker isn't overwhelmed with 600+ unconfigured models.
       let models: typeof catalog;
-      if (allowedCatalog.length > 0) {
+      if (!allowAny) {
         models = allowedCatalog;
       } else {
         const profiles = cfg?.auth?.profiles;
