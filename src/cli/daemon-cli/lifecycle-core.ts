@@ -190,6 +190,7 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
+  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<boolean>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
@@ -202,19 +203,38 @@ export async function runServiceStart(params: {
   if (loaded === null) {
     return;
   }
+  let recoveredNotLoaded = false;
   if (!loaded) {
-    await handleServiceNotLoaded({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      loaded,
-      renderStartHints: params.renderStartHints,
-      json,
-      emit,
-    });
-    return;
+    if (params.onNotLoaded) {
+      const configError = await getConfigValidationError();
+      if (configError) {
+        fail(
+          `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+        );
+        return;
+      }
+      try {
+        recoveredNotLoaded = await params.onNotLoaded({ json, stdout, fail });
+      } catch (err) {
+        const hints = params.renderStartHints();
+        fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+        return;
+      }
+    }
+    if (!recoveredNotLoaded) {
+      await handleServiceNotLoaded({
+        serviceNoun: params.serviceNoun,
+        service: params.service,
+        loaded,
+        renderStartHints: params.renderStartHints,
+        json,
+        emit,
+      });
+      return;
+    }
   }
   // Pre-flight config validation (#35862)
-  {
+  if (!recoveredNotLoaded) {
     const configError = await getConfigValidationError();
     if (configError) {
       fail(
@@ -232,7 +252,7 @@ export async function runServiceStart(params: {
         ok: true,
         result: restartStatus.daemonActionResult,
         message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, loaded),
+        service: buildDaemonServiceSnapshot(params.service, loaded || recoveredNotLoaded),
       });
       if (!json) {
         defaultRuntime.log(restartStatus.message);

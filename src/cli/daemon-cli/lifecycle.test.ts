@@ -20,6 +20,12 @@ type RestartPostCheckContext = {
 type RestartParams = {
   opts?: { json?: boolean };
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  onNotLoaded?: () => Promise<unknown>;
+};
+
+type StartParams = {
+  opts?: { json?: boolean };
+  onNotLoaded?: () => Promise<boolean>;
 };
 
 const service = {
@@ -207,121 +213,137 @@ describe("runDaemonRestart health checks", () => {
     vi.restoreAllMocks();
   });
 
-  it("auto-bootstraps before start when macOS service is unloaded but plist exists", async () => {
+  it("provides a start recovery hook that re-registers a darwin LaunchAgent without kickstart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
 
     await runDaemonStart({ json: true });
 
+    const params = runServiceStart.mock.calls[0]?.[0] as StartParams | undefined;
+    expect(params?.onNotLoaded).toBeTypeOf("function");
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toBe(true);
     expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
-    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
-    expect(runServiceStart).toHaveBeenCalledTimes(1);
-    expect(runServiceStart.mock.invocationCallOrder[0]).toBeGreaterThan(
-      repairLaunchAgentBootstrap.mock.invocationCallOrder[0] ?? 0,
-    );
-  });
-
-  it("skips start auto-bootstrap when the macOS service is already loaded", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(true);
-
-    await runDaemonStart({ json: true });
-
-    expect(launchAgentPlistExists).not.toHaveBeenCalled();
-    expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({
+      env: process.env,
+      kickstart: false,
+    });
     expect(runServiceStart).toHaveBeenCalledTimes(1);
   });
 
-  it("skips start auto-bootstrap when the plist is missing", async () => {
+  it("start recovery hook returns false when the plist is missing", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
     launchAgentPlistExists.mockResolvedValueOnce(false);
 
     await runDaemonStart({ json: true });
 
+    const params = runServiceStart.mock.calls[0]?.[0] as StartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toBe(false);
     expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(runServiceStart).toHaveBeenCalledTimes(1);
   });
 
-  it("skips start auto-bootstrap outside macOS", async () => {
+  it("start recovery hook returns false outside macOS", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     await runDaemonStart({ json: true });
 
-    expect(service.isLoaded).not.toHaveBeenCalled();
+    const params = runServiceStart.mock.calls[0]?.[0] as StartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toBe(false);
     expect(launchAgentPlistExists).not.toHaveBeenCalled();
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(runServiceStart).toHaveBeenCalledTimes(1);
   });
 
-  it("continues start when auto-bootstrap repair fails", async () => {
+  it("start recovery hook falls back when launchd repair fails", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
     repairLaunchAgentBootstrap.mockRejectedValueOnce(new Error("bootstrap failed"));
 
     await runDaemonStart({ json: true });
 
-    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
+    const params = runServiceStart.mock.calls[0]?.[0] as StartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toBe(false);
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({
+      env: process.env,
+      kickstart: false,
+    });
     expect(runServiceStart).toHaveBeenCalledTimes(1);
   });
 
-  it("auto-bootstraps before restart when macOS service is unloaded but plist exists", async () => {
+  it("provides a restart recovery hook that kickstarts a darwin LaunchAgent", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
 
     await runDaemonRestart({ json: true });
 
+    const params = runServiceRestart.mock.calls[0]?.[0] as RestartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toEqual({ result: "restarted" });
     expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
     expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
     expect(runServiceRestart).toHaveBeenCalledTimes(1);
-    expect(runServiceRestart.mock.invocationCallOrder[0]).toBeGreaterThan(
-      repairLaunchAgentBootstrap.mock.invocationCallOrder[0] ?? 0,
-    );
   });
 
-  it("skips restart auto-bootstrap when the macOS service is already loaded", async () => {
+  it("restart recovery hook falls back to unmanaged restart when the plist is missing", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(true);
-
-    await runDaemonRestart({ json: true });
-
-    expect(launchAgentPlistExists).not.toHaveBeenCalled();
-    expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
-    expect(runServiceRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips restart auto-bootstrap when the plist is missing", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     launchAgentPlistExists.mockResolvedValueOnce(false);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
 
     await runDaemonRestart({ json: true });
 
+    const params = runServiceRestart.mock.calls[0]?.[0] as RestartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toEqual({
+      result: "restarted",
+      message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+    });
     expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(4200, "SIGUSR1");
     expect(runServiceRestart).toHaveBeenCalledTimes(1);
   });
 
-  it("skips restart auto-bootstrap outside macOS", async () => {
+  it("restart recovery hook falls back to unmanaged restart when launchd repair fails", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    repairLaunchAgentBootstrap.mockResolvedValueOnce({ ok: false, detail: "boom" });
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+
+    await runDaemonRestart({ json: true });
+
+    const params = runServiceRestart.mock.calls[0]?.[0] as RestartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toEqual({
+      result: "restarted",
+      message: "Gateway restart signal sent to unmanaged process on port 18789: 4200.",
+    });
+    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
+    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(killSpy).toHaveBeenCalledWith(4200, "SIGUSR1");
+  });
+
+  it("restart recovery hook returns null outside macOS", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     await runDaemonRestart({ json: true });
 
-    expect(service.isLoaded).not.toHaveBeenCalled();
+    const params = runServiceRestart.mock.calls[0]?.[0] as RestartParams | undefined;
+    const recovered = await params?.onNotLoaded?.();
+
+    expect(recovered).toBeNull();
     expect(launchAgentPlistExists).not.toHaveBeenCalled();
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
-    expect(runServiceRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("continues restart when auto-bootstrap repair fails", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    service.isLoaded.mockResolvedValueOnce(false);
-    repairLaunchAgentBootstrap.mockRejectedValueOnce(new Error("bootstrap failed"));
-
-    await runDaemonRestart({ json: true });
-
-    expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
     expect(runServiceRestart).toHaveBeenCalledTimes(1);
   });
 
@@ -467,6 +489,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when the running gateway has commands.restart disabled", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     findGatewayPidsOnPortSync.mockReturnValue([4200]);
     probeGateway.mockResolvedValue({
       ok: true,

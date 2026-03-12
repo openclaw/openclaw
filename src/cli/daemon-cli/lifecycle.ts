@@ -32,34 +32,19 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-/**
- * On macOS, if the launchd service is not loaded but the plist file still
- * exists on disk, attempt to bootstrap + kickstart it automatically.
- *
- * This covers the common case where the service was unloaded due to a crash,
- * manual `launchctl bootout`, or a failed previous load — without requiring
- * the user to run `openclaw gateway install` again.
- */
-async function autoBootstrapIfNeeded(service: ReturnType<typeof resolveGatewayService>) {
+async function repairLaunchAgentIfInstalled(args?: { kickstart?: boolean }): Promise<boolean> {
   if (process.platform !== "darwin") {
-    return;
-  }
-  let loaded = false;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (loaded) {
-    return;
+    return false;
   }
   const plistExists = await launchAgentPlistExists(process.env).catch(() => false);
   if (!plistExists) {
-    return;
+    return false;
   }
-  // Best-effort: if bootstrap fails the caller's existing "not loaded" flow
-  // will handle the error and show hints.
-  await repairLaunchAgentBootstrap({ env: process.env }).catch(() => {});
+  const repair = await repairLaunchAgentBootstrap({
+    env: process.env,
+    kickstart: args?.kickstart,
+  }).catch(() => ({ ok: false as const }));
+  return repair.ok;
 }
 
 async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
@@ -224,15 +209,11 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
 
-  // Auto-bootstrap: if the service is not loaded but the plist file exists on
-  // disk, bootstrap it into launchd automatically so the user doesn't have to
-  // run `openclaw gateway install` first every time.
-  await autoBootstrapIfNeeded(service);
-
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
     renderStartHints: renderGatewayServiceStartHints,
+    onNotLoaded: async () => await repairLaunchAgentIfInstalled({ kickstart: false }),
     opts,
   });
 }
@@ -258,12 +239,6 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
-
-  // Auto-bootstrap: same as runDaemonStart — if the plist exists but the
-  // service was unloaded (crash, manual bootout, etc.), re-bootstrap before
-  // the restart flow so the service manager can handle the restart properly.
-  await autoBootstrapIfNeeded(service);
-
   let restartedWithoutServiceManager = false;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
@@ -278,6 +253,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
+      if (await repairLaunchAgentIfInstalled()) {
+        return { result: "restarted" as const };
+      }
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
