@@ -1,7 +1,11 @@
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { ProxyAgent } from "undici";
 import { danger } from "../../globals.js";
 import { wrapFetchWithAbortSignal } from "../../infra/fetch.js";
 import type { RuntimeEnv } from "../../runtime.js";
+
+function buildDiscordProxyRequest(input: RequestInfo | URL, init?: RequestInit): Request {
+  return new Request(input, init);
+}
 
 export function resolveDiscordRestFetch(
   proxyUrl: string | undefined,
@@ -14,10 +18,9 @@ export function resolveDiscordRestFetch(
   try {
     const agent = new ProxyAgent(proxy);
     const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
-      undiciFetch(input as string | URL, {
-        ...(init as Record<string, unknown>),
+      fetch(buildDiscordProxyRequest(input, init), {
         dispatcher: agent,
-      }) as unknown as Promise<Response>) as typeof fetch;
+      } as RequestInit & { dispatcher: ProxyAgent })) as typeof fetch;
     runtime.log?.("discord: rest proxy enabled");
     return wrapFetchWithAbortSignal(fetcher);
   } catch (err) {
