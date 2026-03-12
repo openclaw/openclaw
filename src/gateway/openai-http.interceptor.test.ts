@@ -226,4 +226,27 @@ describe("OpenAI HTTP dispatch interceptor (e2e)", () => {
 
     expect(agentCommand).not.toHaveBeenCalled();
   });
+
+  it("treats thrown interceptor after output as intercepted", async () => {
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "Agent reply" }] } as never);
+
+    injectInterceptors([
+      {
+        async intercept(_text, _ctx, output) {
+          output.sendBlock("Partial block.");
+          throw new Error("interceptor failed after output");
+        },
+      },
+    ]);
+
+    const res = await post(chatBody());
+    expect(res.status).toBe(200);
+
+    const json = (await res.json()) as Record<string, unknown>;
+    const choices = json.choices as Array<Record<string, unknown>>;
+    const message = choices[0].message as Record<string, unknown>;
+    expect(message.content).toBe("Partial block.");
+
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
 });

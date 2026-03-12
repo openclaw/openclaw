@@ -212,4 +212,28 @@ describe("OpenResponses HTTP dispatch interceptor (e2e)", () => {
 
     expect(agentCommand).not.toHaveBeenCalled();
   });
+
+  it("treats thrown interceptor after output as intercepted", async () => {
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "Agent reply" }] } as never);
+
+    injectInterceptors([
+      {
+        async intercept(_text, _ctx, output) {
+          output.sendBlock("Partial block.");
+          throw new Error("interceptor failed after output");
+        },
+      },
+    ]);
+
+    const res = await post(responsesBody());
+    expect(res.status).toBe(200);
+
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.status).toBe("completed");
+    const output = json.output as Array<Record<string, unknown>>;
+    const content = (output[0].content as Array<Record<string, unknown>>)[0];
+    expect(content.text).toBe("Partial block.");
+
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
 });
