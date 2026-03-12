@@ -12,8 +12,15 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
 }
 
 function csvEscape(value: string): string {
-  if (/[",\n]/.test(value)) {
+  if (/[",\r\n]/.test(value)) {
     return `"${value.replaceAll('"', '""')}"`;
+  }
+  return value;
+}
+
+function neutralizeCsvFormulaString(value: string): string {
+  if (/^[\t\r ]*[=+\-@]/.test(value)) {
+    return `'${value}`;
   }
   return value;
 }
@@ -24,7 +31,10 @@ function toCsvRow(values: Array<string | number | undefined | null>): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value));
+      if (typeof value === "number") {
+        return String(value);
+      }
+      return csvEscape(neutralizeCsvFormulaString(value));
     })
     .join(",");
 }
