@@ -486,9 +486,9 @@ describe("decodeFileNameFromFeishu", () => {
     expect(decodeFileNameFromFeishu("")).toBe("");
   });
 
-  it("returns null/undefined unchanged", () => {
-    expect(decodeFileNameFromFeishu(null as any)).toBe(null);
-    expect(decodeFileNameFromFeishu(undefined as any)).toBe(undefined);
+  it("returns empty string for null/undefined", () => {
+    expect(decodeFileNameFromFeishu(null as any)).toBe("");
+    expect(decodeFileNameFromFeishu(undefined as any)).toBe("");
   });
 
   it("returns ASCII filenames unchanged", () => {
