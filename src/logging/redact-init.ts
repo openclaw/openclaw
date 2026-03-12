@@ -30,13 +30,9 @@ function isSensitiveKey(key: string): boolean {
 /**
  * Extract sensitive string values from an object recursively.
  */
-function extractSensitiveValues(
-  obj: unknown,
-  keyPath: string = "",
-  depth: number = 0,
-): string[] {
+function extractSensitiveValues(obj: unknown, keyPath: string = "", depth: number = 0): string[] {
   const MAX_DEPTH = 10;
-  const MIN_VALUE_LENGTH = 18; // Match DEFAULT_REDACT_MIN_LENGTH.
+  const MIN_VALUE_LENGTH = 12; // Match DEFAULT_REDACT_MIN_LENGTH in redact.ts
 
   if (depth > MAX_DEPTH || obj === null || typeof obj !== "object") {
     return [];
@@ -112,8 +108,16 @@ function scanConfig(config: OpenClawConfig): string[] {
   }
 
   // Scan provider configurations (kept for backward compatibility or plugins that use this key).
-  if ((config as any).providers && typeof (config as any).providers === "object") {
-    values.push(...extractSensitiveValues((config as any).providers, "providers"));
+  if (
+    (config as unknown as Record<string, unknown>).providers &&
+    typeof (config as unknown as Record<string, unknown>).providers === "object"
+  ) {
+    values.push(
+      ...extractSensitiveValues(
+        (config as unknown as Record<string, unknown>).providers,
+        "providers",
+      ),
+    );
   }
 
   // Scan gateway configuration.
@@ -128,7 +132,6 @@ function scanConfig(config: OpenClawConfig): string[] {
 
   return values;
 }
-
 
 /**
  * Initialize redaction with sensitive values from config and environment.

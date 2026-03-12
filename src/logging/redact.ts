@@ -8,9 +8,9 @@ const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 export type RedactSensitiveMode = "off" | "tools";
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
-const DEFAULT_REDACT_MIN_LENGTH = 18;
-const DEFAULT_REDACT_KEEP_START = 6;
-const DEFAULT_REDACT_KEEP_END = 4;
+const DEFAULT_REDACT_MIN_LENGTH = 12; // Lowered from 18 to catch shorter secrets
+const DEFAULT_REDACT_KEEP_START = 4; // Adjusted for shorter values
+const DEFAULT_REDACT_KEEP_END = 3;
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
@@ -199,4 +199,3 @@ export function clearDynamicSensitiveValues(): void {
 export function getDynamicSensitiveValuesCount(): number {
   return dynamicSensitiveValues.size;
 }
-
