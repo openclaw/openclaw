@@ -87,14 +87,14 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
-  it("returns 200 for verification request (empty events, no signature)", async () => {
+  it("rejects verification-shaped requests without a signature", async () => {
     const { res, onEvents } = await invokeWebhook({
       body: JSON.stringify({ events: [] }),
       headers: {},
       autoSign: false,
     });
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: "Missing X-Line-Signature header" });
     expect(onEvents).not.toHaveBeenCalled();
   });
 
