@@ -667,11 +667,23 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     };
   }),
   withApiKey("kimi-coding", async ({ apiKey, explicitProvider }) => {
+    const builtInProvider = buildKimiCodingProvider();
     const explicitBaseUrl = explicitProvider?.baseUrl;
+    const explicitHeaders = isRecord(explicitProvider?.headers)
+      ? (explicitProvider.headers as ProviderConfig["headers"])
+      : undefined;
     return {
-      ...buildKimiCodingProvider(),
+      ...builtInProvider,
       ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
         ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      ...(explicitHeaders
+        ? {
+            headers: {
+              ...builtInProvider.headers,
+              ...explicitHeaders,
+            },
+          }
         : {}),
       apiKey,
     };

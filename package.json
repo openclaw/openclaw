@@ -421,6 +421,11 @@
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
+  "peerDependenciesMeta": {
+    "node-llama-cpp": {
+      "optional": true
+    }
+  },
   "optionalDependencies": {
     "@grpc/grpc-js": "^1.14.3",
     "nice-grpc": "^2.1.14",
