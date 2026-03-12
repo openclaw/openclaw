@@ -940,8 +940,11 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
  * These surface when the underlying fetch/socket layer fails before an
  * HTTP status code is available.
  */
+// Note: intentionally excludes "aborted" — AbortError / user cancellation must
+// not be classified as a transient transport failure (it would cause cancelled
+// runs to retry instead of terminating immediately).
 const TRANSIENT_NETWORK_ERROR_RE =
-  /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|network socket disconnected|Network connection lost|\baborted\b|UND_ERR_CONNECT_TIMEOUT|request to .* failed, reason:/i;
+  /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|network socket disconnected|Network connection lost|UND_ERR_CONNECT_TIMEOUT|request to .* failed, reason:/i;
 
 export function isTransientNetworkErrorMessage(raw: string): boolean {
   if (!raw) {

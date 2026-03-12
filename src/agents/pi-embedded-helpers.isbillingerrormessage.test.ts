@@ -589,6 +589,17 @@ describe("isTransientNetworkErrorMessage", () => {
     expect(isTransientNetworkErrorMessage("billing error")).toBe(false);
     expect(isTransientNetworkErrorMessage("")).toBe(false);
   });
+
+  it("does not match user cancellation / AbortError", () => {
+    // "aborted" must not be classified as transient network — it would cause
+    // cancelled runs to retry instead of terminating immediately.
+    expect(isTransientNetworkErrorMessage("aborted")).toBe(false);
+    expect(isTransientNetworkErrorMessage("The operation was aborted")).toBe(false);
+    expect(isTransientNetworkErrorMessage("AbortError: signal is aborted without reason")).toBe(
+      false,
+    );
+    expect(isTransientNetworkErrorMessage("Operation aborted")).toBe(false);
+  });
 });
 
 describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {
