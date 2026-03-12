@@ -2,6 +2,7 @@ import * as dns from "node:dns";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -177,13 +178,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  // Match EnvHttpProxyAgent behavior (undici) for HTTPS requests:
-  // - lower-case env vars take precedence over upper-case
-  // - HTTPS requests use https_proxy/HTTPS_PROXY first, then fall back to http_proxy/HTTP_PROXY
-  // - ALL_PROXY is ignored by EnvHttpProxyAgent
-  const httpProxy = env.http_proxy ?? env.HTTP_PROXY;
-  const httpsProxy = env.https_proxy ?? env.HTTPS_PROXY;
-  return Boolean(httpProxy) || Boolean(httpsProxy);
+  return hasEnvHttpProxyConfigured("https", env);
 }
 
 function createTelegramDispatcher(params: {
