@@ -189,6 +189,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: bodyText,
+    // Preserve the full raw command text so multiline one-shot directives
+    // still parse against the original body instead of the single-line command view.
+    BodyForCommands: rawBody,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
     CommandBody: commandBody,
