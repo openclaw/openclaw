@@ -87,7 +87,7 @@ internal object TalkModeVoiceResolver {
 
         val code = conn.responseCode
         val stream = if (code >= 400) conn.errorStream else conn.inputStream
-        val data = stream.use { it.readBytes() }
+        val data = stream?.use { it.readBytes() } ?: byteArrayOf()
         if (code >= 400) {
           val message = data.toString(Charsets.UTF_8)
           throw IllegalStateException("ElevenLabs voices failed: $code $message")
@@ -101,8 +101,9 @@ internal object TalkModeVoiceResolver {
           val name = obj["name"].asStringOrNull()
           ElevenLabsVoice(voiceId, name)
         }
-      } finally {
+      } catch (e: Exception) {
         conn.disconnect()
+        throw e
       }
     }
   }
