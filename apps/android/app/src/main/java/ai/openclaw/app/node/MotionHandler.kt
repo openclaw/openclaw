@@ -146,15 +146,13 @@ private object SystemMotionDataSource : MotionDataSource {
     val sample =
       withTimeoutOrNull(1200L) {
         suspendCancellableCoroutine<Float?> { cont ->
-          var resumed = false
           val listener =
             object : SensorEventListener {
               override fun onSensorChanged(event: SensorEvent?) {
-                if (resumed) return
                 val value = event?.values?.firstOrNull()
-                resumed = true
+                val token = cont.tryResume(value) ?: return
                 sensorManager.unregisterListener(this)
-                cont.resume(value)
+                cont.completeResume(token)
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -162,7 +160,6 @@ private object SystemMotionDataSource : MotionDataSource {
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
             sensorManager.unregisterListener(listener)
-            resumed = true
             cont.resume(null)
             return@suspendCancellableCoroutine
           }
@@ -181,7 +178,6 @@ private object SystemMotionDataSource : MotionDataSource {
         suspendCancellableCoroutine<AccelerometerSample?> { cont ->
           var count = 0
           var sumDelta = 0.0
-          var resumed = false
           val listener =
             object : SensorEventListener {
               override fun onSensorChanged(event: SensorEvent?) {
@@ -195,15 +191,14 @@ private object SystemMotionDataSource : MotionDataSource {
                   ).toDouble()
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
-                if (count >= ACCELEROMETER_SAMPLE_TARGET && !resumed) {
-                  resumed = true
-                  sensorManager.unregisterListener(this)
-                  cont.resume(
-                    AccelerometerSample(
-                      samples = count,
-                      averageDelta = if (count == 0) 0.0 else sumDelta / count,
-                    ),
+                if (count >= ACCELEROMETER_SAMPLE_TARGET) {
+                  val result = AccelerometerSample(
+                    samples = count,
+                    averageDelta = sumDelta / count,
                   )
+                  val token = cont.tryResume(result) ?: return
+                  sensorManager.unregisterListener(this)
+                  cont.completeResume(token)
                 }
               }
 
@@ -211,7 +206,6 @@ private object SystemMotionDataSource : MotionDataSource {
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
-            resumed = true
             cont.resume(null)
             return@suspendCancellableCoroutine
           }
