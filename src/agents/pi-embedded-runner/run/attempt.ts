@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -117,7 +118,12 @@ import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import {
+  applyExtraParamsToAgent,
+  createTriggerSourceWrapper,
+  createTurnIdWrapper,
+  resolveAgentTransportOverride,
+} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -1120,6 +1126,20 @@ export async function runEmbeddedAttempt(
           });
         };
       }
+
+      // Inject trigger_source so the LLM proxy knows what initiated this run
+      // (e.g. "user", "cron", "heartbeat").
+      if (params.trigger) {
+        activeSession.agent.streamFn = createTriggerSourceWrapper(
+          activeSession.agent.streamFn,
+          params.trigger,
+        );
+      }
+
+      // Generate a turn_id shared across all LLM calls within this agent turn.
+      // This lets the proxy correlate multiple requests from a single user message.
+      const turnId = crypto.randomUUID();
+      activeSession.agent.streamFn = createTurnIdWrapper(activeSession.agent.streamFn, turnId);
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
