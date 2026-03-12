@@ -1,18 +1,9 @@
-{
+﻿{
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "allowedOrigins": [
-        "https://openclaw-production-56fa.up.railway.app"
-      ],
-      "dangerouslyAllowHostHeaderOriginFallback": false,
-      "dangerouslyDisableDeviceAuth": false
-    },
-    "nodes": {
-      "browser": {
-        "mode": "manual",
-        "node": "${OPENCLAW_BROWSER_NODE}"
-      }
+      "dangerouslyAllowHostHeaderOriginFallback": true,
+      "dangerouslyDisableDeviceAuth": true
     }
   },
   "hooks": {
@@ -27,32 +18,24 @@
       "revenue-executor"
     ]
   },
-  "agents": {
-    "defaults": {
-      "sandbox": {
-        "browser": {
-          "allowHostControl": true
-        }
-      },
-      "model": {
-        "primary": "${OPENCLAW_AGENT_MODEL}"
-      }
-    }
-  },
   "plugins": {
     "entries": {
       "revenue-executor": {
         "enabled": true,
         "config": {
-          "ghlApiKey": "${GHL_API_KEY}",
-          "ghlLocationId": "${GHL_LOCATION_ID}",
-          "ghlPipelineId": "${GHL_PIPELINE_ID}",
-          "stripeSecretKey": "${STRIPE_SECRET_KEY}",
-          "defaultTags": [
-            "ai-coo",
-            "telegram-lead"
-          ]
+          "ghlApiKey": "${OPENCLAW_REVENUE_GHL_API_KEY}",
+          "ghlLocationId": "${OPENCLAW_REVENUE_GHL_LOCATION_ID}",
+          "ghlPipelineId": "${OPENCLAW_REVENUE_GHL_PIPELINE_ID}",
+          "stripeSecretKey": "${OPENCLAW_REVENUE_STRIPE_SECRET_KEY}",
+          "defaultTags": ["ai-coo", "telegram-lead"]
         }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "${OPENCLAW_AGENT_MODEL}"
       }
     }
   }
