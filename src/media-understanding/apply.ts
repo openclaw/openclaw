@@ -312,6 +312,13 @@ function isBinaryMediaMime(mime?: string): boolean {
     return true;
   }
   if (
+    mime === "application/msword" ||
+    mime === "application/vnd.ms-word" ||
+    mime === "application/vnd.ms-office"
+  ) {
+    return true;
+  }
+  if (
     mime === "application/zip" ||
     mime === "application/x-zip-compressed" ||
     mime === "application/gzip" ||
@@ -385,7 +392,8 @@ async function extractFileBlocks(params: {
     const textSample = decodeTextSample(bufferResult?.buffer);
     // Do not coerce real PDFs into text/plain via printable-byte heuristics.
     // PDFs have a dedicated extraction path in extractFileContentFromSource.
-    const allowTextHeuristic = normalizedRawMime !== "application/pdf";
+    const allowTextHeuristic =
+      normalizedRawMime !== "application/pdf" && !isBinaryMediaMime(normalizedRawMime);
     const textLike =
       allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;

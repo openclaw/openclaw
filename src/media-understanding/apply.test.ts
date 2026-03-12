@@ -970,6 +970,26 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:audio>" });
   });
 
+  it("skips legacy .doc attachments even when heuristics see UTF-16 tabular text", async () => {
+    const docLikeBytes = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from("WordDocument\t1Table\r\n", "utf16le"),
+      Buffer.from(Array.from({ length: 64 }, (_, index) => index)),
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "incident.doc",
+      content: docLikeBytes,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/msword",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
   it("does not reclassify PDF attachments as text/plain", async () => {
     const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
     const filePath = await createTempMediaFile({
