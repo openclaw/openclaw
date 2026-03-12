@@ -561,7 +561,7 @@ export async function handleToolExecutionEnd(
       durationMs,
     };
     void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
+      .runAfterToolCallVoid(hookEvent, {
         toolName,
         agentId: ctx.params.agentId,
         sessionKey: ctx.params.sessionKey,
