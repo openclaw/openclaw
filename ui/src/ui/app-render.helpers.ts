@@ -10,7 +10,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -133,6 +133,7 @@ export function renderChatControls(state: AppViewState) {
     state.sessionsResult,
     mainSessionKey,
     hideCron,
+    state.agentsList,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -431,11 +432,12 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
-function resolveSessionOptions(
+export function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
   hideCron = false,
+  agentsList?: AgentsListResult | null,
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -470,6 +472,23 @@ function resolveSessionOptions(
         options.push({
           key: s.key,
           displayName: resolveSessionDisplayName(s.key, s),
+        });
+      }
+    }
+  }
+
+  // Add configured agents that don't have existing sessions yet,
+  // so users can start chatting with any configured agent.
+  if (agentsList?.agents) {
+    const mainKey = agentsList.mainKey || "main";
+    for (const agent of agentsList.agents) {
+      const agentSessionKey = `agent:${agent.id}:${mainKey}`;
+      if (!seen.has(agentSessionKey)) {
+        seen.add(agentSessionKey);
+        const name = agent.name || agent.id;
+        options.push({
+          key: agentSessionKey,
+          displayName: `${name} (new)`,
         });
       }
     }
