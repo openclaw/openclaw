@@ -92,7 +92,11 @@ export function shouldSkipBackendSelfPairing(params: {
     return false;
   }
   // token/password: sharedAuthOk is set specifically for these in auth-context.ts.
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // tailscale: WS auth can also attest a backend client via verified Tailscale identity.
+  const usesSharedSecretAuth =
+    params.authMethod === "token" ||
+    params.authMethod === "password" ||
+    params.authMethod === "tailscale";
   // device-token: a derived credential issued after initial shared-secret pairing. sharedAuthOk
   // stays false for device-token in the WS flow (auth-context.ts only sets it for token/password/
   // trusted-proxy), so we gate on authOk directly instead.

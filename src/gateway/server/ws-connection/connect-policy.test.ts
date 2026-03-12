@@ -385,6 +385,48 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
+    // Backend client authenticated via verified Tailscale identity is trusted.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "tailscale",
+      }),
+    ).toBe(true);
+
+    // Remote backend client over Tailscale is also trusted.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "tailscale",
+      }),
+    ).toBe(true);
+
+    // Browser-origin Tailscale backend connection is still rejected.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "tailscale",
+      }),
+    ).toBe(false);
+
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams("webchat", GATEWAY_CLIENT_MODES.BACKEND),
