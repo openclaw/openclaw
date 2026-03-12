@@ -104,6 +104,13 @@ type PreviewTargetResolution = {
   stopCreatesFirstPreview: boolean;
 };
 
+function textLikelyMatchesPreviewSnapshot(snapshot: string | undefined, text: string): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  return snapshot === text || snapshot.startsWith(text) || text.startsWith(snapshot);
+}
+
 function shouldSkipRegressivePreviewUpdate(args: {
   currentPreviewText: string | undefined;
   text: string;
@@ -312,10 +319,22 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewButtons,
     canEditViaPreview,
   }: ConsumeArchivedAnswerPreviewParams): Promise<LaneDeliveryResult | undefined> => {
-    const archivedPreview = params.archivedAnswerPreviews.shift();
+    const archivedPreview = params.archivedAnswerPreviews[0];
     if (!archivedPreview) {
       return undefined;
     }
+    const activePreviewMessageId = lane.stream?.messageId();
+    const hasActivePreviewMessage = typeof activePreviewMessageId === "number";
+    const activeSnapshot = getLanePreviewText(lane);
+    const archivedSnapshot = archivedPreview.textSnapshot;
+    const preferActivePreviewForFinal =
+      hasActivePreviewMessage &&
+      textLikelyMatchesPreviewSnapshot(activeSnapshot, text) &&
+      !textLikelyMatchesPreviewSnapshot(archivedSnapshot, text);
+    if (preferActivePreviewForFinal) {
+      return undefined;
+    }
+    params.archivedAnswerPreviews.shift();
     if (canEditViaPreview) {
       const finalized = await tryUpdatePreviewForLane({
         lane,
