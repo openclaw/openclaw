@@ -1,7 +1,11 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  stripTrailingSilentReplyToken,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -339,8 +343,14 @@ export function buildEmbeddedRunPayloads(params: {
       if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
         return false;
       }
+      // If the text contains a silent-reply token, strip it instead of discarding
+      // the entire payload — the model may have appended real content before the token.
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
-        return false;
+        const stripped = stripTrailingSilentReplyToken(p.text, SILENT_REPLY_TOKEN);
+        if (!stripped) {
+          return false;
+        }
+        p.text = stripped;
       }
       return true;
     });
