@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -658,6 +659,21 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
+
+  // Check the resolved session lane — if it is busy, skip to avoid interrupting
+  // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
+  // re-schedule this wake automatically.  See #14396 (closed without merge).
+  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
+  const sessionLaneSize = (opts.deps?.getQueueSize ?? getQueueSize)(sessionLaneKey);
+  if (sessionLaneSize > 0) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "requests-in-flight",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "requests-in-flight" };
+  }
+
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
