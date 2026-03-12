@@ -113,7 +113,11 @@ type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 const APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
+const MAX_NODE_ID_LENGTH = 256;
+const MAX_TOPIC_LENGTH = 255;
+const MAX_APNS_TOKEN_HEX_LENGTH = 512;
 const MAX_RELAY_IDENTIFIER_LENGTH = 256;
+const MAX_SEND_GRANT_LENGTH = 1024;
 const withLock = createAsyncLock();
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
@@ -125,6 +129,10 @@ function resolveApnsRegistrationPath(baseDir?: string): string {
 
 function normalizeNodeId(value: string): string {
   return value.trim();
+}
+
+function isValidNodeId(value: string): boolean {
+  return value.length > 0 && value.length <= MAX_NODE_ID_LENGTH;
 }
 
 function normalizeApnsToken(value: string): string {
@@ -142,11 +150,15 @@ function normalizeInstallationId(value: string): string {
   return value.trim();
 }
 
-function validateRelayIdentifier(value: string, fieldName: string): string {
+function validateRelayIdentifier(
+  value: string,
+  fieldName: string,
+  maxLength: number = MAX_RELAY_IDENTIFIER_LENGTH,
+): string {
   if (!value) {
     throw new Error(`${fieldName} required`);
   }
-  if (value.length > MAX_RELAY_IDENTIFIER_LENGTH) {
+  if (value.length > maxLength) {
     throw new Error(`${fieldName} too long`);
   }
   if (/[^\x21-\x7e]/.test(value)) {
@@ -157,6 +169,10 @@ function validateRelayIdentifier(value: string, fieldName: string): string {
 
 function normalizeTopic(value: string): string {
   return value.trim();
+}
+
+function isValidTopic(value: string): boolean {
+  return value.length > 0 && value.length <= MAX_TOPIC_LENGTH;
 }
 
 function normalizeTokenDebugSuffix(value: unknown): string | undefined {
@@ -171,7 +187,7 @@ function normalizeTokenDebugSuffix(value: unknown): string | undefined {
 }
 
 function isLikelyApnsToken(value: string): boolean {
-  return /^[0-9a-f]{32,}$/i.test(value);
+  return value.length <= MAX_APNS_TOKEN_HEX_LENGTH && /^[0-9a-f]{32,}$/i.test(value);
 }
 
 function parseReason(body: string): string | undefined {
@@ -260,7 +276,7 @@ function normalizeDirectRegistration(
     typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
       ? Math.trunc(record.updatedAtMs)
       : 0;
-  if (!nodeId || !topic || !isLikelyApnsToken(token)) {
+  if (!isValidNodeId(nodeId) || !isValidTopic(topic) || !isLikelyApnsToken(token)) {
     return null;
   }
   return {
@@ -300,11 +316,11 @@ function normalizeRelayRegistration(
       ? Math.trunc(record.updatedAtMs)
       : 0;
   if (
-    !nodeId ||
+    !isValidNodeId(nodeId) ||
     !relayHandle ||
     !sendGrant ||
     !installationId ||
-    !topic ||
+    !isValidTopic(topic) ||
     environment !== "production" ||
     distribution !== "official"
   ) {
@@ -353,7 +369,9 @@ async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistratio
   for (const [nodeId, record] of Object.entries(registrations)) {
     const registration = normalizeStoredRegistration(record);
     if (registration) {
-      normalized[normalizeNodeId(nodeId)] = registration;
+      const normalizedNodeId = normalizeNodeId(nodeId);
+      normalized[isValidNodeId(normalizedNodeId) ? normalizedNodeId : registration.nodeId] =
+        registration;
     }
   }
   return { registrationsByNodeId: normalized };
@@ -387,10 +405,10 @@ export async function registerApnsRegistration(
 ): Promise<ApnsRegistration> {
   const nodeId = normalizeNodeId(params.nodeId);
   const topic = normalizeTopic(params.topic);
-  if (!nodeId) {
+  if (!isValidNodeId(nodeId)) {
     throw new Error("nodeId required");
   }
-  if (!topic) {
+  if (!isValidTopic(topic)) {
     throw new Error("topic required");
   }
 
@@ -404,7 +422,11 @@ export async function registerApnsRegistration(
         normalizeRelayHandle(params.relayHandle),
         "relayHandle",
       );
-      const sendGrant = validateRelayIdentifier(params.sendGrant.trim(), "sendGrant");
+      const sendGrant = validateRelayIdentifier(
+        params.sendGrant.trim(),
+        "sendGrant",
+        MAX_SEND_GRANT_LENGTH,
+      );
       const installationId = validateRelayIdentifier(
         normalizeInstallationId(params.installationId),
         "installationId",
@@ -721,7 +743,7 @@ function resolveDirectSendContext(params: {
     throw new Error("invalid APNs token");
   }
   const topic = normalizeTopic(params.registration.topic);
-  if (!topic) {
+  if (!isValidTopic(topic)) {
     throw new Error("topic required");
   }
   return {

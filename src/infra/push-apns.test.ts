@@ -125,6 +125,34 @@ describe("push APNs registration store", () => {
     ).rejects.toThrow("invalid APNs token");
   });
 
+  it("rejects oversized direct APNs registration fields", async () => {
+    const baseDir = await makeTempDir();
+    await expect(
+      registerApnsToken({
+        nodeId: "n".repeat(257),
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        baseDir,
+      }),
+    ).rejects.toThrow("nodeId required");
+    await expect(
+      registerApnsToken({
+        nodeId: "ios-node-1",
+        token: "A".repeat(513),
+        topic: "ai.openclaw.ios",
+        baseDir,
+      }),
+    ).rejects.toThrow("invalid APNs token");
+    await expect(
+      registerApnsToken({
+        nodeId: "ios-node-1",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "a".repeat(256),
+        baseDir,
+      }),
+    ).rejects.toThrow("topic required");
+  });
+
   it("rejects relay registrations that do not use production/official values", async () => {
     const baseDir = await makeTempDir();
     await expect(
@@ -184,6 +212,19 @@ describe("push APNs registration store", () => {
         baseDir,
       }),
     ).rejects.toThrow("installationId too long");
+    await expect(
+      registerApnsRegistration({
+        nodeId: "ios-node-relay",
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "x".repeat(1025),
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        baseDir,
+      }),
+    ).rejects.toThrow("sendGrant too long");
   });
 
   it("clears registrations", async () => {
