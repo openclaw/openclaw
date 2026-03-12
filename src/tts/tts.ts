@@ -175,6 +175,9 @@ export type TtsDirectiveOverrides = {
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
   };
+  deepgram?: {
+    model?: string;
+  };
 };
 
 export type TtsDirectiveParseResult = {

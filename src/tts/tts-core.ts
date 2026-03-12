@@ -21,6 +21,7 @@ import type {
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_DEEPGRAM_BASE_URL = "https://api.deepgram.com";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 export function isValidVoiceId(voiceId: string): boolean {
@@ -39,6 +40,14 @@ function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeDeepgramBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return DEFAULT_DEEPGRAM_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
 }
@@ -156,7 +165,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "deepgram"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -186,6 +200,13 @@ export function parseTtsDirectives(
             } else {
               warnings.push(`invalid ElevenLabs voiceId "${rawValue}"`);
             }
+            break;
+          case "deepgram_model":
+          case "deepgrammodel":
+            if (!policy.allowModelId) {
+              break;
+            }
+            overrides.deepgram = { ...overrides.deepgram, model: rawValue };
             break;
           case "model":
           case "modelid":
@@ -671,6 +692,52 @@ export async function openaiTTS(params: {
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function deepgramTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  encoding: string;
+  sampleRate?: number;
+  container?: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, baseUrl, model, encoding, sampleRate, container, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = new URL(`${normalizeDeepgramBaseUrl(baseUrl)}/v1/speak`);
+    url.searchParams.set("model", model);
+    url.searchParams.set("encoding", encoding);
+    if (sampleRate) {
+      url.searchParams.set("sample_rate", String(sampleRate));
+    }
+    if (container) {
+      url.searchParams.set("container", container);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Deepgram TTS API error (${response.status})`);
     }
 
     return Buffer.from(await response.arrayBuffer());
