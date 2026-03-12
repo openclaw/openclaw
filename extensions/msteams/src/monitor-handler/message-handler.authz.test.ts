@@ -152,4 +152,113 @@ describe("msteams monitor handler authz", () => {
 
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
+
+  it("persists the first DM conversation reference before pairing returns", async () => {
+    const upsertPairingRequest = vi.fn(async () => ({ code: "pair-123" }));
+    setMSTeamsRuntime({
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        debounce: {
+          resolveInboundDebounceMs: () => 0,
+          createInboundDebouncer: <T>(params: {
+            onFlush: (entries: T[]) => Promise<void>;
+          }): { enqueue: (entry: T) => Promise<void> } => ({
+            enqueue: async (entry: T) => {
+              await params.onFlush([entry]);
+            },
+          }),
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest,
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const conversationStore = {
+      upsert: vi.fn(async () => undefined),
+    };
+    const deps: MSTeamsMessageHandlerDeps = {
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+      appId: "test-app",
+      adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+      tokenProvider: {
+        getAccessToken: vi.fn(async () => "token"),
+      },
+      textLimit: 4000,
+      mediaMaxBytes: 1024 * 1024,
+      conversationStore:
+        conversationStore as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      pollStore: {
+        recordVote: vi.fn(async () => null),
+      } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
+      log: {
+        info: vi.fn(),
+        debug: vi.fn(),
+        error: vi.fn(),
+      } as unknown as MSTeamsMessageHandlerDeps["log"],
+    };
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-dm-1",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "user-id",
+          aadObjectId: "user-aad",
+          name: "Requester",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:dm@thread.tacv2",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        locale: "en-US",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "msteams",
+      accountId: "default",
+      id: "user-aad",
+      meta: { name: "Requester" },
+    });
+    expect(conversationStore.upsert).toHaveBeenCalledWith("a:dm@thread.tacv2", {
+      activityId: "msg-dm-1",
+      user: { id: "user-id", name: "Requester", aadObjectId: "user-aad" },
+      agent: { id: "bot-id", name: "Bot" },
+      bot: { id: "bot-id", name: "Bot" },
+      conversation: {
+        id: "a:dm@thread.tacv2",
+        conversationType: "personal",
+        tenantId: "tenant-1",
+      },
+      teamId: undefined,
+      channelId: "msteams",
+      serviceUrl: "https://service.example.test",
+      locale: "en-US",
+    });
+  });
 });
