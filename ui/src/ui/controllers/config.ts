@@ -36,7 +36,19 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export type LoadConfigOptions = {
+  discardPendingEdits?: boolean;
+};
+
+type ApplyConfigSnapshotOptions = {
+  discardPendingEdits?: boolean;
+};
+
+function isConfigHashConflictError(error: unknown): boolean {
+  return String(error).includes("config changed since last load");
+}
+
+export async function loadConfig(state: ConfigState, options?: LoadConfigOptions) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -44,7 +56,7 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
-    applyConfigSnapshot(state, res);
+    applyConfigSnapshot(state, res, options);
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -76,7 +88,18 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
+export function applyConfigSnapshot(
+  state: ConfigState,
+  snapshot: ConfigSnapshot,
+  options?: ApplyConfigSnapshotOptions,
+) {
+  const discardPendingEdits = options?.discardPendingEdits === true;
+  const rawModeDirty =
+    state.configFormMode === "raw" &&
+    state.configRaw !== state.configRawOriginal &&
+    !discardPendingEdits;
+  const preservePendingFormState = state.configFormDirty && !discardPendingEdits;
+  const preservePendingRawState = rawModeDirty;
   state.configSnapshot = snapshot;
   const rawFromSnapshot =
     typeof snapshot.raw === "string"
@@ -84,20 +107,23 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       : snapshot.config && typeof snapshot.config === "object"
         ? serializeConfigForm(snapshot.config)
         : state.configRaw;
-  if (!state.configFormDirty || state.configFormMode === "raw") {
+  if (state.configFormMode === "raw") {
+    if (!preservePendingRawState) {
+      state.configRaw = rawFromSnapshot;
+    }
+  } else if (!preservePendingFormState) {
     state.configRaw = rawFromSnapshot;
   } else if (state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
-  } else {
-    state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
-  if (!state.configFormDirty) {
+  if (!preservePendingFormState) {
     state.configForm = cloneConfigObject(snapshot.config ?? {});
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
+    state.configFormDirty = false;
   }
 }
 
@@ -142,9 +168,13 @@ export async function saveConfig(state: ConfigState) {
     }
     await state.client.request("config.set", { raw, baseHash });
     state.configFormDirty = false;
-    await loadConfig(state);
+    await loadConfig(state, { discardPendingEdits: true });
   } catch (err) {
-    state.lastError = String(err);
+    const errorMessage = String(err);
+    if (isConfigHashConflictError(err)) {
+      await loadConfig(state);
+    }
+    state.lastError = errorMessage;
   } finally {
     state.configSaving = false;
   }
@@ -169,9 +199,13 @@ export async function applyConfig(state: ConfigState) {
       sessionKey: state.applySessionKey,
     });
     state.configFormDirty = false;
-    await loadConfig(state);
+    await loadConfig(state, { discardPendingEdits: true });
   } catch (err) {
-    state.lastError = String(err);
+    const errorMessage = String(err);
+    if (isConfigHashConflictError(err)) {
+      await loadConfig(state);
+    }
+    state.lastError = errorMessage;
   } finally {
     state.configApplying = false;
   }

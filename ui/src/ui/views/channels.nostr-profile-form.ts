@@ -106,7 +106,7 @@ export function renderNostrProfileForm(params: {
               const target = e.target as HTMLTextAreaElement;
               callbacks.onFieldChange(field, target.value);
             }}
-            ?disabled=${state.saving}
+            ?disabled=${state.saving || state.importing}
           ></textarea>
           ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
           ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
@@ -130,7 +130,7 @@ export function renderNostrProfileForm(params: {
             const target = e.target as HTMLInputElement;
             callbacks.onFieldChange(field, target.value);
           }}
-          ?disabled=${state.saving}
+          ?disabled=${state.saving || state.importing}
         />
         ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
         ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
@@ -245,7 +245,7 @@ export function renderNostrProfileForm(params: {
         <button
           class="btn primary"
           @click=${callbacks.onSave}
-          ?disabled=${state.saving || !isDirty}
+          ?disabled=${state.saving || state.importing || !isDirty}
         >
           ${state.saving ? "Saving..." : "Save & Publish"}
         </button>

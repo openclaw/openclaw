@@ -4,6 +4,7 @@ import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  loadConfig,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -109,6 +110,40 @@ describe("applyConfigSnapshot", () => {
     // Original values should be preserved when dirty
     expect(state.configRawOriginal).toBe('{ "original": true }');
     expect(state.configFormOriginal).toEqual({ original: true });
+  });
+
+  it("replaces pending form state when explicitly discarding edits", () => {
+    const state = createState();
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    state.configRaw = '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configRawOriginal = '{ "original": true }';
+    state.configFormOriginal = { original: true };
+
+    applyConfigSnapshot(
+      state,
+      {
+        config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+        valid: true,
+        issues: [],
+        raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+      },
+      { discardPendingEdits: true },
+    );
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } },
+    });
+    expect(state.configRaw).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
+    expect(state.configRawOriginal).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
+    expect(state.configFormOriginal).toEqual({
+      agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } },
+    });
   });
 });
 
@@ -294,6 +329,43 @@ describe("applyConfig", () => {
     expect(params.baseHash).toBe("hash-apply-1");
     expect(params.sessionKey).toBe("agent:main:web:dm:test");
   });
+
+  it("refreshes the snapshot after apply hash conflicts without discarding edits", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.apply") {
+        throw new Error("config changed since last load; re-run config.get and retry");
+      }
+      if (method === "config.get") {
+        return {
+          hash: "hash-apply-2",
+          config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+          valid: true,
+          issues: [],
+          raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:web:dm:test";
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    state.configRaw = '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configSnapshot = { hash: "hash-apply-1" };
+
+    await applyConfig(state);
+
+    expect(request.mock.calls.map((call) => call[0])).toEqual(["config.apply", "config.get"]);
+    expect(state.configSnapshot?.hash).toBe("hash-apply-2");
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+    });
+    expect(state.lastError).toContain("config changed since last load");
+  });
 });
 
 describe("saveConfig", () => {
@@ -354,6 +426,163 @@ describe("saveConfig", () => {
     };
     expect(parsed.gateway.port).toBe("18789");
     expect(params.baseHash).toBe("hash-save-2");
+  });
+
+  it("refreshes the snapshot after save hash conflicts without discarding edits", async () => {
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === "config.set") {
+        throw new Error("config changed since last load; re-run config.get and retry");
+      }
+      if (method === "config.get") {
+        return {
+          hash: "hash-save-2",
+          config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+          valid: true,
+          issues: [],
+          raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+        };
+      }
+      return {};
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    state.configRaw = '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configSnapshot = { hash: "hash-save-1" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls.map((call) => call[0])).toEqual(["config.set", "config.get"]);
+    expect(state.configSnapshot?.hash).toBe("hash-save-2");
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+    });
+    expect(state.lastError).toContain("config changed since last load");
+  });
+});
+
+describe("loadConfig", () => {
+  it("keeps dirty form edits during passive refreshes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+      valid: true,
+      issues: [],
+      raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+
+    await loadConfig(state);
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+    });
+  });
+
+  it("discards dirty form edits for explicit reloads", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+      valid: true,
+      issues: [],
+      raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    state.configRaw = '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+
+    await loadConfig(state, { discardPendingEdits: true });
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } },
+    });
+    expect(state.configRaw).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
+  });
+
+  it("keeps dirty raw edits during passive refreshes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+      valid: true,
+      issues: [],
+      raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configRawOriginal =
+      '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configRaw = '{ "agents": { "defaults": { "model": "custom/raw-edit" } } }';
+
+    await loadConfig(state);
+
+    expect(state.configRaw).toBe('{ "agents": { "defaults": { "model": "custom/raw-edit" } } }');
+  });
+
+  it("updates raw mode from the snapshot when only form state is still dirty", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+      valid: true,
+      issues: [],
+      raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configFormDirty = true;
+    state.configForm = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+    state.configRawOriginal =
+      '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configRaw = state.configRawOriginal;
+
+    await loadConfig(state);
+
+    expect(state.configRaw).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
+    expect(state.configForm).toEqual({
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+    });
+    expect(state.configFormDirty).toBe(true);
+  });
+
+  it("discards dirty raw edits for explicit reloads", async () => {
+    const request = vi.fn().mockResolvedValue({
+      config: { agents: { defaults: { model: "ollama/qwen3-coder:30b-64k" } } },
+      valid: true,
+      issues: [],
+      raw: '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configRawOriginal =
+      '{ "agents": { "defaults": { "model": "anthropic/claude-opus-4-6" } } }';
+    state.configRaw = '{ "agents": { "defaults": { "model": "custom/raw-edit" } } }';
+
+    await loadConfig(state, { discardPendingEdits: true });
+
+    expect(state.configRaw).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
+    expect(state.configRawOriginal).toBe(
+      '{ "agents": { "defaults": { "model": "ollama/qwen3-coder:30b-64k" } } }',
+    );
   });
 });
 
