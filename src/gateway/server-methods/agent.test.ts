@@ -405,7 +405,79 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("rejects public spawned-run metadata fields", async () => {
+  it("rejects the inter_session sentinel from non-backend callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        channel: "inter_session",
+        idempotencyKey: "test-inter-session-public",
+      },
+      {
+        reqId: "inter-session-public-1",
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: { id: "test-client", mode: "ui", version: "1.0.0", platform: "test" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("unknown channel: inter_session"),
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("allows the inter_session sentinel for backend gateway callers", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        channel: "inter_session",
+        idempotencyKey: "test-inter-session-backend",
+      },
+      {
+        reqId: "inter-session-backend-1",
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: {
+              id: "gateway-client",
+              mode: "backend",
+              version: "1.0.0",
+              platform: "node",
+            },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { messageChannel?: string; runContext?: { messageChannel?: string } }
+      | undefined;
+    expect(callArgs?.messageChannel).toBe("inter_session");
+    expect(callArgs?.runContext?.messageChannel).toBe("inter_session");
+  });
+
+  it("only forwards workspaceDir for spawned subagent runs", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
     const respond = vi.fn();
