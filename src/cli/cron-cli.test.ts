@@ -40,6 +40,7 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
+    reuseSession?: boolean;
     payload?: {
       kind?: string;
       message?: string;
@@ -59,6 +60,7 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
+  reuseSession?: boolean;
   payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
@@ -320,6 +322,38 @@ describe("cron cli", () => {
     expect(params?.deleteAfterRun).toBe(false);
   });
 
+  it("supports --reuse-session on isolated cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Reuse context",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--reuse-session",
+    ]);
+
+    expect(params?.reuseSession).toBe(true);
+  });
+
+  it("rejects --reuse-session on non-isolated cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid reuse",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+      "--reuse-session",
+    ]);
+  });
+
   it("includes --account on isolated cron add delivery", async () => {
     const params = await runCronAddAndGetParams([
       "--name",
@@ -447,6 +481,14 @@ describe("cron cli", () => {
 
     const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
     expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
+  });
+
+  it("sets and clears reuseSession on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch(["--reuse-session"]);
+    expect(setPatch?.patch?.reuseSession).toBe(true);
+
+    const clearPatch = await runCronEditAndGetPatch(["--no-reuse-session"]);
+    expect(clearPatch?.patch?.reuseSession).toBe(false);
   });
 
   it("updates delivery settings without requiring --message", async () => {

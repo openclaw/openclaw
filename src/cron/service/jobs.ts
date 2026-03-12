@@ -140,6 +140,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+function assertSessionReuseSupport(job: Pick<CronJob, "sessionTarget" | "reuseSession">) {
+  if (job.reuseSession === true && job.sessionTarget !== "isolated") {
+    throw new Error('cron reuseSession is only supported for sessionTarget="isolated"');
+  }
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -535,6 +541,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
     sessionKey: normalizeOptionalSessionKey((input as { sessionKey?: unknown }).sessionKey),
+    reuseSession: input.reuseSession === true ? true : undefined,
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled,
@@ -552,6 +559,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertSessionReuseSupport(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -641,7 +649,11 @@ export function applyJobPatch(
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
+  if ("reuseSession" in patch) {
+    job.reuseSession = patch.reuseSession === true ? true : undefined;
+  }
   assertSupportedJobSpec(job);
+  assertSessionReuseSupport(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);

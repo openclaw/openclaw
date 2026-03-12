@@ -472,6 +472,13 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       }),
     ).not.toThrow();
   });
+
+  it("rejects enabling reuseSession on a main-session job", () => {
+    const job = createMainJob();
+    expect(() => applyJobPatch(job, { reuseSession: true } as CronJobPatch)).toThrow(
+      'cron reuseSession is only supported for sessionTarget="isolated"',
+    );
+  });
 });
 
 describe("cron stagger defaults", () => {
@@ -589,6 +596,20 @@ describe("createJob delivery defaults", () => {
     expect(job.delivery).toEqual({ mode: "none" });
   });
 
+  it("stores reuseSession for isolated agentTurn jobs", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-reuse",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      reuseSession: true,
+    });
+    expect(job.reuseSession).toBe(true);
+  });
+
   it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     const job = createJob(state, {
@@ -600,5 +621,20 @@ describe("createJob delivery defaults", () => {
       payload: { kind: "systemEvent", text: "ping" },
     });
     expect(job.delivery).toBeUndefined();
+  });
+
+  it("rejects reuseSession for main systemEvent jobs", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "main-reuse",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "ping" },
+        reuseSession: true,
+      }),
+    ).toThrow('cron reuseSession is only supported for sessionTarget="isolated"');
   });
 });

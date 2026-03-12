@@ -117,11 +117,23 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
-  it("forces a fresh session for isolated cron runs", async () => {
+  it("forces a fresh session for isolated cron runs by default", async () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
+    });
+  });
+
+  it("reuses the same session when reuseSession is enabled", async () => {
+    await runSkillFilterCase({
+      job: makeSkillJob({
+        reuseSession: true,
+      }),
+    });
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: false,
     });
   });
 

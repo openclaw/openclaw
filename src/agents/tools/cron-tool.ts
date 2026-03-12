@@ -231,6 +231,7 @@ JOB SCHEMA (for add action):
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary or webhook POST
+  "reuseSession": true,     // Optional: reuse the same isolated cron session across runs
   "sessionTarget": "main" | "isolated",  // Required
   "enabled": true | false   // Optional, default true
 }
@@ -306,6 +307,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "name",
               "schedule",
               "sessionTarget",
+              "reuseSession",
               "wakeMode",
               "payload",
               "delivery",
@@ -451,6 +453,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "schedule",
               "payload",
               "delivery",
+              "reuseSession",
               "enabled",
               "description",
               "deleteAfterRun",
