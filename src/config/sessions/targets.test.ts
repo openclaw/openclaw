@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,7 +11,8 @@ import {
 } from "./targets.js";
 
 async function resolveRealStorePath(sessionsDir: string): Promise<string> {
-  return await fs.realpath(path.join(sessionsDir, "sessions.json"));
+  // Match the native realpath behavior used by both discovery paths.
+  return fsSync.realpathSync.native(path.join(sessionsDir, "sessions.json"));
 }
 
 describe("resolveSessionStoreTargets", () => {
