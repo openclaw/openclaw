@@ -28,12 +28,14 @@ afterEach(() => {
 
 describe("cortex bridge", () => {
   it("resolves the default graph path inside the workspace", () => {
-    expect(resolveCortexGraphPath("/tmp/workspace")).toBe("/tmp/workspace/.cortex/context.json");
+    expect(resolveCortexGraphPath("/tmp/workspace")).toBe(
+      path.normalize(path.join("/tmp/workspace", ".cortex", "context.json")),
+    );
   });
 
   it("resolves relative graph overrides against the workspace", () => {
     expect(resolveCortexGraphPath("/tmp/workspace", "graphs/main.json")).toBe(
-      path.normalize("/tmp/workspace/graphs/main.json"),
+      path.normalize(path.resolve("/tmp/workspace", "graphs/main.json")),
     );
   });
 
