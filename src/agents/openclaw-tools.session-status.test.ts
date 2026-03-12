@@ -192,7 +192,7 @@ describe("session_status tool", () => {
     );
   });
 
-  it("blocks sandboxed child session_status access outside its tree", async () => {
+  it("blocks sandboxed child session_status access outside its tree before store lookup", async () => {
     resetSessionStore({
       "agent:main:subagent:child": {
         sessionId: "s-child",
@@ -228,16 +228,34 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:subagent:child", {
       sandboxed: true,
     });
+    const expectedError = "Session status visibility is restricted to the current session tree";
 
     await expect(
       tool.execute("call6", {
         sessionKey: "agent:main:main",
         model: "anthropic/claude-sonnet-4-5",
       }),
-    ).rejects.toThrow("Session status visibility is restricted to the current session tree");
+    ).rejects.toThrow(expectedError);
 
+    await expect(
+      tool.execute("call7", {
+        sessionKey: "agent:main:subagent:missing",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expect(callGatewayMock).toHaveBeenCalledWith({
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit: 500,
+        spawnedBy: "agent:main:subagent:child",
+      },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "sessions.list",
       params: {
         includeGlobal: false,
