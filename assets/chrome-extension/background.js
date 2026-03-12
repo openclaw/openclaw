@@ -62,6 +62,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function colorSchemeStorageKey(tabId) {
+  return `colorScheme:${tabId}`
+}
+
+async function detectTabColorScheme(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        try {
+          return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        } catch {
+          return null
+        }
+      },
+    })
+    const scheme = result === 'dark' || result === 'light' ? result : null
+    if (scheme) {
+      await chrome.storage.session.set({ [colorSchemeStorageKey(tabId)]: scheme })
+    }
+    return scheme
+  } catch {
+    return null
+  }
+}
+
+async function getStoredTabColorScheme(tabId) {
+  try {
+    const stored = await chrome.storage.session.get([colorSchemeStorageKey(tabId)])
+    const scheme = stored[colorSchemeStorageKey(tabId)]
+    return scheme === 'dark' || scheme === 'light' ? scheme : null
+  } catch {
+    return null
+  }
+}
+
+async function clearStoredTabColorScheme(tabId) {
+  try {
+    await chrome.storage.session.remove([colorSchemeStorageKey(tabId)])
+  } catch {
+    // ignore
+  }
+}
+
 async function validateAttachedTab(tabId) {
   try {
     await chrome.tabs.get(tabId)
@@ -509,8 +553,17 @@ function getTabByTargetId(targetId) {
 
 async function attachTab(tabId, opts = {}) {
   const debuggee = { tabId }
+  const detectedScheme = opts.colorScheme || (await detectTabColorScheme(tabId)) || (await getStoredTabColorScheme(tabId))
+
   await chrome.debugger.attach(debuggee, '1.3')
   await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
+  if (detectedScheme) {
+    await chrome.debugger
+      .sendCommand(debuggee, 'Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-color-scheme', value: detectedScheme }],
+      })
+      .catch(() => {})
+  }
 
   const info = /** @type {any} */ (await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo'))
   const targetInfo = info?.targetInfo
@@ -588,6 +641,7 @@ async function detachTab(tabId, reason) {
 
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
+  await clearStoredTabColorScheme(tabId)
 
   try {
     await chrome.debugger.detach({ tabId })
