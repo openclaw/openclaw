@@ -21,6 +21,7 @@ vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: () => false,
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
+  createAdaptiveEmbeddedRunner: () => () => Promise.resolve({ payloads: [], meta: {} }),
 }));
 
 vi.mock("./tools/agent-step.js", () => ({

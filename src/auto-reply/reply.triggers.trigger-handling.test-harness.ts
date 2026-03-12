@@ -40,6 +40,10 @@ vi.mock("../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: (...args: unknown[]) =>
     piEmbeddedMocks.compactEmbeddedPiSession(...args),
   runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
+  createAdaptiveEmbeddedRunner:
+    () =>
+    (...args: unknown[]) =>
+      piEmbeddedMocks.runEmbeddedPiAgent(...args),
   queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),

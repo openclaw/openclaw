@@ -4,7 +4,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { createAdaptiveEmbeddedRunner } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -146,7 +146,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCompleted = false;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: Awaited<ReturnType<ReturnType<typeof createAdaptiveEmbeddedRunner>>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
       const activeSessionEntry =
@@ -155,6 +155,7 @@ export function createFollowupRunner(params: {
         activeSessionEntry?.systemPromptReport,
       );
       try {
+        const runAgent = createAdaptiveEmbeddedRunner();
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
           provider: queued.run.provider,
@@ -168,7 +169,7 @@ export function createFollowupRunner(params: {
           }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
-            const result = await runEmbeddedPiAgent({
+            const result = await runAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
@@ -195,6 +196,7 @@ export function createFollowupRunner(params: {
               config: queued.run.config,
               skillsSnapshot: queued.run.skillsSnapshot,
               prompt: queued.prompt,
+              _hasExplicitModelOverride: queued.run.modelExplicitOverride ?? false,
               extraSystemPrompt: queued.run.extraSystemPrompt,
               ownerNumbers: queued.run.ownerNumbers,
               enforceFinalTag: queued.run.enforceFinalTag,
