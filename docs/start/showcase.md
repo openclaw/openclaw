@@ -149,6 +149,8 @@ Homebrew-installed helper to list/inspect/watch local OpenAI Codex sessions (CLI
   **@openclawq** • `devtools` `monitoring` `tui`
 
 Real-time TUI/CLI to monitor OpenClaw sessions: last user/assistant messages, run state (locks), delivery failures, and Telegram thread-binding routing.
+
+  <img src="/assets/showcase/clawmonitor.png" alt="ClawMonitor TUI screenshot" />
 </Card>
 
 <Card title="Bambu 3D Printer Control" icon="print" href="https://clawhub.com/tobiasbischoff/bambu-cli">
