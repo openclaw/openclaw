@@ -98,7 +98,7 @@ vi.mock("./abort.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
-  getFirstVisibleWatchdogMs: vi.fn(() => 4000),
+  resolveFirstVisibleWarnMs: vi.fn(() => 4000),
   logMessageFirstVisible: diagnosticMocks.logMessageFirstVisible,
   logMessageFirstVisibleTimeout: diagnosticMocks.logMessageFirstVisibleTimeout,
   logMessageQueued: diagnosticMocks.logMessageQueued,
@@ -1790,6 +1790,31 @@ describe("dispatchReplyFromConfig", () => {
         thresholdMs: 4000,
       }),
     );
+    vi.useRealTimers();
+  });
+
+  it("skips the first-visible watchdog on non-routable channels", async () => {
+    vi.useFakeTimers();
+    setNoAbort();
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "internal_webchat",
+        Surface: "internal_webchat",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+        return { text: "done" };
+      },
+    });
+
+    expect(diagnosticMocks.logMessageFirstVisibleTimeout).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 

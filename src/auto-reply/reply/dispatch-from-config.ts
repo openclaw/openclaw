@@ -17,7 +17,6 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
-  getFirstVisibleWatchdogMs,
   logMessageFirstVisible,
   logMessageFirstVisibleTimeout,
   logMessageProcessed,
@@ -33,6 +32,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import { resolveFirstVisibleWatchdogStrategy } from "./first-visible-watchdog.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -126,7 +126,7 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-  const firstVisibleWatchdogMs = getFirstVisibleWatchdogMs();
+  const firstVisibleWatchdog = resolveFirstVisibleWatchdogStrategy({ cfg, channel });
   let firstVisibleSeen = false;
   let firstVisibleWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
   const recordProcessed = (
@@ -182,7 +182,7 @@ export async function dispatchReplyFromConfig(params: {
   const generationToken = await beginSessionGeneration({ sessionKey, cfg });
   const canEmitCurrent = () => isSessionGenerationCurrent(generationToken);
   dispatcher.setDeliveryGuard?.(canEmitCurrent);
-  if (diagnosticsEnabled) {
+  if (firstVisibleWatchdog.mode === "diagnose_only") {
     firstVisibleWatchdogTimer = setTimeout(() => {
       if (firstVisibleSeen) {
         return;
@@ -192,9 +192,9 @@ export async function dispatchReplyFromConfig(params: {
         chatId,
         messageId,
         sessionKey,
-        thresholdMs: firstVisibleWatchdogMs,
+        thresholdMs: firstVisibleWatchdog.thresholdMs,
       });
-    }, firstVisibleWatchdogMs);
+    }, firstVisibleWatchdog.thresholdMs);
   }
   dispatcher.setFirstVisibleHandler?.((info) => {
     if (!diagnosticsEnabled) {
