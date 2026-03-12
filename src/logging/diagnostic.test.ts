@@ -9,6 +9,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
+  logMessageFirstVisibleTimeout,
   logMessageFirstVisible,
   logSessionStateChange,
   resetDiagnosticStateForTest,
@@ -136,7 +137,13 @@ describe("stuck session diagnostics threshold", () => {
   it("includes recent first-visible summary in heartbeat events", () => {
     const events: Array<{
       type: string;
-      firstVisible?: { sampleCount: number; avgMs: number; p95Ms: number; maxMs: number };
+      firstVisible?: {
+        sampleCount: number;
+        avgMs: number;
+        p95Ms: number;
+        maxMs: number;
+        timeoutCount: number;
+      };
     }> = [];
     const unsubscribe = onDiagnosticEvent((event) => {
       if (event.type === "diagnostic.heartbeat") {
@@ -165,6 +172,11 @@ describe("stuck session diagnostics threshold", () => {
         kind: "final",
         dispatchToFirstVisibleMs: 2200,
       });
+      logMessageFirstVisibleTimeout({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        thresholdMs: 4000,
+      });
       vi.advanceTimersByTime(30_000);
     } finally {
       unsubscribe();
@@ -177,6 +189,7 @@ describe("stuck session diagnostics threshold", () => {
         avgMs: 1700,
         p95Ms: 2200,
         maxMs: 2200,
+        timeoutCount: 1,
       },
     });
   });

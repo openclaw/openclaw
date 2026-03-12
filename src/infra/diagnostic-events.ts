@@ -93,6 +93,16 @@ export type DiagnosticMessageFirstVisibleEvent = DiagnosticBaseEvent & {
   dispatchToFirstVisibleMs: number;
 };
 
+export type DiagnosticMessageFirstVisibleTimeoutEvent = DiagnosticBaseEvent & {
+  type: "message.first_visible_timeout";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  thresholdMs: number;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -148,6 +158,7 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
     avgMs: number;
     p95Ms: number;
     maxMs: number;
+    timeoutCount: number;
   };
 };
 
@@ -171,6 +182,7 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
   | DiagnosticMessageFirstVisibleEvent
+  | DiagnosticMessageFirstVisibleTimeoutEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent

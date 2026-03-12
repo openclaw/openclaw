@@ -21,7 +21,9 @@ const webhookStats = {
   lastReceived: 0,
 };
 const FIRST_VISIBLE_SAMPLE_LIMIT = 50;
+const FIRST_VISIBLE_TIMEOUT_MS = 4_000;
 const firstVisibleSamples: number[] = [];
+let firstVisibleTimeoutCount = 0;
 
 let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -53,6 +55,7 @@ function buildFirstVisibleSummary():
       avgMs: number;
       p95Ms: number;
       maxMs: number;
+      timeoutCount: number;
     }
   | undefined {
   if (firstVisibleSamples.length === 0) {
@@ -66,6 +69,7 @@ function buildFirstVisibleSummary():
     avgMs: Math.round(total / ordered.length),
     p95Ms: ordered[p95Index] ?? ordered[ordered.length - 1] ?? 0,
     maxMs: ordered[ordered.length - 1] ?? 0,
+    timeoutCount: firstVisibleTimeoutCount,
   };
 }
 
@@ -251,6 +255,37 @@ export function logMessageFirstVisible(params: {
     dispatchToFirstVisibleMs: params.dispatchToFirstVisibleMs,
   });
   recordFirstVisibleSample(params.dispatchToFirstVisibleMs);
+  markActivity();
+}
+
+export function getFirstVisibleWatchdogMs(): number {
+  return FIRST_VISIBLE_TIMEOUT_MS;
+}
+
+export function logMessageFirstVisibleTimeout(params: {
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionId?: string;
+  sessionKey?: string;
+  thresholdMs?: number;
+}) {
+  const thresholdMs = params.thresholdMs ?? FIRST_VISIBLE_TIMEOUT_MS;
+  firstVisibleTimeoutCount += 1;
+  diag.warn(
+    `message first visible timeout: channel=${params.channel} chatId=${params.chatId ?? "unknown"} messageId=${
+      params.messageId ?? "unknown"
+    } sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} threshold=${thresholdMs}ms`,
+  );
+  emitDiagnosticEvent({
+    type: "message.first_visible_timeout",
+    channel: params.channel,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    thresholdMs,
+  });
   markActivity();
 }
 
@@ -496,6 +531,7 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
   firstVisibleSamples.length = 0;
+  firstVisibleTimeoutCount = 0;
   lastActivityAt = 0;
   stopDiagnosticHeartbeat();
 }

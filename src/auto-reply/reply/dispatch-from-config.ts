@@ -17,7 +17,9 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
+  getFirstVisibleWatchdogMs,
   logMessageFirstVisible,
+  logMessageFirstVisibleTimeout,
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
@@ -124,6 +126,9 @@ export async function dispatchReplyFromConfig(params: {
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const firstVisibleWatchdogMs = getFirstVisibleWatchdogMs();
+  let firstVisibleSeen = false;
+  let firstVisibleWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
     opts?: {
@@ -177,9 +182,28 @@ export async function dispatchReplyFromConfig(params: {
   const generationToken = await beginSessionGeneration({ sessionKey, cfg });
   const canEmitCurrent = () => isSessionGenerationCurrent(generationToken);
   dispatcher.setDeliveryGuard?.(canEmitCurrent);
+  if (diagnosticsEnabled) {
+    firstVisibleWatchdogTimer = setTimeout(() => {
+      if (firstVisibleSeen) {
+        return;
+      }
+      logMessageFirstVisibleTimeout({
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        thresholdMs: firstVisibleWatchdogMs,
+      });
+    }, firstVisibleWatchdogMs);
+  }
   dispatcher.setFirstVisibleHandler?.((info) => {
     if (!diagnosticsEnabled) {
       return;
+    }
+    firstVisibleSeen = true;
+    if (firstVisibleWatchdogTimer) {
+      clearTimeout(firstVisibleWatchdogTimer);
+      firstVisibleWatchdogTimer = undefined;
     }
     logMessageFirstVisible({
       channel,
@@ -659,6 +683,10 @@ export async function dispatchReplyFromConfig(params: {
     throw err;
   } finally {
     void dispatcher.waitForIdle().finally(() => {
+      if (firstVisibleWatchdogTimer) {
+        clearTimeout(firstVisibleWatchdogTimer);
+        firstVisibleWatchdogTimer = undefined;
+      }
       dispatcher.setFirstVisibleHandler?.(undefined);
     });
     if (unregisterSupersededListener) {

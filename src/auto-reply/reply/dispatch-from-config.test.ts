@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageFirstVisible: vi.fn(),
+  logMessageFirstVisibleTimeout: vi.fn(),
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
@@ -97,7 +98,9 @@ vi.mock("./abort.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  getFirstVisibleWatchdogMs: vi.fn(() => 4000),
   logMessageFirstVisible: diagnosticMocks.logMessageFirstVisible,
+  logMessageFirstVisibleTimeout: diagnosticMocks.logMessageFirstVisibleTimeout,
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
@@ -219,6 +222,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageFirstVisible.mockClear();
+    diagnosticMocks.logMessageFirstVisibleTimeout.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -1755,6 +1759,37 @@ describe("dispatchReplyFromConfig", () => {
         outcome: "completed",
       }),
     );
+  });
+
+  it("emits a first-visible timeout diagnostic when silence exceeds the watchdog", async () => {
+    vi.useFakeTimers();
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.setFirstVisibleHandler = vi.fn();
+    dispatcher.waitForIdle = vi.fn(async () => {
+      await new Promise(() => undefined);
+    });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-timeout",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(diagnosticMocks.logMessageFirstVisibleTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        thresholdMs: 4000,
+      }),
+    );
+    vi.useRealTimers();
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
