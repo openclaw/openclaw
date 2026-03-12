@@ -166,9 +166,6 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (!remote) {
       return "gateway.remote is not configured.";
     }
-    if (!plan.remoteEnabled) {
-      return "gateway.remote.enabled is false.";
-    }
     if (plan.remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
     }
@@ -190,9 +187,6 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   const remotePasswordReason = (() => {
     if (!remote) {
       return "gateway.remote is not configured.";
-    }
-    if (!plan.remoteEnabled) {
-      return "gateway.remote.enabled is false.";
     }
     if (plan.remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
