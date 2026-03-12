@@ -810,6 +810,7 @@ export function listSessionsFromStore(params: {
       const model = resolvedModel.model ?? DEFAULT_MODEL;
       return {
         key,
+        spawnedBy: entry?.spawnedBy,
         entry,
         kind: classifySessionKey(key, entry),
         label: entry?.label,
