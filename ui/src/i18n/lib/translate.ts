@@ -22,11 +22,21 @@ class I18nManager {
   }
 
   private resolveInitialLocale(): Locale {
-    const saved = localStorage.getItem("openclaw.i18n.locale");
-    if (isSupportedLocale(saved)) {
-      return saved;
+    try {
+      const saved =
+        typeof localStorage !== "undefined" && typeof localStorage.getItem === "function"
+          ? localStorage.getItem("openclaw.i18n.locale")
+          : null;
+      if (isSupportedLocale(saved)) {
+        return saved;
+      }
+    } catch {
+      // localStorage may throw in sandboxed or SSR contexts
     }
-    return resolveNavigatorLocale(navigator.language);
+    if (typeof navigator !== "undefined" && navigator.language) {
+      return resolveNavigatorLocale(navigator.language);
+    }
+    return DEFAULT_LOCALE;
   }
 
   private loadLocale() {
@@ -64,7 +74,13 @@ class I18nManager {
     }
 
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    try {
+      if (typeof localStorage !== "undefined" && typeof localStorage.setItem === "function") {
+        localStorage.setItem("openclaw.i18n.locale", locale);
+      }
+    } catch {
+      // localStorage may throw in sandboxed or SSR contexts
+    }
     this.notify();
   }
 
