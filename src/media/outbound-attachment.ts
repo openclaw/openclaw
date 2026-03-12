@@ -15,23 +15,27 @@ function isRemoteMediaUrl(mediaUrl: string): boolean {
 
 /**
  * Resolves a local media URL or path to an absolute filesystem path.
- * Handles file:// URLs, ~ expansion, and plain paths (including relative).
+ * Handles MEDIA: prefix (used by agent tools), file:// URLs, ~ expansion,
+ * and plain paths (including relative).
  * Consistent with the resolution logic in loadWebMediaInternal.
  */
 function resolveLocalOutboundPath(mediaUrl: string): string {
-  if (mediaUrl.startsWith("file://")) {
+  // Strip the MEDIA: prefix that agent tools (e.g. TTS) prepend to media paths.
+  // loadWebMedia strips it internally; we must do the same before resolving the path.
+  const stripped = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  if (stripped.startsWith("file://")) {
     try {
-      return fileURLToPath(mediaUrl);
+      return fileURLToPath(stripped);
     } catch {
       // Fall through: return as-is if URL is malformed
     }
   }
-  if (mediaUrl.startsWith("~")) {
-    return resolveUserPath(mediaUrl);
+  if (stripped.startsWith("~")) {
+    return resolveUserPath(stripped);
   }
   // Resolve relative paths to absolute so downstream processes (e.g. signal-cli)
   // can locate the file regardless of their working directory.
-  return path.resolve(mediaUrl);
+  return path.resolve(stripped);
 }
 
 export async function resolveOutboundAttachmentFromUrl(
