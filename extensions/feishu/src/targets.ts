@@ -87,8 +87,11 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   if (lowered.startsWith("direct:")) {
     // Strip OpenClaw internal peer prefix (e.g. session keys use direct:<peerId>)
     const normalized = trimmed.replace(/^direct:/i, "").trim();
-    return normalized.startsWith(CHAT_ID_PREFIX) ? "chat_id" :
-           normalized.startsWith(OPEN_ID_PREFIX) ? "open_id" : "user_id";
+    return normalized.startsWith(CHAT_ID_PREFIX)
+      ? "chat_id"
+      : normalized.startsWith(OPEN_ID_PREFIX)
+        ? "open_id"
+        : "user_id";
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
     return "chat_id";
