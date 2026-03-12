@@ -2,6 +2,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 
+const resolveMatrixClientMock = vi.hoisted(() => vi.fn());
+
 vi.mock("music-metadata", () => ({
   // `resolveMediaDurationMs` lazily imports `music-metadata`; in tests we don't
   // need real duration parsing and the real module is expensive to load.
@@ -27,6 +29,15 @@ vi.mock("@vector-im/matrix-bot-sdk", () => ({
 vi.mock("./send-queue.js", () => ({
   enqueueSend: async <T>(_roomId: string, fn: () => Promise<T>) => await fn(),
 }));
+
+vi.mock("./send/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./send/client.js")>();
+  return {
+    ...actual,
+    resolveMatrixClient: (...args: Parameters<typeof actual.resolveMatrixClient>) =>
+      resolveMatrixClientMock(...args),
+  };
+});
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -90,6 +101,12 @@ beforeAll(async () => {
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveMatrixClientMock.mockImplementation(async (opts) => {
+      if (!opts.client) {
+        throw new Error("test expected a Matrix client");
+      }
+      return { client: opts.client, stopOnDone: false };
+    });
     runtimeLoadConfigMock.mockReset();
     runtimeLoadConfigMock.mockReturnValue({});
     mediaKindFromMimeMock.mockReturnValue("image");
@@ -330,6 +347,12 @@ describe("resolveMediaMaxBytes cfg threading", () => {
 describe("sendTypingMatrix", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveMatrixClientMock.mockImplementation(async (opts) => {
+      if (!opts.client) {
+        throw new Error("test expected a Matrix client");
+      }
+      return { client: opts.client, stopOnDone: false };
+    });
     setMatrixRuntime(runtimeStub);
   });
 
@@ -367,6 +390,25 @@ describe("sendTypingMatrix", () => {
     } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
 
     await sendTypingMatrix("!room:example.org", true, 5_000, client);
+
+    expect(setTyping).toHaveBeenCalledTimes(1);
+    expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 5_000);
+  });
+
+  it("preserves legacy numeric timeout semantics when resolving the client internally", async () => {
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    resolveMatrixClientMock.mockImplementationOnce(async (opts) => {
+      expect(opts.client).toBeUndefined();
+      expect(opts.timeoutMs).toBe(5_000);
+      return {
+        client: {
+          setTyping,
+        } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient,
+        stopOnDone: false,
+      };
+    });
+
+    await sendTypingMatrix("!room:example.org", true, 5_000);
 
     expect(setTyping).toHaveBeenCalledTimes(1);
     expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 5_000);

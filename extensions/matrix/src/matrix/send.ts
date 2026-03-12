@@ -203,7 +203,7 @@ export async function sendTypingMatrix(
   client?: MatrixClient,
 ): Promise<void> {
   const resolvedOpts =
-    typeof opts === "number" ? { typingTimeoutMs: opts, clientTimeoutMs: undefined } : opts;
+    typeof opts === "number" ? { typingTimeoutMs: opts, clientTimeoutMs: opts } : opts;
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
     timeoutMs: resolvedOpts?.clientTimeoutMs,
