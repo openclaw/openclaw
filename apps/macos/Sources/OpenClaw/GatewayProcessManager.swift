@@ -375,19 +375,29 @@ final class GatewayProcessManager {
         Task { await ControlChannel.shared.configure() }
     }
 
+    private func shouldAbortReadinessWait(for status: Status) -> Bool {
+        guard case let .failed(message) = status else { return false }
+        // `enableLaunchdGateway` can mark startup as timed out after 6s, while callers
+        // may intentionally wait longer before giving up.
+        if self.lastFailureReason == "launchd start timeout" {
+            return false
+        }
+        return message != "Gateway did not start in time"
+    }
+
     func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
             // Startup can fail before readiness polling begins (for example missing CLI).
             // Return immediately so callers can surface the concrete failure reason.
-            if case .failed = self.status { return false }
+            if self.shouldAbortReadinessWait(for: self.status) { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
                 return true
             } catch {
-                if case .failed = self.status { return false }
+                if self.shouldAbortReadinessWait(for: self.status) { return false }
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
