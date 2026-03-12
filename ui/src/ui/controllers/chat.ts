@@ -38,6 +38,7 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatRunLastActivityAt?: number | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
@@ -193,6 +194,7 @@ export async function sendChatMessage(
   state.lastError = null;
   const runId = generateUUID();
   state.chatRunId = runId;
+  state.chatRunLastActivityAt = now;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
@@ -279,6 +281,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       return "final";
     }
     return null;
+  }
+
+  if (payload.runId && state.chatRunId && payload.runId === state.chatRunId) {
+    state.chatRunLastActivityAt = Date.now();
   }
 
   if (payload.state === "delta") {

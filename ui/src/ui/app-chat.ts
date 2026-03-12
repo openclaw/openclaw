@@ -5,6 +5,7 @@ import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import type { GatewayBrowserClient } from "./gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
@@ -25,9 +26,109 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+const CHAT_RUN_WATCHDOG_IDLE_MS = 15_000;
+const CHAT_RUN_WATCHDOG_RETRY_MS = 5_000;
+const CHAT_RUN_WATCHDOG_WAIT_TIMEOUT_MS = 50;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
+}
+
+type ChatRunWatchdogHost = ChatHost & {
+  client: GatewayBrowserClient | null;
+  chatLoading: boolean;
+  chatMessages: unknown[];
+  chatThinkingLevel: string | null;
+  chatRunLastActivityAt: number | null;
+  chatRunWatchdogTimer: number | null;
+  chatRunWatchdogProbeInFlight: boolean;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  lastError: string | null;
+};
+
+function clearChatRunWatchdogTimer(host: ChatRunWatchdogHost) {
+  if (host.chatRunWatchdogTimer !== null) {
+    globalThis.clearTimeout(host.chatRunWatchdogTimer);
+    host.chatRunWatchdogTimer = null;
+  }
+}
+
+export function resetChatRunWatchdog(host: ChatRunWatchdogHost) {
+  clearChatRunWatchdogTimer(host);
+  host.chatRunWatchdogProbeInFlight = false;
+  if (!host.chatRunId) {
+    host.chatRunLastActivityAt = null;
+  }
+}
+
+async function runChatRunWatchdog(host: ChatRunWatchdogHost, runId: string) {
+  if (!host.connected || !host.client || !host.chatRunId || host.chatRunId !== runId) {
+    resetChatRunWatchdog(host);
+    return;
+  }
+  if (host.chatRunWatchdogProbeInFlight) {
+    scheduleChatRunWatchdog(host, CHAT_RUN_WATCHDOG_RETRY_MS);
+    return;
+  }
+
+  host.chatRunWatchdogProbeInFlight = true;
+  try {
+    const result = await host.client.request<{ status?: string }>("agent.wait", {
+      runId,
+      timeoutMs: CHAT_RUN_WATCHDOG_WAIT_TIMEOUT_MS,
+    });
+    if (host.chatRunId !== runId) {
+      return;
+    }
+    if (result?.status === "ok" || result?.status === "error") {
+      host.chatRunId = null;
+      host.chatStream = null;
+      host.chatStreamStartedAt = null;
+      host.chatRunLastActivityAt = null;
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      try {
+        await loadChatHistory(host as unknown as OpenClawApp);
+      } finally {
+        await flushChatQueue(host);
+      }
+      return;
+    }
+  } catch (err) {
+    host.lastError = String(err);
+  } finally {
+    host.chatRunWatchdogProbeInFlight = false;
+  }
+
+  if (host.chatRunId === runId) {
+    scheduleChatRunWatchdog(host, CHAT_RUN_WATCHDOG_RETRY_MS);
+  }
+}
+
+export function scheduleChatRunWatchdog(host: ChatRunWatchdogHost, delayMs?: number) {
+  clearChatRunWatchdogTimer(host);
+  if (!host.connected || !host.client || !host.chatRunId) {
+    resetChatRunWatchdog(host);
+    return;
+  }
+
+  const now = Date.now();
+  const lastActivityAt = host.chatRunLastActivityAt ?? now;
+  const delay =
+    delayMs ?? Math.max(0, CHAT_RUN_WATCHDOG_IDLE_MS - Math.max(0, now - lastActivityAt));
+  const runId = host.chatRunId;
+  host.chatRunWatchdogTimer = globalThis.setTimeout(() => {
+    host.chatRunWatchdogTimer = null;
+    void runChatRunWatchdog(host, runId);
+  }, delay);
+}
+
+export function noteChatRunActivity(host: ChatRunWatchdogHost, now = Date.now()) {
+  if (!host.chatRunId) {
+    return;
+  }
+  host.chatRunLastActivityAt = now;
+  scheduleChatRunWatchdog(host);
 }
 
 export function isChatStopCommand(text: string) {
@@ -65,7 +166,10 @@ export async function handleAbortChat(host: ChatHost) {
     return;
   }
   host.chatMessage = "";
-  await abortChatRun(host as unknown as OpenClawApp);
+  const ok = await abortChatRun(host as unknown as OpenClawApp);
+  if (ok && host.chatRunId) {
+    noteChatRunActivity(host as unknown as ChatRunWatchdogHost);
+  }
 }
 
 function enqueueChatMessage(
