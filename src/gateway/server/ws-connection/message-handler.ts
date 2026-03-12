@@ -62,7 +62,12 @@ import {
   validateRequestFrame,
 } from "../../protocol/index.js";
 import { parseGatewayRole } from "../../role-policy.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+} from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
@@ -362,6 +367,15 @@ export function attachGatewayWsMessageHandler(params: {
 
   socket.on("message", async (data) => {
     if (isClosed()) {
+      return;
+    }
+    if (!getClient() && rawDataToString(data).length > MAX_PREAUTH_PAYLOAD_BYTES) {
+      setHandshakeState("failed");
+      setCloseCause("preauth-payload-too-large", {
+        payloadBytes: rawDataToString(data).length,
+        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      });
+      close(1009, "preauth payload too large");
       return;
     }
     const text = rawDataToString(data);
