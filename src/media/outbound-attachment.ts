@@ -1,3 +1,4 @@
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveUserPath } from "../utils.js";
 import { loadWebMedia } from "../web/media.js";
@@ -14,7 +15,7 @@ function isRemoteMediaUrl(mediaUrl: string): boolean {
 
 /**
  * Resolves a local media URL or path to an absolute filesystem path.
- * Handles file:// URLs, ~ expansion, and plain absolute/relative paths.
+ * Handles file:// URLs, ~ expansion, and plain paths (including relative).
  * Consistent with the resolution logic in loadWebMediaInternal.
  */
 function resolveLocalOutboundPath(mediaUrl: string): string {
@@ -28,7 +29,9 @@ function resolveLocalOutboundPath(mediaUrl: string): string {
   if (mediaUrl.startsWith("~")) {
     return resolveUserPath(mediaUrl);
   }
-  return mediaUrl;
+  // Resolve relative paths to absolute so downstream processes (e.g. signal-cli)
+  // can locate the file regardless of their working directory.
+  return path.resolve(mediaUrl);
 }
 
 export async function resolveOutboundAttachmentFromUrl(
@@ -49,10 +52,22 @@ export async function resolveOutboundAttachmentFromUrl(
   // of re-saving with a UUID-based name. Re-saving would discard the human-readable
   // filename, causing outbound attachments (e.g. Signal) to arrive as UUID blobs.
   if (!isRemoteMediaUrl(trimmed)) {
-    return {
-      path: resolveLocalOutboundPath(trimmed),
-      contentType: media.contentType,
-    };
+    const resolvedPath = resolveLocalOutboundPath(trimmed);
+    // If the file fits within the limit (no optimization was needed), short-circuit.
+    // If loadWebMedia had to optimize the image to fit, media.buffer already contains
+    // the correctly sized result — persist that instead of returning the oversized original.
+    if (media.buffer.byteLength <= maxBytes) {
+      return { path: resolvedPath, contentType: media.contentType };
+    }
+    // Fallback: file needed optimization; persist the optimized buffer.
+    const saved = await saveMediaBuffer(
+      media.buffer,
+      media.contentType ?? undefined,
+      "outbound",
+      maxBytes,
+      media.fileName ?? undefined,
+    );
+    return { path: saved.path, contentType: saved.contentType };
   }
 
   // Remote media: buffer is downloaded; persist to temp store.
