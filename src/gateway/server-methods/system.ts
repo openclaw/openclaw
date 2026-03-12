@@ -1,5 +1,9 @@
 import { loadConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../../infra/device-identity.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import {
   resolveHeartbeatSummaryForAgent,
@@ -14,6 +18,17 @@ import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
+  "gateway.identity.get": ({ respond }) => {
+    const identity = loadOrCreateDeviceIdentity();
+    respond(
+      true,
+      {
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      },
+      undefined,
+    );
+  },
   "last-heartbeat": ({ respond }) => {
     respond(true, getLastHeartbeatEvent(), undefined);
   },
