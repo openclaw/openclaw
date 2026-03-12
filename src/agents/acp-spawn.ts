@@ -41,7 +41,6 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
-import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
 
@@ -168,21 +167,6 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
-function resolveRequesterInternalSessionKey(params: {
-  cfg: OpenClawConfig;
-  requesterSessionKey?: string;
-}): string {
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const requesterSessionKey = params.requesterSessionKey?.trim();
-  return requesterSessionKey
-    ? resolveInternalSessionKey({
-        key: requesterSessionKey,
-        alias,
-        mainKey,
-      })
-    : alias;
-}
-
 async function persistAcpSpawnSessionFileBestEffort(params: {
   sessionId: string;
   sessionKey: string;
@@ -307,10 +291,6 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = loadConfig();
-  const requesterInternalKey = resolveRequesterInternalSessionKey({
-    cfg,
-    requesterSessionKey: ctx.agentSessionKey,
-  });
   if (!isAcpEnabledByPolicy(cfg)) {
     return {
       status: "forbidden",
@@ -396,16 +376,29 @@ export async function spawnAcpDirect(
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   try {
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        spawnedBy: requesterInternalKey,
-        ...(params.label ? { label: params.label } : {}),
-      },
-      timeoutMs: 10_000,
+    const initialized = await acpManager.initializeSession({
+      cfg,
+      sessionKey,
+      agent: targetAgentId,
+      mode: runtimeMode,
+      cwd: params.cwd,
+      backendId: cfg.acp?.backend,
     });
+    initializedRuntime = {
+      runtime: initialized.runtime,
+      handle: initialized.handle,
+    };
     sessionCreated = true;
+    if (params.label) {
+      await callGateway({
+        method: "sessions.patch",
+        params: {
+          key: sessionKey,
+          label: params.label,
+        },
+        timeoutMs: 10_000,
+      });
+    }
     const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
     const sessionStore = loadSessionStore(storePath);
     let sessionEntry: SessionEntry | undefined = sessionStore[sessionKey];
@@ -421,18 +414,6 @@ export async function spawnAcpDirect(
         stage: "spawn",
       });
     }
-    const initialized = await acpManager.initializeSession({
-      cfg,
-      sessionKey,
-      agent: targetAgentId,
-      mode: runtimeMode,
-      cwd: params.cwd,
-      backendId: cfg.acp?.backend,
-    });
-    initializedRuntime = {
-      runtime: initialized.runtime,
-      handle: initialized.handle,
-    };
 
     if (preparedBinding) {
       binding = await bindingService.bind({

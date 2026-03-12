@@ -341,10 +341,7 @@ describe("spawnAcpDirect", () => {
     const patchCalls = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .filter((request) => request.method === "sessions.patch");
-    expect(patchCalls[0]?.params).toMatchObject({
-      key: result.childSessionKey,
-      spawnedBy: "agent:main:main",
-    });
+    expect(patchCalls).toHaveLength(0);
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         targetKind: "session",
@@ -373,6 +370,30 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("persists ACP labels without borrowing subagent spawnedBy metadata", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        label: "codex worker",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const patchCalls = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .filter((request) => request.method === "sessions.patch");
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]?.params).toMatchObject({
+      key: result.childSessionKey,
+      label: "codex worker",
+    });
+    expect(patchCalls[0]?.params).not.toHaveProperty("spawnedBy");
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
