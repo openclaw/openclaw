@@ -47,6 +47,25 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   });
 }
 
+/**
+ * Navigate to the chat tab for the given session key without a full page reload.
+ * Resets chat state, updates the URL via pushState, and loads the session history.
+ * Use this when navigating to a session from the sessions list or cron view so the
+ * in-memory gateway auth token is not lost.
+ */
+export function openSessionInChat(state: AppViewState, key: string): void {
+  resetChatStateForSessionSwitch(state, key);
+  void state.loadAssistantIdentity();
+  state.setTab("chat");
+  // Update URL with pushState so the browser stays on the same page
+  // and the in-memory auth token is preserved.
+  const url = new URL(window.location.href);
+  url.pathname = pathForTab("chat", state.basePath);
+  url.searchParams.set("session", key);
+  window.history.pushState({}, "", url.toString());
+  void loadChatHistory(state as unknown as ChatState);
+}
+
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
   return html`

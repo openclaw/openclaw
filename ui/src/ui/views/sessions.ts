@@ -30,6 +30,8 @@ export type SessionsProps = {
     },
   ) => void;
   onDelete: (key: string) => void;
+  /** Navigate to the chat tab for the given session key without a full page reload. */
+  onOpenSession?: (key: string) => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -206,7 +208,14 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onPatch,
+                  props.onDelete,
+                  props.loading,
+                  props.onOpenSession,
+                ),
               )
         }
       </div>
@@ -220,6 +229,7 @@ function renderRow(
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
+  onOpenSession?: SessionsProps["onOpenSession"],
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
@@ -244,7 +254,30 @@ function renderRow(
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
-        ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${
+          canLink
+            ? html`<a
+                href=${chatUrl}
+                class="session-link"
+                @click=${(e: MouseEvent) => {
+                  if (
+                    !onOpenSession ||
+                    e.defaultPrevented ||
+                    e.button !== 0 ||
+                    e.metaKey ||
+                    e.ctrlKey ||
+                    e.shiftKey ||
+                    e.altKey
+                  ) {
+                    return;
+                  }
+                  e.preventDefault();
+                  onOpenSession(row.key);
+                }}
+                >${row.key}</a
+              >`
+            : row.key
+        }
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
       <div>
