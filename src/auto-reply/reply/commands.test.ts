@@ -803,7 +803,7 @@ describe("handleCommands /config configWrites gating", () => {
       GatewayClientScopes: ["operator.write"],
     });
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = true;
+    params.command.senderIsOwner = false;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config messages.ackreaction");
