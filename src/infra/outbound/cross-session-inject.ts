@@ -44,6 +44,14 @@ export type CrossSessionInjectParams = {
  * When both conditions are met the outbound text (or media summary) is appended
  * to the recipient's existing session file so the agent "remembers" what it said
  * the next time the recipient replies.
+ *
+ * **Limitation:** If the target user has never interacted with the agent (i.e.
+ * no session exists yet), the inject is a no-op and a warning is logged. The
+ * outbound context will not be available when the user eventually starts a
+ * session.
+ *
+ * This function is fire-and-forget — it never throws and is safe to call with
+ * `void` (no `await` needed).
  */
 export async function maybeCrossSessionInject(
   params: CrossSessionInjectParams,
@@ -88,7 +96,7 @@ export async function maybeCrossSessionInject(
       return { injected: true };
     }
 
-    log.debug("cross-session inject skipped", {
+    log.warn("cross-session inject skipped (target session does not exist yet)", {
       channel,
       targetSessionKey,
       reason: result.reason,

@@ -556,7 +556,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   // Cross-session injection: record the outbound message in the target peer's
   // session transcript so the agent has context when the target replies.
   if (agentId && !dryRun) {
-    await maybeCrossSessionInject({
+    void maybeCrossSessionInject({
       cfg,
       channel,
       agentId,
