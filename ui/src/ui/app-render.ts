@@ -586,7 +586,7 @@ export function renderApp(state: AppViewState) {
                 toolsCatalogLoading: state.toolsCatalogLoading,
                 toolsCatalogError: state.toolsCatalogError,
                 toolsCatalogResult: state.toolsCatalogResult,
-                skillsFilter: state.skillsFilter,
+                skillsFilter: state.agentSkillsFilter,
                 onRefresh: async () => {
                   await loadAgents(state);
                   const nextSelected =
@@ -715,7 +715,7 @@ export function renderApp(state: AppViewState) {
                 onConfigSave: () => saveAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
-                onSkillsFilterChange: (next) => (state.skillsFilter = next),
+                onSkillsFilterChange: (next) => (state.agentSkillsFilter = next),
                 onSkillsRefresh: () => {
                   if (resolvedAgentId) {
                     void loadAgentSkills(state, resolvedAgentId);
