@@ -60,6 +60,15 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
+    transcriptToolCallIdModelHints: [
+      "mistral",
+      "mixtral",
+      "codestral",
+      "pixtral",
+      "devstral",
+      "ministral",
+      "mistralai",
+    ],
   },
   opencode: {
     openAiCompatTurnValidation: false,
