@@ -447,4 +447,14 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies Codex/OpenAI server_error payloads as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred"}}',
+      ),
+    ).toBe("timeout");
+  });
+  it("classifies plain server_error text as timeout", () => {
+    expect(classifyFailoverReason("server_error")).toBe("timeout");
+  });
 });
