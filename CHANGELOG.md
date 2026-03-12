@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Security/proxy attachments: restore the shared media-store size cap for persisted browser proxy files so oversized payloads are rejected instead of overriding the intended 5 MB limit. (`GHSA-6rph-mmhp-h7h9`)(#43684) Thanks @tdjackey and @vincentkoc.
 - Security/host env: block inherited `GIT_EXEC_PATH` from sanitized host exec environments so Git helper resolution cannot be steered by host environment state. (`GHSA-jf5v-pqgw-gm5m`)(#43685) Thanks @zpbrent and @vincentkoc.
 - Security/session_status: enforce sandbox session-tree visibility and shared agent-to-agent access guards before reading or mutating target session state, so sandboxed subagents can no longer inspect parent session metadata or write parent model overrides via `session_status`. (`GHSA-wcxr-59v9-rxr8`)(#43754) Thanks @tdjackey and @vincentkoc.
+- Models/secrets: enforce source-managed SecretRef markers in generated `models.json` so runtime-resolved provider secrets are not persisted when runtime projection is skipped. (#43759) Thanks @joshavant.
 
 ### Changes
 
