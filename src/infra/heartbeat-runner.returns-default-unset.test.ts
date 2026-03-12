@@ -830,6 +830,86 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("keeps heartbeat runs out of main when heartbeat.session is isolated but wake is scoped to main", async () => {
+    const tmpDir = await createCaseDir("hb-isolated-session-overrides-forced-main");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+              session: "heartbeat",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const heartbeatSessionKey = resolveAgentMainSessionKey({
+        cfg: { session: cfg.session },
+        agentId: "main",
+      }).replace(/:main$/, ":heartbeat");
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567892@g.us",
+            origin: {
+              provider: "webchat",
+              surface: "webchat",
+              chatType: "direct",
+            },
+          },
+          [heartbeatSessionKey]: {
+            sessionId: "sid-heartbeat",
+            updatedAt: Date.now() + 10_000,
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Scoped alert" }]);
+      const sendWhatsApp = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: mainSessionKey,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567892@g.us",
+        "Scoped alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: heartbeatSessionKey,
+          From: "120363401234567892@g.us",
+          To: "120363401234567892@g.us",
+          Provider: "heartbeat",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "120363401234567892@g.us",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");

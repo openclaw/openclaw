@@ -195,6 +195,7 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const TRANSIENT_EMPTY_BODY_402_RE = /\b402\s+status code\s*\((?:no|empty)\s+body\)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
@@ -353,6 +354,14 @@ export function isTransientHttpError(raw: string): boolean {
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
 }
 
+export function isTransientEmptyBody402ErrorMessage(raw?: string): boolean {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return TRANSIENT_EMPTY_BODY_402_RE.test(trimmed);
+}
+
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
@@ -362,6 +371,9 @@ export function classifyFailoverReasonFromHttpStatus(
   }
 
   if (status === 402) {
+    if (message && isTransientEmptyBody402ErrorMessage(message)) {
+      return "timeout";
+    }
     return message ? classify402Message(message) : "billing";
   }
   if (status === 429) {
@@ -970,6 +982,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isTransientEmptyBody402ErrorMessage(raw)) {
     return "timeout";
   }
   if (isCloudCodeAssistFormatError(raw)) {

@@ -12,6 +12,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isTransientEmptyBody402ErrorMessage,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
@@ -189,6 +190,11 @@ describe("isBillingErrorMessage", () => {
     for (const sample of realErrors) {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
+  });
+  it("does not treat bare empty-body 402 transport failures as billing", () => {
+    const sample = "402 status code (no body)";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(isTransientEmptyBody402ErrorMessage(sample)).toBe(true);
   });
 });
 
@@ -685,6 +691,7 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("all credentials for model x are cooling down")).toBeNull();
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    expect(classifyFailoverReason("402 status code (no body)")).toBe("timeout");
     // Billing with "limit exhausted" must stay billing, not rate_limit (avoids key-disable regression)
     expect(
       classifyFailoverReason("HTTP 402 payment required. Your limit exhausted for this plan."),

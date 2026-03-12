@@ -107,6 +107,25 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("does not pin --agent runs with --session-id to the agent main session", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "hi", agent: "main", sessionId: "session-explicit" },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string; sessionId?: string; agentId?: string };
+      };
+      expect(request.params?.agentId).toBe("main");
+      expect(request.params?.sessionId).toBe("session-explicit");
+      expect(request.params?.sessionKey).toBeUndefined();
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));

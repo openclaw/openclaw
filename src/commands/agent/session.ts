@@ -50,12 +50,16 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
+  const hasExplicitRouteTarget =
+    Boolean(opts.sessionKey?.trim()) || Boolean(opts.sessionId?.trim()) || Boolean(opts.to?.trim());
   const explicitSessionKey =
     opts.sessionKey?.trim() ||
-    resolveExplicitAgentSessionKey({
-      cfg: opts.cfg,
-      agentId: opts.agentId,
-    });
+    (!hasExplicitRouteTarget
+      ? resolveExplicitAgentSessionKey({
+          cfg: opts.cfg,
+          agentId: opts.agentId,
+        })
+      : undefined);
   const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,

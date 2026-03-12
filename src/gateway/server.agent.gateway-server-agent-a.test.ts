@@ -268,6 +268,22 @@ describe("gateway server agent", () => {
     expect(call.sessionId).toBe("sess-ops");
   });
 
+  test("agent does not force the agent main session when sessionId is provided", async () => {
+    setRegistry(defaultRegistry);
+    testState.agentsConfig = { list: [{ id: "main" }] };
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      agentId: "main",
+      sessionId: "session-explicit",
+      idempotencyKey: "idem-agent-session-id-route",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = latestAgentCall();
+    expect(call.sessionKey).toBeUndefined();
+    expect(call.sessionId).toBe("session-explicit");
+  });
+
   test("agent rejects unknown reply channel", async () => {
     setRegistry(defaultRegistry);
     const res = await rpcReq(ws, "agent", {

@@ -819,6 +819,60 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
+  it("retries bare empty-body 402 prompt failures on the same profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            promptError: new Error("402 status code (no body)"),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:bare-402-prompt-retry",
+        runId: "run:bare-402-prompt-retry",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
+  it("retries bare empty-body 402 assistant failures on the same profile", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockFailedThenSuccessfulAttempt("402 status code (no body)");
+
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:bare-402-assistant-retry",
+        runId: "run:bare-402-assistant-retry",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const usageStats = await readUsageStats(agentDir);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
+      await expectProfileP2UsageUnchanged(agentDir);
+    });
+  });
+
   it("rotates on bare service unavailable without cooling down the profile", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "LLM error: service unavailable",

@@ -50,6 +50,7 @@ import {
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
+  isTransientEmptyBody402ErrorMessage,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
@@ -138,6 +139,8 @@ const BASE_RUN_RETRY_ITERATIONS = 24;
 const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
+const TRANSIENT_EMPTY_BODY_402_MAX_RETRIES = 3;
+const TRANSIENT_EMPTY_BODY_402_RETRY_DELAYS_MS = [250, 750, 1500] as const;
 
 function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
   const scaled =
@@ -747,6 +750,7 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let transientEmptyBody402RetryCount = 0;
       let overloadFailoverAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
@@ -766,6 +770,29 @@ export async function runEmbeddedPiAgent(
           agentDir,
           runId: params.runId,
         });
+      };
+      const maybeRetryTransientEmptyBody402 = async (
+        errorText: string,
+        source: "prompt" | "assistant",
+      ): Promise<boolean> => {
+        if (!isTransientEmptyBody402ErrorMessage(errorText)) {
+          return false;
+        }
+        if (transientEmptyBody402RetryCount >= TRANSIENT_EMPTY_BODY_402_MAX_RETRIES) {
+          return false;
+        }
+        const retryNumber = transientEmptyBody402RetryCount + 1;
+        transientEmptyBody402RetryCount = retryNumber;
+        const delayMs =
+          TRANSIENT_EMPTY_BODY_402_RETRY_DELAYS_MS[
+            Math.min(retryNumber - 1, TRANSIENT_EMPTY_BODY_402_RETRY_DELAYS_MS.length - 1)
+          ];
+        log.warn(
+          `transient empty-body 402 from ${provider}/${modelId} during ${source}; retrying same profile ` +
+            `(${retryNumber}/${TRANSIENT_EMPTY_BODY_402_MAX_RETRIES}) after ${delayMs}ms`,
+        );
+        await sleepWithAbort(delayMs, params.abortSignal);
+        return true;
       };
       const resolveAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
@@ -1269,6 +1296,9 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            if (await maybeRetryTransientEmptyBody402(errorText, "prompt")) {
+              continue;
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             const promptProfileFailureReason =
               resolveAuthProfileFailureReason(promptFailoverReason);
@@ -1377,6 +1407,12 @@ export async function runEmbeddedPiAgent(
             ))
           ) {
             authRetryPending = true;
+            continue;
+          }
+          if (
+            !aborted &&
+            (await maybeRetryTransientEmptyBody402(lastAssistant?.errorMessage ?? "", "assistant"))
+          ) {
             continue;
           }
           if (imageDimensionError && lastProfileId) {

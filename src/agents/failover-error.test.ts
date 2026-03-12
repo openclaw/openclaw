@@ -50,6 +50,12 @@ describe("failover-error", () => {
         message: "HTTP 402: request reached organization usage limit, try again later",
       }),
     ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "402 status code (no body)",
+      }),
+    ).toBe("timeout");
     // Explicit billing messages on 402 stay classified as billing
     expect(
       resolveFailoverReasonFromError({
