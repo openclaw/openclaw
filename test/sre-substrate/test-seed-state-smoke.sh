@@ -27,6 +27,9 @@ cp "$REPO_ROOT/skills/morpho-sre/config/openclaw.json" "$SKILL_ROOT/config/openc
 cp "$REPO_ROOT/skills/morpho-sre/sentinel-triage.sh" "$SKILL_ROOT/sentinel-triage.sh"
 cp "$REPO_ROOT/skills/morpho-sre/repo-ownership.json" "$SKILL_ROOT/repo-ownership.json"
 cp "$REPO_ROOT/skills/morpho-sre/knowledge-index.md" "$SKILL_ROOT/knowledge-index.md"
+cp \
+  "$REPO_ROOT/skills/morpho-sre/incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md" \
+  "$SKILL_ROOT/incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md"
 cp -R "$REPO_ROOT/skills/morpho-sre/references/." "$SKILL_ROOT/references/"
 cp -R "$REPO_ROOT/skills/morpho-sre/evidence-manifests/." "$SKILL_ROOT/evidence-manifests/"
 
@@ -39,6 +42,7 @@ test -f "$STATE_DIR/openclaw.json"
 test -f "$STATE_DIR/skills/morpho-sre/SKILL.md"
 test -f "$STATE_DIR/skills/morpho-sre/scripts/sentinel-triage.sh"
 test -f "$STATE_DIR/skills/morpho-sre/knowledge-index.md"
+test -f "$STATE_DIR/skills/morpho-sre/incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md"
 test -f "$STATE_DIR/state/sre-index/repo-ownership.json"
 test -f "$STATE_DIR/workspace/MEMORY.md"
 test -f "$STATE_DIR/workspace-sre/MEMORY.md"

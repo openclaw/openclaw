@@ -96,6 +96,7 @@ describe("audit-session-transcripts", () => {
     expect(audit.configuredSkills).toEqual(["morpho-sre"]);
     expect(audit.retrieval.usedKnowledgeIndex).toBe(true);
     expect(audit.retrieval.usedRunbookMap).toBe(true);
+    expect(audit.retrieval.usedDbDataIncidentPlaybook).toBe(false);
     expect(audit.delegation.score).toBe(1);
     expect(audit.bloat.hugeTranscript).toBe(true);
     expect(audit.bloat.cappedReadMarkers).toBe(1);
@@ -119,5 +120,33 @@ describe("audit-session-transcripts", () => {
     expect(audit.discussion.falseAccessClaim).toBe(true);
     expect(audit.discussion.workaroundScopeIgnored).toBe(true);
     expect(audit.discussion.certaintyWithoutKnownIssueSearch).toBe(false);
+  });
+
+  it("flags exact-artifact replay misses and resolver mismatch for data incidents", () => {
+    const audit = analyze(`
+{"type":"session","id":"s6"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Likely cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong. query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=3317372fa9bb4a9d8849d3cff00dbd48 traceId=6763bbc6fbca68b84c892ba063e131a9"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Likely cause: chain 999 scheduler is missing"}]}}
+`);
+
+    expect(audit.discussion.exactArtifactReplayMissed).toBe(true);
+    expect(audit.discussion.exactArtifactReplayBeforeSpeculation).toBe(false);
+    expect(audit.discussion.resolverMismatch).toBe(true);
+    expect(audit.discussion.dataIncidentWithoutPlaybook).toBe(true);
+    expect(audit.retrieval.usedDbDataIncidentPlaybook).toBe(false);
+  });
+
+  it("credits replay when a tool call uses the exact user artifact before speculation", () => {
+    const audit = analyze(`
+{"type":"session","id":"s7"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy } }"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"exec-1","name":"exec","arguments":{"command":"curl https://api.morpho.org/graphql --data '{ vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy } }'"}}]}}
+{"type":"message","message":{"role":"toolResult","toolCallId":"exec-1","toolName":"exec","content":[{"type":"text","text":"{\\"data\\":{\\"vaultV2ByAddress\\":{\\"apy\\":null}}}"}],"details":{"exitCode":0}}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Likely cause: missing realtime state for this vault"}]}}
+`);
+
+    expect(audit.discussion.exactArtifactReplayBeforeSpeculation).toBe(true);
+    expect(audit.discussion.exactArtifactReplayMissed).toBe(false);
   });
 });

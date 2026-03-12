@@ -37,6 +37,13 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - relevant incident dossier / postmortem index
 - Retry on repeated asks: if same/near-identical question appears again in the same thread/session, re-run relevant live checks/tools (state may have changed); do not reuse a prior failure-only answer.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
+- Exact artifact replay:
+  - if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact before reusing any prior theory
+  - isolate the minimal failing field set before expanding the query or naming a cause
+  - use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
+- Resolver / incident matching:
+  - do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match
+  - treat `vaultByAddress` and `vaultV2ByAddress` as different resolver families unless live evidence proves the same failure path
 - Slack file delivery: when user asks to "send the file/csv directly", emit `MEDIA:<url-or-local-path>` in the reply (keep caption in normal text) instead of saying file upload is unavailable.
 - PR body quality: keep PR descriptions concise and reviewable; never paste raw command output/manifests/log dumps (for example `helm template` full output) into PR body.
 - Linear ticket mutation guardrail (Slack threads):
@@ -94,6 +101,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   stacked-cause rewards incident pattern.
 - Use `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
   for consumer wallet / approval / permit regressions where the workaround narrows scope.
+- Use `incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md` for single-vault HyperEVM vault-v2 state gaps where metadata and transaction paths disagree with current-state paths.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `wiz-mcp.sh`
@@ -215,6 +223,35 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Auto-PR gate:
   - do not open a PR unless the reply names the repo/path that changes the active code path
   - blacklist/config-only PRs are not valid if the live failing path does not consume that blacklist/config
+
+## Single-Vault API / GraphQL Data Incidents
+
+- Trigger:
+  - one vault / one market / one address broken while peers work
+  - GraphQL `INTERNAL_SERVER_ERROR`
+  - `sentryEventId` / `traceId` pasted by user
+  - APY nulls, missing realtime state, or field-level GraphQL failures
+- Mandatory order:
+  1. replay the exact user query
+  2. isolate the minimal failing field set
+  3. compare against one healthy control vault on the same chain
+  4. compare public surfaces for the same address:
+     - `vaultV2ByAddress`
+     - `vaultV2s` with `address_in`
+     - `vaultV2transactions`
+  5. verify direct onchain values for the same address
+  6. only then rank causes or assign owners
+- For single-vault incidents:
+  - compare against one healthy control vault on the same chain before calling it chain-wide
+  - if same-factory controls are available, prefer them
+  - do not jump from missing current state on one vault to “scheduler missing on the whole chain” if newer or peer controls materialize state
+  - historical APY series can be a weak signal; prefer current-state fields plus direct RPC
+- Required answer shape:
+  - exact query result
+  - minimal failing fields
+  - healthy control result
+  - direct RPC fact
+  - which public paths see the entity vs miss it
 
 ## Slack BetterStack Alert Intake
 

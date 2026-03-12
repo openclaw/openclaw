@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { DATA_INCIDENT_RE, EXACT_ARTIFACT_RE, extractResolverFamily } from "../src/sre/patterns.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -25,6 +26,12 @@ type TranscriptToolResult = {
 };
 
 type TranscriptAssistantText = {
+  line: number;
+  timestamp?: string;
+  text: string;
+};
+
+type TranscriptUserText = {
   line: number;
   timestamp?: string;
   text: string;
@@ -59,6 +66,7 @@ export type TranscriptAudit = {
     usedNotionPostmortemIndex: boolean;
     usedFrontendResolver: boolean;
     usedKnownIssueSearch: boolean;
+    usedDbDataIncidentPlaybook: boolean;
   };
   delegation: {
     score: number;
@@ -90,6 +98,11 @@ export type TranscriptAudit = {
     falseAccessClaim: boolean;
     workaroundScopeIgnored: boolean;
     certaintyWithoutKnownIssueSearch: boolean;
+    exactArtifactLine?: number;
+    exactArtifactReplayBeforeSpeculation: boolean;
+    exactArtifactReplayMissed: boolean;
+    resolverMismatch: boolean;
+    dataIncidentWithoutPlaybook: boolean;
   };
 };
 
@@ -145,6 +158,7 @@ const RETRIEVAL_PATH_RULES = [
   { name: "repo-root-model", re: /repo-root-model\.md$/i },
   { name: "incident-dossier", re: /incident-dossier/i },
   { name: "notion-postmortem-index", re: /notion-postmortem-index\.md$/i },
+  { name: "db-data-incident-playbook", re: /db-data-incident-playbook\.md$/i },
 ] as const;
 const LARGE_TRANSCRIPT_BYTES = 1_000_000;
 const HUGE_TRANSCRIPT_BYTES = 5_000_000;
@@ -261,6 +275,31 @@ function inferSkillName(skillPath: string): string {
   return path.posix.basename(normalized);
 }
 
+function extractArtifactTokens(text: string): string[] {
+  const tokens = new Set<string>();
+  for (const match of text.matchAll(/0x[a-fA-F0-9]{8,40}/g)) {
+    tokens.add(match[0]);
+  }
+  for (const match of text.matchAll(/\b[a-f0-9]{16,32}\b/gi)) {
+    tokens.add(match[0]);
+  }
+  if (/\bvaultV2ByAddress\b/.test(text)) {
+    tokens.add("vaultV2ByAddress");
+  }
+  if (/\bvaultByAddress\b/.test(text)) {
+    tokens.add("vaultByAddress");
+  }
+  return [...tokens];
+}
+
+function toolCallMentionsAnyToken(call: TranscriptToolCall, tokens: string[]): boolean {
+  if (tokens.length === 0) {
+    return false;
+  }
+  const haystack = JSON.stringify(call.arguments ?? {});
+  return tokens.some((token) => haystack.includes(token));
+}
+
 function inspectCommandForPreflight(command: string): PreflightCheckKey[] {
   const matches = new Set<PreflightCheckKey>();
   for (const check of PRELUDE_CHECKS) {
@@ -358,10 +397,10 @@ export function analyzeTranscriptRecords(
   }
 
   const assistantTexts: TranscriptAssistantText[] = [];
+  const userTexts: TranscriptUserText[] = [];
   const toolCalls: TranscriptToolCall[] = [];
   const toolResults: TranscriptToolResult[] = [];
   const readPaths: string[] = [];
-  const userTexts: string[] = [];
   const delegationCounts = new Map<string, number>();
   const execFailureCounts = new Map<string, number>();
   let userTurns = 0;
@@ -381,7 +420,7 @@ export function analyzeTranscriptRecords(
       userTurns += 1;
       const text = getTextBlocks(typedMessage.content).join("\n").trim();
       if (text) {
-        userTexts.push(text);
+        userTexts.push({ line, timestamp, text });
       }
       continue;
     }
@@ -524,7 +563,7 @@ export function analyzeTranscriptRecords(
   const blockedReplyHasNextChecks = blockedReply ? NEXT_CHECKS_RE.test(blockedReply.text) : false;
   const blockedReplyHasSpeculation = blockedReply ? SPECULATION_RE.test(blockedReply.text) : false;
   const blockedReplyIsLong = blockedReply ? countNonEmptyLines(blockedReply.text) > 12 : false;
-  const combinedUserText = userTexts.join("\n");
+  const combinedUserText = userTexts.map((entry) => entry.text).join("\n");
   const consumerTxBugContext = CONSUMER_TX_BUG_RE.test(combinedUserText);
   const hasWorkaroundClue = WORKAROUND_CLUE_RE.test(combinedUserText);
   const usedFrontendResolver = execCommands.some(({ command }) =>
@@ -549,6 +588,47 @@ export function analyzeTranscriptRecords(
     consumerTxBugContext &&
     assistantTexts.some((entry) => /\broot cause(?:\s+confirmed)?\b/i.test(entry.text)) &&
     !usedKnownIssueSearch;
+  const latestExactArtifact = userTexts
+    .toReversed()
+    .find((entry) => EXACT_ARTIFACT_RE.test(entry.text));
+  const latestExactArtifactTokens = latestExactArtifact
+    ? extractArtifactTokens(latestExactArtifact.text)
+    : [];
+  const firstSpeculationAfterArtifact =
+    latestExactArtifact == null
+      ? undefined
+      : assistantTexts.find(
+          (entry) => entry.line > latestExactArtifact.line && SPECULATION_RE.test(entry.text),
+        );
+  const exactArtifactReplayBeforeSpeculation =
+    latestExactArtifact == null
+      ? false
+      : toolCalls.some(
+          (call) =>
+            call.line > latestExactArtifact.line &&
+            (!firstSpeculationAfterArtifact || call.line < firstSpeculationAfterArtifact.line) &&
+            toolCallMentionsAnyToken(call, latestExactArtifactTokens),
+        );
+  const exactArtifactReplayMissed =
+    latestExactArtifact != null &&
+    firstSpeculationAfterArtifact != null &&
+    !exactArtifactReplayBeforeSpeculation;
+  const latestUserResolver = latestExactArtifact
+    ? extractResolverFamily(latestExactArtifact.text)
+    : undefined;
+  const resolverMismatch =
+    latestExactArtifact != null && latestUserResolver != null
+      ? assistantTexts.some((entry) => {
+          if (entry.line >= latestExactArtifact.line) {
+            return false;
+          }
+          const assistantResolver = extractResolverFamily(entry.text);
+          return assistantResolver != null && assistantResolver !== latestUserResolver;
+        })
+      : false;
+  const dataIncidentWithoutPlaybook =
+    userTexts.some((entry) => DATA_INCIDENT_RE.test(entry.text)) &&
+    !retrievalReads.some((entry) => /db-data-incident-playbook\.md$/i.test(entry));
 
   return {
     path: pathLabel,
@@ -578,6 +658,9 @@ export function analyzeTranscriptRecords(
       ),
       usedFrontendResolver,
       usedKnownIssueSearch,
+      usedDbDataIncidentPlaybook: retrievalReads.some((entry) =>
+        /db-data-incident-playbook\.md$/i.test(entry),
+      ),
     },
     delegation: {
       score: [...delegationCounts.values()].reduce((sum, count) => sum + count, 0),
@@ -611,6 +694,11 @@ export function analyzeTranscriptRecords(
       falseAccessClaim,
       workaroundScopeIgnored,
       certaintyWithoutKnownIssueSearch,
+      exactArtifactLine: latestExactArtifact?.line,
+      exactArtifactReplayBeforeSpeculation,
+      exactArtifactReplayMissed,
+      resolverMismatch,
+      dataIncidentWithoutPlaybook,
     },
   };
 }
@@ -774,6 +862,16 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
       "Block hypotheses until at least one successful live check lands; failed exec alone should switch the agent into blocked-investigation mode.",
     );
   }
+  if (sessions.some((entry) => entry.discussion.exactArtifactReplayMissed)) {
+    recommendations.push(
+      "Replay exact user-supplied queries, event IDs, trace IDs, and addresses before naming a cause; treat artifact replay as mandatory for API/data incidents.",
+    );
+  }
+  if (sessions.some((entry) => entry.discussion.resolverMismatch)) {
+    recommendations.push(
+      "Stop cross-resolver anchoring: match the live theory to the user's actual resolver family (`vaultV2ByAddress` vs `vaultByAddress`) before reusing prior incidents.",
+    );
+  }
   if (
     sessions.some(
       (entry) =>
@@ -799,6 +897,11 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
   if (sessionsWithConfiguredSkills > 0 && sessionsWithRetrieval === 0) {
     recommendations.push(
       "Force skill retrieval before repo spelunking: require knowledge-index/runbook-map/repo-root-model or dossier reads in evidence-driven incident sessions.",
+    );
+  }
+  if (sessions.some((entry) => entry.discussion.dataIncidentWithoutPlaybook)) {
+    recommendations.push(
+      "For wrong-value / APY / GraphQL data incidents, require `references/db-data-incident-playbook.md` retrieval before deeper repo or root-cause claims.",
     );
   }
   if (sessionsWithDelegation === 0 && sessionsWithConfiguredSkills > 0) {
@@ -918,6 +1021,9 @@ function formatSummary(summary: TranscriptAuditSummary): string {
       );
       lines.push(
         `  blocked_reply=${session.discussion.blockedReplyLine ? "yes" : "no"} exact_error=${session.discussion.blockedReplyHasExactError ? "yes" : "no"} next_checks=${session.discussion.blockedReplyHasNextChecks ? "yes" : "no"}`,
+      );
+      lines.push(
+        `  exact_artifact=${session.discussion.exactArtifactLine ? "yes" : "no"} replay_before_speculation=${session.discussion.exactArtifactReplayBeforeSpeculation ? "yes" : "no"} resolver_mismatch=${session.discussion.resolverMismatch ? "yes" : "no"} data_playbook=${session.retrieval.usedDbDataIncidentPlaybook ? "yes" : "no"}`,
       );
       lines.push(
         `  large=${session.bloat.largeTranscript ? "yes" : "no"} huge=${session.bloat.hugeTranscript ? "yes" : "no"} repeated_failures=${session.bloat.repeatedExecFailures} capped_reads=${session.bloat.cappedReadMarkers}`,

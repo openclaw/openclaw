@@ -1,9 +1,16 @@
 import fs from "node:fs/promises";
+import {
+  DATA_INCIDENT_RE,
+  EXACT_ARTIFACT_RE,
+  extractInlineJsonTextValue,
+  extractResolverFamily,
+} from "./patterns.js";
 
 type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
 
 const RETRIEVAL_DOC_RE =
   /(knowledge-index\.md|runbook-map\.md|repo-root-model\.md|notion-postmortem-index\.md|incident-dossier)/i;
+const DB_DATA_PLAYBOOK_RE = /db-data-incident-playbook\.md$/i;
 const HUMAN_CORRECTION_RE =
   /\b(wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|outdated|not the issue)\b/i;
 
@@ -57,16 +64,24 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   }
 
   let sawRetrievalDoc = false;
+  let sawDbDataPlaybook = false;
   let sawRepoRead = false;
   let latestHumanCorrection: string | undefined;
+  let latestUserArtifact: { line: number; preview: string; rawText: string } | undefined;
+  let latestDataIncidentText: string | undefined;
   const failureCounts = new Map<GuardrailFailureFamily, number>();
+  const assistantOrToolLines: Array<{ line: number; text: string }> = [];
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    const lineNo = index + 1;
     if (/"name":"read"/.test(line) && /"path":"([^"]+)"/.test(line)) {
       const pathMatch = /"path":"([^"]+)"/.exec(line);
       const readPath = pathMatch?.[1] ?? "";
       if (RETRIEVAL_DOC_RE.test(readPath)) {
         sawRetrievalDoc = true;
+      }
+      if (DB_DATA_PLAYBOOK_RE.test(readPath)) {
+        sawDbDataPlaybook = true;
       }
       if (/\/repos\/|morpho-infra|morpho-api|openclaw-sre\//i.test(readPath)) {
         sawRepoRead = true;
@@ -74,15 +89,22 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
     }
 
     if (line.includes('"role":"user"')) {
-      const textMatch = /"text":"([^"]+)"/.exec(line);
-      const text = textMatch?.[1] ?? "";
+      const text = extractInlineJsonTextValue(line) ?? "";
+      const preview = cleanLine(text);
       if (HUMAN_CORRECTION_RE.test(text)) {
-        latestHumanCorrection = cleanLine(text.replace(/\\"/g, '"'));
+        latestHumanCorrection = preview;
+      }
+      if (DATA_INCIDENT_RE.test(text)) {
+        latestDataIncidentText = text;
+      }
+      if (EXACT_ARTIFACT_RE.test(text)) {
+        latestUserArtifact = { line: lineNo, preview, rawText: text };
       }
     }
 
     if (line.includes('"role":"toolResult"') || line.includes('"role":"assistant"')) {
       const normalized = line.replace(/\\"/g, '"');
+      assistantOrToolLines.push({ line: lineNo, text: normalized });
       const family = classifyFailure(normalized);
       if (family) {
         failureCounts.set(family, (failureCounts.get(family) ?? 0) + 1);
@@ -91,11 +113,53 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   }
 
   const guidance: string[] = [];
+  const currentArtifactText = latestUserArtifact?.rawText ?? params.prompt;
+  const hasDataIncidentSignal = DATA_INCIDENT_RE.test(
+    `${params.prompt}\n${latestDataIncidentText ?? ""}\n${currentArtifactText}`,
+  );
+  const hasExactArtifactSignal = EXACT_ARTIFACT_RE.test(currentArtifactText);
 
   if (latestHumanCorrection) {
     guidance.push(
       `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${latestHumanCorrection}"`,
     );
+  }
+
+  if (hasExactArtifactSignal) {
+    guidance.push(
+      "- Latest user-supplied exact artifact detected. Replay that exact query/event/address first, then isolate the minimal failing field set before reusing older theories.",
+    );
+  }
+
+  if (latestUserArtifact && hasDataIncidentSignal) {
+    guidance.push(
+      "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
+    );
+  }
+
+  if (hasDataIncidentSignal && !sawDbDataPlaybook) {
+    guidance.push(
+      "- Data-incident retrieval gate: read `references/db-data-incident-playbook.md` before more repo/code spelunking.",
+    );
+  }
+
+  const userResolver = extractResolverFamily(currentArtifactText);
+  if (latestUserArtifact && userResolver) {
+    const otherResolver =
+      userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
+    const userResolverRe = new RegExp(`\\b${userResolver}\\b`);
+    const otherResolverRe = new RegExp(`\\b${otherResolver}\\b`);
+    const priorResolverMismatch = assistantOrToolLines.some(
+      (entry) =>
+        entry.line < latestUserArtifact.line &&
+        otherResolverRe.test(entry.text) &&
+        !userResolverRe.test(entry.text),
+    );
+    if (priorResolverMismatch) {
+      guidance.push(
+        `- Resolver mismatch detected: older thread content mentions \`${otherResolver}\` while the latest user artifact is \`${userResolver}\`. Re-prove the path from the latest query before naming a cause.`,
+      );
+    }
   }
 
   const repeatedFamilies = [...failureCounts.entries()].filter(([, count]) => count >= 2);

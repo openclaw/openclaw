@@ -8,11 +8,21 @@ const VALID_SKILL = `
 - Shell portability:
   - do not use Bash-only syntax unless command is explicitly wrapped with \`bash -lc '...'\`
 - No root-cause ranking before one successful live check.
+- if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong, replay that exact artifact first
+- use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable
+- do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match
 - RBAC-aware fallback:
   - if \`pods/exec forbidden\` appears, stop retrying \`kubectl exec\`
 - Before broad repo/code reads, load at least one retrieval surface relevant to the incident:
   - \`knowledge-index.md\`
   - \`runbook-map.md\`
+
+## Single-Vault API / GraphQL Data Incidents
+- compare against one healthy control vault on the same chain
+- compare public surfaces:
+  - \`vaultV2ByAddress\`
+  - \`vaultV2s\`
+  - \`vaultV2transactions\`
 
 ## Blocked Mode Reply Contract
 - \`*Evidence:* <exact command> -> <exact error>\`

@@ -70,6 +70,36 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     re: /runbook-map\.md/,
     message: "missing runbook-map retrieval reference",
   },
+  {
+    id: "exact-artifact-replay",
+    re: /if user provides an exact query, event ID, trace ID, address, or says the prior answer is wrong/i,
+    message: "missing exact-artifact replay guidance",
+  },
+  {
+    id: "live-sentry-or-blocked",
+    re: /use Sentry event IDs only after a live lookup, or explicitly say creds are unavailable/i,
+    message: "missing live-sentry lookup or credential-block guidance",
+  },
+  {
+    id: "no-cross-resolver-reuse",
+    re: /do not reuse a prior incident unless operation name, schema object, failing fields, chain, and address pattern match/i,
+    message: "missing anti-anchoring / cross-resolver reuse guidance",
+  },
+  {
+    id: "single-vault-workflow",
+    re: /## Single-Vault API \/ GraphQL Data Incidents/,
+    message: "missing single-vault api/graphql workflow",
+  },
+  {
+    id: "same-chain-control",
+    re: /compare against one healthy control vault on the same chain/i,
+    message: "missing same-chain control comparison guidance",
+  },
+  {
+    id: "public-surface-compare",
+    re: /vaultV2ByAddress[\s\S]*vaultV2s[\s\S]*vaultV2transactions/i,
+    message: "missing public-surface comparison guidance for single-vault incidents",
+  },
 ];
 
 export function validateMorphoSreSkillText(text: string): SkillGuardrailIssue[] {
