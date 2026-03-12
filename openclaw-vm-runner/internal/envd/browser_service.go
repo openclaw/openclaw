@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/google/uuid"
@@ -204,8 +208,57 @@ func (s *BrowserServer) Navigate(ctx context.Context, req *pb.NavigateRequest) (
 		defer timeoutCancel()
 	}
 
+	// Enable Fetch domain to intercept and validate redirect URLs BEFORE
+	// Chromium follows them. This prevents TOCTOU SSRF where the server
+	// redirects to an internal IP after pre-navigation validation passes.
+	var ssrfErr error
+	chromedp.ListenTarget(runCtx, func(ev interface{}) {
+		if paused, ok := ev.(*fetch.EventRequestPaused); ok {
+			reqURL := paused.Request.URL
+			if err := s.validateRedirectURL(ctx, reqURL); err != nil {
+				ssrfErr = err
+				go func() {
+					_ = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+						return fetch.FailRequest(paused.RequestID, network.ErrorReasonBlockedByClient).Do(c)
+					}))
+				}()
+				return
+			}
+			go func() {
+				_ = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+					return fetch.ContinueRequest(paused.RequestID).Do(c)
+				}))
+			}()
+		}
+	})
+
+	// Enable Fetch interception for the main document navigation requests.
+	if err := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+		return fetch.Enable().
+			WithPatterns([]*fetch.RequestPattern{{
+				URLPattern:   "*",
+				RequestStage: fetch.RequestStageRequest,
+			}}).Do(c)
+	})); err != nil {
+		return nil, status.Errorf(codes.Internal, "enable fetch interception: %v", err)
+	}
+
 	if err := chromedp.Run(runCtx, chromedp.Navigate(req.GetUrl())); err != nil {
+		if ssrfErr != nil {
+			_ = chromedp.Run(runCtx, chromedp.Navigate("about:blank"))
+			return nil, status.Errorf(codes.InvalidArgument, "blocked redirect URL: %v", ssrfErr)
+		}
 		return nil, status.Errorf(codes.Internal, "navigate: %v", err)
+	}
+
+	// Disable Fetch interception after navigation completes.
+	_ = chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+		return fetch.Disable().Do(c)
+	}))
+
+	if ssrfErr != nil {
+		_ = chromedp.Run(runCtx, chromedp.Navigate("about:blank"))
+		return nil, status.Errorf(codes.InvalidArgument, "blocked redirect URL: %v", ssrfErr)
 	}
 
 	var title string
@@ -214,16 +267,49 @@ func (s *BrowserServer) Navigate(ctx context.Context, req *pb.NavigateRequest) (
 		return nil, status.Errorf(codes.Internal, "get page info after navigate: %v", err)
 	}
 
-	// Post-navigation SSRF check: if Chromium followed a redirect, validate the final URL.
-	if finalURL != req.GetUrl() {
-		if err := s.urlPolicy.Validate(ctx, finalURL); err != nil {
-			// Navigate away from the blocked page to prevent data exfiltration.
-			_ = chromedp.Run(runCtx, chromedp.Navigate("about:blank"))
-			return nil, status.Errorf(codes.InvalidArgument, "blocked redirect URL: %v", err)
+	return &pb.NavigateResponse{Url: finalURL, Title: title}, nil
+}
+
+// validateRedirectURL validates a URL from a redirect or sub-request during navigation.
+// It performs DNS resolution on hostnames and blocks private/internal IPs.
+func (s *BrowserServer) validateRedirectURL(ctx context.Context, rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid redirect URL: %w", err)
+	}
+
+	// Allow non-HTTP schemes used internally by Chromium (e.g. data: for blank pages).
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil
+	}
+
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return nil
+	}
+
+	// Quick check: if it's an IP literal, validate directly.
+	if ip := net.ParseIP(hostname); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("blocked IP in redirect: %s", hostname)
+		}
+		return nil
+	}
+
+	// Resolve hostname and check all IPs.
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", hostname)
+	if err != nil {
+		// DNS failure during redirect — allow to proceed (Chromium will handle the error).
+		return nil
+	}
+	for _, ip := range ips {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("blocked IP in redirect (resolved %s -> %s)", hostname, ip.String())
 		}
 	}
 
-	return &pb.NavigateResponse{Url: finalURL, Title: title}, nil
+	return nil
 }
 
 // Click clicks an element matching a CSS selector.

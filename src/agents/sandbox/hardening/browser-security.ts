@@ -24,6 +24,15 @@ const BLOCKED_HOSTS = new Set([
 /** Private/loopback IP prefixes for quick string-based check. */
 const PRIVATE_PREFIXES = ["127.", "10.", "0."];
 
+/** CGN (Carrier-Grade NAT) range 100.64.0.0/10, not covered by standard private checks. */
+function isCGNRange(hostname: string): boolean {
+  if (!hostname.startsWith("100.")) {
+    return false;
+  }
+  const second = parseInt(hostname.split(".")[1], 10);
+  return !isNaN(second) && second >= 64 && second <= 127;
+}
+
 /**
  * Convert a 32-bit integer to a dotted-quad IPv4 string.
  */
@@ -59,6 +68,11 @@ function isPrivateIP(hostname: string): boolean {
 
   // Check 169.254.0.0/16 (link-local / cloud metadata)
   if (h.startsWith("169.254.")) {
+    return true;
+  }
+
+  // Check CGN range 100.64.0.0/10 (RFC 6598)
+  if (isCGNRange(h)) {
     return true;
   }
 
