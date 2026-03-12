@@ -59,18 +59,28 @@ export async function applyAuthChoiceMiniMax(
     );
     const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
+    // Warn when both Global and CN share the same `minimax` provider entry — configuring one
+    // overwrites the other's baseUrl. Only show when the other profile is already present.
+    const otherProfileId = isCn ? "minimax:global" : "minimax:cn";
+    const hasOtherProfile = Boolean(nextConfig.auth?.profiles?.[otherProfileId]);
+    const noteMessage = hasOtherProfile
+      ? `Note: Global and CN both use the "minimax" provider entry. Saving this key will overwrite the existing ${isCn ? "Global" : "CN"} endpoint (${otherProfileId}).`
+      : undefined;
+
     await ensureApiKeyFromOptionEnvOrPrompt({
       token: params.opts?.token,
       tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
       config: nextConfig,
-      expectedProviders: ["minimax"],
+      // Accept "minimax-cn" as a legacy tokenProvider alias for the CN path.
+      expectedProviders: isCn ? ["minimax", "minimax-cn"] : ["minimax"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       promptMessage,
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
+      noteMessage,
       setCredential: async (apiKey, mode) =>
         setMinimaxApiKey(apiKey, params.agentDir, profileId, { secretInputMode: mode }),
     });
