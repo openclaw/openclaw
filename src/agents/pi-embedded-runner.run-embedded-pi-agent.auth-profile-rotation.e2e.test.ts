@@ -299,6 +299,66 @@ const mockPromptErrorThenSuccessfulAttempt = (errorMessage: string) => {
     );
 };
 
+const mockStandaloneHtmlErrorThenSuccessfulAttempt = () => {
+  const htmlError = `<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`;
+
+  runEmbeddedAttemptMock
+    .mockResolvedValueOnce(
+      makeAttempt({
+        assistantTexts: [],
+        lastAssistant: buildAssistant({
+          stopReason: "error",
+          errorMessage: htmlError,
+        }),
+      }),
+    )
+    .mockResolvedValueOnce(
+      makeAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildAssistant({
+          stopReason: "stop",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+};
+
+const buildStandaloneHtmlError = () => `<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`;
+
+const mockStandaloneHtmlErrorOnlyAttempts = (count: number) => {
+  const htmlError = buildStandaloneHtmlError();
+  for (let index = 0; index < count; index += 1) {
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeAttempt({
+        assistantTexts: [htmlError],
+        lastAssistant: buildAssistant({
+          stopReason: "error",
+          errorMessage: htmlError,
+          content: [],
+        }),
+      }),
+    );
+  }
+};
+
 async function runAutoPinnedOpenAiTurn(params: {
   agentDir: string;
   workspaceDir: string;
@@ -827,6 +887,86 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+  });
+
+  it("retries standalone HTML provider errors on the same profile before rotating", async () => {
+    runEmbeddedAttemptMock.mockClear();
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockStandaloneHtmlErrorThenSuccessfulAttempt();
+
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:standalone-html-retry",
+        runId: "run:standalone-html-retry",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p2"]?.lastUsed).toBe(2);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialMs: 500,
+          maxMs: 4_000,
+          factor: 2,
+          jitter: 0.2,
+        }),
+        1,
+      );
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
+    });
+  });
+
+  it("returns a safe payload after standalone HTML retries are exhausted", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      await fs.writeFile(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
+          },
+          usageStats: {},
+        }),
+      );
+
+      runEmbeddedAttemptMock.mockClear();
+      mockStandaloneHtmlErrorOnlyAttempts(5);
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:standalone-html-terminal",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileId: "openai:p1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:standalone-html-terminal",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(5);
+      expect(computeBackoffMock).toHaveBeenCalledTimes(4);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(4);
+      const payloads = result.payloads ?? [];
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]).toEqual(
+        expect.objectContaining({
+          text: "The AI service is temporarily unavailable. Please try again in a moment.",
+          isError: true,
+        }),
+      );
+    });
   });
 
   it("does not rotate for compaction timeouts", async () => {

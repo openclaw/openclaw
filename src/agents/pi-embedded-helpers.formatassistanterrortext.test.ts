@@ -117,6 +117,23 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a safe message for standalone OpenAI HTML error pages", () => {
+    const msg = makeAssistantError(`<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`);
+
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily unavailable. Please try again in a moment.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

@@ -222,6 +222,21 @@ describe("isCloudflareOrHtmlErrorPage", () => {
     expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
   });
 
+  it("detects standalone OpenAI/Cloudflare HTML error pages without a leading status line", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>[IP:5.180.240.78 | Ray ID:9db04bc5cf66e92d]</span>
+    <span>If you are using a VPN, try turning it off.</span>
+  </body>
+</html>`;
+
+    expect(isCloudflareOrHtmlErrorPage(htmlError)).toBe(true);
+  });
+
   it("does not flag non-HTML status lines", () => {
     expect(isCloudflareOrHtmlErrorPage("500 Internal Server Error")).toBe(false);
     expect(isCloudflareOrHtmlErrorPage("429 Too Many Requests")).toBe(false);
@@ -470,6 +485,20 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("504 Gateway Timeout")).toBe(true);
     expect(isTransientHttpError("521 <!DOCTYPE html><html></html>")).toBe(true);
     expect(isTransientHttpError("529 Overloaded")).toBe(true);
+  });
+
+  it("returns true for standalone OpenAI/Cloudflare HTML error pages", () => {
+    const htmlError = `<!DOCTYPE html>
+<html>
+  <head><title>Unable to load site</title></head>
+  <body>
+    <p>Unable to load site</p>
+    <a href="https://status.openai.com/">status page</a>
+    <span>Ray ID: 9db04bc5cf66e92d</span>
+  </body>
+</html>`;
+
+    expect(isTransientHttpError(htmlError)).toBe(true);
   });
 
   it("returns false for non-retryable or non-http text", () => {

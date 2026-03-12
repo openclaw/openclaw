@@ -43,6 +43,7 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
+  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
@@ -50,6 +51,7 @@ import {
   parseImageSizeError,
   parseImageDimensionError,
   isRateLimitAssistantError,
+  isTransientHttpError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   type FailoverReason,
@@ -91,6 +93,13 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
+const TRANSIENT_TRANSPORT_RETRY_BACKOFF_POLICY: BackoffPolicy = {
+  initialMs: 500,
+  maxMs: 4_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const MAX_TRANSIENT_TRANSPORT_RETRIES = 4;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -748,6 +757,7 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let transientTransportRetryAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1353,6 +1363,11 @@ export async function runEmbeddedPiAgent(
             resolveAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          const rawAssistantError = lastAssistant?.errorMessage?.trim() ?? "";
+          const standaloneHtmlTransientError =
+            rawAssistantError.length > 0 && isCloudflareOrHtmlErrorPage(rawAssistantError);
+          const transientHttpTransportError =
+            rawAssistantError.length > 0 && isTransientHttpError(rawAssistantError);
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
@@ -1377,6 +1392,24 @@ export async function runEmbeddedPiAgent(
             ))
           ) {
             authRetryPending = true;
+            continue;
+          }
+          if (
+            !aborted &&
+            assistantFailoverReason === "timeout" &&
+            (standaloneHtmlTransientError || transientHttpTransportError) &&
+            transientTransportRetryAttempts < MAX_TRANSIENT_TRANSPORT_RETRIES
+          ) {
+            transientTransportRetryAttempts += 1;
+            const delayMs = computeBackoff(
+              TRANSIENT_TRANSPORT_RETRY_BACKOFF_POLICY,
+              transientTransportRetryAttempts,
+            );
+            log.warn(
+              `transient provider transport failure for ${provider}/${modelId}; retrying same profile/model ` +
+                `attempt=${transientTransportRetryAttempts}/${MAX_TRANSIENT_TRANSPORT_RETRIES} delayMs=${delayMs}`,
+            );
+            await sleepWithAbort(delayMs, params.abortSignal);
             continue;
           }
           if (imageDimensionError && lastProfileId) {
