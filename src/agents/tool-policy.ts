@@ -28,7 +28,12 @@ function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean):
   };
 }
 
-const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>(["whatsapp_login", "cron", "gateway"]);
+const OWNER_ONLY_TOOL_NAME_FALLBACKS = new Set<string>([
+  "whatsapp_login",
+  "cron",
+  "gateway",
+  "nodes",
+]);
 
 export function isOwnerOnlyToolName(name: string) {
   return OWNER_ONLY_TOOL_NAME_FALLBACKS.has(normalizeToolName(name));

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/tlon";
 import {
   formatDocsLink,
+  patchScopedAccountConfig,
   resolveAccountIdForConfigure,
   DEFAULT_ACCOUNT_ID,
   type ChannelOnboardingAdapter,
@@ -32,46 +33,30 @@ function applyAccountConfig(params: {
   };
 }): OpenClawConfig {
   const { cfg, accountId, input } = params;
-  const useDefault = accountId === DEFAULT_ACCOUNT_ID;
-  const base = cfg.channels?.tlon ?? {};
   const nextValues = {
     enabled: true,
     ...(input.name ? { name: input.name } : {}),
     ...buildTlonAccountFields(input),
   };
-
-  if (useDefault) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        tlon: {
-          ...base,
-          ...nextValues,
-        },
-      },
-    };
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return patchScopedAccountConfig({
+      cfg,
+      channelKey: channel,
+      accountId,
+      patch: nextValues,
+      ensureChannelEnabled: false,
+      ensureAccountEnabled: false,
+    });
   }
-
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      tlon: {
-        ...base,
-        enabled: base.enabled ?? true,
-        accounts: {
-          ...(base as { accounts?: Record<string, unknown> }).accounts,
-          [accountId]: {
-            ...(base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
-              accountId
-            ],
-            ...nextValues,
-          },
-        },
-      },
-    },
-  };
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: { enabled: cfg.channels?.tlon?.enabled ?? true },
+    accountPatch: nextValues,
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
+  });
 }
 
 async function noteTlonHelp(prompter: WizardPrompter): Promise<void> {
