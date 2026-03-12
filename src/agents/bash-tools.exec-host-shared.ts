@@ -137,11 +137,9 @@ export function resolveExecHostApprovalContext(params: {
   // must be able to suppress prompts even when other defaults are stricter.
   // tools.exec.ask=off takes precedence to allow users to disable prompts entirely.
   const hostAsk =
-    params.ask === "off"
+    params.ask === "off" || approvals.agent.ask === "off"
       ? "off"
-      : approvals.agent.ask === "off"
-        ? "off"
-        : maxAsk(params.ask, approvals.agent.ask);
+      : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
