@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   createBackupArchive,
   formatBackupCreateSummary,
@@ -13,15 +14,24 @@ export async function backupCreateCommand(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
   const result = await createBackupArchive(opts);
-  if (opts.verify && !opts.dryRun) {
-    await backupVerifyCommand(
-      {
-        ...runtime,
-        log: () => {},
-      },
-      { archive: result.archivePath, json: false },
-    );
-    result.verified = true;
+  const shouldVerify = opts.verify !== false;
+  if (shouldVerify && !opts.dryRun) {
+    try {
+      await backupVerifyCommand(
+        {
+          ...runtime,
+          log: () => {},
+        },
+        { archive: result.archivePath, json: false },
+      );
+      result.verified = true;
+    } catch (cause) {
+      await fs.rm(result.archivePath, { force: true });
+      throw new Error(
+        `Backup archive failed validation after writing and was removed: ${result.archivePath}`,
+        { cause },
+      );
+    }
   }
   const output = opts.json
     ? JSON.stringify(result, null, 2)

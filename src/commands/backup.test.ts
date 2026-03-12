@@ -201,7 +201,7 @@ describe("backup commands", () => {
 
       expect(result.verified).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Validated backup archive:"),
+        expect.stringContaining("Archive verification: passed"),
       );
       expect(backupVerifyCommandMock).toHaveBeenCalledWith(
         expect.objectContaining({ log: expect.any(Function) }),
