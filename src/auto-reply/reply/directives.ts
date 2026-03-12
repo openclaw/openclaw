@@ -2,6 +2,7 @@ import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
+  normalizeFastMode,
   normalizeElevatedLevel,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
@@ -119,6 +120,24 @@ export function extractVerboseDirective(body?: string): {
   return {
     cleaned: extracted.cleaned,
     verboseLevel: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
+export function extractFastDirective(body?: string): {
+  cleaned: string;
+  fastMode?: boolean;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(body, ["fast"], normalizeFastMode);
+  return {
+    cleaned: extracted.cleaned,
+    fastMode: extracted.level,
     rawLevel: extracted.rawLevel,
     hasDirective: extracted.hasDirective,
   };
