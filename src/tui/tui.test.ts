@@ -161,10 +161,10 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.pairingHint).toContain("openclaw devices list");
   });
 
-  it("falls back to idle for generic disconnect reasons", () => {
+  it("falls back to reconnecting hint for generic disconnect reasons", () => {
     const state = resolveGatewayDisconnectState("network timeout");
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
-    expect(state.activityStatus).toBe("idle");
+    expect(state.activityStatus).toBe("reconnecting… ctrl+r to retry now");
     expect(state.pairingHint).toBeUndefined();
   });
 });

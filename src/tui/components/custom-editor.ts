@@ -8,6 +8,7 @@ export class CustomEditor extends Editor {
   onCtrlL?: () => void;
   onCtrlO?: () => void;
   onCtrlP?: () => void;
+  onCtrlR?: () => void;
   onCtrlT?: () => void;
   onShiftTab?: () => void;
   onAltEnter?: () => void;
@@ -27,6 +28,10 @@ export class CustomEditor extends Editor {
     }
     if (matchesKey(data, Key.ctrl("p")) && this.onCtrlP) {
       this.onCtrlP();
+      return;
+    }
+    if (matchesKey(data, Key.ctrl("r")) && this.onCtrlR) {
+      this.onCtrlR();
       return;
     }
     if (matchesKey(data, Key.ctrl("g")) && this.onCtrlG) {

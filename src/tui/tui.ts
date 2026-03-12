@@ -246,7 +246,7 @@ export function resolveGatewayDisconnectState(reason?: string): {
   }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: "idle",
+    activityStatus: "reconnecting… ctrl+r to retry now",
   };
 }
 
@@ -343,6 +343,7 @@ export async function runTui(opts: TuiOptions) {
   let toolsExpanded = false;
   let showThinking = false;
   let pairingHintShown = false;
+  let disconnectHintShown = false;
   const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
@@ -911,6 +912,13 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlP = () => {
     void openSessionSelector();
   };
+  editor.onCtrlR = () => {
+    if (!isConnected) {
+      setActivityStatus("reconnecting…");
+      client.reconnect();
+      tui.requestRender();
+    }
+  };
   editor.onCtrlT = () => {
     showThinking = !showThinking;
     void loadHistory();
@@ -928,6 +936,7 @@ export async function runTui(opts: TuiOptions) {
   client.onConnected = () => {
     isConnected = true;
     pairingHintShown = false;
+    disconnectHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
@@ -956,6 +965,12 @@ export async function runTui(opts: TuiOptions) {
     if (disconnectState.pairingHint && !pairingHintShown) {
       pairingHintShown = true;
       chatLog.addSystem(disconnectState.pairingHint);
+    } else if (!disconnectHintShown) {
+      disconnectHintShown = true;
+      chatLog.addSystem(
+        "Gateway disconnected. Auto-reconnecting… press ctrl+r to retry immediately.\n" +
+          "If the problem persists, restart the TUI with: openclaw tui",
+      );
     }
     updateFooter();
     tui.requestRender();
