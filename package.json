@@ -422,6 +422,7 @@
     "node-llama-cpp": "3.16.2"
   },
   "optionalDependencies": {
+    "@grpc/grpc-js": "^1.14.3",
     "nice-grpc": "^2.1.14",
     "nice-grpc-client-middleware-deadline": "^2.0.17",
     "nice-grpc-client-middleware-retry": "^3.1.13"
