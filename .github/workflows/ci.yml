@@ -131,6 +131,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          token: ${{ github.token }}
           submodules: false
 
       - name: Ensure secrets base commit (PR fast path)
@@ -165,6 +166,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          token: ${{ github.token }}
           submodules: false
 
       - name: Setup Node environment
@@ -282,6 +284,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          token: ${{ github.token }}
           submodules: false
 
       - name: Setup Node environment
@@ -606,6 +609,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          token: ${{ github.token }}
           submodules: false
 
       - name: Setup Node environment
