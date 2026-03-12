@@ -291,7 +291,7 @@ export function renderChatControls(state: AppViewState) {
   `;
 }
 
-function resolveMainSessionKey(
+export function resolveMainSessionKey(
   hello: AppViewState["hello"],
   sessions: SessionsListResult | null,
 ): string | null {
@@ -307,7 +307,15 @@ function resolveMainSessionKey(
   if (sessions?.sessions?.some((row) => row.key === "main")) {
     return "main";
   }
-  return null;
+  const inferredMainKey = sessions?.sessions?.find((row) => {
+    const key = row.key.trim();
+    return key === "global" || /^agent:[^:]+:main$/i.test(key);
+  })?.key;
+  if (inferredMainKey) {
+    return inferredMainKey;
+  }
+  // Keep "main" visible even when sessions.list is narrowed to active sessions.
+  return "main";
 }
 
 /* ── Channel display labels ────────────────────────────── */

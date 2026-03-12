@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveMainSessionKey,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -282,5 +283,39 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveMainSessionKey", () => {
+  it("returns mainSessionKey from snapshot when present", () => {
+    const hello = {
+      snapshot: { sessionDefaults: { mainSessionKey: "agent:main:main" } },
+    } as const;
+    expect(resolveMainSessionKey(hello as never, null)).toBe("agent:main:main");
+  });
+
+  it("falls back to inferred canonical main key from sessions", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 2,
+      defaults: { model: null, contextTokens: null },
+      sessions: [
+        row({ key: "agent:main:heartbeat", updatedAt: Date.now() }),
+        row({ key: "agent:main:main", updatedAt: Date.now() }),
+      ],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("agent:main:main");
+  });
+
+  it("falls back to main when snapshot and inferred keys are unavailable", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      sessions: [row({ key: "agent:main:heartbeat", updatedAt: Date.now() })],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("main");
   });
 });
