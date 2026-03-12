@@ -21,7 +21,8 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   updateSessionStore: vi.fn(async () => {}),
 }));
 
@@ -311,6 +312,27 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("/new");
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
+  });
+
+  it("does not block a model switch when cached session usage is stale", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: false,
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        cfg: configWithContextWindows(),
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to");
+    expect(result?.text).toContain("openai/gpt-4o");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
   });
 
   it("persists thinkingLevel=off (does not clear)", async () => {

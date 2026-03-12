@@ -1,18 +1,8 @@
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveCompactionReserveTokensFloor } from "../../agents/pi-settings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { formatTokenCount } from "../../utils/usage-format.js";
-
-function resolveRecordedSessionTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): number | undefined {
-  const total = entry?.totalTokens;
-  if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) {
-    return undefined;
-  }
-  return Math.floor(total);
-}
 
 export function maybeBlockOversizedModelSwitch(params: {
   cfg: OpenClawConfig;
@@ -29,7 +19,7 @@ export function maybeBlockOversizedModelSwitch(params: {
     return undefined;
   }
 
-  const recordedTokens = resolveRecordedSessionTokens(params.sessionEntry);
+  const recordedTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
   if (recordedTokens === undefined) {
     return undefined;
   }
