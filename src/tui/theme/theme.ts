@@ -7,8 +7,8 @@ import type {
 import chalk from "chalk";
 import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
-import type { Palette, ThemePalette } from "./palettes.js";
 import { detectThemeName } from "./detect.js";
+import type { Palette, ThemePalette } from "./palettes.js";
 import { getPalette, palettes } from "./palettes.js";
 import { createSyntaxThemeFromPalette } from "./syntax-theme.js";
 
