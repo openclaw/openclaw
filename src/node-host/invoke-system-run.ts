@@ -5,7 +5,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   recordAllowlistUse,
-  resolveAllowAlwaysPatterns,
+  resolveAllowAlwaysPatternsAsync,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecAsk,
@@ -479,7 +479,7 @@ async function executeSystemRunPhase(
 
   if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
     if (phase.policy.analysisOk) {
-      const patterns = resolveAllowAlwaysPatterns({
+      const { patterns, unresolved } = await resolveAllowAlwaysPatternsAsync({
         segments: phase.segments,
         cwd: phase.cwd,
         env: phase.env,
@@ -489,6 +489,10 @@ async function executeSystemRunPhase(
         if (pattern) {
           addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
         }
+      }
+      if (unresolved.length > 0) {
+        const joined = unresolved.join(", ");
+        logWarn(`exec: failed to resolve absolute paths for “Always Allow”: ${joined}`);
       }
     }
   }
