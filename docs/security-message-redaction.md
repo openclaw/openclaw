@@ -1,33 +1,35 @@
-# 安全增强：消息发送敏感信息打码功能
+# Security: Sensitive Value Redaction in Outbound Messages
 
-## 概述
+## Overview
 
-实现了在消息发送时自动检测并打码敏感信息（如 API 密钥、Token 等）的安全功能。
+Implements automatic detection and redaction of sensitive information (API keys, tokens, credentials, etc.) in all outbound messages sent through Telegram, Discord, Slack, and other channels.
 
-## 修改的文件
+## Modified Files
 
-### 1. `src/logging/redact.ts` (增强)
-**修改内容：**
-- 添加了 `dynamicSensitiveValues: Set<string>` 用于存储运行时发现的敏感值
-- 增强了 `redactText()` 函数，先替换动态敏感值，然后再应用正则模式
-- 新增公共 API：
-  - `addSensitiveValue(value: string)`: 添加单个敏感值
-  - `addSensitiveValues(values: string[])`: 批量添加敏感值
-  - `clearDynamicSensitiveValues()`: 清除所有动态值
-  - `getDynamicSensitiveValuesCount()`: 获取动态值数量
+### 1. `src/logging/redact.ts` (Enhanced)
 
-**功能：**
-- 支持正则模式匹配（已有功能）
-- 新增支持精确字符串匹配（动态添加的值）
-- 打码格式：保留前6位和后4位，中间用 `…` 替换
+**Changes:**
+- Added `dynamicSensitiveValues: Set<string>` to store runtime-discovered sensitive values
+- Enhanced `redactText()` function to redact dynamic values first, then apply pattern-based redaction
+- New public APIs:
+  - `addSensitiveValue(value: string)`: Add a single sensitive value
+  - `addSensitiveValues(values: string[])`: Add multiple sensitive values
+  - `clearDynamicSensitiveValues()`: Clear all dynamic values
+  - `getDynamicSensitiveValuesCount()`: Get count of registered values
 
-### 2. `src/logging/redact-init.ts` (新建)
-**功能：**
-- 扫描 `openclaw.json` 配置文件，识别敏感配置项
-- 扫描环境变量，识别敏感值
-- 自动提取并注册这些值到打码系统
+**Features:**
+- Pattern-based matching (existing functionality)
+- Exact string matching for dynamic values (new)
+- Redaction format: preserves first 6 and last 4 characters, replaces middle with `…`
 
-**敏感键模式：**
+### 2. `src/logging/redact-init.ts` (New)
+
+**Purpose:**
+- Scan `openclaw.json` configuration for sensitive values
+- Scan environment variables for secrets
+- Automatically register discovered values for redaction
+
+**Sensitive Key Patterns:**
 ```javascript
 const SENSITIVE_KEY_PATTERNS = [
   /api[_-]?key/i,
@@ -41,31 +43,33 @@ const SENSITIVE_KEY_PATTERNS = [
 ];
 ```
 
-**扫描范围：**
+**Scan Scope:**
 - `agents.defaults.sandbox.docker.env`
-- `providers.*`
+- `channels.*` (Telegram, Discord, Slack, etc.)
 - `gateway.*`
 - `plugins[*].*`
-- 所有环境变量
+- All environment variables
 
-### 3. `src/infra/outbound/outbound-send-service.ts` (修改)
-**修改内容：**
-- 在 `executeSendAction()` 中，发送消息前对 `message` 进行打码
-- 在 `executePollAction()` 中，发送投票前对 `question` 和 `options` 进行打码
+### 3. `src/infra/outbound/outbound-send-service.ts` (Modified)
 
-**代码示例：**
+**Changes:**
+- Added message redaction in `executeSendAction()` before sending
+- Added poll content redaction in `executePollAction()` before sending
+
+**Code Example:**
 ```typescript
 const redactedMessage = redactSensitiveText(params.message);
-// 然后使用 redactedMessage 而不是 params.message
+// Use redactedMessage instead of params.message
 ```
 
-### 4. `src/cli/program/preaction.ts` (修改)
-**修改内容：**
-- 在 `registerPreActionHooks()` 的 preAction hook 中添加初始化调用
-- 在 `ensureConfigReady()` 之后调用，确保配置已加载
-- 使用 try-catch 包裹，确保初始化失败不影响程序启动
+### 4. `src/cli/program/preaction.ts` (Modified)
 
-**代码示例：**
+**Changes:**
+- Added initialization call in `registerPreActionHooks()` preAction hook
+- Runs after `ensureConfigReady()` to ensure config is loaded
+- Wrapped in try-catch to ensure initialization failures don't block startup
+
+**Code Example:**
 ```typescript
 try {
   const { initializeRedactionWithConfig } = await import("../../logging/redact-init.js");
@@ -77,59 +81,63 @@ try {
 }
 ```
 
-## 工作流程
+## Workflow
 
-### 启动时
-1. CLI 启动 → preAction hook 执行
-2. 加载配置文件（`ensureConfigReady`）
-3. 调用 `initializeRedactionWithConfig(config)`
-4. 扫描配置和环境变量，提取敏感值
-5. 调用 `addSensitiveValues()` 注册到打码系统
+### At Startup
+1. CLI starts → preAction hook executes
+2. Load config file (`ensureConfigReady`)
+3. Call `initializeRedactionWithConfig(config)`
+4. Scan config and environment variables for sensitive values
+5. Register values via `addSensitiveValues()`
 
-### 消息发送时
-1. Agent/用户调用发送消息
-2. → `executeSendAction()` 或 `executePollAction()`
-3. → 调用 `redactSensitiveText()` 打码
-4. → 发送打码后的消息到 TG/Discord/Slack 等渠道
+### When Sending Messages
+1. Agent/user calls send message
+2. → `executeSendAction()` or `executePollAction()`
+3. → Call `redactSensitiveText()` to redact content
+4. → Send redacted message to TG/Discord/Slack/etc
 
-## 打码示例
+## Redaction Examples
 
-### 示例 1: sk- 开头的密钥
+### Example 1: sk- prefixed keys
 ```
-原始: sk-3hjd98348hfkwduy83e4iuhfsa7t5623
-打码: sk-3hj**************a7t5
-```
-
-### 示例 2: GitHub Token
-```
-原始: ghp_1234567890abcdefghij1234567890
-打码: ghp_12**************7890
+Original: sk-3hjd98348hfkwduy83e4iuhfsa7t5623
+Redacted: sk-3hj…5623
 ```
 
-### 示例 3: 环境变量格式
+### Example 2: GitHub Token
 ```
-原始: API_KEY=sk-proj-1234567890abcdefghijklmnopqrstuvwxyz12345678
-打码: API_KEY=sk-pro**************5678
+Original: ghp_1234567890abcdefghij1234567890
+Redacted: ghp_12…7890
 ```
 
-### 示例 4: 配置中的自定义值
-如果 `openclaw.json` 中有：
+### Example 3: Environment variable format
+```
+Original: API_KEY=sk-proj-1234567890abcdefghijklmnopqrstuvwxyz12345678
+Redacted: API_KEY=sk-pro…5678
+```
+
+### Example 4: Runtime-discovered config values
+If `openclaw.json` contains:
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-custom-1234567890abcdefghij"
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "default": {
+          "botToken": "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
+        }
+      }
     }
   }
 }
 ```
 
-启动时会自动提取 `sk-custom-1234567890abcdefghij`，
-之后任何包含这个值的消息都会被打码为 `sk-cus**************ghij`
+The token `1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ` will be automatically extracted at startup.
+Any message containing this exact value will be redacted to `123456…wxYZ`
 
-## 支持的密钥格式
+## Supported Key Formats
 
-### 正则模式识别（已有）
+### Pattern-based Detection (Existing)
 - `sk-*` - OpenAI/Anthropic API keys
 - `ghp_*` - GitHub personal access tokens
 - `github_pat_*` - GitHub fine-grained tokens
@@ -139,48 +147,54 @@ try {
 - `AIza*` - Google API keys
 - `pplx-*` - Perplexity API keys
 - `npm_*` - NPM tokens
-- `数字:*` - Telegram bot tokens
-- PEM 私钥块
+- `digits:*` - Telegram bot tokens
+- PEM private key blocks
 - Bearer tokens
-- 环境变量赋值格式
-- JSON 字段格式
+- Environment variable assignments
+- JSON field formats
 
-### 动态值识别（新增）
-- 从 `openclaw.json` 配置提取的实际密钥值
-- 从环境变量提取的实际密钥值
+### Dynamic Value Detection (New)
+- Actual key values extracted from `openclaw.json`
+- Actual key values extracted from environment variables
 
-## 安全特性
+## Security Features
 
-1. **最小长度限制**: 只打码长度 ≥ 18 的值，避免误报
-2. **保留上下文**: 保留前6位和后4位，便于识别
-3. **递归扫描**: 扫描嵌套配置对象，最大深度 10 层
-4. **故障隔离**: 初始化失败不影响程序启动
-5. **性能优化**: 使用 Set 存储，快速查找
-6. **零配置**: 自动扫描，无需手动配置
+1. **Minimum Length**: Only redacts values ≥ 18 characters to avoid false positives
+2. **Context Preservation**: Preserves first 6 and last 4 characters for identification
+3. **Recursive Scanning**: Scans nested config objects up to 10 levels deep
+4. **Failure Isolation**: Initialization failures don't block application startup
+5. **Performance**: Uses Set for O(1) lookups, patterns compiled once
+6. **Zero Configuration**: Works automatically, no manual setup required
 
-## 测试
+## Testing
 
-可以运行测试文件验证功能：
-```bash
-node test-redaction.js
-```
+### Unit Tests
+- `redact.test.ts` - Core redaction functionality
+- `redact-init.test.ts` - Configuration scanning
 
-## 注意事项
+### Test Coverage
+- Pattern-based redaction for common key formats
+- Dynamic value redaction
+- Config scanning
+- Environment variable scanning
+- Edge cases (special characters, multiple occurrences, etc.)
 
-1. **不影响日志**: 此打码仅应用于外发消息，不影响内部日志
-2. **性能影响**: 对每条消息进行正则和字符串替换，有轻微性能开销
-3. **覆盖范围**: 目前仅在 `outbound-send-service.ts` 层面打码，对于直接调用各渠道发送 API 的代码可能需要额外处理
-4. **启动时机**: 只在 preAction hook 执行时初始化，对于不经过 CLI 启动的场景需要手动调用
+## Notes
 
-## 未来改进方向
+1. **Scope**: Redaction only applies to outbound messages, not internal logs
+2. **Performance**: Minimal overhead from regex matching and Set lookups
+3. **Coverage**: Currently integrated at `outbound-send-service.ts` level; direct channel API calls may need separate handling
+4. **Timing**: Initialization occurs during CLI startup preAction hook
 
-1. 在更多发送路径添加打码（如 WebSocket 消息）
-2. 支持自定义打码格式（如星号、全隐藏等）
-3. 添加打码统计和日志
-4. 支持配置白名单（某些密钥不打码）
-5. 添加单元测试
+## Future Improvements
+
+1. Extend redaction to additional send paths (e.g., WebSocket messages)
+2. Support custom redaction formats (asterisks, full hiding, etc.)
+3. Add redaction statistics and logging
+4. Support whitelist (keys that should not be redacted)
+5. Add integration tests
 
 ---
 
-**实现日期**: 2026-03-13
-**分支**: security-message-redaction
+**Implementation Date**: 2026-03-13
+**Branch**: security-message-redaction

@@ -91,9 +91,9 @@ function scanConfig(config: OpenClawConfig): string[] {
     values.push(...extractSensitiveValues(dockerEnv, "agents.defaults.sandbox.docker.env"));
   }
 
-  // Scan provider configurations (Telegram, Discord, Slack, etc.).
-  if (config.providers && typeof config.providers === "object") {
-    values.push(...extractSensitiveValues(config.providers, "providers"));
+  // Scan channel configurations (Telegram, Discord, Slack, etc.).
+  if (config.channels && typeof config.channels === "object") {
+    values.push(...extractSensitiveValues(config.channels, "channels"));
   }
 
   // Scan gateway configuration.

@@ -1,13 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { initializeRedactionWithConfig } from "./redact-init.js";
+import { initializeRedaction } from "./redact-init.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 describe("redact-init", () => {
   it("should extract sensitive values from config", async () => {
     const mockConfig: Partial<OpenClawConfig> = {
-      providers: {
-        openai: {
-          apiKey: "sk-test-1234567890abcdefghijklmnopqrstuvwxyz",
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "sk-test-1234567890abcdefghijklmnopqrstuvwxyz",
+            },
+          },
         },
       },
       agents: {
@@ -32,7 +36,7 @@ describe("redact-init", () => {
 
   it("should handle config without sensitive values", async () => {
     const mockConfig: Partial<OpenClawConfig> = {
-      providers: {},
+      channels: {},
     };
 
     const result = await initializeRedaction(mockConfig as OpenClawConfig);
