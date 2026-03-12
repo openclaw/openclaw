@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.3.11",
+  "version": "2026.3.12",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
