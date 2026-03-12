@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 
+function magnitude(values: number[]) {
+  return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+}
+
 describe("runGeminiEmbeddingBatches", () => {
   let runGeminiEmbeddingBatches: typeof import("./batch-gemini.js").runGeminiEmbeddingBatches;
 
@@ -56,7 +60,7 @@ describe("runGeminiEmbeddingBatches", () => {
         return new Response(
           JSON.stringify({
             key: "req-1",
-            response: { embedding: { values: [0.1, 0.2, 0.3] } },
+            response: { embedding: { values: [3, 4] } },
           }),
           {
             status: 200,
@@ -88,7 +92,11 @@ describe("runGeminiEmbeddingBatches", () => {
       concurrency: 1,
     });
 
-    expect(results.get("req-1")).toEqual([0.1, 0.2, 0.3]);
+    const embedding = results.get("req-1");
+    expect(embedding).toBeDefined();
+    expect(embedding?.[0]).toBeCloseTo(0.6, 5);
+    expect(embedding?.[1]).toBeCloseTo(0.8, 5);
+    expect(magnitude(embedding ?? [])).toBeCloseTo(1, 5);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

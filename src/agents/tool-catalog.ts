@@ -86,7 +86,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_search",
     description: "Search the web",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -94,7 +94,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_fetch",
     description: "Fetch web content",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
