@@ -557,3 +557,15 @@ export async function setupSearch(
     },
   };
 }
+
+export const __testing = {
+  generateSessionId,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  pollFirecrawlAuthStatus,
+  waitForFirecrawlAuth,
+  applyFirecrawlKeyEverywhere,
+  FIRECRAWL_AUTH_STATUS_URL,
+  POLL_INTERVAL_MS,
+  POLL_TIMEOUT_MS,
+} as const;
