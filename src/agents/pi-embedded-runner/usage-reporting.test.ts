@@ -1,15 +1,6 @@
-import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
 import { runEmbeddedPiAgent } from "./run.js";
+import { mockedEnsureRuntimePluginsLoaded } from "./run.overflow-compaction.mocks.shared.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
@@ -39,7 +30,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
