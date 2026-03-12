@@ -2482,12 +2482,49 @@ describe("broadcast dispatch", () => {
     await handleFeishuMessage({
       cfg,
       event,
+      botOpenId: "ou_known_bot",
       runtime: createRuntimeEnv(),
     });
 
     // No dispatch: requireMention=true and bot not mentioned → returns early.
     // The mentioned bot's handler (on another account or same account with
     // matching botOpenId) will handle broadcast dispatch for all agents.
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("skips broadcast dispatch when bot identity is unknown (requireMention=true)", async () => {
+    const cfg: ClawdbotConfig = {
+      broadcast: { "oc-broadcast-group": ["susan", "main"] },
+      agents: { list: [{ id: "main" }, { id: "susan" }] },
+      channels: {
+        feishu: {
+          groups: {
+            "oc-broadcast-group": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-broadcast-unknown-bot-id",
+        chat_id: "oc-broadcast-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello everyone" }),
+      },
+    };
+
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+    });
+
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
   });
