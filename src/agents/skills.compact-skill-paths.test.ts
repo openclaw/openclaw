@@ -37,7 +37,7 @@ describe("compactSkillPaths", () => {
     });
   });
 
-  it("replaces home directory prefix with ~ in skill locations", async () => {
+  it("does not leak absolute home path in workspace-local skill locations", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const skillDir = path.join(workspaceDir, "skills", "test-skill");
 
@@ -63,6 +63,39 @@ describe("compactSkillPaths", () => {
       expect(prompt).toContain("test-skill");
       expect(prompt).toContain("A test skill for path compaction");
     });
+  });
+
+  it("replaces home directory prefix with ~ for skills outside the workspace", async () => {
+    const home = os.homedir();
+    if (!home) {
+      return;
+    }
+
+    const managedSkillsDir = await fs.mkdtemp(path.join(home, "openclaw-managed-skill-"));
+    try {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-workspace-"));
+      try {
+        const skillDir = path.join(managedSkillsDir, "managed-skill");
+
+        await writeSkill({
+          dir: skillDir,
+          name: "managed-skill",
+          description: "Managed skill outside workspace",
+        });
+
+        const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+          bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+          managedSkillsDir,
+        });
+
+        expect(prompt).toContain("<location>~/");
+        expect(prompt).not.toContain(home + path.sep);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    } finally {
+      await fs.rm(managedSkillsDir, { recursive: true, force: true });
+    }
   });
 
   it("preserves paths outside home directory", async () => {

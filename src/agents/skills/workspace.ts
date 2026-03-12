@@ -46,8 +46,8 @@ const skillCommandDebugOnce = new Set<string>();
 function compactSkillPaths(skills: Skill[], workspaceDir?: string): Skill[] {
   const home = os.homedir();
   const normalizedWorkspaceDir = workspaceDir ? path.resolve(workspaceDir) : null;
-  if (!home) return skills;
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  if (!home && !normalizedWorkspaceDir) return skills;
+  const prefix = home ? (home.endsWith(path.sep) ? home : home + path.sep) : null;
   return skills.map((s) => ({
     ...s,
     filePath: (() => {
@@ -58,7 +58,9 @@ function compactSkillPaths(skills: Skill[], workspaceDir?: string): Skill[] {
           return rel;
         }
       }
-      return s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath;
+      return prefix && s.filePath.startsWith(prefix)
+        ? "~/" + s.filePath.slice(prefix.length)
+        : s.filePath;
     })(),
   }));
 }
