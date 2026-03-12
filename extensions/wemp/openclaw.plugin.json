@@ -1,0 +1,9 @@
+{
+  "id": "wemp",
+  "channels": ["wemp"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

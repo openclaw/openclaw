@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/wemp",
+  "version": "2026.2.4",
+  "description": "OpenClaw WeChat Official Account channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "wemp",
+      "label": "微信公众号",
+      "selectionLabel": "微信公众号 (plugin)",
+      "docsPath": "/channels/wemp",
+      "docsLabel": "wemp",
+      "blurb": "WeChat Official Account channel with paired/unpaired routing.",
+      "aliases": ["wechat"],
+      "order": 86,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/wemp",
+      "localPath": "extensions/wemp",
+      "defaultChoice": "npm"
+    }
+  }
+}
