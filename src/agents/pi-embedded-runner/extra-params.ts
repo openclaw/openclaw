@@ -22,8 +22,10 @@ import {
 import {
   createCodexDefaultTransportWrapper,
   createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
 import {
@@ -436,6 +438,12 @@ export function applyExtraParamsToAgent(
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+  const openAIFastMode = resolveOpenAIFastMode(merged);
+  if (openAIFastMode) {
+    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
+    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
+  }
 
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {
