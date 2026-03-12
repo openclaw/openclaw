@@ -223,10 +223,10 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot =
-    nextEntry?.skillsSnapshot ??
-    (shouldRefreshSnapshot
-      ? {
+  const skillsSnapshot = shouldRefreshSnapshot
+    ? isFirstTurnInSession && nextEntry?.skillsSnapshot
+      ? nextEntry.skillsSnapshot
+      : {
           ...buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
@@ -235,7 +235,8 @@ export async function ensureSkillSnapshot(params: {
           }),
           eligibilitySignature,
         }
-      : isFirstTurnInSession
+    : (nextEntry?.skillsSnapshot ??
+      (isFirstTurnInSession
         ? undefined
         : {
             ...buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -245,7 +246,7 @@ export async function ensureSkillSnapshot(params: {
               snapshotVersion,
             }),
             eligibilitySignature,
-          });
+          }));
   if (
     skillsSnapshot &&
     sessionStore &&
