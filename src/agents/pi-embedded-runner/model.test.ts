@@ -23,7 +23,7 @@ function buildForwardCompatTemplate(params: {
   id: string;
   name: string;
   provider: string;
-  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions";
+  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -179,9 +179,65 @@ describe("buildInlineProviderModels", () => {
     expect(result).toHaveLength(1);
     expect(result[0].headers).toBeUndefined();
   });
+
+  it("drops SecretRef marker headers in inline provider models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      custom: {
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].headers).toEqual({
+      "X-Static": "tenant-a",
+    });
+  });
 });
 
 describe("resolveModel", () => {
+  it("defaults model input to text when discovery omits input", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "missing-input",
+      templateModel: {
+        id: "missing-input",
+        name: "missing-input",
+        api: "openai-completions",
+        provider: "custom",
+        baseUrl: "http://localhost:9999",
+        reasoning: false,
+        // NOTE: deliberately omit input to simulate buggy/custom catalogs.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    });
+
+    const result = resolveModel("custom", "missing-input", "/tmp/agent", {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9999",
+            api: "openai-completions",
+            // Intentionally keep this minimal — the discovered model provides the rest.
+            models: [{ id: "missing-input", name: "missing-input" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.model?.input)).toBe(true);
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
   it("includes provider baseUrl in fallback model", () => {
     const cfg = {
       models: {
@@ -220,6 +276,54 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("drops SecretRef marker provider headers in fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            headers: {
+              Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+              "X-Managed": "secretref-managed",
+              "X-Custom-Auth": "token-123",
+            },
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("drops marker headers from discovered models.json entries", () => {
+    mockDiscoveredModel({
+      provider: "custom",
+      modelId: "listed-model",
+      templateModel: {
+        ...makeModel("listed-model"),
+        provider: "custom",
+        headers: {
+          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
+          "X-Managed": "secretref-managed",
+          "X-Static": "tenant-a",
+        },
+      },
+    });
+
+    const result = resolveModel("custom", "listed-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Static": "tenant-a",
     });
   });
 
@@ -278,6 +382,152 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("matches prefixed OpenRouter native ids in configured fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("openrouter/healer-alpha"),
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 262144,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
+  it("prefers configured provider api metadata over discovered registry model", () => {
+    mockDiscoveredModel({
+      provider: "onehub",
+      modelId: "glm-5",
+      templateModel: {
+        id: "glm-5",
+        name: "GLM-5 (cached)",
+        provider: "onehub",
+        api: "anthropic-messages",
+        baseUrl: "https://old-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          onehub: {
+            baseUrl: "http://new-provider.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("glm-5"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 198000,
+                maxTokens: 16000,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("onehub", "glm-5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "onehub",
+      id: "glm-5",
+      api: "openai-completions",
+      baseUrl: "http://new-provider.example.com/v1",
+      reasoning: true,
+      contextWindow: 198000,
+      maxTokens: 16000,
+    });
+  });
+
+  it("prefers exact provider config over normalized alias match when both keys exist", () => {
+    mockDiscoveredModel({
+      provider: "qwen",
+      modelId: "qwen3-coder-plus",
+      templateModel: {
+        id: "qwen3-coder-plus",
+        name: "Qwen3 Coder Plus",
+        provider: "qwen",
+        api: "openai-completions",
+        baseUrl: "https://default-provider.example.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "qwen-portal": {
+            baseUrl: "https://canonical-provider.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Provider": "canonical" },
+            models: [{ ...makeModel("qwen3-coder-plus"), reasoning: false }],
+          },
+          qwen: {
+            baseUrl: "https://alias-provider.example.com/v1",
+            api: "anthropic-messages",
+            headers: { "X-Provider": "alias" },
+            models: [
+              {
+                ...makeModel("qwen3-coder-plus"),
+                api: "anthropic-messages",
+                reasoning: true,
+                contextWindow: 262144,
+                maxTokens: 32768,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen",
+      id: "qwen3-coder-plus",
+      api: "anthropic-messages",
+      baseUrl: "https://alias-provider.example.com",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 32768,
+      headers: { "X-Provider": "alias" },
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 
@@ -285,6 +535,101 @@ describe("resolveModel", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex"));
+  });
+
+  it("builds an openai-codex fallback for gpt-5.4", () => {
+    mockOpenAICodexTemplateModel();
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+  });
+
+  it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.com/v1",
+            headers: { "X-Proxy-Auth": "token-123" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+    });
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Proxy-Auth": "token-123",
+    });
+  });
+
+  it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+  });
+
+  it("keeps proxied openai completions transport untouched", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "openai",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+    });
   });
 
   it("builds an anthropic forward-compat fallback for claude-opus-4-6", () => {
@@ -402,6 +747,86 @@ describe("resolveModel", () => {
       expectedModel: {
         api: "openai-codex-responses",
         id: "gpt-5.3-codex",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("uses codex fallback when inline model omits api (#39682)", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://custom.example.com",
+            headers: { "X-Custom-Auth": "token-123" },
+            models: [{ id: "gpt-5.4" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
+      id: "gpt-5.4",
+      provider: "openai-codex",
+    });
+  });
+
+  it("normalizes openai-codex gpt-5.4 overrides away from /v1/responses", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+        provider: "openai-codex",
+      },
+    });
+  });
+
+  it("does not rewrite openai baseUrl when openai-codex api stays non-codex", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expectResolvedForwardCompatFallback({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      cfg,
+      expectedModel: {
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
         provider: "openai-codex",
       },
     });

@@ -19,6 +19,7 @@ import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -77,7 +78,11 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 }
 
 export async function getStatusSummary(
-  options: { includeSensitive?: boolean; config?: OpenClawConfig } = {},
+  options: {
+    includeSensitive?: boolean;
+    config?: OpenClawConfig;
+    sourceConfig?: OpenClawConfig;
+  } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
   const cfg = options.config ?? loadConfig();
@@ -95,6 +100,7 @@ export async function getStatusSummary(
   const channelSummary = await buildChannelSummary(cfg, {
     colorize: true,
     includeAllowFrom: true,
+    sourceConfig: options.sourceConfig,
   });
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
@@ -205,6 +211,7 @@ export async function getStatusSummary(
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {
+    runtimeVersion: resolveRuntimeServiceVersion(process.env),
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

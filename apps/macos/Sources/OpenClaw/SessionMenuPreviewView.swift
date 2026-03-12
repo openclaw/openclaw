@@ -4,13 +4,13 @@ import OpenClawProtocol
 import OSLog
 import SwiftUI
 
-struct SessionPreviewItem: Identifiable, Sendable {
+struct SessionPreviewItem: Identifiable {
     let id: String
     let role: PreviewRole
     let text: String
 }
 
-enum PreviewRole: String, Sendable {
+enum PreviewRole: String {
     case user
     case assistant
     case tool
@@ -114,7 +114,7 @@ extension SessionPreviewCache {
 }
 #endif
 
-struct SessionMenuPreviewSnapshot: Sendable {
+struct SessionMenuPreviewSnapshot {
     let items: [SessionPreviewItem]
     let status: SessionMenuPreviewView.LoadStatus
 }

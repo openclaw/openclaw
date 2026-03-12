@@ -4,9 +4,9 @@ export const ConnectErrorDetailCodes = {
   AUTH_TOKEN_MISSING: "AUTH_TOKEN_MISSING",
   AUTH_TOKEN_MISMATCH: "AUTH_TOKEN_MISMATCH",
   AUTH_TOKEN_NOT_CONFIGURED: "AUTH_TOKEN_NOT_CONFIGURED",
-  AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING",
-  AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH",
-  AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED",
+  AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING", // pragma: allowlist secret
+  AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH", // pragma: allowlist secret
+  AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED", // pragma: allowlist secret
   AUTH_DEVICE_TOKEN_MISMATCH: "AUTH_DEVICE_TOKEN_MISMATCH",
   AUTH_RATE_LIMITED: "AUTH_RATE_LIMITED",
   AUTH_TAILSCALE_IDENTITY_MISSING: "AUTH_TAILSCALE_IDENTITY_MISSING",
@@ -27,6 +27,26 @@ export const ConnectErrorDetailCodes = {
 
 export type ConnectErrorDetailCode =
   (typeof ConnectErrorDetailCodes)[keyof typeof ConnectErrorDetailCodes];
+
+export type ConnectRecoveryNextStep =
+  | "retry_with_device_token"
+  | "update_auth_configuration"
+  | "update_auth_credentials"
+  | "wait_then_retry"
+  | "review_auth_configuration";
+
+export type ConnectErrorRecoveryAdvice = {
+  canRetryWithDeviceToken?: boolean;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+};
+
+const CONNECT_RECOVERY_NEXT_STEP_VALUES: ReadonlySet<ConnectRecoveryNextStep> = new Set([
+  "retry_with_device_token",
+  "update_auth_configuration",
+  "update_auth_credentials",
+  "wait_then_retry",
+  "review_auth_configuration",
+]);
 
 export function resolveAuthConnectErrorDetailCode(
   reason: string | undefined,
@@ -90,4 +110,27 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   }
   const code = (details as { code?: unknown }).code;
   return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
+
+export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRecoveryAdvice {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return {};
+  }
+  const raw = details as {
+    canRetryWithDeviceToken?: unknown;
+    recommendedNextStep?: unknown;
+  };
+  const canRetryWithDeviceToken =
+    typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
+  const normalizedNextStep =
+    typeof raw.recommendedNextStep === "string" ? raw.recommendedNextStep.trim() : "";
+  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
+    normalizedNextStep as ConnectRecoveryNextStep,
+  )
+    ? (normalizedNextStep as ConnectRecoveryNextStep)
+    : undefined;
+  return {
+    canRetryWithDeviceToken,
+    recommendedNextStep,
+  };
 }

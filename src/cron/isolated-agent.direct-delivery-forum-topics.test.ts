@@ -48,12 +48,12 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       });
 
       expect(plainRes.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
-        | { expectsCompletionMessage?: boolean }
-        | undefined;
-      expect(announceArgs?.expectsCompletionMessage).toBe(true);
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(plainRes.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expectDirectTelegramDelivery(deps, {
+        chatId: "123",
+        text: "plain message",
+      });
     });
   });
 });
