@@ -27,6 +27,36 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.asdf/shims");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+  });
+
+  it("includes Nix Home Manager profile directories on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/.nix-profile",
+      },
+    });
+
+    // Should include default Nix profile
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
+
+    // Should include all profiles from NIX_PROFILES env var
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("handles single Nix profile from NIX_PROFILES on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/per-user/testuser/profile",
+      },
+    });
+
+    expect(result).toContain("/nix/var/nix/profiles/per-user/testuser/profile/bin");
+    expect(result).toContain("/home/testuser/.nix-profile/bin");
   });
 
   it("excludes user bin directories when HOME is undefined on Linux", () => {
@@ -117,10 +147,27 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
     expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
     expect(result).toContain("/Users/testuser/.bun/bin");
+    expect(result).toContain("/Users/testuser/.nix-profile/bin"); // Nix Home Manager
 
     // Should also include macOS system directories
     expect(result).toContain("/opt/homebrew/bin");
     expect(result).toContain("/usr/local/bin");
+  });
+
+  it("includes Nix Home Manager profile directories on macOS", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: {
+        HOME: "/Users/testuser",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /Users/testuser/.nix-profile",
+      },
+    });
+
+    // Should include default Nix profile
+    expect(result).toContain("/Users/testuser/.nix-profile/bin");
+
+    // Should include all profiles from NIX_PROFILES env var
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
   });
 
   it("includes env-configured version manager dirs on macOS", () => {
