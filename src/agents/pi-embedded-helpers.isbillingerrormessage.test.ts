@@ -14,6 +14,7 @@ import {
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
+  isTransientNetworkErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
@@ -567,6 +568,29 @@ describe("image dimension errors", () => {
   });
 });
 
+describe("isTransientNetworkErrorMessage", () => {
+  it("matches network connection lost", () => {
+    expect(isTransientNetworkErrorMessage("Network connection lost.")).toBe(true);
+    expect(isTransientNetworkErrorMessage("Network connection lost")).toBe(true);
+  });
+
+  it("matches other transient network errors", () => {
+    expect(isTransientNetworkErrorMessage("fetch failed")).toBe(true);
+    expect(isTransientNetworkErrorMessage("socket hang up")).toBe(true);
+    expect(isTransientNetworkErrorMessage("ECONNRESET")).toBe(true);
+    expect(isTransientNetworkErrorMessage("ETIMEDOUT")).toBe(true);
+    expect(isTransientNetworkErrorMessage("ECONNREFUSED")).toBe(true);
+    expect(isTransientNetworkErrorMessage("ENOTFOUND")).toBe(true);
+  });
+
+  it("does not match non-network errors", () => {
+    expect(isTransientNetworkErrorMessage("invalid api key")).toBe(false);
+    expect(isTransientNetworkErrorMessage("rate limit exceeded")).toBe(false);
+    expect(isTransientNetworkErrorMessage("billing error")).toBe(false);
+    expect(isTransientNetworkErrorMessage("")).toBe(false);
+  });
+});
+
 describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {
   it("reclassifies periodic usage limits as rate_limit", () => {
     const samples = [
@@ -772,6 +796,13 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+  });
+  it("classifies transient network errors as timeout", () => {
+    expect(classifyFailoverReason("Network connection lost.")).toBe("timeout");
+    expect(classifyFailoverReason("Network connection lost")).toBe("timeout");
+    expect(classifyFailoverReason("fetch failed")).toBe("timeout");
+    expect(classifyFailoverReason("socket hang up")).toBe("timeout");
+    expect(classifyFailoverReason("ECONNRESET")).toBe("timeout");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(
