@@ -133,9 +133,15 @@ export function resolveExecHostApprovalContext(params: {
     ask: params.ask,
   });
   const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  // An explicit ask=off policy in exec-approvals.json must be able to suppress
-  // prompts even when tool/runtime defaults are stricter (for example on-miss).
-  const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
+  // An explicit ask=off policy (either from exec-approvals.json or tools.exec.ask)
+  // must be able to suppress prompts even when other defaults are stricter.
+  // tools.exec.ask=off takes precedence to allow users to disable prompts entirely.
+  const hostAsk =
+    params.ask === "off"
+      ? "off"
+      : approvals.agent.ask === "off"
+        ? "off"
+        : maxAsk(params.ask, approvals.agent.ask);
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
