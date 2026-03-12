@@ -925,7 +925,7 @@ export function createOpenAIWebSocketStreamFn(
         }
 
         const unsubscribe = session.manager.onMessage((event) => {
-          if (isResponseLifecycleEvent(event)) {
+          if (isResponseLifecycleEvent(event) || event.type === "error") {
             markFirstServerEventSeen();
           }
           if (event.type === "response.completed") {
