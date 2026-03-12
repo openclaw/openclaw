@@ -8,6 +8,18 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
+/**
+ * Regex for CJK (Chinese, Japanese, Korean) characters.
+ * Covers:
+ * - CJK Unified Ideographs: U+4E00-U+9FFF (common Chinese/Kanji)
+ * - CJK Unified Ideographs Extension A: U+3400-U+4DBF (rare Chinese)
+ * - Hiragana: U+3040-U+309F (Japanese)
+ * - Katakana: U+30A0-U+30FF (Japanese)
+ * - Hangul Syllables: U+AC00-U+D7AF (Korean)
+ * - Halfwidth and Fullwidth Forms: U+FF00-U+FFEF (fullwidth Latin, Katakana)
+ */
+const CJK_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\uff00-\uffef]/g;
+
 function asText(text: string): TextContent {
   return { type: "text", text };
 }
@@ -117,8 +129,8 @@ function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageCon
     if (block.type === "text") {
       // Count CJK characters (Chinese, Japanese, Korean) separately
       // CJK characters are roughly 1 token each, not 0.25 like English
-      const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
-      const cjkCount = (block.text.match(cjkRegex) || []).length;
+      CJK_REGEX.lastIndex = 0;
+      const cjkCount = (block.text.match(CJK_REGEX) || []).length;
       const latinCount = block.text.length - cjkCount;
       // CJK characters count as 4 chars (1 char ≈ 1 token, but we divide by CHARS_PER_TOKEN_ESTIMATE later)
       chars += latinCount + cjkCount * 4;
@@ -135,8 +147,8 @@ function estimateMessageChars(message: AgentMessage): number {
     const content = message.content;
     if (typeof content === "string") {
       // Count CJK characters separately for string content
-      const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
-      const cjkCount = (content.match(cjkRegex) || []).length;
+      CJK_REGEX.lastIndex = 0;
+      const cjkCount = (content.match(CJK_REGEX) || []).length;
       const latinCount = content.length - cjkCount;
       return latinCount + cjkCount * 4;
     }
@@ -151,15 +163,15 @@ function estimateMessageChars(message: AgentMessage): number {
       }
       if (b.type === "text" && typeof b.text === "string") {
         // Count CJK characters separately
-        const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
-        const cjkCount = (b.text.match(cjkRegex) || []).length;
+        CJK_REGEX.lastIndex = 0;
+        const cjkCount = (b.text.match(CJK_REGEX) || []).length;
         const latinCount = b.text.length - cjkCount;
         chars += latinCount + cjkCount * 4;
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
         // Count CJK characters separately
-        const cjkRegex = /[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g;
-        const cjkCount = (b.thinking.match(cjkRegex) || []).length;
+        CJK_REGEX.lastIndex = 0;
+        const cjkCount = (b.thinking.match(CJK_REGEX) || []).length;
         const latinCount = b.thinking.length - cjkCount;
         chars += latinCount + cjkCount * 4;
       }
