@@ -53,22 +53,12 @@ function createChannelManager(snapshots: RuntimeSnapshot[]): ChannelManager {
   return { getRuntimeSnapshot } as unknown as ChannelManager;
 }
 
-type RecoveryPreflightLog = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-};
-
-type TestLog = RecoveryPreflightLog & {
-  infoMock: ReturnType<typeof vi.fn<(msg: string) => void>>;
-  warnMock: ReturnType<typeof vi.fn<(msg: string) => void>>;
-};
-
-function createTestLog(): TestLog {
-  const infoMock = vi.fn<(msg: string) => void>();
-  const warnMock = vi.fn<(msg: string) => void>();
+function createTestLog() {
+  const infoMock = vi.fn<[msg: string], void>();
+  const warnMock = vi.fn<[msg: string], void>();
   return {
-    info: infoMock,
-    warn: warnMock,
+    info: infoMock as (msg: string) => void,
+    warn: warnMock as (msg: string) => void,
     infoMock,
     warnMock,
   };
