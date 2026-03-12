@@ -120,7 +120,7 @@ async function readPatternFile(filePath: string, opts: ReadPatternFileOpts): Pro
       );
     }
 
-    if (opts.permissionCheck) {
+    if (opts.permissionCheck && process.platform !== "win32") {
       const isGroupOrWorldWritable = (fileStat.mode & 0o022) !== 0;
       if (isGroupOrWorldWritable) {
         throw new ExcludeFileError(filePath, "group/world writable — skipping for security");
