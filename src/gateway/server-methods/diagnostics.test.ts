@@ -45,7 +45,7 @@ describe("diagnostics.queue", () => {
 
     await diagnosticsHandlers["diagnostics.queue"]({
       req: {} as never,
-      params: undefined,
+      params: undefined as never,
       respond: respond as never,
       context: {} as never,
       client: null,
