@@ -1002,6 +1002,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               replyToId: trimmedPayload.replyToId,
             }),
             textLimit,
+            // The picker path already converts and trims text before capture/delivery.
             tableMode: "off",
             sendMessage: sendMessageMattermost,
           });

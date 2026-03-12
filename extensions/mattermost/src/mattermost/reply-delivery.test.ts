@@ -60,4 +60,36 @@ describe("deliverMattermostReplyPayload", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("forwards replyToId for text-only chunked replies", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const core = {
+      channel: {
+        text: {
+          convertMarkdownTables: vi.fn((text: string) => text),
+          resolveChunkMode: vi.fn(() => "length"),
+          chunkMarkdownTextWithMode: vi.fn(() => ["hello"]),
+        },
+      },
+    } as any;
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg: {} satisfies OpenClawConfig,
+      payload: { text: "hello" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
+      accountId: "default",
+      replyToId: "root-post",
+    });
+  });
 });
