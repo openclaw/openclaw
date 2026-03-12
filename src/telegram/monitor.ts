@@ -192,6 +192,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     });
     await pollingSession.runUntilAbort();
   } finally {
+    // Abort any in-flight long-poll HTTP request before exiting
+    // This prevents 409 Conflict when a new process starts polling
+    pollingSession?.abortActiveFetch();
     await execApprovalsHandler?.stop().catch(() => {});
     unregisterHandler();
   }
