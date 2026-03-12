@@ -953,7 +953,7 @@ async function listComments(client: Lark.Client, docToken: string, blockId?: str
     params.block_id = blockId;
   }
 
-  const res = await client.docx.documentComment.list({
+  const res = await (client.docx as any).documentComment.list({
     path: { document_id: docToken },
     params,
   });
@@ -969,7 +969,7 @@ async function listComments(client: Lark.Client, docToken: string, blockId?: str
 }
 
 async function getComment(client: Lark.Client, docToken: string, commentId: string) {
-  const res = await client.docx.documentComment.get({
+  const res = await (client.docx as any).documentComment.get({
     path: { document_id: docToken, comment_id: commentId },
   });
 
@@ -1001,7 +1001,7 @@ async function createComment(
     data.reply_to_comment_id = replyToCommentId;
   }
 
-  const res = await client.docx.documentComment.create({
+  const res = await (client.docx as any).documentComment.create({
     path: { document_id: docToken },
     data,
   });
@@ -1022,7 +1022,7 @@ async function updateComment(
   commentId: string,
   content: string,
 ) {
-  const res = await client.docx.documentComment.update({
+  const res = await (client.docx as any).documentComment.update({
     path: { document_id: docToken, comment_id: commentId },
     data: {
       content,
@@ -1040,7 +1040,7 @@ async function updateComment(
 }
 
 async function deleteComment(client: Lark.Client, docToken: string, commentId: string) {
-  const res = await client.docx.documentComment.delete({
+  const res = await (client.docx as any).documentComment.delete({
     path: { document_id: docToken, comment_id: commentId },
   });
 
