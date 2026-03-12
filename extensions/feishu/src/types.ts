@@ -93,6 +93,7 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  sheets?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {
