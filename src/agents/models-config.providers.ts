@@ -684,10 +684,22 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey,
   })),
   withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
-  withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
-    ...(await buildHuggingfaceProvider(discoveryApiKey)),
-    apiKey,
-  })),
+  // HuggingFace discovery: respect models.huggingfaceDiscovery.enabled toggle.
+  async (ctx) => {
+    if (ctx.config?.models?.huggingfaceDiscovery?.enabled === false) {
+      return undefined;
+    }
+    const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey("huggingface");
+    if (!apiKey) {
+      return undefined;
+    }
+    return {
+      huggingface: {
+        ...(await buildHuggingfaceProvider(discoveryApiKey)),
+        apiKey,
+      },
+    };
+  },
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
@@ -787,11 +799,16 @@ async function resolveCloudflareAiGatewayImplicitProvider(
 async function resolveOllamaImplicitProvider(
   ctx: ImplicitProviderContext,
 ): Promise<Record<string, ProviderConfig> | undefined> {
+  // Respect models.ollamaDiscovery.enabled toggle.
+  const ollamaDiscoveryEnabled = ctx.config?.models?.ollamaDiscovery?.enabled;
   const ollamaKey = ctx.resolveProviderApiKey("ollama").apiKey;
   const explicitOllama = ctx.explicitProviders?.ollama;
   const hasExplicitModels =
     Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
   if (hasExplicitModels && explicitOllama) {
+    // Always register explicitly configured Ollama models, regardless of
+    // the discovery toggle — the toggle controls network probing, not
+    // explicit-provider defaulting.
     return {
       ollama: {
         ...explicitOllama,
@@ -800,6 +817,10 @@ async function resolveOllamaImplicitProvider(
         apiKey: ollamaKey ?? explicitOllama.apiKey ?? OLLAMA_LOCAL_AUTH_MARKER,
       },
     };
+  }
+  if (ollamaDiscoveryEnabled === false) {
+    // No explicit models and discovery disabled; skip entirely.
+    return undefined;
   }
 
   const ollamaBaseUrl = explicitOllama?.baseUrl;
@@ -883,6 +904,7 @@ export async function resolveImplicitProviders(
   if (!providers["github-copilot"]) {
     const implicitCopilot = await resolveImplicitCopilotProvider({
       agentDir: params.agentDir,
+      config: params.config,
       env,
     });
     if (implicitCopilot) {
@@ -914,8 +936,14 @@ export async function resolveImplicitProviders(
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
+  // Respect models.copilotDiscovery.enabled toggle.
+  if (params.config?.models?.copilotDiscovery?.enabled === false) {
+    return null;
+  }
+
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
