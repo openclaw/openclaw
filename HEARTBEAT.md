@@ -40,6 +40,20 @@
   3. 거부 시 → 사유 분석 → 수정 계획 수립 → Discord DM 보고
 - **완료 조건:** App Store 출시 완료 또는 거부 대응 완료
 
+#### Zalo OA "Lov2Luv" 승인 모니터링
+
+- **OA ID:** 3248206969121202907
+- **현재 상태:** Đang chờ duyệt (심사 중)
+- **체크 방법:** `https://oa.zalo.me/manage/oa?status=1` 에서 Lov2Luv OA가 활성 탭에 나타나는지 확인
+  - browser action evaluate: `document.querySelector('.oa-name')?.textContent` 또는 페이지 HTML에서 `3248206969121202907` 포함 여부
+  - 또는: `https://oa.zalo.me/manage/accuracy_name.html` 접속 시 더 이상 403이 아니면 승인됨
+- **할 일:**
+  1. 승인 확인 시 → Discord DM 즉시 알림: "🎉 Zalo OA 승인됨! 지금 바로 기업 인증 시작 가능"
+  2. 인증 페이지 접근 테스트 (`accuracy_name.html` 403 여부)
+  3. 승인 후 → 1A (김미정 Zalo +821025881057) 또는 1B (공문 `C:\TEMP\zalooa_filled.docx`) 중 선택하여 진행
+- **완료 조건:** OA status = "Đang hoạt động" + 기업 인증 제출 완료
+- **마감:** 2026-03-26
+
 #### MAISECONDBRAIN (Mnemo) — 이슈 자동 대응
 
 - **Repo:** https://github.com/jini92/MAISECONDBRAIN

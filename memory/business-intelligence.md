@@ -1,69 +1,67 @@
 # Business Intelligence 누적 기록
 
-_Created: 2026-03-11_
-_Updated: 2026-03-11_
+_MAIBOT 자동 사업화 인텔리전스 분석 이력. 크론 04:30 실행._
 
-## 2026-03-11 리포트 핵심 요약
+---
 
-### MAIBEAUTY
+## 2026-03-12 (첫 회차)
 
-- 베트남 4대 플랫폼 GMV USD 16.4B (2025), YoY +35%
-- TikTok Shop 베트남 점유율 41% (2023: 24%), Shopee 56%
-- Shopee+TikTok Shop = 97% 점유
-- 호치민 위조품 25톤 적발 → 정품 인증 차별화 기회
-- 베트남 GMP 신기준 2026.1 발효 → 컴플라이언스 우위
-- Google-Shopee YouTube Shopping 연동 (동남아 5개국)
-- **기회**: AI 라이브커머스, QR 정품인증, GMP 컨설팅
+### 핵심 발견 요약
 
-### MAISTAR7
+**MAIBEAUTY**
 
-- 베트남 노동시장 Tet 후 활황, 대기업 500-600명 채용
-- 한국 FDI 2026-2030 심층제조/기술개발 전환 → 고급인력 수요
-- 호치민 FDI USD 83.7억
-- **기회**: 기술인력 매칭 프리미엄, 한-베 양방향 플랫폼
+- 베트남 온라인 커머스: TikTok Shop(41%) + Shopee(56%) = 97% 독점 (2025)
+- AI 아바타 라이브커머스 시장 폭발 — NBA 스타가 Shopee에서 AI 분신으로 판매 시작
+- K-Beauty 글로벌 CAGR 6.1%, TikTok Shop 소셜커머스가 성장 드라이버
+- YouTube Shopping × Shopee 연동 베트남 출시 (Google 파트너십)
+- **기회**: AI 아바타 24/7 라이브 커머스 (BnF 100개 브랜드 활용)
 
-### MAIAX
+**MAIAX**
 
-- AW 2026: 24개국 500업체 2,300부스 역대 최대
-- 정책: 스마트팩토리 → 제조 AX + 자율제조로 확대
-- 산업부 "2030 제조 AX 최강국" 선언
-- 포스코DX AI Agent + Physical AI, 이즈파크 i-AX 플랫폼
-- **기회**: 7KL POC → AX 실증사업, AI Agent 제조 포지셔닝
+- 한국 정부 AX 상용화: 870억원 / 2년 / 36과제 (정부 70%+민간 30%)
+- 공모 마감: 2026-04-06 (과기정통부 기업데이터 실증사업)
+- 2026 지원 규모: 자율형공장 30개, AI 스마트공장 400개, 상생형 20개 = ~450개
+- MOTIE M.AX 프로그램 1.0455조 (YoY +52%)
+- **기회**: 7KL 발효 POC로 "공정혁신" 카테고리 지원
 
-### MAITOK (Tikly)
+**MAIOSS**
 
-- TikTok Shop 동남아 GMV 폭증, 베트남 41% 점유
-- 소셜커머스 2026년 USD 1,000억+ 전망
-- 비디오커머스 = 동남아 이커머스 GMV 25%
-- **기회**: 베트남 셀러 특화, 크로스플랫폼(YouTube), 셀러 분석
+- EU CRA 가이드라인 초안 2026-03-03 발표, 퍼블릭 컨설테이션 중
+- "Open Source Steward" 역할 구체화 (ORC Working Group 백서)
+- FOSS 상업 통합 시 제조자 책임 확인
+- **기회**: CRA 컴플라이언스 + SBOM 자동화 도구로 피벗
 
-### MAIBOTALKS
+**MAITOK**
 
-- Voice AI 시장: 2026 USD 9.2B → 2031 USD 20.7B (CAGR 30.7%)
-- AI 컴패니언 앱 누적 2.2억 DL, YoY +88%
-- 상위 10% = 매출 89% (winner-takes-most)
-- Replika: MAU 200만, 연 $24-30M, $19.99/월
-- **기회**: 니치 특화(한국어 학습), 동남아 가격($4.99-9.99/월)
+- TikTok Shop SEA 100%+ 성장, 크리에이터 커머스 투자 60%+ 증가
+- 크리에이터-브랜드 AI 매칭 플랫폼 11개+ SEA 경쟁
+- **기회**: 댓글 AI → 크리에이터-브랜드 매칭 확장
 
-### MAITUTOR
+**MAIBOTALKS**
 
-- TOPIK 3급+ → 베트남 대입 졸업시험 면제/성적인정
-- 한국어 = 베트남 수능 외국어 선택과목 (2021~)
-- 베트남 교육 4대 법률 2026.1.1 시행
-- **기회**: TOPIK 준비 AI 튜터, MAIBOTALKS 시너지, B2B SaaS
+- Voice AI 비용 $0.01-1/분, 오픈웨이트 LLM 4종 동시 출시 (2026.03)
+- Character.AI: 월 1.85억 방문, 연 $3,220만 매출
+- **기회**: 오픈웨이트 모델 비용 절감 + Story Mode 개념
 
-### MAIOSS
+**MAISTAR7**
 
-- EU CRA: 2026 보고의무 발효, 2027 전면시행
-- Black Duck OSSRA: 평균 취약점 280→581/codebase (2x)
-- 65% 기업 공급망 공격 경험
-- BearingPoint CRA 컨설팅 서비스 출시
-- **기회**: CRA-ready SaaS, 공급망 공격 탐지, 올해가 골든타임
+- 베트남 노동시장 밝은 전망, AI 채용매칭 도입 (스크리닝 70% 단축)
+- 한국 외국인 인력 개방 확대 (FT 보도)
+- **기회**: 한국기업 특화 니치 + EOR 파트너십
 
-### 크로스 시너지
+**MAITUTOR**
 
-- MAIBEAUTY-MAITOK: TikTok AI 댓글 → BnF 제품 자동응대
-- MAITUTOR-MAIBOTALKS: TOPIK AI + 음성엔진 = 회화학습앱
-- MAISTAR7-MAIAX: 스마트제조 인력 + AX 컨설팅 번들
-- MAIOSS-MAIAX: 제조 SW 공급망 보안 (CRA)
-- MAIBEAUTY-MAISTAR7: K-Beauty 진출 인력+마케팅 패키지
+- 베트남 교육법 4건 2026.1.1 시행, AI 교육 우호적
+- EdTech 글로벌 CAGR 13.9%
+- **기회**: 한국어 교육 → MAISTAR7 취업 파이프라인
+
+### 즉시 행동 사항
+
+1. MAIAX: AX 상용화 사업 컨소시엄 파트너 탐색 (마감 4/6)
+2. MAIBEAUTY: AI 아바타 라이브커머스 POC (D-ID/WMDigit.ai API)
+3. MAIOSS: CRA 가이드라인 분석 + 피벗 방향 확정
+4. MAITOK: 크리에이터-브랜드 매칭 기능 설계
+
+---
+
+_Last updated: 2026-03-12_

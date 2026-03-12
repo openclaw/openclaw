@@ -1,5 +1,39 @@
 # Tech Intelligence 누적 기록
 
+## 2026-03-12
+
+### 주요 발견
+
+1. **🔴 Fish Audio S2 오픈소스 출시** (2026-03-10) — 24개 언어 지원(한국어+베트남어 포함), ElevenLabs/MiniMax 벤치마크 압도. 자연어 감정 디렉팅(`[whisper]`, `[laughing nervously]`), 멀티스피커 원패스 생성. 음성 클로닝 SOTA. **MAIBEAUTY AI 아바타 TTS + MAIBOTALKS 음성대화 + MAITUTOR 발음교정 — 3개 프로젝트에 직접 적용 가능. edge-tts/Qwen3-TTS 대비 감정표현+다국어 품질 월등.**
+2. **🔴 Hume AI TADA TTS 오픈소스** (2026-03-11) — 온디바이스 배포 설계, 가장 빠른 LLM 기반 TTS. 콘텐츠 환각 거의 제로. 영어+다국어 모델 포함. **MAIBOTALKS 온디바이스 TTS 후보로 Fish S2(고품질 서버)와 TADA(경량 로컬) 2-tier 구조 설계 가능.**
+3. **🔴 CVE-2026-28353: Trivy VS Code 확장 공급망 공격** (2026-03-05) — Aqua Security Trivy VSCode 1.8.12가 OpenVSX에서 악성코드 삽입됨. **AI 코딩 에이전트를 통한 민감정보 유출 새로운 공격 벡터**. GitHub PAT 탈취 → 악성 버전 퍼블리시. MAIOSS에 "AI Agent 공급망 공격" 탐지 모듈 신규 기회.
+4. **🔴 Baidu DuClaw 출시** (2026-03-11) — Baidu AI Cloud에서 OpenClaw 제로배포 서비스. 월 ¥17.8. OpenClaw 아시아 확산 가속 → MAIBOTALKS OpenClaw 기반 음성에이전트의 시장 수요 검증.
+5. **🟡 Qwen3-ASR: Whisper 킬러급 STT** — Alibaba 2026.01 오픈소스. 52개 언어, 정확도/속도/타임스탬프/스트리밍/배치/음악인식 전방위 Whisper 압도. Rust 크레이트(Metal+CUDA)도 등장. **MAIBOTALKS/MAITUTOR STT를 Moonshine → Qwen3-ASR로 재평가 필요.**
+6. **🟡 Qwen3-TTS 상세 확인** — 3초 오디오로 보이스 클로닝, 10개 언어(한국어 O, 베트남어 X). ComfyUI 통합 튜토리얼 등장. Fish S2(베트남어 O)와 조합하면 한/베 양국어 커버.
+7. **🟡 TikTok Shop 베트남 시장점유율 40%+ 돌파** — Shopee와 격차 축소 중. SEA GMV $45.6B. FBT(Fulfilled by TikTok) 물류 안정화. 크리에이터 수익화 1,267% YoY 성장. **MAIBEAUTY TikTok Commerce 전략의 시장 타이밍 최적.**
+8. **🟡 FastAPI 0.135.x (2026.03 안정)** — AI 백엔드 프레임워크 1위 유지. VyOS도 FastAPI 배경작업 프레임워크 채택. MAISTAR7 기술 스택 검증됨.
+9. **🟡 디지털 트윈+RL 최신 연구** — arxiv 2603.08931: 멀티피델리티 네트워크에서 PPO 2단계 최적화, 물리 데이터 수집 지연 28% 감소. Wiley 서베이: AI+DT 패러다임 정리. MAIAX LSTM+PPO 접근법 학술적 지지 강화.
+10. **🟡 Cloudflare API 취약점 스캐너 상세** — AI 콜 그래프로 "독성 조합"(개별 안전 but 조합 시 위험) 탐지. CVE-2026-22813(마크다운 RCE, CVSS 9.4) 자체 발견. **MAIOSS에 "조합 취약점 탐지" 기능 영감.**
+11. **🟢 OpenClawd 클라우드 플랫폼 업데이트** (2026-03-11) — 확장 언어 지원 추가. AI Agent 아시아+북미 채택 기록적 수준.
+12. **🟢 Lobstr.io + Make.com TikTok 댓글 AI 감성 모니터링** 통합 — 노코드 파이프라인. MAITOK 경쟁 분석 대상.
+13. **🟢 TranscriptionSuite v1.1.2** — WhisperX + Parakeet/Canary + VibeVoice(24kHz) 통합 STT 앱. 로컬 완전 프라이빗. MAIBOTALKS/MAITUTOR 참조 아키텍처.
+14. **🟢 InfluxDB 3.0 트렌드** — 시계열 DB 진화 지속. Grafana 연동 표준. MAIAX 데이터 인프라 현행 유지 적절.
+15. **🟢 AI 어학교육 시장** — Langua(지역 악센트+슬랭), Pingo AI(발음 비교 훈련). 차별점은 "실제 대화감". MAITUTOR 로컬 처리+제로레이턴시가 핵심 차별점 유지.
+
+### 긴급건
+
+- 🔴 **Fish Audio S2 즉시 평가** → MAIBEAUTY/MAIBOTALKS/MAITUTOR 3개 프로젝트에 게임체인저급. 한국어+베트남어 동시 지원하는 최초의 오픈소스 SOTA TTS. PoC 우선순위 높음.
+- 🔴 **CVE-2026-28353 Trivy 공급망 공격** → MAIOSS에 "AI Agent 익스플로잇 통한 공급망 공격" 탐지 카테고리 추가 기회. VS Code 확장 보안 감사 모듈 신설 검토.
+- 🟡 **Qwen3-ASR STT 재평가** → Moonshine v2 대비 벤치마크 비교 필요. 52개 언어+스트리밍 지원으로 MAIBOTALKS/MAITUTOR STT 엔진 후보 상향.
+- 🟡 **TikTok Shop 베트남 40%+** → MAIBEAUTY TikTok Commerce 전략 실행 시점 도래.
+
+### 크로스프로젝트 시너지
+
+- **Fish S2 + Qwen3-ASR → MAIBEAUTY×MAIBOTALKS×MAITUTOR 공유 음성 파이프라인** 설계 가능. STT(Qwen3-ASR) + TTS(Fish S2) 통합 모듈을 공통 라이브러리로 추출하면 3개 프로젝트 동시 수혜.
+- **Trivy 공급망 공격 패턴 → MAIOSS 신규 탐지 카테고리** + Cloudflare "독성 조합" 패턴 → MAIOSS 차별화 기능으로 빅테크(OpenAI Codex Security, GitHub Taskflow)와 차별.
+
+---
+
 ## 2026-03-11
 
 ### 주요 발견
@@ -69,4 +103,4 @@
 
 ---
 
-_Last updated: 2026-03-11T05:01+07:00_
+_Last updated: 2026-03-12T04:00+07:00_
