@@ -385,8 +385,13 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   const runningAt = job.state.runningAtMs;
   if (typeof runningAt === "number") {
     const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+    // Clamp to the fallback ceiling so absurdly large timeoutSeconds values
+    // (which overflow setTimeout's 2^31-1 ms limit) don't leave stuck locks
+    // blocking the job for days after a crash.
     const stuckThresholdMs =
-      typeof jobTimeoutMs === "number" ? jobTimeoutMs + STUCK_RUN_BUFFER_MS : STUCK_RUN_FALLBACK_MS;
+      typeof jobTimeoutMs === "number"
+        ? Math.min(jobTimeoutMs + STUCK_RUN_BUFFER_MS, STUCK_RUN_FALLBACK_MS)
+        : STUCK_RUN_FALLBACK_MS;
     if (nowMs - runningAt > stuckThresholdMs) {
       state.deps.log.warn(
         { jobId: job.id, runningAtMs: runningAt, stuckThresholdMs },
