@@ -28,6 +28,68 @@ function makePrompter(confirmResult = true) {
 }
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("does not warn for canonical payload kinds in an already-normalized store", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "canonical-agent",
+              name: "Canonical agent",
+              enabled: true,
+              schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC", staggerMs: 300_000 },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: {
+                kind: "agentTurn",
+                message: "Morning brief",
+              },
+              delivery: { mode: "none" },
+              state: {},
+            },
+            {
+              id: "canonical-system",
+              name: "Canonical system",
+              enabled: true,
+              schedule: { kind: "every", everyMs: 60_000 },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: {
+                kind: "systemEvent",
+                text: "Status",
+              },
+              delivery: { mode: "none" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+        },
+      },
+      options: { nonInteractive: true },
+      prompter,
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(noteSpy).not.toHaveBeenCalled();
+  });
+
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
     await fs.mkdir(path.dirname(storePath), { recursive: true });

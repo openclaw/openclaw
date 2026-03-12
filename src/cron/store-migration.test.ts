@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 
+function createCronJob(payload: Record<string, unknown>, sessionTarget: "isolated" | "main") {
+  return {
+    id: typeof payload.kind === "string" ? `job-${payload.kind}` : "job",
+    name: "test",
+    enabled: true,
+    schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 300_000 },
+    sessionTarget,
+    wakeMode: "now",
+    payload,
+    delivery: { mode: "none" },
+    state: {},
+  } satisfies Record<string, unknown>;
+}
+
 describe("normalizeStoredCronJobs", () => {
   it("normalizes legacy cron fields and reports migration issues", () => {
     const jobs = [
@@ -74,5 +88,47 @@ describe("normalizeStoredCronJobs", () => {
       mode: "announce",
       channel: "slack",
     });
+  });
+
+  it("does not flag canonical payload kinds as legacy", () => {
+    const jobs = [
+      createCronJob({ kind: "agentTurn", message: "ping" }, "isolated"),
+      createCronJob({ kind: "systemEvent", text: "pong" }, "main"),
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(false);
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent" });
+  });
+
+  it("normalizes lowercase legacy payload kinds", () => {
+    const jobs = [
+      createCronJob({ kind: "agentturn", message: "ping" }, "isolated"),
+      createCronJob({ kind: "systemevent", text: "pong" }, "main"),
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent" });
+  });
+
+  it("normalizes weird casing and whitespace to canonical payload kinds", () => {
+    const jobs = [
+      createCronJob({ kind: " AgentTurn ", message: "ping" }, "isolated"),
+      createCronJob({ kind: "SYSTEMEVENT", text: "pong" }, "main"),
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent" });
   });
 });
