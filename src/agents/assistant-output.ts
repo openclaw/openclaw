@@ -216,10 +216,13 @@ export async function reconcileAssistantOutputs(params: {
   messages: AgentMessage[];
   startIndex: number;
   seenSegmentIds: Set<string>;
+  historyBeforePrompt?: AgentMessage[];
 }) {
   const newOutputs: AssistantOutputEntry[] = [];
   const normalizedStartIndex =
-    params.startIndex >= 0 && params.startIndex <= params.messages.length ? params.startIndex : 0;
+    params.startIndex >= 0 && params.startIndex <= params.messages.length
+      ? params.startIndex
+      : resolveCompactedPromptBoundaryIndex(params.messages, params.historyBeforePrompt);
   let nextStartIndex = params.messages.length;
 
   for (const [index, msg] of params.messages.slice(normalizedStartIndex).entries()) {
@@ -245,4 +248,53 @@ export async function reconcileAssistantOutputs(params: {
   }
 
   return { newOutputs, nextStartIndex };
+}
+
+function resolveCompactedPromptBoundaryIndex(
+  messages: AgentMessage[],
+  historyBeforePrompt?: AgentMessage[],
+) {
+  if (!historyBeforePrompt || historyBeforePrompt.length === 0 || messages.length === 0) {
+    return 0;
+  }
+
+  const maxRetainedPrefixLength = Math.min(historyBeforePrompt.length, messages.length);
+  for (
+    let retainedPrefixLength = maxRetainedPrefixLength;
+    retainedPrefixLength > 0;
+    retainedPrefixLength -= 1
+  ) {
+    const historyStartIndex = historyBeforePrompt.length - retainedPrefixLength;
+    let matchesRetainedPrefix = true;
+    for (let index = 0; index < retainedPrefixLength; index += 1) {
+      const beforePromptMessage = historyBeforePrompt[historyStartIndex + index];
+      const currentMessage = messages[index];
+      if (!assistantHistoryMessagesMatch(beforePromptMessage, currentMessage)) {
+        matchesRetainedPrefix = false;
+        break;
+      }
+    }
+    if (matchesRetainedPrefix) {
+      return retainedPrefixLength;
+    }
+  }
+
+  return 0;
+}
+
+function assistantHistoryMessagesMatch(
+  left: AgentMessage | undefined,
+  right: AgentMessage | undefined,
+) {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
 }

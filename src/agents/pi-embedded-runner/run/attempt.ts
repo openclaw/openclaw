@@ -1636,6 +1636,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      const historyBeforePrompt = activeSession.messages.slice();
       const prePromptMessageCount = activeSession.messages.length;
       const assistantOutputs: AssistantOutputEntry[] = [];
       const seenAssistantOutputIds = new Set<string>();
@@ -1674,6 +1675,7 @@ export async function runEmbeddedAttempt(
       const reconcileFinalizedAssistantOutputs = async (messages: AgentMessage[]) => {
         try {
           const result = await reconcileAssistantOutputs({
+            historyBeforePrompt,
             messages,
             startIndex: reconcileStartIndex,
             seenSegmentIds: seenAssistantOutputIds,

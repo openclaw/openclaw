@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractAssistantOutputSegments,
@@ -327,6 +328,49 @@ describe("assistant output reconciliation", () => {
     );
     expect(result.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(result.nextStartIndex).toBe(1);
+  });
+
+  it("skips retained pre-prompt assistant messages when a stale cursor rewinds after compaction", async () => {
+    const seenSegmentIds = new Set<string>();
+    const historyBeforePrompt: AgentMessage[] = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Old user prompt." }],
+      },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Old finalized assistant output." }],
+      },
+    ];
+    const messages: AgentMessage[] = [
+      historyBeforePrompt[1],
+      {
+        role: "user",
+        content: [{ type: "text", text: "Current prompt." }],
+      },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Current finalized assistant output." }],
+      },
+    ];
+
+    const result = await reconcileAssistantOutputs({
+      messages,
+      historyBeforePrompt,
+      startIndex: 5,
+      seenSegmentIds,
+    });
+
+    expect(result.newOutputs).toHaveLength(1);
+    expect(result.newOutputs[0]).toEqual(
+      expect.objectContaining({
+        text: "Current finalized assistant output.",
+      }),
+    );
+    expect(result.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
+    expect(result.nextStartIndex).toBe(3);
   });
 
   it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {
