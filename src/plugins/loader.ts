@@ -21,6 +21,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { resolvePluginSourceRoots } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -37,6 +38,7 @@ export type PluginLoadResult = PluginRegistry;
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   runtimeOptions?: CreatePluginRuntimeOptions;
@@ -45,6 +47,10 @@ export type PluginLoadOptions = {
 };
 
 const registryCache = new Map<string, PluginRegistry>();
+
+export function clearPluginLoaderCache(): void {
+  registryCache.clear();
+}
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
@@ -167,9 +173,13 @@ export const __testing = {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  env: NodeJS.ProcessEnv;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
+  const roots = resolvePluginSourceRoots({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(params.plugins)}`;
 }
 
 function validatePluginConfig(params: {
@@ -445,15 +455,17 @@ function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): voi
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  const env = options.env ?? process.env;
   // Test env: default-disable plugins unless explicitly configured.
   // This keeps unit/gateway suites fast and avoids loading heavyweight plugin deps by accident.
-  const cfg = applyTestPluginDefaults(options.config ?? {}, process.env);
+  const cfg = applyTestPluginDefaults(options.config ?? {}, env);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const normalized = normalizePluginsConfig(cfg.plugins);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    env,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -510,11 +522,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
     cache: options.cache,
+    env,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
     workspaceDir: options.workspaceDir,
     cache: options.cache,
+    env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
   });

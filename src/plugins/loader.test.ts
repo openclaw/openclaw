@@ -28,6 +28,7 @@ async function importFreshPluginTestModules() {
 
 const {
   __testing,
+  clearPluginLoaderCache,
   createHookRunner,
   getGlobalHookRunner,
   loadOpenClawPlugins,
@@ -80,6 +81,7 @@ function writePlugin(params: {
 }): TempPlugin {
   const dir = params.dir ?? makeTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
+  fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
@@ -265,6 +267,7 @@ function createPluginSdkAliasFixture(params?: {
 }
 
 afterEach(() => {
+  clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -447,6 +450,89 @@ describe("loadOpenClawPlugins", () => {
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("does not reuse cached bundled plugin registries across env changes", () => {
+    const bundledA = makeTempDir();
+    const bundledB = makeTempDir();
+    const pluginA = writePlugin({
+      id: "cache-root",
+      dir: path.join(bundledA, "cache-root"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "cache-root", register() {} };`,
+    });
+    const pluginB = writePlugin({
+      id: "cache-root",
+      dir: path.join(bundledB, "cache-root"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "cache-root", register() {} };`,
+    });
+
+    const options = {
+      config: {
+        plugins: {
+          allow: ["cache-root"],
+          entries: {
+            "cache-root": { enabled: true },
+          },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins({
+      ...options,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
+      },
+    });
+    const second = loadOpenClawPlugins({
+      ...options,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
+      },
+    });
+
+    expect(second).not.toBe(first);
+    expect(
+      fs.realpathSync(first.plugins.find((entry) => entry.id === "cache-root")?.source ?? ""),
+    ).toBe(fs.realpathSync(pluginA.file));
+    expect(
+      fs.realpathSync(second.plugins.find((entry) => entry.id === "cache-root")?.source ?? ""),
+    ).toBe(fs.realpathSync(pluginB.file));
+  });
+
+  it("normalizes bundled plugin env overrides against the provided env", () => {
+    const bundledDir = makeTempDir();
+    const homeDir = path.dirname(bundledDir);
+    const override = `~/${path.basename(bundledDir)}`;
+    const plugin = writePlugin({
+      id: "tilde-bundled",
+      dir: path.join(bundledDir, "tilde-bundled"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "tilde-bundled", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: override,
+      },
+      config: {
+        plugins: {
+          allow: ["tilde-bundled"],
+          entries: {
+            "tilde-bundled": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(
+      fs.realpathSync(registry.plugins.find((entry) => entry.id === "tilde-bundled")?.source ?? ""),
+    ).toBe(fs.realpathSync(plugin.file));
   });
 
   it("loads plugins when source and root differ only by realpath alias", () => {
