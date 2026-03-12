@@ -240,7 +240,6 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
   }
 
   const provider = memorySearch.provider;
-  const model = memorySearch.model;
   const remote = memorySearch.remote;
 
   // Note: API key validation is done at runtime by resolveMemorySearchConfig

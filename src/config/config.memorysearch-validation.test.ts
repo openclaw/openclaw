@@ -106,7 +106,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects openai provider without apiKey", () => {
+  it("accepts openai provider without apiKey (resolved at runtime)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -117,12 +117,10 @@ describe("validateConfigObject - memorySearch", () => {
         },
       },
     });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("apiKey");
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects openai provider without apiKey and model", () => {
+  it("accepts openai provider without apiKey and model (resolved at runtime)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -132,12 +130,10 @@ describe("validateConfigObject - memorySearch", () => {
         },
       },
     });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1); // Only apiKey issue, model is optional
-    expect(result.issues[0]?.message).toContain("apiKey");
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects gemini provider without apiKey", () => {
+  it("accepts gemini provider without apiKey (resolved at runtime)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -148,9 +144,7 @@ describe("validateConfigObject - memorySearch", () => {
         },
       },
     });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("apiKey");
+    expect(result.ok).toBe(true);
   });
 
   it("accepts gemini without explicit model (uses provider default)", () => {
@@ -169,7 +163,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects voyage provider without apiKey", () => {
+  it("accepts voyage provider without apiKey (resolved at runtime)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -180,9 +174,7 @@ describe("validateConfigObject - memorySearch", () => {
         },
       },
     });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("apiKey");
+    expect(result.ok).toBe(true);
   });
 
   it("accepts voyage without explicit model (uses provider default)", () => {
@@ -201,7 +193,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("rejects mistral provider without apiKey", () => {
+  it("accepts mistral provider without apiKey (resolved at runtime)", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
@@ -212,9 +204,7 @@ describe("validateConfigObject - memorySearch", () => {
         },
       },
     });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("apiKey");
+    expect(result.ok).toBe(true);
   });
 
   it("accepts mistral without explicit model (uses provider default)", () => {
@@ -248,5 +238,43 @@ describe("validateConfigObject - memorySearch", () => {
       },
     });
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects ollama provider when baseUrl is an empty string", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            remote: {
+              baseUrl: "",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("non-empty baseUrl");
+  });
+
+  it("rejects ollama provider when baseUrl is whitespace only", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            remote: {
+              baseUrl: "   ",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("non-empty baseUrl");
   });
 });
