@@ -111,7 +111,7 @@ describe("setupFetch", () => {
     expect(result).toEqual(config);
   });
 
-  it("quickstart auto-selects firecrawl when authenticated", async () => {
+  it("quickstart shows picker and defaults to firecrawl when authenticated", async () => {
     const config: OpenClawConfig = {
       tools: {
         web: {
@@ -121,31 +121,25 @@ describe("setupFetch", () => {
         },
       },
     };
-    const { prompter } = createPrompter({});
-    const result = await setupFetch(config, prompter, { quickstartDefaults: true });
+    const { prompter } = createPrompter({ selectValue: "firecrawl" });
+    const result = await setupFetch(config, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("firecrawl");
-    // Should not have shown any UI
-    expect(prompter.select).not.toHaveBeenCalled();
+    expect(prompter.select).toHaveBeenCalled();
+    const selectCall = (prompter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | { initialValue?: string }
+      | undefined;
+    expect(selectCall?.initialValue).toBe("firecrawl");
   });
 
-  it("quickstart auto-selects readability when not authenticated", async () => {
-    const { prompter } = createPrompter({});
-    const result = await setupFetch({}, prompter, { quickstartDefaults: true });
+  it("defaults to readability when not authenticated", async () => {
+    const { prompter } = createPrompter({ selectValue: "readability" });
+    const result = await setupFetch({}, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("readability");
-    expect(prompter.select).not.toHaveBeenCalled();
-  });
-
-  it("quickstart preserves existing provider", async () => {
-    const config: OpenClawConfig = {
-      tools: {
-        web: {
-          fetch: { provider: "scrapingbee" },
-        },
-      },
-    };
-    const { prompter } = createPrompter({});
-    const result = await setupFetch(config, prompter, { quickstartDefaults: true });
-    expect(result.tools?.web?.fetch?.provider).toBe("scrapingbee");
+    expect(prompter.select).toHaveBeenCalled();
+    const selectCall = (prompter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | { initialValue?: string }
+      | undefined;
+    expect(selectCall?.initialValue).toBe("readability");
   });
 
   it("defaults to existing provider in picker", async () => {

@@ -46,25 +46,12 @@ function applyFetchProvider(config: OpenClawConfig, provider: FetchProvider): Op
   };
 }
 
-export type SetupFetchOptions = {
-  quickstartDefaults?: boolean;
-};
-
 export async function setupFetch(
   config: OpenClawConfig,
   prompter: WizardPrompter,
-  opts?: SetupFetchOptions,
 ): Promise<OpenClawConfig> {
   const firecrawlReady = isFirecrawlAuthenticated(config);
   const existingProvider = config.tools?.web?.fetch?.provider;
-
-  // QuickStart: auto-select Firecrawl if authenticated, otherwise readability.
-  if (opts?.quickstartDefaults) {
-    if (existingProvider) {
-      return config;
-    }
-    return applyFetchProvider(config, firecrawlReady ? "firecrawl" : "readability");
-  }
 
   await prompter.note(
     [

@@ -535,9 +535,7 @@ export async function runOnboardingWizard(
   // but always runs — even when search is skipped the user can still pick a scrape provider).
   {
     const { setupFetch } = await import("../commands/onboard-fetch.js");
-    nextConfig = await setupFetch(nextConfig, prompter, {
-      quickstartDefaults: flow === "quickstart",
-    });
+    nextConfig = await setupFetch(nextConfig, prompter);
   }
 
   if (opts.skipSkills) {
