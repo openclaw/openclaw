@@ -53,22 +53,24 @@ export async function resolveGatewayRuntimeConfig(params: {
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
-      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind.\nFix: remove the --host flag override, or change gateway.bind to "lan" if LAN access is intended (with auth configured).`,
     );
   }
   if (bindMode === "custom") {
     const configuredCustomBindHost = customBindHost?.trim();
     if (!configuredCustomBindHost) {
-      throw new Error("gateway.bind=custom requires gateway.customBindHost");
+      throw new Error(
+        'gateway.bind=custom requires gateway.customBindHost.\nFix: add "customBindHost": "<your-ip>" to the gateway section in openclaw.json.',
+      );
     }
     if (!isValidIPv4(configuredCustomBindHost)) {
       throw new Error(
-        `gateway.bind=custom requires a valid IPv4 customBindHost (got ${configuredCustomBindHost})`,
+        `gateway.bind=custom requires a valid IPv4 customBindHost (got ${configuredCustomBindHost}).\nFix: use a valid IPv4 address like "192.168.1.100", not hostnames or padded octets.`,
       );
     }
     if (bindHost !== configuredCustomBindHost) {
       throw new Error(
-        `gateway bind=custom requested ${configuredCustomBindHost} but resolved ${bindHost}; refusing fallback`,
+        `gateway bind=custom requested ${configuredCustomBindHost} but resolved ${bindHost}; refusing fallback.\nFix: remove the --host flag, or update gateway.customBindHost to match the desired address.`,
       );
     }
   }
@@ -124,15 +126,17 @@ export async function resolveGatewayRuntimeConfig(params: {
   assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
-      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+      'tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD).\nFix: run `openclaw config set gateway.auth.mode password` and `openclaw config set gateway.auth.password "YOUR_PASSWORD"`.',
     );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+    throw new Error(
+      'tailscale serve/funnel requires gateway bind=loopback (127.0.0.1).\nFix: remove gateway.bind or set it to "loopback", or disable tailscale with gateway.tailscale.mode="off".',
+    );
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD).\nFix: run \`openclaw config set gateway.auth.mode token\` to auto-generate a token, or set OPENCLAW_GATEWAY_TOKEN env var.`,
     );
   }
   if (
@@ -142,14 +146,14 @@ export async function resolveGatewayRuntimeConfig(params: {
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     throw new Error(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
+      'non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode.\nFix: add "allowedOrigins": ["https://your-domain.com"] to gateway.controlUi in openclaw.json.',
     );
   }
 
   if (authMode === "trusted-proxy") {
     if (trustedProxies.length === 0) {
       throw new Error(
-        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+        'gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP.\nFix: add "trustedProxies": ["<proxy-ip>"] to the gateway section in openclaw.json.',
       );
     }
     if (isLoopbackHost(bindHost)) {
@@ -158,7 +162,7 @@ export async function resolveGatewayRuntimeConfig(params: {
         isTrustedProxyAddress("::1", trustedProxies);
       if (!hasLoopbackTrustedProxy) {
         throw new Error(
-          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
+          'gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR.\nFix: add "127.0.0.1" to the gateway.trustedProxies array in openclaw.json.',
         );
       }
     }
@@ -169,7 +173,10 @@ export async function resolveGatewayRuntimeConfig(params: {
     controlUiEnabled,
     openAiChatCompletionsEnabled,
     openAiChatCompletionsConfig: openAiChatCompletionsConfig
-      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
+      ? {
+          ...openAiChatCompletionsConfig,
+          enabled: openAiChatCompletionsEnabled,
+        }
       : undefined,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig
