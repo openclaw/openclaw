@@ -62,11 +62,19 @@ export function isCurrentProcessLaunchdServiceLabel(
 }
 
 function buildLaunchdRestartScript(mode: LaunchdRestartHandoffMode): string {
+  const waitForCallerPid = `wait_pid="$4"
+if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
+  while kill -0 "$wait_pid" >/dev/null 2>&1; do
+    sleep 0.1
+  done
+fi
+`;
+
   if (mode === "kickstart") {
     return `service_target="$1"
 domain="$2"
 plist_path="$3"
-sleep 1
+${waitForCallerPid}
 if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
@@ -79,19 +87,7 @@ fi
   return `service_target="$1"
 domain="$2"
 plist_path="$3"
-wait_pid="$4"
-if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
-  attempts=0
-  while kill -0 "$wait_pid" >/dev/null 2>&1; do
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge 100 ]; then
-      break
-    fi
-    sleep 0.1
-  done
-else
-  sleep 1
-fi
+${waitForCallerPid}
 if ! launchctl start "$service_target" >/dev/null 2>&1; then
   launchctl enable "$service_target" >/dev/null 2>&1
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
