@@ -171,7 +171,8 @@ actor GatewayEndpointStore {
         if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
            !configToken.isEmpty
         {
-            Self.staticLogger.debug("resolveGatewayToken: using config gateway.auth.token")
+            let configKey = isRemote ? "gateway.remote.token" : "gateway.auth.token"
+            Self.staticLogger.debug("resolveGatewayToken: using config \(configKey, privacy: .public)")
             return configToken
         }
 
