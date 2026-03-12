@@ -56,6 +56,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     drive: false,
     perm: false,
     scopes: false,
+    card: false,
   };
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
