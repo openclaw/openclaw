@@ -1,9 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -12,13 +17,16 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
+  validateSessionsAbortParams,
   validateSessionsCompactParams,
+  validateSessionsCreateParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
+  validateSessionsSendParams,
 } from "../protocol/index.js";
 import {
   archiveSessionTranscriptsForSession,
@@ -33,6 +41,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
+  pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
@@ -43,6 +52,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { chatHandlers } from "./chat.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -116,6 +126,96 @@ function rejectWebchatSessionMutation(params: {
   return true;
 }
 
+function migrateAndPruneSessionStoreKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  store: Record<string, SessionEntry>;
+}) {
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    store: params.store,
+  });
+  const primaryKey = target.canonicalKey;
+  if (!params.store[primaryKey]) {
+    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
+    if (existingKey) {
+      params.store[primaryKey] = params.store[existingKey];
+    }
+  }
+  pruneLegacyStoreKeys({
+    store: params.store,
+    canonicalKey: primaryKey,
+    candidates: target.storeKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey] };
+}
+
+function buildDashboardSessionKey(agentId: string): string {
+  return `agent:${agentId}:dashboard:${randomUUID()}`;
+}
+
+function ensureSessionTranscriptFile(params: {
+  sessionId: string;
+  storePath: string;
+  sessionFile?: string;
+  agentId: string;
+}): { ok: true; transcriptPath: string } | { ok: false; error: string } {
+  try {
+    const transcriptPath = resolveSessionFilePath(
+      params.sessionId,
+      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
+      resolveSessionFilePathOptions({
+        storePath: params.storePath,
+        agentId: params.agentId,
+      }),
+    );
+    if (!fs.existsSync(transcriptPath)) {
+      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
+      const header = {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: params.sessionId,
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      };
+      fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    }
+    return { ok: true, transcriptPath };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function resolveAbortSessionKey(params: {
+  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  requestedKey: string;
+  canonicalKey: string;
+  runId?: string;
+}): string {
+  const activeRunKey =
+    typeof params.runId === "string"
+      ? params.context.chatAbortControllers.get(params.runId)?.sessionKey
+      : undefined;
+  if (activeRunKey) {
+    return activeRunKey;
+  }
+  for (const active of params.context.chatAbortControllers.values()) {
+    if (active.sessionKey === params.canonicalKey) {
+      return params.canonicalKey;
+    }
+    if (active.sessionKey === params.requestedKey) {
+      return params.requestedKey;
+    }
+  }
+  return params.requestedKey;
+}
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
@@ -221,6 +321,154 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: resolved.key }, undefined);
+  },
+  "sessions.create": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
+      return;
+    }
+    const p = params;
+    const cfg = loadConfig();
+    const agentId = normalizeAgentId(
+      typeof p.agentId === "string" && p.agentId.trim() ? p.agentId : resolveDefaultAgentId(cfg),
+    );
+    const key = buildDashboardSessionKey(agentId);
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const created = await updateSessionStore(target.storePath, async (store) => {
+      return await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey: target.canonicalKey,
+        patch: {
+          key: target.canonicalKey,
+          label: typeof p.label === "string" ? p.label.trim() : undefined,
+        },
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      });
+    });
+    if (!created.ok) {
+      respond(false, undefined, created.error);
+      return;
+    }
+    const ensured = ensureSessionTranscriptFile({
+      sessionId: created.entry.sessionId,
+      storePath: target.storePath,
+      sessionFile: created.entry.sessionFile,
+      agentId,
+    });
+    if (!ensured.ok) {
+      await updateSessionStore(target.storePath, (store) => {
+        delete store[target.canonicalKey];
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `failed to create session transcript: ${ensured.error}`),
+      );
+      return;
+    }
+    respond(
+      true,
+      {
+        ok: true,
+        key: target.canonicalKey,
+        sessionId: created.entry.sessionId,
+        entry: created.entry,
+      },
+      undefined,
+    );
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey,
+      reason: "create",
+    });
+  },
+  "sessions.send": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsSendParams, "sessions.send", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    const { entry, canonicalKey } = loadSessionEntry(key);
+    if (!entry?.sessionId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      );
+      return;
+    }
+    let sendAcked = false;
+    await chatHandlers["chat.send"]({
+      req,
+      params: {
+        sessionKey: canonicalKey,
+        message: p.message,
+        thinking: p.thinking,
+        attachments: p.attachments,
+        timeoutMs: p.timeoutMs,
+        idempotencyKey:
+          typeof p.idempotencyKey === "string" && p.idempotencyKey.trim()
+            ? p.idempotencyKey.trim()
+            : randomUUID(),
+      },
+      respond: (ok, payload, error, meta) => {
+        sendAcked = ok;
+        respond(ok, payload, error, meta);
+      },
+      context,
+      client,
+      isWebchatConnect,
+    });
+    if (sendAcked) {
+      emitSessionsChanged(context, {
+        sessionKey: canonicalKey,
+        reason: "send",
+      });
+    }
+  },
+  "sessions.abort": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    const { canonicalKey } = loadSessionEntry(key);
+    const abortSessionKey = resolveAbortSessionKey({
+      context,
+      requestedKey: key,
+      canonicalKey,
+      runId: typeof p.runId === "string" ? p.runId : undefined,
+    });
+    let aborted = false;
+    await chatHandlers["chat.abort"]({
+      req,
+      params: {
+        sessionKey: abortSessionKey,
+        runId: typeof p.runId === "string" ? p.runId : undefined,
+      },
+      respond: (ok, payload, error, meta) => {
+        aborted =
+          ok &&
+          Boolean(
+            payload && typeof payload === "object" && (payload as { aborted?: boolean }).aborted,
+          );
+        respond(ok, payload, error, meta);
+      },
+      context,
+      client,
+      isWebchatConnect,
+    });
+    if (aborted) {
+      emitSessionsChanged(context, {
+        sessionKey: canonicalKey,
+        reason: "abort",
+      });
+    }
   },
   "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {

@@ -242,6 +242,47 @@ describe("gateway server sessions", () => {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
 
+  test("sessions.create creates a dashboard session entry and transcript", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: { label?: string };
+    }>(ws, "sessions.create", {
+      agentId: "ops",
+      label: "Dashboard Chat",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
+    expect(created.payload?.entry?.label).toBe("Dashboard Chat");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { sessionId?: string; label?: string }
+    >;
+    const key = created.payload?.key as string;
+    expect(rawStore[key]).toMatchObject({
+      sessionId: created.payload?.sessionId,
+      label: "Dashboard Chat",
+    });
+
+    const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
+    const transcript = await fs.readFile(transcriptPath, "utf-8");
+    const [headerLine] = transcript.trim().split(/\r?\n/, 1);
+    expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
+      type: "session",
+      id: created.payload?.sessionId,
+    });
+
+    ws.close();
+  });
+
   test("lists and patches session store via sessions.* RPC", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     const now = Date.now();
