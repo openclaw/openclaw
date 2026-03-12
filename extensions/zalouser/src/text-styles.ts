@@ -113,7 +113,10 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
     const { text: unquotedLine, indent: baseIndent } = stripQuotePrefix(rawLine);
 
     if (activeFence) {
-      const codeLine = activeFence.quoteIndent > 0 ? unquotedLine : rawLine;
+      const codeLine =
+        activeFence.quoteIndent > 0
+          ? stripQuotePrefix(rawLine, activeFence.quoteIndent).text
+          : rawLine;
       if (isClosingFence(codeLine, activeFence)) {
         activeFence = null;
         continue;
@@ -293,7 +296,8 @@ function clampIndent(spaceCount: number): number {
 
 function hasClosingFence(lines: string[], startIndex: number, fence: ActiveFence): boolean {
   for (let index = startIndex; index < lines.length; index += 1) {
-    const candidate = fence.quoteIndent > 0 ? stripQuotePrefix(lines[index]).text : lines[index];
+    const candidate =
+      fence.quoteIndent > 0 ? stripQuotePrefix(lines[index], fence.quoteIndent).text : lines[index];
     if (isClosingFence(candidate, fence)) {
       return true;
     }
@@ -323,14 +327,23 @@ function resolveOpeningFence(line: string): ActiveFence | null {
   };
 }
 
-function stripQuotePrefix(line: string): { text: string; indent: number } {
-  const match = line.match(/^(>+)\s?(.*)$/);
+function stripQuotePrefix(
+  line: string,
+  maxDepth = Number.POSITIVE_INFINITY,
+): { text: string; indent: number } {
+  const match = line.match(/^([ ]{0,3})(>+)( ?)(.*)$/);
   if (!match) {
     return { text: line, indent: 0 };
   }
+
+  const removedDepth = Math.min(match[2].length, maxDepth);
+  const remainingMarkers = match[2].slice(removedDepth);
+  const remainingText =
+    remainingMarkers.length > 0 ? `${remainingMarkers}${match[3]}${match[4]}` : match[4];
+
   return {
-    text: match[2],
-    indent: Math.min(5, match[1].length),
+    text: remainingText,
+    indent: Math.min(5, removedDepth),
   };
 }
 

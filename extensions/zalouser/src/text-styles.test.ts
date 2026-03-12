@@ -90,6 +90,27 @@ describe("parseZalouserTextStyles", () => {
     });
   });
 
+  it("treats indented blockquotes as quoted lines", () => {
+    expect(parseZalouserTextStyles("  > quoted")).toEqual({
+      text: "quoted",
+      styles: [{ start: 0, len: 6, st: TextStyle.Indent, indentSize: 1 }],
+    });
+  });
+
+  it("treats indented quoted fences as literal code blocks", () => {
+    expect(parseZalouserTextStyles("  > ```\n  > *cmd*\n  > ```")).toEqual({
+      text: "*cmd*",
+      styles: [],
+    });
+  });
+
+  it("preserves inner quote markers inside quoted fenced code blocks", () => {
+    expect(parseZalouserTextStyles("> ```\n>> prompt\n> ```")).toEqual({
+      text: "> prompt",
+      styles: [],
+    });
+  });
+
   it("keeps unmatched fences literal", () => {
     expect(parseZalouserTextStyles("```python")).toEqual({
       text: "```python",
