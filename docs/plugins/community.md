@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **MyAider** - Connect OpenClaw to MyAider.ai Skillful MCP Hub. Bring MCP servers back without token consumption issue, by using custom skills calling dehydrated MCP tools.
+  npm: `myaider`
+  repo: `https://github.com/hurungang/myaider`
+  install: `openclaw plugins install myaider`
