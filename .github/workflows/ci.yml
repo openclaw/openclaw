@@ -21,6 +21,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # Pin PR runs to the synthetic merge ref to avoid flaky SHA fetch auth on some runners.
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
           fetch-depth: 1
           fetch-tags: false
           submodules: false
