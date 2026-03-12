@@ -14,6 +14,13 @@ describe("redact-init", () => {
           },
         },
       },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-another-secret-1234567890abcdefghij",
+          } as any,
+        },
+      },
       agents: {
         defaults: {
           sandbox: {

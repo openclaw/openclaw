@@ -101,7 +101,11 @@ export async function executeSendAction(params: {
   throwIfAborted(params.ctx.abortSignal);
 
   // Redact sensitive information from message content before sending.
-  const redactedMessage = redactSensitiveText(params.message);
+  const redactOptions = {
+    mode: params.ctx.cfg.logging?.redactSensitive,
+    patterns: params.ctx.cfg.logging?.redactPatterns,
+  };
+  const redactedMessage = redactSensitiveText(params.message, redactOptions);
 
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
@@ -173,8 +177,12 @@ export async function executePollAction(params: {
   pollResult?: MessagePollResult;
 }> {
   // Redact sensitive information from poll content before sending.
-  const redactedQuestion = redactSensitiveText(params.question);
-  const redactedOptions = params.options.map((opt) => redactSensitiveText(opt));
+  const redactOptions = {
+    mode: params.ctx.cfg.logging?.redactSensitive,
+    patterns: params.ctx.cfg.logging?.redactPatterns,
+  };
+  const redactedQuestion = redactSensitiveText(params.question, redactOptions);
+  const redactedOptions = params.options.map((opt) => redactSensitiveText(opt, redactOptions));
 
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,

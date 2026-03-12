@@ -85,6 +85,11 @@ function scanEnvironmentVariables(): string[] {
 function scanConfig(config: OpenClawConfig): string[] {
   const values: string[] = [];
 
+  // Scan inline environment variables.
+  if (config.env && typeof config.env === "object") {
+    values.push(...extractSensitiveValues(config.env, "env"));
+  }
+
   // Scan Docker environment variables in agent defaults.
   const dockerEnv = config.agents?.defaults?.sandbox?.docker?.env;
   if (dockerEnv && typeof dockerEnv === "object") {
@@ -96,23 +101,34 @@ function scanConfig(config: OpenClawConfig): string[] {
     values.push(...extractSensitiveValues(config.channels, "channels"));
   }
 
+  // Scan model provider configurations.
+  if (config.models?.providers && typeof config.models.providers === "object") {
+    values.push(...extractSensitiveValues(config.models.providers, "models.providers"));
+  }
+
+  // Scan Talk provider configurations.
+  if (config.talk?.providers && typeof config.talk.providers === "object") {
+    values.push(...extractSensitiveValues(config.talk.providers, "talk.providers"));
+  }
+
+  // Scan provider configurations (kept for backward compatibility or plugins that use this key).
+  if ((config as any).providers && typeof (config as any).providers === "object") {
+    values.push(...extractSensitiveValues((config as any).providers, "providers"));
+  }
+
   // Scan gateway configuration.
   if (config.gateway && typeof config.gateway === "object") {
     values.push(...extractSensitiveValues(config.gateway, "gateway"));
   }
 
   // Scan plugin configurations.
-  if (config.plugins && Array.isArray(config.plugins)) {
-    for (let i = 0; i < config.plugins.length; i++) {
-      const plugin = config.plugins[i];
-      if (plugin && typeof plugin === "object") {
-        values.push(...extractSensitiveValues(plugin, `plugins[${i}]`));
-      }
-    }
+  if (config.plugins?.entries && typeof config.plugins.entries === "object") {
+    values.push(...extractSensitiveValues(config.plugins.entries, "plugins.entries"));
   }
 
   return values;
 }
+
 
 /**
  * Initialize redaction with sensitive values from config and environment.
