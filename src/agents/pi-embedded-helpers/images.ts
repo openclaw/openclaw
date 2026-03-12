@@ -6,6 +6,7 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
@@ -27,6 +28,28 @@ export function isEmptyAssistantMessageContent(
     }
     return typeof rec.text !== "string" || rec.text.trim().length === 0;
   });
+}
+
+function normalizeAssistantReplayContent(content: unknown): AssistantMessage["content"] {
+  if (Array.isArray(content)) {
+    return content as AssistantMessage["content"];
+  }
+  if (typeof content === "string") {
+    if (!content.trim()) {
+      return [] as AssistantMessage["content"];
+    }
+    return [{ type: "text", text: content }] as AssistantMessage["content"];
+  }
+  if (content && typeof content === "object") {
+    const record = content as { type?: unknown; text?: unknown };
+    if (typeof record.type === "string") {
+      return [content as AssistantMessage["content"][number]] as AssistantMessage["content"];
+    }
+    if (typeof record.text === "string") {
+      return [{ type: "text", text: record.text }] as AssistantMessage["content"];
+    }
+  }
+  return [] as AssistantMessage["content"];
 }
 
 export async function sanitizeSessionMessagesImages(
@@ -96,21 +119,21 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      const normalizedContent = normalizeAssistantReplayContent(assistantMsg.content);
+      const normalizedAssistantMsg =
+        normalizedContent === assistantMsg.content
+          ? assistantMsg
+          : ({ ...assistantMsg, content: normalizedContent } as typeof assistantMsg);
       if (assistantMsg.stopReason === "error") {
-        const content = assistantMsg.content;
-        if (Array.isArray(content)) {
-          const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
-            label,
-            imageSanitization,
-          )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
-        } else {
-          out.push(assistantMsg);
-        }
+        const nextContent = (await sanitizeContentBlocksImages(
+          normalizedContent as unknown as ContentBlock[],
+          label,
+          imageSanitization,
+        )) as unknown as typeof assistantMsg.content;
+        out.push({ ...normalizedAssistantMsg, content: nextContent });
         continue;
       }
-      const content = assistantMsg.content;
+      const content = normalizedContent;
       if (Array.isArray(content)) {
         if (!allowNonImageSanitization) {
           const nextContent = (await sanitizeContentBlocksImages(
@@ -118,7 +141,7 @@ export async function sanitizeSessionMessagesImages(
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
-          out.push({ ...assistantMsg, content: nextContent });
+          out.push({ ...normalizedAssistantMsg, content: nextContent });
           continue;
         }
         const strippedContent = options?.preserveSignatures
@@ -143,7 +166,7 @@ export async function sanitizeSessionMessagesImages(
         if (finalContent.length === 0) {
           continue;
         }
-        out.push({ ...assistantMsg, content: finalContent });
+        out.push({ ...normalizedAssistantMsg, content: finalContent });
         continue;
       }
     }
