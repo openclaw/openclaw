@@ -68,6 +68,44 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     }
   });
 
+  it("sends only the basename when fileName includes a path", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "/tmp/private/voice.wav",
+      apiKey: "test-key",
+      timeoutMs: 1234,
+      fetchFn,
+    });
+
+    const form = getRequest().init?.body as FormData;
+    const file = form.get("file") as Blob | { name?: string } | null;
+    expect(file).not.toBeNull();
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("voice.wav");
+    }
+  });
+
+  it("falls back to the default upload name for whitespace-only file names", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "hello" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "   ",
+      apiKey: "test-key",
+      timeoutMs: 1234,
+      fetchFn,
+    });
+
+    const form = getRequest().init?.body as FormData;
+    const file = form.get("file") as Blob | { name?: string } | null;
+    expect(file).not.toBeNull();
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("audio");
+    }
+  });
+
   it("throws when the provider response omits text", async () => {
     const { fetchFn } = createRequestCaptureJsonFetch({});
 

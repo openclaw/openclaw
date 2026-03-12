@@ -15,6 +15,15 @@ function resolveModel(model?: string): string {
   return trimmed || DEFAULT_OPENAI_AUDIO_MODEL;
 }
 
+function resolveUploadFileName(fileName?: string): string {
+  const trimmed = fileName?.trim();
+  if (!trimmed) {
+    return "audio";
+  }
+  const baseName = path.basename(trimmed).trim();
+  return baseName || "audio";
+}
+
 export async function transcribeOpenAiCompatibleAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -25,7 +34,7 @@ export async function transcribeOpenAiCompatibleAudio(
 
   const model = resolveModel(params.model);
   const form = new FormData();
-  const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
+  const fileName = resolveUploadFileName(params.fileName);
   const bytes = new Uint8Array(params.buffer);
   const blob = new Blob([bytes], {
     type: params.mime ?? "application/octet-stream",
