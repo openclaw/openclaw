@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { INITIAL_CHAT_HISTORY_WINDOW } from "../chat/constants.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
@@ -285,5 +286,29 @@ describe("chat view", () => {
     );
     expect(senderLabels).toContain("Iris");
     expect(senderLabels).toContain("Joaquin De Rojas");
+  });
+
+  it("truncates rendered history to the initial hydration window and shows a notice", () => {
+    const container = document.createElement("div");
+    const messages = Array.from({ length: INITIAL_CHAT_HISTORY_WINDOW + 5 }, (_, index) => ({
+      role: "assistant",
+      content: [{ type: "text", text: `message-${index}` }],
+      timestamp: index + 1,
+    }));
+
+    render(
+      renderChat(
+        createProps({
+          messages,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain(
+      `Showing last ${INITIAL_CHAT_HISTORY_WINDOW} messages (5 hidden).`,
+    );
+    expect(container.textContent).not.toContain("message-0");
+    expect(container.textContent).toContain(`message-${INITIAL_CHAT_HISTORY_WINDOW + 4}`);
   });
 });

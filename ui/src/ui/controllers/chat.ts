@@ -1,4 +1,5 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import { INITIAL_CHAT_HISTORY_WINDOW } from "../chat/constants.ts";
 import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
@@ -74,7 +75,10 @@ export async function loadChatHistory(state: ChatState) {
       "chat.history",
       {
         sessionKey: state.sessionKey,
-        limit: 200,
+        // Keep initial WebUI chat hydration intentionally smaller than the
+        // server-side default to avoid tab freezes on sessions with many large
+        // toolResult payloads.
+        limit: INITIAL_CHAT_HISTORY_WINDOW,
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
