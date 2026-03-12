@@ -138,7 +138,7 @@ export async function buildReplyPayloads(params: {
         return [{ ...payload, text: stripped.text }];
       });
 
-  const replyTaggedPayloads = (
+  const replyTaggedPayloadEntries = (
     await Promise.all(
       applyReplyThreading({
         payloads: sanitizedPayloads,
@@ -152,17 +152,23 @@ export async function buildReplyPayloads(params: {
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
         });
-        const text = sanitizeOutboundText(normalized.payload.text);
-        return await normalizeReplyPayloadMedia({
-          payload: {
-            ...normalized.payload,
-            text: text ? text : undefined,
-          },
+        const rawPayload = await normalizeReplyPayloadMedia({
+          payload: normalized.payload,
           normalizeMediaPaths: params.normalizeMediaPaths,
         });
+        const text = sanitizeOutboundText(rawPayload.text);
+        return {
+          // Preserve the unsanitized text so content-key dedupe can run after
+          // later media filtering without losing the original streamed key.
+          rawText: rawPayload.text,
+          payload: {
+            ...rawPayload,
+            text: text ? text : undefined,
+          },
+        };
       }),
     )
-  ).filter(isRenderablePayload);
+  ).filter((entry) => isRenderablePayload(entry.payload));
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
@@ -197,31 +203,57 @@ export async function buildReplyPayloads(params: {
         normalizeMediaPaths: params.normalizeMediaPaths,
       })
     : (params.messagingToolSentMediaUrls ?? []);
+  const replyTaggedPayloads = replyTaggedPayloadEntries.map((entry) => entry.payload);
   const dedupedPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
         sentTexts: messagingToolSentTexts,
       })
     : replyTaggedPayloads;
+  const dedupedPayloadSet = new Set(dedupedPayloads);
+  const dedupedPayloadEntries = replyTaggedPayloadEntries.filter((entry) =>
+    dedupedPayloadSet.has(entry.payload),
+  );
   const mediaFilteredPayloads = dedupeMessagingToolPayloads
     ? filterMessagingToolMediaDuplicates({
         payloads: dedupedPayloads,
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : dedupedPayloads;
+  const mediaFilteredPayloadEntries = dedupedPayloadEntries.flatMap((entry, index) => {
+    const payload = mediaFilteredPayloads[index];
+    if (!payload || !isRenderablePayload(payload)) {
+      return [];
+    }
+    return [{ ...entry, payload }];
+  });
   // Filter out payloads already sent via pipeline or directly during tool flush.
-  const filteredPayloads = shouldDropFinalPayloads
+  const filteredPayloadEntries = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      ? mediaFilteredPayloadEntries.filter(
+          (entry) =>
+            !params.blockReplyPipeline?.hasSentContentKey(
+              createBlockReplyContentKey({
+                ...entry.payload,
+                text: entry.rawText,
+              }),
+            ),
         )
       : params.directlySentBlockKeys?.size
-        ? mediaFilteredPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
+        ? mediaFilteredPayloadEntries.filter(
+            (entry) =>
+              !params.directlySentBlockKeys!.has(
+                createBlockReplyContentKey({
+                  ...entry.payload,
+                  text: entry.rawText,
+                }),
+              ),
           )
-        : mediaFilteredPayloads;
-  const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
+        : mediaFilteredPayloadEntries;
+  const replyPayloads = suppressMessagingToolReplies
+    ? []
+    : filteredPayloadEntries.map((entry) => entry.payload);
 
   return {
     replyPayloads,

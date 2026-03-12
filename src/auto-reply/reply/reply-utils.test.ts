@@ -901,28 +901,30 @@ describe("sanitizeOutboundText", () => {
 });
 
 describe("buildReplyPayloads outbound sanitizer", () => {
-  const build = (
+  const build = async (
     payloads: Array<Record<string, unknown>>,
     overrides: Partial<Parameters<typeof buildReplyPayloads>[0]> = {},
   ) =>
-    buildReplyPayloads({
-      payloads: payloads as Parameters<typeof buildReplyPayloads>[0]["payloads"],
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      replyToMode: "first",
-      ...overrides,
-    }).replyPayloads;
+    (
+      await buildReplyPayloads({
+        payloads: payloads as Parameters<typeof buildReplyPayloads>[0]["payloads"],
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "first",
+        ...overrides,
+      })
+    ).replyPayloads;
 
-  it("suppresses text-only NO_REPLY payloads", () => {
-    expect(build([{ text: "NO_REPLY" }])).toEqual([]);
-    expect(build([{ text: '{"action":"NO_REPLY"}' }])).toEqual([]);
-    expect(build([{ text: '{"action":"NO_REPLY","extra":true}' }])).toEqual([]);
+  it("suppresses text-only NO_REPLY payloads", async () => {
+    await expect(build([{ text: "NO_REPLY" }])).resolves.toEqual([]);
+    await expect(build([{ text: '{"action":"NO_REPLY"}' }])).resolves.toEqual([]);
+    await expect(build([{ text: '{"action":"NO_REPLY","extra":true}' }])).resolves.toEqual([]);
   });
 
-  it("keeps media payloads when NO_REPLY text is stripped", () => {
-    const payloads = build([{ text: "NO_REPLY", mediaUrl: "https://example.com/image.jpg" }]);
+  it("keeps media payloads when NO_REPLY text is stripped", async () => {
+    const payloads = await build([{ text: "NO_REPLY", mediaUrl: "https://example.com/image.jpg" }]);
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toMatchObject({
@@ -931,8 +933,8 @@ describe("buildReplyPayloads outbound sanitizer", () => {
     expect(payloads[0].text).toBeUndefined();
   });
 
-  it("keeps channelData payloads when bare Reasoning leak text is stripped", () => {
-    const payloads = build([
+  it("keeps channelData payloads when bare Reasoning leak text is stripped", async () => {
+    const payloads = await build([
       {
         text: "Reasoning:",
         channelData: {
@@ -952,14 +954,14 @@ describe("buildReplyPayloads outbound sanitizer", () => {
     expect(payloads[0].text).toBeUndefined();
   });
 
-  it("does not suppress non-documented Reasoning variants", () => {
-    expect(build([{ text: "Reasoning" }])).toMatchObject([{ text: "Reasoning" }]);
-    expect(build([{ text: "reasoning:" }])).toMatchObject([{ text: "reasoning:" }]);
-    expect(build([{ text: "REASONING:" }])).toMatchObject([{ text: "REASONING:" }]);
+  it("does not suppress non-documented Reasoning variants", async () => {
+    await expect(build([{ text: "Reasoning" }])).resolves.toMatchObject([{ text: "Reasoning" }]);
+    await expect(build([{ text: "reasoning:" }])).resolves.toMatchObject([{ text: "reasoning:" }]);
+    await expect(build([{ text: "REASONING:" }])).resolves.toMatchObject([{ text: "REASONING:" }]);
   });
 
-  it("keeps reply threading and inline directives intact for normal text", () => {
-    const payloads = build([{ text: "[[reply_to_current]]Hello there" }], {
+  it("keeps reply threading and inline directives intact for normal text", async () => {
+    const payloads = await build([{ text: "[[reply_to_current]]Hello there" }], {
       currentMessageId: "42",
     });
 
@@ -971,17 +973,17 @@ describe("buildReplyPayloads outbound sanitizer", () => {
     });
   });
 
-  it("preserves duplicate suppression for normal replies", () => {
-    const payloads = build([{ text: "hello world" }], {
+  it("preserves duplicate suppression for normal replies", async () => {
+    const payloads = await build([{ text: "hello world" }], {
       messagingToolSentTexts: ["hello world"],
     });
 
     expect(payloads).toEqual([]);
   });
 
-  it("keeps heartbeat stripping behavior unchanged", () => {
-    const result = buildReplyPayloads({
-      payloads: [{ text: "HEARTBEAT_OK" }],
+  it("keeps heartbeat stripping behavior unchanged", async () => {
+    const result = await buildReplyPayloads({
+      payloads: [{ text: "HEARTBEAT_OK" }] as Parameters<typeof buildReplyPayloads>[0]["payloads"],
       isHeartbeat: false,
       didLogHeartbeatStrip: false,
       blockStreamingEnabled: false,
