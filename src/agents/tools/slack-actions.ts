@@ -52,6 +52,8 @@ export type SlackActionContext = {
   hasRepliedRef?: { value: boolean };
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
+  /** Agent identity for chat:write.customize (custom display name/emoji). */
+  identity?: import("../../slack/send.js").SlackSendIdentity;
 };
 
 /**
@@ -214,6 +216,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           threadTs: threadTs ?? undefined,
           blocks,
+          ...(context?.identity ? { identity: context.identity } : {}),
         });
 
         if (threadTs && result.channelId && account.accountId) {

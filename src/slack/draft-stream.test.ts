@@ -122,6 +122,34 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("passes identity to send when configured", async () => {
+    const send = vi.fn<DraftSendFn>(async () => ({
+      channelId: "C123",
+      messageId: "111.222",
+    }));
+    const identity = { username: "TestBot", iconEmoji: ":robot_face:" };
+    const stream = createSlackDraftStream({
+      target: "channel:C123",
+      token: "xoxb-test",
+      throttleMs: 250,
+      send,
+      edit: vi.fn<DraftEditFn>(async () => {}),
+      remove: vi.fn<DraftRemoveFn>(async () => {}),
+      identity,
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("channel:C123", "hello", {
+      token: "xoxb-test",
+      accountId: undefined,
+      threadTs: undefined,
+      identity,
+    });
+  });
+
   it("clear warns when cleanup fails", async () => {
     const remove = vi.fn<DraftRemoveFn>(async () => {
       throw new Error("cleanup failed");
