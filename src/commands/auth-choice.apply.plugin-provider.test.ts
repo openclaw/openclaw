@@ -107,6 +107,27 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     vi.clearAllMocks();
   });
 
+  it("returns an agent model override when default model application is deferred", async () => {
+    const provider = buildProvider();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        setDefaultModel: false,
+      }),
+    );
+
+    expect(result).toEqual({
+      config: {},
+      agentModelOverride: "ollama/qwen3:4b",
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+  });
+
   it("applies the default model and runs provider post-setup hooks", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
