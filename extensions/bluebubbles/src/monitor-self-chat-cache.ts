@@ -16,6 +16,7 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
 const SELF_CHAT_TTL_MS = 10_000;
 const MAX_SELF_CHAT_CACHE_ENTRIES = 512;
 const CLEANUP_MIN_INTERVAL_MS = 1_000;
+const MAX_SELF_CHAT_BODY_CHARS = 32_768;
 const cache = new Map<string, number>();
 let lastCleanupAt = 0;
 
@@ -23,7 +24,9 @@ function normalizeBody(body: string | undefined): string | null {
   if (!body) {
     return null;
   }
-  const normalized = body.replace(/\r\n?/g, "\n").trim();
+  const bounded =
+    body.length > MAX_SELF_CHAT_BODY_CHARS ? body.slice(0, MAX_SELF_CHAT_BODY_CHARS) : body;
+  const normalized = bounded.replace(/\r\n?/g, "\n").trim();
   return normalized ? normalized : null;
 }
 
@@ -49,8 +52,12 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
   return `${parts.accountId}:${target}`;
 }
 
-function maybeCleanup(now = Date.now()): void {
-  if (lastCleanupAt !== 0 && now - lastCleanupAt < CLEANUP_MIN_INTERVAL_MS) {
+function cleanupExpired(now = Date.now()): void {
+  if (
+    lastCleanupAt !== 0 &&
+    now >= lastCleanupAt &&
+    now - lastCleanupAt < CLEANUP_MIN_INTERVAL_MS
+  ) {
     return;
   }
   lastCleanupAt = now;
@@ -59,6 +66,9 @@ function maybeCleanup(now = Date.now()): void {
       cache.delete(key);
     }
   }
+}
+
+function enforceSizeCap(): void {
   while (cache.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
     const oldestKey = cache.keys().next().value;
     if (typeof oldestKey !== "string") {
@@ -77,17 +87,17 @@ function buildKey(lookup: SelfChatLookup): string | null {
 }
 
 export function rememberBlueBubblesSelfChatCopy(lookup: SelfChatLookup): void {
-  maybeCleanup();
+  cleanupExpired();
   const key = buildKey(lookup);
   if (!key) {
     return;
   }
   cache.set(key, Date.now());
-  maybeCleanup();
+  enforceSizeCap();
 }
 
 export function hasBlueBubblesSelfChatCopy(lookup: SelfChatLookup): boolean {
-  maybeCleanup();
+  cleanupExpired();
   const key = buildKey(lookup);
   if (!key) {
     return false;
