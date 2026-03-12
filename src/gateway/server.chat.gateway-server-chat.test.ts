@@ -359,6 +359,10 @@ describe("gateway server chat", () => {
       );
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
+
+      const mediaSpy = vi.mocked(getReplyFromConfig);
+      const mediaCalls = mediaSpy.mock.calls as unknown[][];
+      const beforeImageOnlyCtx = mediaCalls.length;
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -388,6 +392,17 @@ describe("gateway server chat", () => {
       );
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
+      await waitFor(() => mediaCalls.length > beforeImageOnlyCtx);
+      const imageOnlyCtx = mediaCalls.at(-1)?.[0] as
+        | { MediaPath?: string; MediaPaths?: string[]; MediaType?: string; MediaTypes?: string[] }
+        | undefined;
+      expect(imageOnlyCtx?.MediaPath).toBeTypeOf("string");
+      expect(imageOnlyCtx?.MediaPath?.length ?? 0).toBeGreaterThan(0);
+      expect(imageOnlyCtx?.MediaPaths).toEqual([imageOnlyCtx?.MediaPath]);
+      expect(imageOnlyCtx?.MediaType).toBe("image/png");
+      expect(imageOnlyCtx?.MediaTypes).toEqual(["image/png"]);
+      const materializedImage = await fs.readFile(imageOnlyCtx?.MediaPath as string);
+      expect(materializedImage.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
