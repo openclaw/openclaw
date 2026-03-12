@@ -396,36 +396,6 @@ function handleFileSelect(e: Event, props: ChatProps) {
   input.value = "";
 }
 
-function handleDrop(e: DragEvent, props: ChatProps) {
-  e.preventDefault();
-  const files = e.dataTransfer?.files;
-  if (!files || !props.onAttachmentsChange) {
-    return;
-  }
-  const current = props.attachments ?? [];
-  const additions: ChatAttachment[] = [];
-  let pending = 0;
-  for (const file of files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
-      continue;
-    }
-    pending++;
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      additions.push({
-        id: generateAttachmentId(),
-        dataUrl: reader.result as string,
-        mimeType: file.type,
-      });
-      pending--;
-      if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
-      }
-    });
-    reader.readAsDataURL(file);
-  }
-}
-
 function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof nothing {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
