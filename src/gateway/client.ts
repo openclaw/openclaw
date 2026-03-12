@@ -88,6 +88,8 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  /** HTTP headers sent with the WebSocket upgrade request (e.g. Cloudflare Zero Trust). */
+  headers?: Record<string, string>;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -170,6 +172,9 @@ export class GatewayClient {
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
     };
+    if (this.opts.headers && Object.keys(this.opts.headers).length > 0) {
+      wsOptions.headers = { ...this.opts.headers };
+    }
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
       wsOptions.checkServerIdentity = ((_host: string, cert: CertMeta) => {

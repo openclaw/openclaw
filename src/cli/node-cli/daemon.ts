@@ -15,6 +15,7 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
@@ -34,14 +35,17 @@ import {
   createCliStatusTextStyles,
   formatRuntimeStatus,
   parsePort,
+  redactSensitiveDaemonEnv,
   resolveRuntimeStatusColor,
 } from "../daemon-cli/shared.js";
+import { parseHeaderArgs } from "./header-args.js";
 
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
   tls?: boolean;
   tlsFingerprint?: string;
+  header?: string[];
   nodeId?: string;
   displayName?: string;
   runtime?: string;
@@ -56,6 +60,24 @@ type NodeDaemonLifecycleOptions = {
 type NodeDaemonStatusOptions = {
   json?: boolean;
 };
+
+function hasNodeHeaderEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    env.OPENCLAW_NODE_HEADERS?.trim() ||
+    env.CF_ACCESS_CLIENT_ID?.trim() ||
+    env.CF_ACCESS_CLIENT_SECRET?.trim(),
+  );
+}
+
+function redactNodeServiceCommandEnv(
+  command: GatewayServiceCommandConfig | null,
+): GatewayServiceCommandConfig | null {
+  if (!command?.environment) {
+    return command;
+  }
+  const redacted = redactSensitiveDaemonEnv(command.environment);
+  return { ...command, environment: redacted };
+}
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
@@ -110,6 +132,25 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
+  let headers: Record<string, string> | undefined;
+  try {
+    headers = parseHeaderArgs(opts.header);
+  } catch (err) {
+    fail(String(err));
+    return;
+  }
+  if (Object.keys(headers).length === 0) {
+    headers = undefined;
+  }
+  if (
+    headers === undefined &&
+    !hasNodeHeaderEnv(process.env) &&
+    config?.gateway?.headers &&
+    Object.keys(config.gateway.headers).length > 0
+  ) {
+    headers = config.gateway.headers;
+  }
+
   const service = resolveNodeService();
   let loaded = false;
   try {
@@ -142,6 +183,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       port: port ?? 18789,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
+      headers,
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       runtime: runtimeRaw,
@@ -220,10 +262,11 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
       .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
+  const commandForOutput = redactNodeServiceCommandEnv(command);
   const payload = {
     service: {
       ...buildDaemonServiceSnapshot(service, loaded),
-      command,
+      command: commandForOutput,
       runtime,
     },
   };
@@ -239,14 +282,16 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const serviceStatus = loaded ? okText(service.loadedText) : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
 
-  if (command?.programArguments?.length) {
-    defaultRuntime.log(`${label("Command:")} ${infoText(command.programArguments.join(" "))}`);
+  if (commandForOutput?.programArguments?.length) {
+    defaultRuntime.log(
+      `${label("Command:")} ${infoText(commandForOutput.programArguments.join(" "))}`,
+    );
   }
-  if (command?.sourcePath) {
-    defaultRuntime.log(`${label("Service file:")} ${infoText(command.sourcePath)}`);
+  if (commandForOutput?.sourcePath) {
+    defaultRuntime.log(`${label("Service file:")} ${infoText(commandForOutput.sourcePath)}`);
   }
-  if (command?.workingDirectory) {
-    defaultRuntime.log(`${label("Working dir:")} ${infoText(command.workingDirectory)}`);
+  if (commandForOutput?.workingDirectory) {
+    defaultRuntime.log(`${label("Working dir:")} ${infoText(commandForOutput.workingDirectory)}`);
   }
 
   const runtimeLine = formatRuntimeStatus(runtime);
@@ -265,7 +310,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
 
   const baseEnv = {
     ...(process.env as Record<string, string | undefined>),
-    ...(command?.environment ?? undefined),
+    ...(commandForOutput?.environment ?? undefined),
   };
   const hintEnv = {
     ...baseEnv,

@@ -4,6 +4,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const wsOptionsList = vi.hoisted((): unknown[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -24,8 +25,9 @@ class MockWebSocket {
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
 
-  constructor(_url: string, _options?: unknown) {
+  constructor(_url: string, options?: unknown) {
     wsInstances.push(this);
+    wsOptionsList.push(options ?? undefined);
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -148,6 +150,22 @@ describe("GatewayClient security checks", () => {
   beforeEach(() => {
     envSnapshot.restore();
     wsInstances.length = 0;
+    wsOptionsList.length = 0;
+  });
+
+  it("passes custom headers to WebSocket upgrade request", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      headers: { "CF-Access-Client-Id": "id", "X-Custom": "value" },
+    });
+    client.start();
+    expect(wsInstances.length).toBe(1);
+    const options = wsOptionsList.at(-1) as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers).toEqual({
+      "CF-Access-Client-Id": "id",
+      "X-Custom": "value",
+    });
+    client.stop();
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -241,6 +259,7 @@ describe("GatewayClient security checks", () => {
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    wsOptionsList.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
     logDebugMock.mockClear();
@@ -322,6 +341,7 @@ describe("GatewayClient close handling", () => {
 describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
     wsInstances.length = 0;
+    wsOptionsList.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
   });

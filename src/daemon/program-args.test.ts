@@ -12,7 +12,7 @@ vi.mock("node:fs/promises", () => ({
   realpath: fsMocks.realpath,
 }));
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
@@ -86,5 +86,24 @@ describe("resolveGatewayProgramArguments", () => {
       "--port",
       "18789",
     ]);
+  });
+});
+
+describe("resolveNodeProgramArguments", () => {
+  it("does not include --header in program arguments (headers are passed via service env)", async () => {
+    const argv1 = path.resolve("/tmp/node_modules/.bin/openclaw");
+    const entryPath = path.resolve("/tmp/node_modules/openclaw/dist/entry.js");
+    process.argv = ["node", argv1];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({
+      host: "gateway.example.com",
+      port: 443,
+      tls: true,
+      runtime: "node",
+    });
+
+    expect(result.programArguments).not.toContain("--header");
   });
 });
