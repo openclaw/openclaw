@@ -26,6 +26,7 @@ export type ChannelsAddOptions = {
   initialSyncLimit?: number | string;
   groupChannels?: string;
   dmAllowlist?: string;
+  encodingAesKey?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function parseList(value: string | undefined): string[] | undefined {
@@ -233,7 +234,7 @@ export async function channelsAddCommand(
     token: opts.token,
     appId: opts.appId,
     appSecret: opts.appSecret,
-    encodingAESKey: opts.encodingAESKey,
+    encodingAESKey: opts.encodingAesKey ?? opts.encodingAESKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
