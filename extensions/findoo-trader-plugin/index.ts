@@ -1112,13 +1112,17 @@ const findooTraderPlugin = {
       process.env.TELEGRAM_BOT_TOKEN;
 
     if (telegramChatId) {
-      const notificationRouter = new NotificationRouter(eventStore, {
-        telegramChatId,
-        telegramBotToken,
-        minLevel:
-          (notificationConfig?.minLevel as "critical" | "action_required" | "info") ?? "info",
-        suppressTypes: notificationConfig?.suppressTypes as string[] | undefined as never,
-      });
+      const notificationRouter = new NotificationRouter(
+        eventStore,
+        {
+          telegramChatId,
+          telegramBotToken,
+          minLevel:
+            (notificationConfig?.minLevel as "critical" | "action_required" | "info") ?? "info",
+          suppressTypes: notificationConfig?.suppressTypes as string[] | undefined as never,
+        },
+        api.runtime.channel.telegram.sendMessageTelegram,
+      );
       notificationRouter.start();
 
       // Register notification stats endpoint
@@ -1136,6 +1140,7 @@ const findooTraderPlugin = {
     // Register Telegram approval callback route (always active — handles button clicks)
     registerTelegramApprovalRoute(api, eventStore, {
       telegramBotToken,
+      editMessageTelegram: api.runtime.channel.telegram.editMessageTelegram,
       lifecycleEngineResolver: () => lifecycleRef.engine,
     });
 

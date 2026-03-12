@@ -6,11 +6,21 @@
  * so users can approve/reject directly from Telegram.
  */
 
-import { sendMessageTelegram } from "../../../../src/telegram/send.js";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
 import type { AgentEvent, AgentEventType, EventSubscriber } from "./agent-event-store.js";
 
 // ── Types ──
+
+/** Signature matching api.runtime.channel.telegram.sendMessageTelegram */
+export type SendMessageTelegramFn = (
+  to: string,
+  text: string,
+  opts?: {
+    token?: string;
+    textMode?: "markdown" | "html";
+    buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  },
+) => Promise<{ messageId: string; chatId: string }>;
 
 export type NotificationLevel = "critical" | "action_required" | "info";
 
@@ -130,6 +140,7 @@ function buildNotification(event: AgentEvent): EventNotification {
 export class NotificationRouter {
   private unsubscribe: (() => void) | null = null;
   private config: NotificationConfig;
+  private sendFn: SendMessageTelegramFn;
   private sendCount = 0;
   private errorCount = 0;
 
@@ -159,11 +170,13 @@ export class NotificationRouter {
   constructor(
     private eventStore: AgentEventSqliteStore,
     config: NotificationConfig,
+    sendFn: SendMessageTelegramFn,
   ) {
     this.config = {
       minLevel: "info",
       ...config,
     };
+    this.sendFn = sendFn;
   }
 
   /** Start listening for events and routing notifications. */
@@ -218,7 +231,7 @@ export class NotificationRouter {
     if (!telegramChatId) return;
 
     try {
-      await sendMessageTelegram(telegramChatId, notification.text, {
+      await this.sendFn(telegramChatId, notification.text, {
         token: telegramBotToken,
         textMode: "html",
         buttons: notification.buttons,

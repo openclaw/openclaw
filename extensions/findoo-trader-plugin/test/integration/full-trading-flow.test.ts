@@ -5,10 +5,7 @@
 
 vi.mock("ccxt", () => ({}));
 
-// Mock sendMessageTelegram to avoid real Telegram calls
-vi.mock("../../../../src/telegram/send.js", () => ({
-  sendMessageTelegram: vi.fn().mockResolvedValue(undefined),
-}));
+// sendMessageTelegram is now injected via constructor — no mock needed here.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildNotification } from "../../src/core/notification-router.js";

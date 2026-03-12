@@ -14,7 +14,6 @@
  */
 
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
-import { editMessageTelegram } from "../../../../src/telegram/send.js";
 import type { HttpReq, HttpRes } from "../types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "../types-http.js";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
@@ -57,10 +56,18 @@ export function parseCallbackData(
 
 // ── Process approval ──
 
+/** Signature matching api.runtime.channel.telegram.editMessageTelegram */
+type EditMessageTelegramFn = (
+  chatId: string | number,
+  messageId: string | number,
+  text: string,
+  opts?: { token?: string; textMode?: "markdown" | "html"; buttons?: unknown[] },
+) => Promise<{ ok: true; messageId: string; chatId: string }>;
+
 export async function processApproval(
   eventStore: AgentEventSqliteStore,
   payload: TelegramCallbackPayload,
-  opts?: { telegramBotToken?: string },
+  opts?: { telegramBotToken?: string; editMessageTelegram?: EditMessageTelegramFn },
 ): Promise<ApprovalResult> {
   const parsed = parseCallbackData(payload.callbackData);
   if (!parsed) {
@@ -91,14 +98,16 @@ export async function processApproval(
   const statusText = action === "approve" ? "APPROVED" : "REJECTED";
   const updatedText = `${statusEmoji} <b>[${statusText}]</b> ${event.title}\n\n${event.detail}\n\n<i>Decision: ${statusText} at ${new Date().toLocaleString("en-US", { timeZone: "UTC", hour12: false })}</i>`;
 
-  try {
-    await editMessageTelegram(payload.chatId, payload.messageId, updatedText, {
-      token: opts?.telegramBotToken,
-      textMode: "html",
-      buttons: [], // Remove inline buttons after decision
-    });
-  } catch {
-    // Best-effort: approval succeeded even if message edit fails
+  if (opts?.editMessageTelegram) {
+    try {
+      await opts.editMessageTelegram(payload.chatId, payload.messageId, updatedText, {
+        token: opts?.telegramBotToken,
+        textMode: "html",
+        buttons: [], // Remove inline buttons after decision
+      });
+    } catch {
+      // Best-effort: approval succeeded even if message edit fails
+    }
   }
 
   return { ok: true, action, eventId };
@@ -116,6 +125,7 @@ export function registerTelegramApprovalRoute(
   eventStore: AgentEventSqliteStore,
   opts?: {
     telegramBotToken?: string;
+    editMessageTelegram?: EditMessageTelegramFn;
     lifecycleEngineResolver?: () => LifecycleEngineLike | undefined;
   },
 ): void {

@@ -12,15 +12,10 @@ import {
 } from "../../src/core/notification-router.js";
 import { parseCallbackData, processApproval } from "../../src/core/telegram-approval.js";
 
-// ── Mock sendMessageTelegram ──
+// ── Mock sendMessageTelegram (injected via constructor, no vi.mock needed) ──
 
 const mockSendTelegram = vi.fn().mockResolvedValue({ messageId: "123", chatId: "456" });
 const mockEditTelegram = vi.fn().mockResolvedValue({ ok: true, messageId: "123", chatId: "456" });
-
-vi.mock("../../../../src/telegram/send.js", () => ({
-  sendMessageTelegram: (...args: unknown[]) => mockSendTelegram(...args),
-  editMessageTelegram: (...args: unknown[]) => mockEditTelegram(...args),
-}));
 
 // ── Minimal AgentEventSqliteStore stub ──
 
@@ -147,14 +142,9 @@ describe("NotificationRouter", () => {
 
   it("subscribes to event store and sends Telegram notification on new event", async () => {
     const router = new NotificationRouter(
-      store as unknown as Parameters<
-        typeof NotificationRouter extends new (a: infer A, ...args: never[]) => unknown
-          ? never
-          : never
-      >[0],
-      {
-        telegramChatId: "12345",
-      },
+      store as never,
+      { telegramChatId: "12345" },
+      mockSendTelegram,
     );
     router.start();
 
@@ -179,10 +169,14 @@ describe("NotificationRouter", () => {
   // ── Test 6: NotificationRouter respects minLevel filter ──
 
   it("filters events below minLevel threshold", async () => {
-    const router = new NotificationRouter(store as never, {
-      telegramChatId: "12345",
-      minLevel: "action_required",
-    });
+    const router = new NotificationRouter(
+      store as never,
+      {
+        telegramChatId: "12345",
+        minLevel: "action_required",
+      },
+      mockSendTelegram,
+    );
     router.start();
 
     // Info-level event should be filtered
@@ -213,9 +207,13 @@ describe("NotificationRouter", () => {
   // ── Test 7: NotificationRouter suppresses system events ──
 
   it("does not notify on system events (approve/reject notifications)", async () => {
-    const router = new NotificationRouter(store as never, {
-      telegramChatId: "12345",
-    });
+    const router = new NotificationRouter(
+      store as never,
+      {
+        telegramChatId: "12345",
+      },
+      mockSendTelegram,
+    );
     router.start();
 
     store.addEvent({
@@ -234,9 +232,13 @@ describe("NotificationRouter", () => {
   // ── Test 8: NotificationRouter tracks stats ──
 
   it("tracks sendCount and errorCount", async () => {
-    const router = new NotificationRouter(store as never, {
-      telegramChatId: "12345",
-    });
+    const router = new NotificationRouter(
+      store as never,
+      {
+        telegramChatId: "12345",
+      },
+      mockSendTelegram,
+    );
     router.start();
 
     expect(router.getStats()).toEqual({ sendCount: 0, errorCount: 0, running: true });
@@ -260,9 +262,13 @@ describe("NotificationRouter", () => {
   it("increments errorCount on Telegram send failure", async () => {
     mockSendTelegram.mockRejectedValueOnce(new Error("Network error"));
 
-    const router = new NotificationRouter(store as never, {
-      telegramChatId: "12345",
-    });
+    const router = new NotificationRouter(
+      store as never,
+      {
+        telegramChatId: "12345",
+      },
+      mockSendTelegram,
+    );
     router.start();
 
     store.addEvent({
@@ -281,9 +287,13 @@ describe("NotificationRouter", () => {
   // ── Test 10: stop() unsubscribes from event store ──
 
   it("stop() unsubscribes and prevents further notifications", async () => {
-    const router = new NotificationRouter(store as never, {
-      telegramChatId: "12345",
-    });
+    const router = new NotificationRouter(
+      store as never,
+      {
+        telegramChatId: "12345",
+      },
+      mockSendTelegram,
+    );
     router.start();
     router.stop();
 
@@ -328,11 +338,15 @@ describe("Telegram Approval", () => {
       status: "pending",
     });
 
-    const result = await processApproval(store as never, {
-      callbackData: "fin_approve:evt-1-test",
-      chatId: "12345",
-      messageId: 99,
-    });
+    const result = await processApproval(
+      store as never,
+      {
+        callbackData: "fin_approve:evt-1-test",
+        chatId: "12345",
+        messageId: 99,
+      },
+      { editMessageTelegram: mockEditTelegram },
+    );
 
     expect(result.ok).toBe(true);
     expect(result.action).toBe("approve");
