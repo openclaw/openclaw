@@ -130,6 +130,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/direct delivery: bridge direct delivery sends to internal `message:sent` hooks so internal hook listeners observe successful Telegram deliveries. (#40185) Thanks @vincentkoc.
 - Dependencies: refresh workspace dependencies except the pinned Carbon package, and harden ACP session-config writes against non-string SDK values so newer ACP clients fail fast instead of tripping type/runtime mismatches.
 - Telegram/polling restarts: clear bounded cleanup timeout handles after `runner.stop()` and `bot.stop()` settle so stall recovery no longer leaves stray 15-second timers behind on clean shutdown. (#43188) thanks @kyohwang.
+- Browser/proxy attachments: restore the shared media-store size cap for persisted browser proxy files so oversized payloads are rejected instead of overriding the intended 5 MB limit. (#43684) Thanks @vincentkoc.
 
 ## 2026.3.8
 
