@@ -28,14 +28,17 @@ describe("INTER_SESSION_CHANNEL sentinel routing", () => {
     expect(result).toBe("discord");
   });
 
-  it("falls back to session-key channel hint when no persisted channel is set", () => {
+  it("returns undefined when persisted channel is absent and only session-key hint exists (no channel synthesis)", () => {
+    // Inter-session turns must not synthesise a channel from the session key alone.
+    // Without a persisted external channel, returning a channel-only route would leave
+    // lastTo undefined and risk misdelivery via the channel defaultTo fallback.
     expect(
       resolveLastChannelRaw({
         originatingChannelRaw: INTER_SESSION_CHANNEL,
         persistedLastChannel: undefined,
         sessionKey: "agent:navi:discord:direct:channel:123",
       }),
-    ).toBe("discord");
+    ).toBeUndefined();
   });
 
   it("returns undefined when no external route can be determined", () => {

@@ -99,10 +99,6 @@ export function resolveLastChannelRaw(params: {
     if (isExternalRoutingChannel(persistedChannel)) {
       return persistedChannel;
     }
-    const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
-    if (isExternalRoutingChannel(sessionKeyChannelHint)) {
-      return sessionKeyChannelHint;
-    }
     return undefined;
   }
 
