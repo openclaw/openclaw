@@ -22,6 +22,7 @@ export type ChatHost = {
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
   refreshSessionsAfterChat: Set<string>;
+  chatPollInterval: number | null;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -106,6 +107,9 @@ async function sendChatMessageNow(
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
   const ok = Boolean(runId);
+  if (ok) {
+    startChatPoll(host);
+  }
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
   }
@@ -263,4 +267,25 @@ export async function refreshChatAvatar(host: ChatHost) {
   } catch {
     host.chatAvatarUrl = null;
   }
+}
+
+export function startChatPoll(host: ChatHost) {
+  if (host.chatPollInterval != null) {
+    return;
+  }
+  host.chatPollInterval = window.setInterval(() => {
+    if (!host.chatRunId) {
+      stopChatPoll(host);
+      return;
+    }
+    void loadChatHistory(host as unknown as OpenClawApp);
+  }, 1500);
+}
+
+export function stopChatPoll(host: ChatHost) {
+  if (host.chatPollInterval == null) {
+    return;
+  }
+  clearInterval(host.chatPollInterval);
+  host.chatPollInterval = null;
 }

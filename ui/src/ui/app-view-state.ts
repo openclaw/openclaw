@@ -258,6 +258,7 @@ export type AppViewState = {
     updateAvailable: import("./types.js").UpdateAvailable | null;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Set<string>;
+    chatPollInterval: number | null;
     connect: () => void;
     setTab: (tab: Tab) => void;
     setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
