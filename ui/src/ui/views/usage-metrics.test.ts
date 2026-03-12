@@ -36,19 +36,19 @@ describe("buildAggregatesFromSessions", () => {
           {
             date: "2026-03-01",
             total: 7,
-            user: 0,
-            assistant: 0,
+            user: 3,
+            assistant: 2,
             toolCalls: 2,
-            toolResults: 0,
+            toolResults: 1,
             errors: 1,
           },
           {
             date: "2026-03-02",
             total: 5,
-            user: 0,
-            assistant: 0,
+            user: 1,
+            assistant: 1,
             toolCalls: 1,
-            toolResults: 0,
+            toolResults: 2,
             errors: 0,
           },
         ],
@@ -56,7 +56,10 @@ describe("buildAggregatesFromSessions", () => {
     ]);
 
     expect(aggregates.messages.total).toBe(12);
+    expect(aggregates.messages.user).toBe(4);
+    expect(aggregates.messages.assistant).toBe(3);
     expect(aggregates.messages.toolCalls).toBe(3);
+    expect(aggregates.messages.toolResults).toBe(3);
     expect(aggregates.messages.errors).toBe(1);
   });
 

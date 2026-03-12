@@ -333,7 +333,10 @@ const getMessageCountsWithFallback = (usage: UsageSessionEntry["usage"]) => {
   return usage.dailyMessageCounts.reduce(
     (counts, day) => {
       counts.total += day.total ?? 0;
+      counts.user += day.user ?? 0;
+      counts.assistant += day.assistant ?? 0;
       counts.toolCalls += day.toolCalls ?? 0;
+      counts.toolResults += day.toolResults ?? 0;
       counts.errors += day.errors ?? 0;
       return counts;
     },
