@@ -600,14 +600,15 @@ export async function buildRestoreOperations(params: {
       });
     }
 
-    const configSourcePath = !isPathWithin(configPath, stateDir)
-      ? ((configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
-        tryResolveExtractedConfigPath({
-          manifest: params.manifest,
-          assetByKind,
-          extractedRoot: params.extractedRoot,
-        }))
-      : undefined;
+    const configSourcePath =
+      !stateAsset || !isPathWithin(configPath, stateDir)
+        ? ((configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
+          tryResolveExtractedConfigPath({
+            manifest: params.manifest,
+            assetByKind,
+            extractedRoot: params.extractedRoot,
+          }))
+        : undefined;
     if (configSourcePath) {
       operations.push({
         kind: "config",
@@ -616,14 +617,15 @@ export async function buildRestoreOperations(params: {
       });
     }
 
-    const credentialsSourcePath = !isPathWithin(oauthDir, stateDir)
-      ? ((credentialsAsset && getAssetExtractPath(params.extractedRoot, credentialsAsset)) ??
-        tryResolveExtractedCredentialsPath({
-          manifest: params.manifest,
-          assetByKind,
-          extractedRoot: params.extractedRoot,
-        }))
-      : undefined;
+    const credentialsSourcePath =
+      !stateAsset || !isPathWithin(oauthDir, stateDir)
+        ? ((credentialsAsset && getAssetExtractPath(params.extractedRoot, credentialsAsset)) ??
+          tryResolveExtractedCredentialsPath({
+            manifest: params.manifest,
+            assetByKind,
+            extractedRoot: params.extractedRoot,
+          }))
+        : undefined;
     if (credentialsSourcePath) {
       operations.push({
         kind: "credentials",

@@ -856,6 +856,54 @@ describe("backup restore", () => {
     }
   });
 
+  it("restores full-host config asset when state asset is missing", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    try {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.mkdir(path.join(rootDir, "assets"), { recursive: true });
+      await fs.writeFile(path.join(rootDir, "assets", "config.json"), "{}\n", "utf8");
+
+      const operations = await buildRestoreOperations({
+        mode: "full-host",
+        extractedRoot: rootDir,
+        manifest: {
+          schemaVersion: 1,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          archiveRoot: "archive-root",
+          runtimeVersion: "2026.3.9",
+          platform: process.platform,
+          nodeVersion: process.version,
+          assets: [
+            {
+              kind: "config",
+              sourcePath: configPath,
+              archivePath: "archive-root/assets/config.json",
+            },
+          ],
+        },
+      });
+
+      expect(operations).toEqual([
+        expect.objectContaining({
+          kind: "config",
+          sourcePath: path.join(rootDir, "assets", "config.json"),
+          targetPath: configPath,
+        }),
+      ]);
+    } finally {
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("restores external config paths from state-backed full-host archives", async () => {
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const stateDir = path.join(tempHome.home, ".openclaw");
