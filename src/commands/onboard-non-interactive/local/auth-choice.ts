@@ -28,6 +28,7 @@ import {
   applyOpenrouterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
+  applyMeganovaConfig,
   applyTogetherConfig,
   applyHuggingfaceConfig,
   applyVercelAiGatewayConfig,
@@ -56,6 +57,7 @@ import {
   setVolcengineApiKey,
   setXaiApiKey,
   setVeniceApiKey,
+  setMeganovaApiKey,
   setTogetherApiKey,
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
@@ -991,6 +993,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyTogetherConfig(nextConfig);
+  }
+
+  if (authChoice === "meganova-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "meganova",
+      cfg: baseConfig,
+      flagValue: opts.meganovaApiKey,
+      flagName: "--meganova-api-key",
+      envVar: "MEGANOVA_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setMeganovaApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "meganova:default",
+      provider: "meganova",
+      mode: "api_key",
+    });
+    return applyMeganovaConfig(nextConfig);
   }
 
   if (authChoice === "huggingface-api-key") {

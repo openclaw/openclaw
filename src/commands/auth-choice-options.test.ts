@@ -31,6 +31,7 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key-cn",
       "kimi-code-api-key",
       "together-api-key",
+      "meganova-api-key",
       "ai-gateway-api-key",
       "cloudflare-ai-gateway-api-key",
       "synthetic-api-key",
