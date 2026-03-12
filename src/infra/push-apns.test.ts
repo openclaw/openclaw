@@ -263,6 +263,52 @@ describe("push APNs env config", () => {
     });
   });
 
+  it("resolves APNs relay config from gateway config", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, {
+      push: {
+        apns: {
+          relay: {
+            baseUrl: "https://relay.example.com/base/",
+            timeoutMs: 2500,
+          },
+        },
+      },
+    });
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        baseUrl: "https://relay.example.com/base",
+        timeoutMs: 2500,
+      },
+    });
+  });
+
+  it("lets relay env overrides win over gateway config", () => {
+    const resolved = resolveApnsRelayConfigFromEnv(
+      {
+        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay-override.example.com",
+        OPENCLAW_APNS_RELAY_TIMEOUT_MS: "3000",
+      } as NodeJS.ProcessEnv,
+      {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 2500,
+            },
+          },
+        },
+      },
+    );
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        baseUrl: "https://relay-override.example.com",
+        timeoutMs: 3000,
+      },
+    });
+  });
+
   it("rejects insecure APNs relay http URLs by default", () => {
     const resolved = resolveApnsRelayConfigFromEnv({
       OPENCLAW_APNS_RELAY_BASE_URL: "http://relay.example.com",
@@ -319,6 +365,22 @@ describe("push APNs env config", () => {
     expect(withUserinfo.ok).toBe(false);
     if (!withUserinfo.ok) {
       expect(withUserinfo.error).toContain("userinfo is not allowed");
+    }
+  });
+
+  it("reports the config key name for invalid gateway relay URLs", () => {
+    const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, {
+      push: {
+        apns: {
+          relay: {
+            baseUrl: "https://relay.example.com/path?debug=1",
+          },
+        },
+      },
+    });
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.error).toContain("gateway.push.apns.relay.baseUrl");
     }
   });
 });

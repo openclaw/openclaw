@@ -1,4 +1,5 @@
 import { URL } from "node:url";
+import type { GatewayConfig } from "../config/types.gateway.js";
 
 export type ApnsRelayPushType = "alert" | "background";
 
@@ -36,9 +37,10 @@ function normalizeNonEmptyString(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeTimeoutMs(value: string | undefined): number {
-  const raw = value?.trim();
-  if (!raw) {
+function normalizeTimeoutMs(value: string | number | undefined): number {
+  const raw =
+    typeof value === "number" ? value : typeof value === "string" ? value.trim() : undefined;
+  if (raw === undefined || raw === "") {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
   const parsed = Number(raw);
@@ -69,12 +71,20 @@ function parseReason(value: unknown): string | undefined {
 
 export function resolveApnsRelayConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
+  gatewayConfig?: GatewayConfig,
 ): ApnsRelayConfigResolution {
-  const baseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
+  const configuredRelay = gatewayConfig?.push?.apns?.relay;
+  const envBaseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
+  const configBaseUrl = normalizeNonEmptyString(configuredRelay?.baseUrl);
+  const baseUrl = envBaseUrl ?? configBaseUrl;
+  const baseUrlSource = envBaseUrl
+    ? "OPENCLAW_APNS_RELAY_BASE_URL"
+    : "gateway.push.apns.relay.baseUrl";
   if (!baseUrl) {
     return {
       ok: false,
-      error: "APNs relay config missing: set OPENCLAW_APNS_RELAY_BASE_URL",
+      error:
+        "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL",
     };
   }
 
@@ -104,14 +114,16 @@ export function resolveApnsRelayConfigFromEnv(
       ok: true,
       value: {
         baseUrl: parsed.toString().replace(/\/+$/, ""),
-        timeoutMs: normalizeTimeoutMs(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS),
+        timeoutMs: normalizeTimeoutMs(
+          env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        ),
       },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
-      error: `invalid OPENCLAW_APNS_RELAY_BASE_URL (${baseUrl}): ${message}`,
+      error: `invalid ${baseUrlSource} (${baseUrl}): ${message}`,
     };
   }
 }

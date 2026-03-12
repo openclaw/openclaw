@@ -103,7 +103,7 @@ async function resolveDirectNodePushConfig() {
 }
 
 function resolveRelayNodePushConfig() {
-  const relay = resolveApnsRelayConfigFromEnv(process.env);
+  const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
   return relay.ok
     ? { ok: true as const, relayConfig: relay.value }
     : { ok: false as const, error: relay.error };

@@ -325,6 +325,18 @@ describe("node.invoke APNs wake path", () => {
   });
 
   it("does not clear relay registrations from wake failures", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 1000,
+            },
+          },
+        },
+      },
+    });
     mocks.loadApnsRegistration.mockResolvedValue({
       nodeId: "ios-node-relay",
       transport: "relay",
@@ -368,6 +380,16 @@ describe("node.invoke APNs wake path", () => {
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.message).toBe("node not connected");
+    expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
+      push: {
+        apns: {
+          relay: {
+            baseUrl: "https://relay.example.com",
+            timeoutMs: 1000,
+          },
+        },
+      },
+    });
     expect(mocks.shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
       registration: {
         nodeId: "ios-node-relay",

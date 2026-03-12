@@ -49,6 +49,53 @@ openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
 
+## Relay-backed push for official builds
+
+Official distributed iOS builds use the external push relay instead of publishing the raw APNs
+token to the gateway.
+
+Gateway-side requirement:
+
+```json5
+{
+  gateway: {
+    push: {
+      apns: {
+        relay: {
+          baseUrl: "https://relay.example.com",
+        },
+      },
+    },
+  },
+}
+```
+
+How the flow works:
+
+- The iOS app registers with the relay using App Attest and the app receipt.
+- The relay returns an opaque relay handle plus a registration-scoped send grant.
+- The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
+- The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
+- The gateway relay base URL must match the relay URL baked into the official/TestFlight iOS build.
+
+What the gateway does **not** need for this path:
+
+- No deployment-wide relay token.
+- No direct APNs key for official/TestFlight relay-backed sends.
+
+Compatibility note:
+
+- `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
+
+Local/manual builds remain on direct APNs. If you are testing those builds without the relay, the
+gateway still needs direct APNs credentials:
+
+```bash
+export OPENCLAW_APNS_TEAM_ID="TEAMID"
+export OPENCLAW_APNS_KEY_ID="KEYID"
+export OPENCLAW_APNS_PRIVATE_KEY_P8='-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'
+```
+
 ## Discovery paths
 
 ### Bonjour (LAN)

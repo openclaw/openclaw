@@ -1183,7 +1183,15 @@ final class NodeAppModel {
             _ = try await notificationCenter.requestAuthorization(options: [.alert, .sound, .badge])
         }
 
-        return await self.notificationAuthorizationStatus()
+        let updatedStatus = await self.notificationAuthorizationStatus()
+        if Self.isNotificationAuthorizationAllowed(updatedStatus) {
+            // Refresh APNs registration immediately after the first permission grant so the
+            // gateway can receive a push registration without requiring an app relaunch.
+            await MainActor.run {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
+        }
+        return updatedStatus
     }
 
     private func notificationAuthorizationStatus() async -> NotificationAuthorizationStatus {
@@ -1195,6 +1203,17 @@ final class NodeAppModel {
             return status
         case .failure:
             return .denied
+        }
+    }
+
+    private static func isNotificationAuthorizationAllowed(
+        _ status: NotificationAuthorizationStatus
+    ) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            true
+        case .denied, .notDetermined:
+            false
         }
     }
 

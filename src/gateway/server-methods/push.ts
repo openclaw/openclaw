@@ -1,3 +1,4 @@
+import { loadConfig } from "../../config/config.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -74,7 +75,7 @@ export const pushHandlers: GatewayRequestHandlers = {
               });
             })()
           : await (async () => {
-              const relay = resolveApnsRelayConfigFromEnv(process.env);
+              const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
               if (!relay.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
                 return null;

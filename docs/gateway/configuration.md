@@ -225,6 +225,49 @@ When validation fails:
 
   </Accordion>
 
+  <Accordion title="Enable relay-backed push for official iOS builds">
+    Relay-backed push is configured in `openclaw.json`.
+
+    Set this in gateway config:
+
+    ```json5
+    {
+      gateway: {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              // Optional. Default: 10000
+              timeoutMs: 10000,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    CLI equivalent:
+
+    ```bash
+    openclaw config set gateway.push.apns.relay.baseUrl https://relay.example.com
+    ```
+
+    What this does:
+
+    - Lets the gateway send `push.test`, wake nudges, and reconnect wakes through the external relay.
+    - Uses a registration-scoped send grant forwarded by the paired iOS app. The gateway does not need a deployment-wide relay token.
+    - Keeps local/manual iOS builds on direct APNs. Relay-backed sends apply only to official distributed builds that registered through the relay.
+    - Must match the relay base URL baked into the official/TestFlight iOS build, so registration and send traffic reach the same relay deployment.
+
+    Compatibility note:
+
+    - `OPENCLAW_APNS_RELAY_BASE_URL` and `OPENCLAW_APNS_RELAY_TIMEOUT_MS` still work as temporary env overrides.
+    - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true` remains a loopback-only development escape hatch; do not persist HTTP relay URLs in config.
+
+    See [iOS App](/platforms/ios#relay-backed-push-for-official-builds) for the end-to-end flow.
+
+  </Accordion>
+
   <Accordion title="Set up heartbeat (periodic check-ins)">
     ```json5
     {

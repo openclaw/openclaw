@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
 import { pushHandlers } from "./push.js";
 
+const mocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+}));
+
 vi.mock("../../infra/push-apns.js", () => ({
   clearApnsRegistrationIfCurrent: vi.fn(),
   loadApnsRegistration: vi.fn(),
@@ -52,6 +60,8 @@ function expectInvalidRequestResponse(
 
 describe("push.test handler", () => {
   beforeEach(() => {
+    mocks.loadConfig.mockClear();
+    mocks.loadConfig.mockReturnValue({});
     vi.mocked(loadApnsRegistration).mockClear();
     vi.mocked(normalizeApnsEnvironment).mockClear();
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
@@ -115,6 +125,18 @@ describe("push.test handler", () => {
   });
 
   it("sends push test through relay registrations", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 1000,
+            },
+          },
+        },
+      },
+    });
     vi.mocked(loadApnsRegistration).mockResolvedValue({
       nodeId: "ios-node-1",
       transport: "relay",
@@ -153,6 +175,16 @@ describe("push.test handler", () => {
 
     expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
+    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
+      push: {
+        apns: {
+          relay: {
+            baseUrl: "https://relay.example.com",
+            timeoutMs: 1000,
+          },
+        },
+      },
+    });
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
