@@ -228,7 +228,7 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
 }
 
 // ---------------------------------------------------------------------------
-// ScrapingBee — thin proxy wrapper (returns HTML, piped through Readability)
+// ScrapingBee — thin proxy wrapper (returns markdown via ScrapingBee's own converter)
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SCRAPINGBEE_BASE_URL = "https://app.scrapingbee.com/api/v1";
@@ -283,6 +283,8 @@ async function fetchViaScrapingBee(params: {
     endpoint.searchParams.set("render_js", "true");
   }
 
+  // Direct fetch is safe here: endpoint is the hardcoded ScrapingBee API, not a user URL.
+  // The user-supplied URL is passed as a query param for ScrapingBee to fetch server-side.
   const res = await fetch(endpoint.toString(), {
     method: "GET",
     signal: AbortSignal.timeout(params.timeoutSeconds * 1000),
@@ -652,10 +654,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         finalUrlFallback: params.url,
         statusFallback: 200,
         cacheKey,
-        tookMs: Date.now() - start,
+        tookMs: 0,
       });
+      const elapsed = Date.now() - start;
       if (payload) {
-        return { ...payload, provider: "firecrawl" };
+        return { ...payload, tookMs: elapsed, provider: "firecrawl" };
       }
       throw new Error("Firecrawl fetch failed: no content returned");
     } catch (err) {
