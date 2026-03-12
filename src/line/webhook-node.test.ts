@@ -86,16 +86,16 @@ describe("createLineNodeWebhookHandler", () => {
     expect(res.body).toBeUndefined();
   });
 
-  it("returns 200 for verification request (empty events, no signature)", async () => {
+  it("rejects verification-shaped requests without a signature", async () => {
     const rawBody = JSON.stringify({ events: [] });
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
 
     const { res, headers } = createRes();
     await handler({ method: "POST", headers: {} } as unknown as IncomingMessage, res);
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(400);
     expect(headers["content-type"]).toBe("application/json");
-    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(res.body).toBe(JSON.stringify({ error: "Missing X-Line-Signature header" }));
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
