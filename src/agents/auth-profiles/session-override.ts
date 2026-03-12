@@ -102,16 +102,18 @@ export async function resolveSessionAuthProfileOverride(params: {
       if (entry?.type !== "oauth") {
         return false;
       }
-      const sameEmail =
-        typeof legacyEntry.email === "string" &&
-        typeof entry.email === "string" &&
-        legacyEntry.email.trim().length > 0 &&
-        legacyEntry.email.trim() === entry.email.trim();
-      const sameAccount =
-        typeof legacyEntry.accountId === "string" &&
-        typeof entry.accountId === "string" &&
-        legacyEntry.accountId.length > 0 &&
-        legacyEntry.accountId === entry.accountId;
+      const legacyEmail = typeof legacyEntry.email === "string" ? legacyEntry.email.trim() : "";
+      const candidateEmail = typeof entry.email === "string" ? entry.email.trim() : "";
+      const legacyAccountId =
+        typeof legacyEntry.accountId === "string" ? legacyEntry.accountId.trim() : "";
+      const candidateAccountId = typeof entry.accountId === "string" ? entry.accountId.trim() : "";
+      const hasEmailOnBoth = legacyEmail.length > 0 && candidateEmail.length > 0;
+      const hasAccountOnBoth = legacyAccountId.length > 0 && candidateAccountId.length > 0;
+      const sameEmail = hasEmailOnBoth && legacyEmail === candidateEmail;
+      const sameAccount = hasAccountOnBoth && legacyAccountId === candidateAccountId;
+      if (hasEmailOnBoth && hasAccountOnBoth) {
+        return sameEmail && sameAccount;
+      }
       return sameEmail || sameAccount;
     };
     const suggested = suggestOAuthProfileIdForLegacyDefault({
