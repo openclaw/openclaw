@@ -16,6 +16,7 @@ import {
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
+  applyScnetConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
   applyKimiCodeConfig,
@@ -41,6 +42,7 @@ import {
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
+  setScnetApiKey,
   setModelStudioApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
@@ -506,6 +508,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "scnet-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "scnet",
+      cfg: baseConfig,
+      flagValue: opts.scnetApiKey,
+      flagName: "--scnet-api-key",
+      envVar: "SCNET_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setScnetApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "scnet:default",
+      provider: "scnet",
+      mode: "api_key",
+    });
+    return applyScnetConfig(nextConfig);
   }
 
   if (authChoice === "modelstudio-api-key-cn") {

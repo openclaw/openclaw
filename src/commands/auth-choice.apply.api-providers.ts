@@ -24,6 +24,8 @@ import {
   applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
+  applyScnetConfig,
+  applyScnetProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyLitellmConfig,
@@ -54,6 +56,7 @@ import {
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
+  SCNET_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -64,6 +67,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
+  setScnetApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setLitellmApiKey,
@@ -111,6 +115,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  scnet: "scnet-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -313,6 +318,18 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "API key format: bce-v3/ALTAK-...",
     ].join("\n"),
     noteTitle: "QIANFAN",
+  },
+  "scnet-api-key": {
+    provider: "scnet",
+    profileId: "scnet:default",
+    expectedProviders: ["scnet"],
+    envLabel: "SCNET_API_KEY",
+    promptMessage: "Enter SCNet API key",
+    setCredential: setScnetApiKey,
+    defaultModel: SCNET_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyScnetConfig,
+    applyProviderConfig: applyScnetProviderConfig,
+    noteDefault: SCNET_DEFAULT_MODEL_REF,
   },
   "kilocode-api-key": {
     provider: "kilocode",

@@ -40,6 +40,7 @@ describe("buildAuthChoiceOptions", () => {
       "mistral-api-key",
       "volcengine-api-key",
       "byteplus-api-key",
+      "scnet-api-key",
       "vllm",
       "opencode-go",
       "ollama",

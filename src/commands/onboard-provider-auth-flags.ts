@@ -24,6 +24,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "scnetApiKey"
   | "modelstudioApiKeyCn"
   | "modelstudioApiKey"
   | "volcengineApiKey"
@@ -193,6 +194,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "scnetApiKey",
+    authChoice: "scnet-api-key",
+    cliFlag: "--scnet-api-key",
+    cliOption: "--scnet-api-key <key>",
+    description: "SCNet API key",
   },
   {
     optionKey: "modelstudioApiKeyCn",

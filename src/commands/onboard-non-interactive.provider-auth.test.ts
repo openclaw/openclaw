@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL, SCNET_BASE_URL } from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -406,6 +406,14 @@ describe("onboard (non-interactive): provider auth", () => {
       flagName: "--byteplus-api-key",
       envVar: "BYTEPLUS_API_KEY",
     },
+    {
+      name: "scnet",
+      prefix: "openclaw-onboard-ref-flag-scnet-",
+      authChoice: "scnet-api-key",
+      optionKey: "scnetApiKey",
+      flagName: "--scnet-api-key",
+      envVar: "SCNET_API_KEY",
+    },
   ])(
     "fails fast for $name when --secret-input-mode ref uses explicit key without env and does not leak the key",
     async ({ prefix, authChoice, optionKey, flagName, envVar }) => {
@@ -572,6 +580,25 @@ describe("onboard (non-interactive): provider auth", () => {
         profileId: "qianfan:default",
         provider: "qianfan",
         key: "qianfan-test-key",
+      });
+    });
+  });
+
+  it("infers SCNet auth choice from --scnet-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-scnet-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        scnetApiKey: "scnet-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["scnet:default"]?.provider).toBe("scnet");
+      expect(cfg.auth?.profiles?.["scnet:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.scnet?.baseUrl).toBe(SCNET_BASE_URL);
+      expect(cfg.models?.providers?.scnet?.api).toBe("openai-completions");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("scnet/DeepSeek-R1");
+      await expectApiKeyProfile({
+        profileId: "scnet:default",
+        provider: "scnet",
+        key: "scnet-test-key",
       });
     });
   });
