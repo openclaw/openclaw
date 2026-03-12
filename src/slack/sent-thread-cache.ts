@@ -1,3 +1,5 @@
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 /**
  * In-memory cache of Slack threads the bot has participated in.
  * Used to auto-respond in threads without requiring @mention after the first reply.
@@ -7,7 +9,13 @@
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
 
-const threadParticipation = new Map<string, number>();
+/**
+ * Keep Slack thread participation shared across bundled chunks so thread
+ * auto-reply gating does not diverge between prepare/dispatch call paths.
+ */
+const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
+
+const threadParticipation = resolveGlobalMap<string, number>(SLACK_THREAD_PARTICIPATION_KEY);
 
 function makeKey(accountId: string, channelId: string, threadTs: string): string {
   return `${accountId}:${channelId}:${threadTs}`;

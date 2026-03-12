@@ -3,6 +3,7 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
@@ -11,12 +12,23 @@ type EmbeddedPiQueueHandle = {
   abort: () => void;
 };
 
-const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
 };
-const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
+
+/**
+ * Use global singleton state so busy/streaming checks stay consistent even
+ * when the bundler emits multiple copies of this module into separate chunks.
+ */
+const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
+
+const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
+  activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
+  waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
+}));
+const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
+const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
 
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
