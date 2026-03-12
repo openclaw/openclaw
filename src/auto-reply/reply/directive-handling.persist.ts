@@ -21,6 +21,7 @@ import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import { maybeBlockOversizedModelSwitch } from "./model-switch-guard.js";
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
@@ -160,27 +161,40 @@ export async function persistInlineDirectives(params: {
             }
             profileOverride = profileResolved.profileId;
           }
-          const isDefault =
-            resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
-          const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
-            entry: sessionEntry,
-            selection: {
-              provider: resolved.ref.provider,
-              model: resolved.ref.model,
-              isDefault,
-            },
-            profileOverride,
+          const blockedModelSwitchText = maybeBlockOversizedModelSwitch({
+            cfg,
+            sessionEntry,
+            currentProvider: provider,
+            currentModel: model,
+            targetProvider: resolved.ref.provider,
+            targetModel: resolved.ref.model,
           });
-          provider = resolved.ref.provider;
-          model = resolved.ref.model;
-          const nextLabel = `${provider}/${model}`;
-          if (nextLabel !== initialModelLabel) {
-            enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
+          // The fast-lane `/model` path already returns the user-facing error.
+          // Keep persistence aligned so inline directives cannot write the
+          // blocked selection into the session store afterward.
+          if (!blockedModelSwitchText) {
+            const isDefault =
+              resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
+            const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+              entry: sessionEntry,
+              selection: {
+                provider: resolved.ref.provider,
+                model: resolved.ref.model,
+                isDefault,
+              },
+              profileOverride,
             });
+            provider = resolved.ref.provider;
+            model = resolved.ref.model;
+            const nextLabel = `${provider}/${model}`;
+            if (nextLabel !== initialModelLabel) {
+              enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
+                sessionKey,
+                contextKey: `model:${nextLabel}`,
+              });
+            }
+            updated = updated || modelUpdated;
           }
-          updated = updated || modelUpdated;
         }
       }
     }

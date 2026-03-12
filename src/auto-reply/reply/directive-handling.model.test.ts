@@ -8,6 +8,7 @@ import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import { persistInlineDirectives } from "./directive-handling.persist.js";
 
 // Mock dependencies for directive handling persistence.
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -36,6 +37,29 @@ function baseConfig(): OpenClawConfig {
   return {
     commands: { text: true },
     agents: { defaults: {} },
+  } as unknown as OpenClawConfig;
+}
+
+function configWithContextWindows(): OpenClawConfig {
+  return {
+    commands: { text: true },
+    agents: {
+      defaults: {
+        compaction: {
+          reserveTokensFloor: 20_000,
+        },
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          models: [{ id: "claude-opus-4-5", contextWindow: 200_000 }],
+        },
+        openai: {
+          models: [{ id: "gpt-4o", contextWindow: 128_000 }],
+        },
+      },
+    },
   } as unknown as OpenClawConfig;
 }
 
@@ -267,6 +291,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
   });
 
+  it("rejects switching to a smaller-context model when recorded session usage is already too large", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        cfg: configWithContextWindows(),
+        directives,
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toContain("Can't switch to openai/gpt-4o yet.");
+    expect(result?.text).toContain("/compact");
+    expect(result?.text).toContain("/new");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+  });
+
   it("persists thinkingLevel=off (does not clear)", async () => {
     const directives = parseInlineDirectives("/think off");
     const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
@@ -282,5 +328,40 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("does not persist an oversized switch during inline directive persistence", async () => {
+    const directives = parseInlineDirectives("please continue /model openai/gpt-4o");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "openai/gpt-4o",
+      cfg: configWithContextWindows(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: configWithContextWindows().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
   });
 });
