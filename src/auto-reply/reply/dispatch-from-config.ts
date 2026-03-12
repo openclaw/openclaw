@@ -2,6 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  parseSessionThreadInfo,
   resolveSessionStoreEntry,
   resolveStorePath,
   type SessionEntry,
@@ -172,10 +173,12 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
-  // Only use the active delivery context's threadId. `lastThreadId` is not safe here because
-  // `loadSessionStore` normalises it from `origin.threadId`, which can outlive an intentionally
-  // cleared delivery route and would resurrect stale thread routing.
-  const routeThreadId = ctx.MessageThreadId ?? sessionStoreEntry.entry?.deliveryContext?.threadId;
+  // Restore route thread context only from the active turn or the thread-scoped session key.
+  // Do not read thread ids from the normalised session store here: `origin.threadId` can be
+  // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
+  // stale route after thread delivery was intentionally cleared.
+  const routeThreadId =
+    ctx.MessageThreadId ?? parseSessionThreadInfo(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();

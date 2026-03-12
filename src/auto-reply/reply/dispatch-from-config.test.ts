@@ -113,11 +113,15 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  resolveStorePath: sessionStoreMocks.resolveStorePath,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-}));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: sessionStoreMocks.loadSessionStore,
+    resolveStorePath: sessionStoreMocks.resolveStorePath,
+    resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
@@ -315,7 +319,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("falls back to session deliveryContext threadId when current ctx has no MessageThreadId", async () => {
+  it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     sessionStoreMocks.currentEntry = {
@@ -323,9 +327,11 @@ describe("dispatchReplyFromConfig", () => {
         channel: "mattermost",
         to: "channel:CHAN1",
         accountId: "default",
-        threadId: "post-root",
       },
-      lastThreadId: "post-root",
+      origin: {
+        threadId: "stale-origin-root",
+      },
+      lastThreadId: "stale-origin-root",
     };
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -355,17 +361,16 @@ describe("dispatchReplyFromConfig", () => {
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    // Simulate the real store: lastThreadId is normalised from origin.threadId when
-    // deliveryContext.threadId is absent. Using lastThreadId as a fallback would
-    // incorrectly revive stale thread routing.
+    // Simulate the real store: lastThreadId and deliveryContext.threadId may be normalised from
+    // origin.threadId on read, but a non-thread session key must still route to channel root.
     sessionStoreMocks.currentEntry = {
       deliveryContext: {
         channel: "mattermost",
         to: "channel:CHAN1",
         accountId: "default",
-        // threadId deliberately absent — the route was cleared
+        threadId: "stale-root",
       },
-      lastThreadId: "stale-root", // normalised from origin.threadId by loadSessionStore
+      lastThreadId: "stale-root",
       origin: {
         threadId: "stale-root",
       },
