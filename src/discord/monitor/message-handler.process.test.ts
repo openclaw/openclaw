@@ -502,6 +502,38 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
+  it("uses root discord maxLinesPerMessage for preview finalization when runtime config omits it", async () => {
+    const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: longReply });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        channels: {
+          discord: {
+            maxLinesPerMessage: 120,
+          },
+        },
+      },
+      discordConfig: { streamMode: "partial" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(editMessageDiscord).toHaveBeenCalledWith(
+      "c1",
+      "preview-1",
+      { content: longReply },
+      { rest: {} },
+    );
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
   it("suppresses reasoning payload delivery to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
