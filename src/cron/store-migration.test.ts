@@ -47,6 +47,71 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
+  it("does not flag canonical payload kinds as needing normalization", () => {
+    const jobs = [
+      {
+        id: "canonical-agent",
+        name: "agent job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "ping" },
+        sessionTarget: "isolated",
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+      },
+      {
+        id: "canonical-system",
+        name: "system job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "heartbeat" },
+        sessionTarget: "main",
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // legacyPayloadKind must not be incremented for already-canonical kinds.
+    expect(result.issues.legacyPayloadKind ?? 0).toBe(0);
+    // Payload kinds must remain unchanged.
+    expect((jobs[0]?.payload as Record<string, unknown>)?.kind).toBe("agentTurn");
+    expect((jobs[1]?.payload as Record<string, unknown>)?.kind).toBe("systemEvent");
+  });
+
+  it("normalizes non-canonical payload kind casing to the canonical form", () => {
+    const jobs = [
+      {
+        id: "uppercase-kind",
+        name: "uppercase job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "AGENTTURN", message: "ping" },
+        sessionTarget: "isolated",
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+      },
+      {
+        id: "mixed-kind",
+        name: "mixed job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "SystemEvent", text: "heartbeat" },
+        sessionTarget: "main",
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect((jobs[0]?.payload as Record<string, unknown>)?.kind).toBe("agentTurn");
+    expect((jobs[1]?.payload as Record<string, unknown>)?.kind).toBe("systemEvent");
+  });
+
   it("normalizes payload provider alias into channel", () => {
     const jobs = [
       {
