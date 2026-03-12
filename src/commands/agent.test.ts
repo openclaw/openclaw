@@ -708,6 +708,66 @@ describe("agentCommand", () => {
     });
   });
 
+  it("suppresses prompt image detection on cross-provider fallback retry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:suppress-detect": {
+          sessionId: "session-suppress-detect",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent)
+        .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+        .mockResolvedValueOnce({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: {
+              sessionId: "session-suppress-detect",
+              provider: "openai",
+              model: "gpt-5.2",
+            },
+          },
+        });
+
+      await agentCommand(
+        {
+          message: "check /tmp/photo.png",
+          sessionKey: "agent:main:subagent:suppress-detect",
+        },
+        runtime,
+      );
+
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      expect(calls).toHaveLength(2);
+      // First attempt (primary provider) should not suppress prompt image detection
+      expect(calls[0]?.[0]?.suppressPromptImageDetection).toBeFalsy();
+      // Second attempt (cross-provider fallback) should suppress prompt image detection
+      expect(calls[1]?.[0]?.suppressPromptImageDetection).toBe(true);
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1150,5 +1210,47 @@ describe("resolveRetryImages", () => {
 
   it("strips images on same-provider format error (existing behavior)", () => {
     expect(resolveRetryImages(fakeImages, true, "format", "openai", "openai")).toBeUndefined();
+  });
+});
+
+describe("buildPartialExecutionSystemContext", () => {
+  const { buildPartialExecutionSystemContext } = _testInternals;
+
+  it("returns undefined when no partial execution", () => {
+    expect(buildPartialExecutionSystemContext(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when toolNames is empty", () => {
+    expect(
+      buildPartialExecutionSystemContext({
+        toolNames: [],
+        didSendViaMessagingTool: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("includes tool names in warning", () => {
+    const result = buildPartialExecutionSystemContext({
+      toolNames: ["send_message", "read_file"],
+      didSendViaMessagingTool: false,
+    });
+    expect(result).toContain("send_message, read_file");
+    expect(result).toContain("Do not repeat actions");
+  });
+
+  it("includes messaging warning when didSendViaMessagingTool is true", () => {
+    const result = buildPartialExecutionSystemContext({
+      toolNames: ["send_message"],
+      didSendViaMessagingTool: true,
+    });
+    expect(result).toContain("do NOT re-send");
+  });
+
+  it("omits messaging warning when didSendViaMessagingTool is false", () => {
+    const result = buildPartialExecutionSystemContext({
+      toolNames: ["read_file"],
+      didSendViaMessagingTool: false,
+    });
+    expect(result).not.toContain("re-send");
   });
 });
