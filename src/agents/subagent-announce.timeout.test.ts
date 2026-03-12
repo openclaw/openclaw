@@ -25,6 +25,9 @@ let fallbackRequesterResolution: {
 } | null = null;
 let rejectFinalCompletionAnnounce = false;
 let embeddedRunActive = false;
+let acceptedRunIds: string[] = ["announce-run-1"];
+let waitStatusByRunId: Record<string, string> = {};
+const queueEmbeddedPiMessageMock = vi.fn(() => false);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: GatewayCall) => {
@@ -45,10 +48,13 @@ vi.mock("../gateway/call.js", () => ({
       request.expectFinal === false &&
       request.params?.sessionKey === "agent:main:main"
     ) {
-      return { status: "accepted", runId: "announce-run-1" };
+      const nextRunId = acceptedRunIds.shift() ?? `announce-run-${gatewayCalls.length}`;
+      return { status: "accepted", runId: nextRunId };
     }
     if (request.method === "agent.wait") {
-      return { status: "ok", runId: request.params?.runId };
+      const runId = typeof request.params?.runId === "string" ? request.params.runId : "";
+      const status = waitStatusByRunId[runId] ?? "ok";
+      return { status, runId };
     }
     return { status: "ok" };
   }),
@@ -75,7 +81,7 @@ vi.mock("./subagent-depth.js", () => ({
 
 vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunActive: () => embeddedRunActive,
-  queueEmbeddedPiMessage: () => false,
+  queueEmbeddedPiMessage: (...args: unknown[]) => queueEmbeddedPiMessageMock(...args),
   waitForEmbeddedPiRunEnd: async () => true,
 }));
 
@@ -155,6 +161,10 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
     rejectFinalCompletionAnnounce = false;
     embeddedRunActive = false;
+    acceptedRunIds = ["announce-run-1"];
+    waitStatusByRunId = {};
+    queueEmbeddedPiMessageMock.mockReset();
+    queueEmbeddedPiMessageMock.mockReturnValue(false);
   });
 
   it("uses 60s timeout by default for direct announce agent call", async () => {
@@ -217,6 +227,68 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
     );
     expect(completionDirectAgentCall?.expectFinal).toBe(false);
+    expect(findGatewayCall((call) => call.method === "agent.wait")?.params?.runId).toBe(
+      "announce-run-1",
+    );
+  });
+
+  it("regression, collect mode preserves every accepted completion run id", async () => {
+    rejectFinalCompletionAnnounce = true;
+    embeddedRunActive = true;
+    acceptedRunIds = ["announce-run-1", "announce-run-2"];
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "main-session-collect",
+        queueDebounceMs: 25,
+        queueMode: "collect",
+      },
+    };
+
+    await runAnnounceFlowForTest("run-no-final-wait-collect-1", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await runAnnounceFlowForTest("run-no-final-wait-collect-2", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const waitedRunIds = gatewayCalls
+      .filter((call) => call.method === "agent.wait")
+      .map((call) => (typeof call.params?.runId === "string" ? call.params.runId : ""));
+    expect(waitedRunIds).toEqual(expect.arrayContaining(["announce-run-1", "announce-run-2"]));
+  });
+
+  it("regression, accepted completion fallback bypasses steer injection", async () => {
+    rejectFinalCompletionAnnounce = true;
+    embeddedRunActive = true;
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "main-session-steer",
+        queueDebounceMs: 0,
+        queueMode: "steer",
+      },
+    };
+
+    const didAnnounce = await runAnnounceFlowForTest("run-no-steer-dup", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await waitForAsyncCallbacks();
+
+    expect(didAnnounce).toBe(true);
+    expect(queueEmbeddedPiMessageMock).not.toHaveBeenCalled();
     expect(findGatewayCall((call) => call.method === "agent.wait")?.params?.runId).toBe(
       "announce-run-1",
     );

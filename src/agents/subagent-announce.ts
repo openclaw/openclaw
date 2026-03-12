@@ -613,30 +613,58 @@ function buildQueuedAnnounceId(item: AnnounceQueueItem): string {
   return retryAttempt > 0 ? `${baseAnnounceId}:retry:${retryAttempt}` : baseAnnounceId;
 }
 
+function readPendingRunIds(item: AnnounceQueueItem): string[] {
+  const fromList = Array.isArray(item.pendingRunIds) ? item.pendingRunIds : [];
+  const fromLegacy = item.pendingRunId ? [item.pendingRunId] : [];
+  return Array.from(new Set([...fromList, ...fromLegacy].filter((runId) => Boolean(runId))));
+}
+
+function writePendingRunIds(item: AnnounceQueueItem, runIds: string[] | undefined): void {
+  if (!runIds || runIds.length === 0) {
+    item.pendingRunId = undefined;
+    item.pendingRunIds = undefined;
+    return;
+  }
+  item.pendingRunId = runIds[runIds.length - 1];
+  item.pendingRunIds = runIds;
+}
+
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const isTopLevelCompletion = item.expectsCompletionMessage === true && !requesterIsSubagent;
-  if (isTopLevelCompletion && item.pendingRunId) {
-    const waitResult = await callGateway<{ status?: string }>({
-      method: "agent.wait",
-      params: {
-        runId: item.pendingRunId,
+  const pendingRunIds = isTopLevelCompletion ? readPendingRunIds(item) : [];
+  if (isTopLevelCompletion && pendingRunIds.length > 0) {
+    let shouldRetryWithFreshAnnounce = false;
+    for (let idx = 0; idx < pendingRunIds.length; idx++) {
+      const pendingRunId = pendingRunIds[idx];
+      const waitResult = await callGateway<{ status?: string }>({
+        method: "agent.wait",
+        params: {
+          runId: pendingRunId,
+          timeoutMs: announceTimeoutMs,
+        },
         timeoutMs: announceTimeoutMs,
-      },
-      timeoutMs: announceTimeoutMs,
-    });
-    const waitStatus =
-      typeof waitResult?.status === "string" ? waitResult.status.trim().toLowerCase() : undefined;
-    if (waitStatus === "ok") {
+      });
+      const waitStatus =
+        typeof waitResult?.status === "string" ? waitResult.status.trim().toLowerCase() : undefined;
+      if (waitStatus === "ok") {
+        continue;
+      }
+      if (waitStatus === "timeout" || !waitStatus) {
+        writePendingRunIds(item, pendingRunIds.slice(idx));
+        throw new Error(`completion announce still pending for run ${pendingRunId}`);
+      }
+      writePendingRunIds(item, undefined);
+      item.retryAttempt = (item.retryAttempt ?? 0) + 1;
+      shouldRetryWithFreshAnnounce = true;
+      break;
+    }
+    if (!shouldRetryWithFreshAnnounce) {
+      writePendingRunIds(item, undefined);
       return;
     }
-    if (waitStatus === "timeout" || !waitStatus) {
-      throw new Error(`completion announce still pending for run ${item.pendingRunId}`);
-    }
-    item.pendingRunId = undefined;
-    item.retryAttempt = (item.retryAttempt ?? 0) + 1;
   }
 
   const origin = item.origin;
@@ -672,7 +700,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     return;
   }
   if (runId) {
-    item.pendingRunId = runId;
+    const nextPendingRunIds = readPendingRunIds(item);
+    if (!nextPendingRunIds.includes(runId)) {
+      nextPendingRunIds.push(runId);
+    }
+    writePendingRunIds(item, nextPendingRunIds);
     throw new Error(`completion announce accepted for run ${runId}`);
   }
   item.retryAttempt = (item.retryAttempt ?? 0) + 1;
@@ -734,6 +766,7 @@ async function maybeQueueSubagentAnnounce(params: {
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage?: boolean;
   pendingRunId?: string;
+  pendingRunIds?: string[];
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none"> {
   if (params.signal?.aborted) {
@@ -753,7 +786,18 @@ async function maybeQueueSubagentAnnounce(params: {
   });
   const isActive = isEmbeddedPiRunActive(sessionId);
 
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const pendingRunIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(params.pendingRunIds) ? params.pendingRunIds : []),
+        ...(params.pendingRunId ? [params.pendingRunId] : []),
+      ].filter((runId) => Boolean(runId)),
+    ),
+  );
+  const hasPendingCompletionRun = pendingRunIds.length > 0;
+  const shouldSteer =
+    (queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog") &&
+    !hasPendingCompletionRun;
   if (shouldSteer) {
     const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
     if (steered) {
@@ -783,6 +827,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceTool: params.sourceTool,
         expectsCompletionMessage: params.expectsCompletionMessage,
         pendingRunId: params.pendingRunId,
+        pendingRunIds: pendingRunIds.length > 0 ? pendingRunIds : params.pendingRunIds,
       },
       settings: queueSettings,
       send: sendAnnounce,
@@ -897,6 +942,7 @@ async function sendSubagentAnnounceDirectly(params: {
           delivered: false,
           path: "direct",
           pendingRunId: runId,
+          pendingRunIds: [runId],
         };
       }
     }
@@ -935,6 +981,7 @@ async function deliverSubagentAnnouncement(params: {
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   let pendingRunId: string | undefined;
+  let pendingRunIds: string[] | undefined;
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
@@ -952,6 +999,7 @@ async function deliverSubagentAnnouncement(params: {
         internalEvents: params.internalEvents,
         expectsCompletionMessage: params.expectsCompletionMessage,
         pendingRunId,
+        pendingRunIds,
         signal: params.signal,
       }),
     direct: async () => {
@@ -971,6 +1019,7 @@ async function deliverSubagentAnnouncement(params: {
         bestEffortDeliver: params.bestEffortDeliver,
       });
       pendingRunId = result.pendingRunId;
+      pendingRunIds = result.pendingRunIds;
       return result;
     },
   });
