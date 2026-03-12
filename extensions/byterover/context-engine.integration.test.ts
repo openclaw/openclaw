@@ -7,9 +7,12 @@ import { ByteRoverContextEngine } from "./context-engine.js";
 // Mock brv-process so no real CLI is spawned
 // ---------------------------------------------------------------------------
 
+type BrvCurateFn = typeof import("./brv-process.js").brvCurate;
+type BrvQueryFn = typeof import("./brv-process.js").brvQuery;
+
 const mocks = vi.hoisted(() => ({
-  brvCurate: vi.fn<() => Promise<BrvJsonResponse<BrvCurateResult>>>(),
-  brvQuery: vi.fn<() => Promise<BrvJsonResponse<BrvQueryResult>>>(),
+  brvCurate: vi.fn<BrvCurateFn>(),
+  brvQuery: vi.fn<BrvQueryFn>(),
 }));
 
 vi.mock("./brv-process.js", async (importOriginal) => {
