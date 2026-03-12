@@ -79,13 +79,13 @@ export async function getMemorySearchManager(params: {
             },
           ),
         });
-        if (!wrapper) {
-          return { manager: null, error: "memory search unavailable" };
-        }
         if (cacheKey) {
-          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper!);
         }
-        return { manager: wrapper };
+        return {
+          manager: wrapper,
+          error: wrapper ? undefined : "memory search unavailable",
+        };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -101,11 +101,20 @@ export async function getMemorySearchManager(params: {
         cfg: params.cfg,
         agentId: params.agentId,
         manager,
+        error: manager ? undefined : "memory search unavailable",
       }),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { manager: null, error: message };
+    return {
+      manager: wrapManagerWithPostgresMemoryReads({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        manager: null,
+        error: message,
+      }),
+      error: message,
+    };
   }
 }
 
@@ -287,8 +296,9 @@ function wrapManagerWithPostgresMemoryReads(params: {
   cfg: OpenClawConfig;
   agentId: string;
   manager: MemorySearchManager | null;
+  error?: string;
 }): MemorySearchManager | null {
-  if (!params.manager || params.cfg.persistence?.backend !== "postgres") {
+  if (params.cfg.persistence?.backend !== "postgres") {
     return params.manager;
   }
   const workspaceRoot = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -300,16 +310,18 @@ function wrapManagerWithPostgresMemoryReads(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     workspaceRoot,
+    error: params.error,
   });
 }
 
 class PostgresReadThroughMemoryManager implements MemorySearchManager {
   constructor(
     private readonly deps: {
-      manager: MemorySearchManager;
+      manager: MemorySearchManager | null;
       cfg: OpenClawConfig;
       agentId: string;
       workspaceRoot: string;
+      error?: string;
     },
   ) {}
 
@@ -317,6 +329,9 @@ class PostgresReadThroughMemoryManager implements MemorySearchManager {
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ) {
+    if (!this.deps.manager) {
+      throw new Error(this.deps.error ?? "memory search unavailable");
+    }
     return await this.deps.manager.search(query, opts);
   }
 
@@ -337,11 +352,26 @@ class PostgresReadThroughMemoryManager implements MemorySearchManager {
         path: relPath,
       };
     }
+    if (!this.deps.manager) {
+      throw new Error(this.deps.error ?? "memory read unavailable");
+    }
     return await this.deps.manager.readFile(params);
   }
 
   status() {
-    return this.deps.manager.status();
+    return (
+      this.deps.manager?.status() ?? {
+        backend: "builtin",
+        provider: "postgres",
+        fallback: {
+          from: "postgres",
+          reason: this.deps.error ?? "memory index unavailable",
+        },
+        custom: {
+          searchAvailable: false,
+        },
+      }
+    );
   }
 
   async sync(params?: {
@@ -349,7 +379,7 @@ class PostgresReadThroughMemoryManager implements MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    await this.deps.manager.sync?.(params);
+    await this.deps.manager?.sync?.(params);
     await reconcileWorkspaceMemoryDocumentsToPostgres(
       {
         workspaceRoot: this.deps.workspaceRoot,
@@ -363,15 +393,24 @@ class PostgresReadThroughMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    if (!this.deps.manager) {
+      return {
+        ok: false,
+        error: this.deps.error ?? "memory search unavailable",
+      };
+    }
     return await this.deps.manager.probeEmbeddingAvailability();
   }
 
   async probeVectorAvailability() {
+    if (!this.deps.manager) {
+      return false;
+    }
     return await this.deps.manager.probeVectorAvailability();
   }
 
   async close() {
-    await this.deps.manager.close?.();
+    await this.deps.manager?.close?.();
   }
 }
 

@@ -349,6 +349,30 @@ describe("getMemorySearchManager caching", () => {
     expect(mockPrimary.readFile).not.toHaveBeenCalled();
   });
 
+  it("keeps memory_get available from postgres when index startup fails", async () => {
+    const cfg = {
+      ...createQmdCfg("postgres-read-through"),
+      persistence: {
+        backend: "postgres" as const,
+        postgres: {
+          url: "postgresql://openclaw:test@localhost/openclaw",
+        },
+      },
+    };
+    createQmdManagerMock.mockRejectedValueOnce(new Error("qmd missing"));
+    mockMemoryIndexGet.mockRejectedValueOnce(new Error("builtin unavailable"));
+    readMemoryDocumentFromPostgresMock.mockResolvedValue("canonical line");
+
+    const result = await getMemorySearchManager({ cfg, agentId: "postgres-read-through" });
+    const manager = requireManager(result);
+
+    await expect(manager.search("hello")).rejects.toThrow("builtin unavailable");
+    await expect(manager.readFile({ relPath: "MEMORY.md" })).resolves.toEqual({
+      text: "canonical line",
+      path: "MEMORY.md",
+    });
+  });
+
   it("reconciles workspace memory documents after sync when postgres is configured", async () => {
     const cfg = {
       ...createQmdCfg("postgres-sync"),

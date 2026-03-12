@@ -447,16 +447,12 @@ export async function startGatewayServer(
       activate: true,
     })
   ).config;
-  try {
-    await bootstrapPostgresRuntimeState({
-      config: cfgAtStart,
-      env: process.env,
-      auth: true,
-      subagents: true,
-    });
-  } catch (error) {
-    log.warn(`gateway: failed to load persisted subagent state from postgres: ${String(error)}`);
-  }
+  await bootstrapPostgresRuntimeState({
+    config: cfgAtStart,
+    env: process.env,
+    auth: true,
+    subagents: true,
+  });
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();

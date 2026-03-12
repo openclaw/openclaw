@@ -216,7 +216,12 @@ function collectApplyPatchAffectedPaths(result: unknown): string[] {
 
 function wrapApplyPatchToolWithMemoryDocumentSync(
   tool: AnyAgentTool,
-  options: { root: string; agentId?: string },
+  options: {
+    workspaceRoot: string;
+    sourceRoot?: string;
+    agentId?: string;
+    containerWorkdir?: string;
+  },
 ): AnyAgentTool {
   return {
     ...tool,
@@ -224,9 +229,11 @@ function wrapApplyPatchToolWithMemoryDocumentSync(
       const result = await tool.execute(toolCallId, args, signal, onUpdate);
       for (const filePath of collectApplyPatchAffectedPaths(result)) {
         scheduleMemoryDocumentSyncForWorkspacePath({
-          root: options.root,
+          workspaceRoot: options.workspaceRoot,
+          sourceRoot: options.sourceRoot,
           agentId: options.agentId,
           filePath,
+          containerWorkdir: options.containerWorkdir,
         });
       }
       return result;
@@ -503,8 +510,10 @@ export function createOpenClawCodingTools(options?: {
             workspaceOnly: applyPatchWorkspaceOnly,
           }) as unknown as AnyAgentTool,
           {
-            root: workspaceRoot,
+            workspaceRoot,
+            sourceRoot: sandboxRoot ?? workspaceRoot,
             agentId: options?.agentId,
+            containerWorkdir: sandbox?.containerWorkdir,
           },
         );
   const tools: AnyAgentTool[] = [
@@ -514,22 +523,58 @@ export function createOpenClawCodingTools(options?: {
         ? [
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedEditTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                    memorySync: {
+                      workspaceRoot,
+                      sourceRoot: sandboxRoot,
+                      agentId,
+                      containerWorkdir: sandbox.containerWorkdir,
+                    },
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedEditTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                  memorySync: {
+                    workspaceRoot,
+                    sourceRoot: sandboxRoot,
+                    agentId,
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
+                }),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedWriteTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                    memorySync: {
+                      workspaceRoot,
+                      sourceRoot: sandboxRoot,
+                      agentId,
+                      containerWorkdir: sandbox.containerWorkdir,
+                    },
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedWriteTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                  memorySync: {
+                    workspaceRoot,
+                    sourceRoot: sandboxRoot,
+                    agentId,
+                    containerWorkdir: sandbox.containerWorkdir,
+                  },
+                }),
           ]
         : []
       : []),

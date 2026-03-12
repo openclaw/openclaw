@@ -605,6 +605,12 @@ type SandboxToolParams = {
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  memorySync?: {
+    workspaceRoot: string;
+    sourceRoot?: string;
+    agentId?: string;
+    containerWorkdir?: string;
+  };
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -621,18 +627,35 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return wrapToolParamNormalization(
+    wrapToolMemoryDocumentSync(base, {
+      workspaceRoot: params.memorySync?.workspaceRoot ?? params.root,
+      sourceRoot: params.memorySync?.sourceRoot ?? params.root,
+      agentId: params.memorySync?.agentId,
+      containerWorkdir: params.memorySync?.containerWorkdir,
+    }),
+    CLAUDE_PARAM_GROUPS.write,
+  );
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return wrapToolParamNormalization(
+    wrapToolMemoryDocumentSync(base, {
+      workspaceRoot: params.memorySync?.workspaceRoot ?? params.root,
+      sourceRoot: params.memorySync?.sourceRoot ?? params.root,
+      agentId: params.memorySync?.agentId,
+      containerWorkdir: params.memorySync?.containerWorkdir,
+    }),
+    CLAUDE_PARAM_GROUPS.edit,
+  );
 }
 
 export function scheduleMemoryDocumentSyncForWorkspacePath(params: {
-  root: string;
+  workspaceRoot: string;
+  sourceRoot?: string;
   agentId?: string;
   filePath: string;
   containerWorkdir?: string;
@@ -640,18 +663,19 @@ export function scheduleMemoryDocumentSyncForWorkspacePath(params: {
   if (!params.filePath.trim()) {
     return;
   }
+  const sourceRoot = params.sourceRoot ?? params.workspaceRoot;
   const absolutePath = resolveToolPathAgainstWorkspaceRoot({
     filePath: params.filePath,
-    root: params.root,
+    root: sourceRoot,
     containerWorkdir: params.containerWorkdir,
   });
-  const relativePath = resolvePathRelativeToRoot(params.root, absolutePath);
+  const relativePath = resolvePathRelativeToRoot(sourceRoot, absolutePath);
   const logicalPath = relativePath ? normalizeMemoryDocumentPath(relativePath) : undefined;
   if (!logicalPath) {
     return;
   }
   scheduleMemoryDocumentSyncToPostgres({
-    workspaceRoot: params.root,
+    workspaceRoot: params.workspaceRoot,
     absolutePath,
     logicalPath,
     agentId: params.agentId,
@@ -659,8 +683,10 @@ export function scheduleMemoryDocumentSyncForWorkspacePath(params: {
 }
 
 function syncMemoryDocumentAfterHostMutation(params: {
-  root: string;
+  workspaceRoot: string;
+  sourceRoot?: string;
   agentId?: string;
+  containerWorkdir?: string;
   args: unknown;
 }): void {
   const normalized = normalizeToolParams(params.args);
@@ -674,23 +700,32 @@ function syncMemoryDocumentAfterHostMutation(params: {
     return;
   }
   scheduleMemoryDocumentSyncForWorkspacePath({
-    root: params.root,
+    workspaceRoot: params.workspaceRoot,
+    sourceRoot: params.sourceRoot,
     agentId: params.agentId,
     filePath,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function wrapToolMemoryDocumentSync(
   tool: AnyAgentTool,
-  options: { root: string; agentId?: string },
+  options: {
+    workspaceRoot: string;
+    sourceRoot?: string;
+    agentId?: string;
+    containerWorkdir?: string;
+  },
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await tool.execute(toolCallId, args, signal, onUpdate);
       syncMemoryDocumentAfterHostMutation({
-        root: options.root,
+        workspaceRoot: options.workspaceRoot,
+        sourceRoot: options.sourceRoot,
         agentId: options.agentId,
+        containerWorkdir: options.containerWorkdir,
         args,
       });
       return result;
@@ -706,7 +741,7 @@ export function createHostWorkspaceWriteTool(
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(
-    wrapToolMemoryDocumentSync(base, { root, agentId: options?.agentId }),
+    wrapToolMemoryDocumentSync(base, { workspaceRoot: root, agentId: options?.agentId }),
     CLAUDE_PARAM_GROUPS.write,
   );
 }
@@ -720,7 +755,7 @@ export function createHostWorkspaceEditTool(
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapHostEditToolWithPostWriteRecovery(base, root);
   return wrapToolParamNormalization(
-    wrapToolMemoryDocumentSync(withRecovery, { root, agentId: options?.agentId }),
+    wrapToolMemoryDocumentSync(withRecovery, { workspaceRoot: root, agentId: options?.agentId }),
     CLAUDE_PARAM_GROUPS.edit,
   );
 }
