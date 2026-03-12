@@ -21,6 +21,7 @@ import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  chunkTextForOutbound,
   formatAllowFromLowercase,
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
@@ -613,6 +614,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
     sendPayload: async (ctx) =>
       await sendPayloadWithChunkedTextAndMedia({
         ctx,
+        chunker: zalouserPlugin.outbound!.chunker,
         sendText: (nextCtx) => zalouserPlugin.outbound!.sendText!(nextCtx),
         sendMedia: (nextCtx) => zalouserPlugin.outbound!.sendMedia!(nextCtx),
         emptyResult: { channel: "zalouser", messageId: "" },
