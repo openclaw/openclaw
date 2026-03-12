@@ -132,6 +132,34 @@ describe("isValidAgentId", () => {
   });
 });
 
+// ── tripwire: default config unchanged ────────────────────────────
+describe("buildAgentPeerSessionKey default behavior", () => {
+  it("default config: channel peer session key includes channel and peer details", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "channel",
+      peerId: "C123",
+    });
+    expect(key).toContain("slack");
+    expect(key).toContain("channel");
+    expect(key).toContain("c123");
+    expect(key).not.toBe("agent:main:main");
+  });
+
+  it("default config: group peer session key includes group details", () => {
+    const key = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peerKind: "group",
+      peerId: "G456",
+    });
+    expect(key).toContain("group");
+    expect(key).toContain("g456");
+    expect(key).not.toBe("agent:main:main");
+  });
+});
+
 describe("buildAgentPeerSessionKey channelIsolation", () => {
   it("returns main session key when channelIsolation is false for non-DM peers", () => {
     const key = buildAgentPeerSessionKey({

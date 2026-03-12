@@ -2018,6 +2018,13 @@ See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
 Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
 
+**Advanced: opt into shared sessions.** For single-identity agents where you want cross-thread or cross-channel memory, two opt-in flags can collapse session isolation:
+
+- `session.threadIsolation: false` — Slack thread replies reuse the parent session instead of forking (Slack-only). See [Shared session across threads](/channels/slack#shared-session-across-threads-sessionthreadisolation).
+- `session.channelIsolation: false` — all non-DM channels share the agent's main session (global, all providers). See [Shared session across channels](/channels/slack#shared-session-across-channels-sessionchannelisolation).
+
+Both are off by default. Enabling them creates cross-context leakage — recommended for single-user or trusted-team deployments only.
+
 ### How many workspaces and agents can I create
 
 No hard limits. Dozens (even hundreds) are fine, but watch for:

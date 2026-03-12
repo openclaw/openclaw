@@ -2,7 +2,9 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { shouldLogVerbose } from "../globals.js";
+import { shouldLogVerbose, warn } from "../globals.js";
+
+let _channelIsolationWarned = false;
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
 import {
@@ -630,6 +632,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const dmScope = input.cfg.session?.dmScope ?? "main";
   const identityLinks = input.cfg.session?.identityLinks;
   const channelIsolation = input.cfg.session?.channelIsolation;
+  if (channelIsolation === false && !_channelIsolationWarned) {
+    _channelIsolationWarned = true;
+    warn(
+      "session.channelIsolation=false: all non-DM channels share the main session. " +
+        "Context leaks across channels, /new resets all channels. Recommended for single-user deployments only.",
+    );
+  }
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
     ? {
