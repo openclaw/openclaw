@@ -41,6 +41,22 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
+function resolveOptionalBooleanFlag(
+  command: unknown,
+  name: string,
+  value: boolean,
+): boolean | undefined {
+  if (!command || typeof command !== "object") {
+    return undefined;
+  }
+  const getOptionValueSource =
+    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
+  if (typeof getOptionValueSource !== "function") {
+    return undefined;
+  }
+  return getOptionValueSource.call(command, name) === "cli" ? value : undefined;
+}
+
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
@@ -116,6 +132,10 @@ export function registerOnboardCommand(program: Command) {
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
+    .option(
+      "--rescue-watchdog",
+      "Set up an isolated rescue gateway profile that monitors and restarts this profile automatically",
+    )
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
@@ -130,6 +150,11 @@ export function registerOnboardCommand(program: Command) {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
+      const rescueWatchdog = resolveOptionalBooleanFlag(
+        commandRuntime,
+        "rescueWatchdog",
+        Boolean(opts.rescueWatchdog),
+      );
       const gatewayPort =
         typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
       await onboardCommand(
@@ -194,6 +219,7 @@ export function registerOnboardCommand(program: Command) {
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
+          rescueWatchdog,
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),
           skipSkills: Boolean(opts.skipSkills),
