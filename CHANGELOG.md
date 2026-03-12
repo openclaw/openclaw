@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Security
+
+- Gateway/WebSocket: enforce browser origin validation for all browser-originated connections regardless of whether proxy headers are present, closing a cross-site WebSocket hijacking path in `trusted-proxy` mode that could grant untrusted origins `operator.admin` access. (GHSA-5wcw-8jjv-m286)
+
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
