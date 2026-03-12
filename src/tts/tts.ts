@@ -897,11 +897,15 @@ export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
   channel?: string;
+  accountId?: string;
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const config =
+    params.channel && params.accountId
+      ? resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId)
+      : resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
