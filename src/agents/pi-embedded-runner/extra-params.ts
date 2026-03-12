@@ -853,6 +853,64 @@ function createZaiToolStreamWrapper(
 }
 
 /**
+ * Create a streamFn wrapper that injects trigger_source into every LLM request.
+ * The value indicates what initiated the agent run (e.g. "user", "cron", "heartbeat").
+ * Injected as both an HTTP header (X-Trigger-Source) and a body field (trigger_source)
+ * so the LLM proxy can read it regardless of transport.
+ */
+export function createTriggerSourceWrapper(
+  baseStreamFn: StreamFn | undefined,
+  triggerSource: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "X-Trigger-Source": triggerSource,
+      },
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).trigger_source = triggerSource;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
+ * Create a streamFn wrapper that injects turn_id into every LLM request.
+ * All LLM calls within one agent turn share the same turn_id, allowing the
+ * proxy to correlate multiple requests belonging to a single user message.
+ * Injected as both an HTTP header (X-Turn-Id) and a body field (turn_id).
+ */
+export function createTurnIdWrapper(
+  baseStreamFn: StreamFn | undefined,
+  turnId: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "X-Turn-Id": turnId,
+      },
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          (payload as Record<string, unknown>).turn_id = turnId;
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
