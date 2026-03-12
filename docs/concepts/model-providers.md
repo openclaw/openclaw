@@ -352,7 +352,7 @@ See [/providers/minimax](/providers/minimax) for setup details, model options, a
 
 ### Ollama
 
-Ollama is a local LLM runtime that provides an OpenAI-compatible API:
+Ollama ships as a bundled provider plugin and uses Ollama's native API:
 
 - Provider: `ollama`
 - Auth: None required (local server)
@@ -372,11 +372,15 @@ ollama pull llama3.3
 }
 ```
 
-Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with `OLLAMA_API_KEY`, and `openclaw onboard` can configure it directly as a first-class provider. See [/providers/ollama](/providers/ollama) for onboarding, cloud/local mode, and custom configuration.
+Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with
+`OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to
+`openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama)
+for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
 
-vLLM is a local (or self-hosted) OpenAI-compatible server:
+vLLM ships as a bundled provider plugin for local/self-hosted OpenAI-compatible
+servers:
 
 - Provider: `vllm`
 - Auth: Optional (depends on your server)
@@ -399,6 +403,34 @@ Then set a model (replace with one of the IDs returned by `/v1/models`):
 ```
 
 See [/providers/vllm](/providers/vllm) for details.
+
+### SGLang
+
+SGLang ships as a bundled provider plugin for fast self-hosted
+OpenAI-compatible servers:
+
+- Provider: `sglang`
+- Auth: Optional (depends on your server)
+- Default base URL: `http://127.0.0.1:30000/v1`
+
+To opt in to auto-discovery locally (any value works if your server does not
+enforce auth):
+
+```bash
+export SGLANG_API_KEY="sglang-local"
+```
+
+Then set a model (replace with one of the IDs returned by `/v1/models`):
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "sglang/your-model-id" } },
+  },
+}
+```
+
+See [/providers/sglang](/providers/sglang) for details.
 
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
