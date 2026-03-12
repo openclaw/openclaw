@@ -97,6 +97,7 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -369,7 +370,10 @@ function collectModelsJsonSecrets(params: {
     return;
   }
   params.collector.filesScanned.add(params.modelsJsonPath);
-  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath);
+  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
+    requireRegularFile: true,
+    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+  });
   if (parsedResult.error) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
@@ -630,7 +634,7 @@ export async function runSecretsAudit(
         defaults,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir)) {
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,

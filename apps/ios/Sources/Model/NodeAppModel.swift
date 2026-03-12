@@ -88,6 +88,7 @@ final class NodeAppModel {
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
+    var homeCanvasRevision: Int = 0
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
@@ -548,6 +549,7 @@ final class NodeAppModel {
                 self.seamColorHex = raw.isEmpty ? nil : raw
                 self.mainSessionBaseKey = mainKey
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.homeCanvasRevision &+= 1
             }
         } catch {
             if let gatewayError = error as? GatewayResponseError {
@@ -574,10 +576,17 @@ final class NodeAppModel {
                     self.selectedAgentId = nil
                 }
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.homeCanvasRevision &+= 1
             }
         } catch {
             // Best-effort only.
         }
+    }
+
+    func refreshGatewayOverviewIfConnected() async {
+        guard await self.isOperatorConnected() else { return }
+        await self.refreshBrandingFromGateway()
+        await self.refreshAgentsFromGateway()
     }
 
     func setSelectedAgentId(_ agentId: String?) {
@@ -590,6 +599,7 @@ final class NodeAppModel {
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: self.selectedAgentId)
         }
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.homeCanvasRevision &+= 1
         if let relay = ShareGatewayRelaySettings.loadConfig() {
             ShareGatewayRelaySettings.saveConfig(
                 ShareGatewayRelayConfig(
@@ -1629,11 +1639,9 @@ extension NodeAppModel {
     }
 
     var chatSessionKey: String {
-        let base = "ios"
-        let agentId = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if agentId.isEmpty || (!defaultId.isEmpty && agentId == defaultId) { return base }
-        return SessionKey.makeAgentSessionKey(agentId: agentId, baseKey: base)
+        // Keep chat aligned with the gateway's resolved main session key.
+        // A hardcoded "ios" base creates synthetic placeholder sessions in the chat UI.
+        self.mainSessionKey
     }
 
     var activeAgentName: String {
@@ -1749,6 +1757,7 @@ private extension NodeAppModel {
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
+        self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
     }
 
@@ -2246,8 +2255,7 @@ extension NodeAppModel {
                 from: payload)
             guard !decoded.actions.isEmpty else { return }
             self.pendingActionLogger.info(
-                "Pending actions pulled trigger=\(trigger, privacy: .public) "
-                    + "count=\(decoded.actions.count, privacy: .public)")
+                "Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
             await self.applyPendingForegroundNodeActions(decoded.actions, trigger: trigger)
         } catch {
             // Best-effort only.
@@ -2270,9 +2278,7 @@ extension NodeAppModel {
                 paramsJSON: action.paramsJSON)
             let result = await self.handleInvoke(req)
             self.pendingActionLogger.info(
-                "Pending action replay trigger=\(trigger, privacy: .public) "
-                    + "id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) "
-                    + "ok=\(result.ok, privacy: .public)")
+                "Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
             guard result.ok else { return }
             let acked = await self.ackPendingForegroundNodeAction(
                 id: action.id,
@@ -2297,9 +2303,7 @@ extension NodeAppModel {
             return true
         } catch {
             self.pendingActionLogger.error(
-                "Pending action ack failed trigger=\(trigger, privacy: .public) "
-                    + "id=\(id, privacy: .public) command=\(command, privacy: .public) "
-                    + "error=\(String(describing: error), privacy: .public)")
+                "Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
             return false
         }
     }

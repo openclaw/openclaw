@@ -173,7 +173,12 @@ export {
   WEBHOOK_IN_FLIGHT_DEFAULTS,
 } from "./webhook-request-guards.js";
 export type { WebhookBodyReadProfile, WebhookInFlightLimiter } from "./webhook-request-guards.js";
-export { keepHttpServerTaskAlive, waitUntilAbort } from "./channel-lifecycle.js";
+export {
+  createAccountStatusSink,
+  keepHttpServerTaskAlive,
+  runPassiveAccountLifecycle,
+  waitUntilAbort,
+} from "./channel-lifecycle.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -198,11 +203,17 @@ export { createPluginRuntimeStore } from "./runtime-store.js";
 export { createScopedChannelConfigBase } from "./channel-config-helpers.js";
 export {
   AllowFromEntrySchema,
+  AllowFromListSchema,
+  buildNestedDmConfigSchema,
   buildCatchallMultiAccountChannelSchema,
 } from "../channels/plugins/config-schema.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
-export { resolveAllowlistMatchByCandidates } from "../channels/allowlist-match.js";
+export {
+  compileAllowlist,
+  resolveAllowlistCandidates,
+  resolveAllowlistMatchByCandidates,
+} from "../channels/allowlist-match.js";
 export type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -390,6 +401,7 @@ export {
   formatTrimmedAllowFromEntries,
   mapAllowFromEntries,
   resolveOptionalConfigString,
+  createScopedDmSecurityResolver,
   formatWhatsAppConfigAllowFromEntries,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
@@ -546,7 +558,9 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export {
   applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
+  patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,

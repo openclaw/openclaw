@@ -16,6 +16,7 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRenderArgs,
+  GatewayServiceRestartResult,
 } from "./service-types.js";
 
 function resolveTaskName(env: GatewayServiceEnv): string {
@@ -316,7 +317,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 export async function restartScheduledTask({
   stdout,
   env,
-}: GatewayServiceControlArgs): Promise<void> {
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
   await execSchtasks(["/End", "/TN", taskName]);
@@ -325,6 +326,7 @@ export async function restartScheduledTask({
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
   }
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
+  return { outcome: "completed" };
 }
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {

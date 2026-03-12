@@ -277,7 +277,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload) => {
         if (
           payload &&
           typeof payload === "object" &&
@@ -298,7 +298,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             );
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
+        return originalOnPayload?.(payload, model);
       },
     });
   };

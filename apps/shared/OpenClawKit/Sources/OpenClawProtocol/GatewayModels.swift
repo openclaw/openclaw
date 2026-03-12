@@ -538,8 +538,6 @@ public struct AgentParams: Codable, Sendable {
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
-    public let spawnedby: String?
-    public let workspacedir: String?
 
     public init(
         message: String,
@@ -566,9 +564,7 @@ public struct AgentParams: Codable, Sendable {
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
-        label: String?,
-        spawnedby: String?,
-        workspacedir: String?)
+        label: String?)
     {
         self.message = message
         self.agentid = agentid
@@ -595,8 +591,6 @@ public struct AgentParams: Codable, Sendable {
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
-        self.spawnedby = spawnedby
-        self.workspacedir = workspacedir
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -625,8 +619,6 @@ public struct AgentParams: Codable, Sendable {
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
-        case spawnedby = "spawnedBy"
-        case workspacedir = "workspaceDir"
     }
 }
 
@@ -1336,7 +1328,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let spawnedworkspacedir: AnyCodable?
     public let spawndepth: AnyCodable?
+    public let subagentrole: AnyCodable?
+    public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1354,7 +1349,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
+        spawnedworkspacedir: AnyCodable?,
         spawndepth: AnyCodable?,
+        subagentrole: AnyCodable?,
+        subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
@@ -1371,7 +1369,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.spawnedworkspacedir = spawnedworkspacedir
         self.spawndepth = spawndepth
+        self.subagentrole = subagentrole
+        self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -1390,7 +1391,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawndepth = "spawnDepth"
+        case subagentrole = "subagentRole"
+        case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
@@ -3046,7 +3050,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
-    public let command: String
+    public let command: String?
     public let commandargv: [String]?
     public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
@@ -3067,7 +3071,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 
     public init(
         id: String?,
-        command: String,
+        command: String?,
         commandargv: [String]?,
         systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,

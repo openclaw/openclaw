@@ -522,10 +522,21 @@
               "apiKey": {
                 "type": "string"
               },
+              "baseUrl": {
+                "type": "string"
+              },
               "model": {
                 "type": "string"
               },
               "voice": {
+                "type": "string"
+              },
+              "speed": {
+                "type": "number",
+                "minimum": 0.25,
+                "maximum": 4.0
+              },
+              "instructions": {
                 "type": "string"
               }
             }

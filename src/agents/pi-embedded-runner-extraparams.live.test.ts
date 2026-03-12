@@ -101,7 +101,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
     oneByOneRedPngBase64: string;
     includeImage?: boolean;
     prompt: string;
-    onPayload?: (payload: Record<string, unknown>, model: Model<"google-generative-ai">) => void;
+    onPayload?: (payload: Record<string, unknown>) => void;
   }): Promise<{ sawDone: boolean; stopReason?: string; errorMessage?: string }> {
     const userContent: Array<
       { type: "text"; text: string } | { type: "image"; mimeType: string; data: string }
@@ -129,11 +129,8 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
         apiKey: params.apiKey,
         reasoning: "high",
         maxTokens: 64,
-        onPayload: (payload, streamModel) => {
-          params.onPayload?.(
-            payload as Record<string, unknown>,
-            streamModel as Model<"google-generative-ai">,
-          );
+        onPayload: (payload) => {
+          params.onPayload?.(payload as Record<string, unknown>);
         },
       },
     );
