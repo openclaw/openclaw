@@ -798,9 +798,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.recallBeforeResponse.maxResults":
     "Override how many recalled snippets are injected per turn. Increase for broader policy coverage, or lower to keep prompts tighter.",
   "agents.defaults.memorySearch.recallBeforeResponse.minScore":
-    "Minimum relevance score (0-1) required for recalled snippets before injection. Raise to reduce weak matches, or lower for broader recall.",
+    "Sets the minimum relevance score (0-1) required for recalled snippets before injection. Raise it to reduce weak matches, or lower it for broader recall.",
   "agents.defaults.memorySearch.recallBeforeResponse.maxChars":
-    "Maximum characters injected from runtime recall snippets into system context per turn. Tune this to balance rule coverage vs prompt budget.",
+    "Sets the maximum characters injected from runtime recall snippets into system context per turn. Tune this to balance rule coverage vs prompt budget.",
   "agents.defaults.memorySearch.provider":
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":

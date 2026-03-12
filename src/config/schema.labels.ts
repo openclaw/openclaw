@@ -325,6 +325,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
+  "agents.defaults.memorySearch.recallBeforeResponse": "Recall Before Response",
+  "agents.defaults.memorySearch.recallBeforeResponse.enabled": "Enable Recall Before Response",
+  "agents.defaults.memorySearch.recallBeforeResponse.mode": "Recall Before Response Mode",
+  "agents.defaults.memorySearch.recallBeforeResponse.maxResults":
+    "Recall Before Response Max Results",
+  "agents.defaults.memorySearch.recallBeforeResponse.minScore": "Recall Before Response Min Score",
+  "agents.defaults.memorySearch.recallBeforeResponse.maxChars": "Recall Before Response Max Chars",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
