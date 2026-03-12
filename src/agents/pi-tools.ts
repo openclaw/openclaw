@@ -581,6 +581,7 @@ export function createOpenClawCodingTools(options?: {
               mutationLockingEnabled
                 ? wrapToolMutationLock(memoryFlushWriteTool, sandboxRoot ?? workspaceRoot, {
                     containerWorkdir: sandbox?.containerWorkdir,
+                    bindMounts: sandbox?.docker.binds,
                   })
                 : memoryFlushWriteTool,
             ];

@@ -26,6 +26,7 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { parseSandboxBindMount } from "./sandbox/fs-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -359,7 +360,7 @@ const WORKSPACE_MUTATION_LOCK_TTL_MS = 60_000;
 export function wrapToolMutationLock(
   tool: AnyAgentTool,
   root: string,
-  options?: { containerWorkdir?: string },
+  options?: { containerWorkdir?: string; bindMounts?: string[] },
 ): AnyAgentTool {
   return {
     ...tool,
@@ -377,6 +378,7 @@ export function wrapToolMutationLock(
         filePath: filePathRaw,
         root,
         containerWorkdir: options?.containerWorkdir,
+        bindMounts: options?.bindMounts,
       });
       const lockKey = path.resolve(root, resolvedPath);
       const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
@@ -416,6 +418,7 @@ function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
+  bindMounts?: string[];
 }): string {
   const containerWorkdir = params.containerWorkdir?.trim();
   if (!containerWorkdir) {
@@ -450,6 +453,22 @@ function mapContainerPathToWorkspaceRoot(params: {
   }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
+
+  const bindMatches = (params.bindMounts ?? [])
+    .map((bind) => parseSandboxBindMount(bind))
+    .filter((bind): bind is NonNullable<ReturnType<typeof parseSandboxBindMount>> => !!bind)
+    .toSorted((a, b) => b.containerRoot.length - a.containerRoot.length);
+  for (const bind of bindMatches) {
+    if (normalizedCandidate === bind.containerRoot) {
+      return bind.hostRoot;
+    }
+    const bindPrefix = `${bind.containerRoot}/`;
+    if (normalizedCandidate.startsWith(bindPrefix)) {
+      const relative = normalizedCandidate.slice(bindPrefix.length);
+      return path.resolve(bind.hostRoot, ...relative.split("/").filter(Boolean));
+    }
+  }
+
   if (normalizedCandidate === normalizedWorkdir) {
     return path.resolve(params.root);
   }

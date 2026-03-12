@@ -195,4 +195,50 @@ describe("wrapToolMutationLock", () => {
       "end:same.txt",
     ]);
   });
+
+  it("normalizes extra sandbox bind mount paths into shared lock keys", async () => {
+    const gate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const filePath = typeof record.path === "string" ? record.path : "";
+        events.push(`start:${filePath}`);
+        if (filePath === "/data/shared.txt") {
+          await gate.promise;
+        }
+        events.push(`end:${filePath}`);
+        return textResult(filePath);
+      },
+    };
+
+    const wrapped = wrapToolMutationLock(base, process.cwd(), {
+      containerWorkdir: "/agent",
+      bindMounts: ["/var/shared:/data:rw"],
+    });
+
+    const p1 = wrapped.execute("call-1", { path: "/data/shared.txt", content: "one" });
+    const p2 = wrapped.execute("call-2", {
+      path: "/var/shared/shared.txt",
+      content: "two",
+    });
+
+    await waitUntil(() => {
+      expect(events).toEqual(["start:/data/shared.txt"]);
+    });
+
+    gate.resolve();
+    await Promise.all([p1, p2]);
+    expect(events).toEqual([
+      "start:/data/shared.txt",
+      "end:/data/shared.txt",
+      "start:/var/shared/shared.txt",
+      "end:/var/shared/shared.txt",
+    ]);
+  });
 });

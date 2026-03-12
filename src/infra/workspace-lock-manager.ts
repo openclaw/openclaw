@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
@@ -46,25 +47,6 @@ function lockMapKey(kind: WorkspaceLockKind, normalizedTarget: string): string {
   return `${kind}:${normalizedTarget}`;
 }
 
-async function findNearestExistingDirectory(startDir: string): Promise<string> {
-  let current = path.resolve(startDir);
-  while (true) {
-    try {
-      const stat = await fs.stat(current);
-      if (stat.isDirectory()) {
-        return await fs.realpath(current).catch(() => current);
-      }
-    } catch {
-      // continue walking upwards
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return current;
-    }
-    current = parent;
-  }
-}
-
 async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind): Promise<string> {
   const resolved = path.resolve(targetPath);
   if (kind === "file") {
@@ -85,10 +67,7 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
 }
 
 async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): Promise<string> {
-  const lockBaseDir =
-    kind === "dir"
-      ? normalizedTarget
-      : await findNearestExistingDirectory(path.dirname(normalizedTarget));
+  const lockBaseDir = kind === "dir" ? normalizedTarget : path.join(os.tmpdir(), "openclaw");
   const lockDir = path.join(lockBaseDir, ".openclaw.workspace-locks");
   const digest = createHash("sha256")
     .update(`${kind}:${normalizedTarget}`)

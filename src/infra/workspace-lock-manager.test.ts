@@ -24,7 +24,7 @@ async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promi
           path.basename(resolved),
         );
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
-  const lockBaseDir = kind === "dir" ? normalized : path.dirname(normalized);
+  const lockBaseDir = kind === "dir" ? normalized : path.join(os.tmpdir(), "openclaw");
   return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
 }
 
@@ -338,6 +338,32 @@ describe("workspace lock manager", () => {
 
     await expect(fs.stat(missingParent)).rejects.toThrow();
     await lock.release();
+  });
+
+  it("keeps file lock path stable when parent directories appear later", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "new", "nested", "state.json");
+
+    const lockA = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+
+    const lockB = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    expect(lockA.lockPath).toBe(lockB.lockPath);
+
+    await lockB.release();
+    await lockA.release();
   });
 
   it("backs off when stale lock deletion fails", async () => {
