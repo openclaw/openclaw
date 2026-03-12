@@ -21,7 +21,6 @@ import {
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
-  shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
@@ -38,6 +37,50 @@ import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+/**
+ * Maximum number of retries for the same candidate on transient errors
+ * (e.g. HTTP 408 timeout, 429 rate-limit, 502/503/504 server errors)
+ * before falling over to the next candidate.
+ */
+const DEFAULT_TRANSIENT_RETRY_COUNT = 2;
+
+/** Backoff delays (ms) for successive transient retries on the same candidate. */
+const TRANSIENT_RETRY_BACKOFF_MS = [1_000, 2_000];
+
+/**
+ * Classify whether a failover reason represents a transient (retryable on
+ * same model) error vs. a permanent error that should immediately failover.
+ *
+ * Transient: timeout, rate_limit, overloaded, unknown
+ * Permanent: auth, auth_permanent, billing, format, model_not_found, session_expired
+ */
+function isTransientFailoverReason(reason: FailoverReason | null | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+  switch (reason) {
+    case "timeout":
+    case "rate_limit":
+    case "overloaded":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolveTransientRetryDelay(retryIndex: number): number {
+  return (
+    TRANSIENT_RETRY_BACKOFF_MS[retryIndex] ??
+    TRANSIENT_RETRY_BACKOFF_MS[TRANSIENT_RETRY_BACKOFF_MS.length - 1] ??
+    2_000
+  );
+}
+
+/** @internal – holder object so tests can override _sleep via the exported reference */
+export const _testHooks = {
+  sleep: (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)),
+};
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
@@ -412,6 +455,13 @@ function shouldProbePrimaryDuringCooldown(params: {
 }
 
 /** @internal – exposed for unit tests only */
+export const _transientRetryInternals = {
+  DEFAULT_TRANSIENT_RETRY_COUNT,
+  TRANSIENT_RETRY_BACKOFF_MS,
+  isTransientFailoverReason,
+} as const;
+
+/** @internal – exposed for unit tests only */
 export const _probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
@@ -521,6 +571,12 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /**
+   * Maximum number of retries on the same candidate for transient errors
+   * (timeout, rate-limit, overloaded) before falling over to the next
+   * candidate. Defaults to 2. Set to 0 to disable transient retries.
+   */
+  transientRetries?: number;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
@@ -655,101 +711,133 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const attemptRun = await runFallbackAttempt({
-      run: params.run,
-      ...candidate,
-      attempts,
-      options: runOptions,
-    });
-    if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+    const maxTransientRetries = params.transientRetries ?? DEFAULT_TRANSIENT_RETRY_COUNT;
+    let candidateSucceeded = false;
+    for (let retryAttempt = 0; retryAttempt <= maxTransientRetries; retryAttempt += 1) {
+      const attemptRun = await runFallbackAttempt({
+        run: params.run,
+        ...candidate,
+        attempts,
+        options: runOptions,
+      });
+      if ("success" in attemptRun) {
+        if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+          logModelFallbackDecision({
+            decision: "candidate_succeeded",
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            previousAttempts: attempts,
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+          });
+        }
+        const notFoundAttempt =
+          i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+        if (notFoundAttempt) {
+          log.warn(
+            `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+          );
+        }
+        candidateSucceeded = true;
+        return attemptRun.success;
+      }
+      const err = attemptRun.error;
+      {
+        if (transientProbeProviderForAttempt) {
+          const probeFailureReason = describeFailoverError(err).reason;
+          const shouldPreserveTransientProbeSlot =
+            probeFailureReason === "model_not_found" ||
+            probeFailureReason === "format" ||
+            probeFailureReason === "auth" ||
+            probeFailureReason === "auth_permanent" ||
+            probeFailureReason === "session_expired";
+          if (!shouldPreserveTransientProbeSlot) {
+            cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
+          }
+        }
+        // Context overflow errors should be handled by the inner runner's
+        // compaction/retry logic, not by model fallback.  If one escapes as a
+        // throw, rethrow it immediately rather than trying a different model
+        // that may have a smaller context window and fail worse.
+        const errMessage = err instanceof Error ? err.message : String(err);
+        if (isLikelyContextOverflowError(errMessage)) {
+          throw err;
+        }
+        const normalized =
+          coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err;
+
+        // Check if this is a transient error that should be retried on the same candidate.
+        // Only retry if we haven't exhausted our retry budget for this candidate.
+        const errorReason = describeFailoverError(normalized).reason ?? null;
+        if (
+          isTransientFailoverReason(errorReason) &&
+          retryAttempt < maxTransientRetries &&
+          hasFallbackCandidates
+        ) {
+          const delayMs = resolveTransientRetryDelay(retryAttempt);
+          log.info(
+            `Transient error (${errorReason}) on ${candidate.provider}/${candidate.model}, retrying in ${delayMs}ms (attempt ${retryAttempt + 1}/${maxTransientRetries})`,
+          );
+          await _testHooks.sleep(delayMs);
+          continue;
+        }
+
+        // Even unrecognized errors should not abort the fallback loop when
+        // there are remaining candidates.  Only abort/context-overflow errors
+        // (handled above) are truly non-retryable.
+        const isKnownFailover = isFailoverError(normalized);
+        if (!isKnownFailover && i === candidates.length - 1) {
+          throw err;
+        }
+
+        lastError = isKnownFailover ? normalized : err;
+        const described = describeFailoverError(normalized);
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: described.message,
+          reason: described.reason ?? "unknown",
+          status: described.status,
+          code: described.code,
+        });
         logModelFallbackDecision({
-          decision: "candidate_succeeded",
+          decision: "candidate_failed",
           runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
           candidate,
           attempt: i + 1,
           total: candidates.length,
-          previousAttempts: attempts,
+          reason: described.reason,
+          status: described.status,
+          code: described.code,
+          error: described.message,
+          nextCandidate: candidates[i + 1],
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
         });
-      }
-      const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-      if (notFoundAttempt) {
-        log.warn(
-          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-        );
-      }
-      return attemptRun.success;
-    }
-    const err = attemptRun.error;
-    {
-      if (transientProbeProviderForAttempt) {
-        const probeFailureReason = describeFailoverError(err).reason;
-        if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
-          cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
-        }
-      }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
-      }
-      const normalized =
-        coerceToFailoverError(err, {
+        await params.onError?.({
           provider: candidate.provider,
           model: candidate.model,
-        }) ?? err;
-
-      // Even unrecognized errors should not abort the fallback loop when
-      // there are remaining candidates.  Only abort/context-overflow errors
-      // (handled above) are truly non-retryable.
-      const isKnownFailover = isFailoverError(normalized);
-      if (!isKnownFailover && i === candidates.length - 1) {
-        throw err;
+          error: isKnownFailover ? normalized : err,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+        // Break out of retry loop — either permanent error or retries exhausted.
+        break;
       }
-
-      lastError = isKnownFailover ? normalized : err;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason ?? "unknown",
-        status: described.status,
-        code: described.code,
-      });
-      logModelFallbackDecision({
-        decision: "candidate_failed",
-        runId: params.runId,
-        requestedProvider: params.provider,
-        requestedModel: params.model,
-        candidate,
-        attempt: i + 1,
-        total: candidates.length,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-        error: described.message,
-        nextCandidate: candidates[i + 1],
-        isPrimary,
-        requestedModelMatched: requestedModel,
-        fallbackConfigured: hasFallbackCandidates,
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: isKnownFailover ? normalized : err,
-        attempt: i + 1,
-        total: candidates.length,
-      });
+    } // end transient retry loop
+    if (candidateSucceeded) {
+      break;
     }
   }
 
