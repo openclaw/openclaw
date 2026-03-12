@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BILLING_ERROR_USER_MESSAGE } from "../../agents/pi-embedded-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -10,7 +11,6 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-e
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/pi-embedded-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
