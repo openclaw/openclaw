@@ -102,6 +102,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "puter",
+    label: "puter.com",
+    hint: "Web login or API key",
+    choices: ["puter-web", "puter-api-key"],
+  },
+  {
     value: "kilocode",
     label: "Kilo Gateway",
     hint: "API key (OpenRouter-compatible)",
@@ -239,6 +245,15 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "OpenAI Codex (ChatGPT OAuth)",
   },
   { value: "chutes", label: "Chutes (OAuth)" },
+  {
+    value: "puter-web",
+    label: "puter.com web login",
+    hint: "Open browser, sign in, then paste API key",
+  },
+  {
+    value: "puter-api-key",
+    label: "puter.com API key",
+  },
   {
     value: "vllm",
     label: "vLLM (custom URL + model)",

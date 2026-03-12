@@ -13,6 +13,8 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   chutes: "chutes",
   "openai-api-key": "openai",
   "openrouter-api-key": "openrouter",
+  "puter-web": "puter",
+  "puter-api-key": "puter",
   "kilocode-api-key": "kilocode",
   "ai-gateway-api-key": "vercel-ai-gateway",
   "cloudflare-ai-gateway-api-key": "cloudflare-ai-gateway",

@@ -380,6 +380,18 @@ export async function setOpenrouterApiKey(
   });
 }
 
+export async function setPuterApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "puter:default",
+    credential: buildApiKeyCredential("puter", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setCloudflareAiGatewayConfig(
   accountId: string,
   gatewayId: string,

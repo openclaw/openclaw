@@ -1,3 +1,4 @@
+import http from "node:http";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
@@ -38,6 +39,8 @@ import {
   applyOpencodeGoProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyPuterConfig,
+  applyPuterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyTogetherConfig,
@@ -56,6 +59,7 @@ import {
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  PUTER_DEFAULT_MODEL_ID,
   MISTRAL_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -72,6 +76,7 @@ import {
   setMoonshotApiKey,
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
+  setPuterApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
@@ -86,6 +91,7 @@ import {
   applyModelStudioProviderConfigCn,
   setModelStudioApiKey,
 } from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
@@ -111,7 +117,171 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  puter: "puter-api-key",
 };
+
+const PUTER_WEB_ORIGIN = "https://puter.com";
+const PUTER_AUTH_TIMEOUT_MS = 120_000;
+const PUTER_MODELS_ENDPOINT = "https://api.puter.com/puterai/chat/models";
+const PUTER_MODEL_PICKER_DEFAULT = "__default__";
+const PUTER_MODEL_PICKER_MANUAL = "__manual__";
+
+async function getPuterAuthToken(params: {
+  guiOrigin?: string;
+  prompter: ApplyAuthChoiceParams["prompter"];
+}): Promise<string | undefined> {
+  const guiOrigin = params.guiOrigin?.trim() || PUTER_WEB_ORIGIN;
+  return await new Promise((resolve) => {
+    let finished = false;
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = (token?: string) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (server.listening) {
+        server.close(() => resolve(token));
+      } else {
+        resolve(token);
+      }
+    };
+
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost/");
+      const token = url.searchParams.get("token")?.trim() || undefined;
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Puter login complete</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#404C71;color:#1a1a2e;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif}.card{background:#fff;padding:24px 28px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.22);max-width:420px}.title{margin:0 0 8px;font-size:20px}.sub{margin:0;color:#64748b}</style></head><body><div class="card"><h1 class="title">Authentication Successful</h1><p class="sub">You may close this tab and return to your terminal.</p></div></body></html>',
+      );
+      finish(token);
+    });
+
+    server.listen(0, "127.0.0.1", async () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        finish(undefined);
+        return;
+      }
+
+      timeout = setTimeout(() => finish(undefined), PUTER_AUTH_TIMEOUT_MS);
+      const redirectUrl = `http://127.0.0.1:${address.port}`;
+      const authUrl = `${guiOrigin}/?action=authme&redirectURL=${encodeURIComponent(redirectUrl)}`;
+      const opened = await openUrl(authUrl);
+      if (!opened) {
+        await params.prompter.note(
+          ["Open this URL to complete Puter login:", authUrl].join("\n"),
+          "Puter web login",
+        );
+      }
+    });
+  });
+}
+
+function normalizePuterModelIds(models: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const model of models) {
+    const trimmed = model.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function extractPuterModelId(entry: unknown): string | null {
+  if (typeof entry === "string") {
+    return entry.trim() || null;
+  }
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const record = entry as Record<string, unknown>;
+  for (const key of ["id", "model", "name"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+async function fetchPuterModelIds(apiKey?: string): Promise<string[]> {
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) {
+    headers.Authorization = `Bearer ${apiKey.trim()}`;
+  }
+  try {
+    const response = await fetch(PUTER_MODELS_ENDPOINT, {
+      headers,
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as unknown;
+    let entries: unknown[] = [];
+    if (Array.isArray(payload)) {
+      entries = payload;
+    } else if (payload && typeof payload === "object") {
+      const record = payload as Record<string, unknown>;
+      if (Array.isArray(record.data)) {
+        entries = record.data;
+      } else if (Array.isArray(record.models)) {
+        entries = record.models;
+      }
+    }
+    return normalizePuterModelIds(
+      entries
+        .map((entry) => extractPuterModelId(entry))
+        .filter((value): value is string => Boolean(value)),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function resolvePuterModelId(params: {
+  apiKey?: string;
+  prompter: ApplyAuthChoiceParams["prompter"];
+}): Promise<string> {
+  const progress = params.prompter.progress("Fetching Puter models...");
+  const models = await fetchPuterModelIds(params.apiKey);
+  progress.stop();
+
+  if (models.length === 0) {
+    return PUTER_DEFAULT_MODEL_ID;
+  }
+
+  const filtered = models.filter((model) => model !== PUTER_DEFAULT_MODEL_ID);
+  const selection = await params.prompter.select({
+    message: "Select Puter model",
+    initialValue: PUTER_MODEL_PICKER_DEFAULT,
+    options: [
+      { value: PUTER_MODEL_PICKER_DEFAULT, label: `Default (${PUTER_DEFAULT_MODEL_ID})` },
+      { value: PUTER_MODEL_PICKER_MANUAL, label: "Enter model manually" },
+      ...filtered.map((model) => ({ value: model, label: model })),
+    ],
+  });
+
+  if (selection === PUTER_MODEL_PICKER_DEFAULT) {
+    return PUTER_DEFAULT_MODEL_ID;
+  }
+  if (selection === PUTER_MODEL_PICKER_MANUAL) {
+    const manual = await params.prompter.text({
+      message: "Puter model id",
+      initialValue: PUTER_DEFAULT_MODEL_ID,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    return manual.trim() || PUTER_DEFAULT_MODEL_ID;
+  }
+  return selection.trim() || PUTER_DEFAULT_MODEL_ID;
+}
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
   Record<AuthChoice, "global" | "cn" | "coding-global" | "coding-cn">
@@ -524,6 +694,59 @@ export async function applyAuthChoiceApiProviders(
       applyDefaultConfig: applyLitellmConfig,
       applyProviderConfig: applyLitellmProviderConfig,
       noteDefault: LITELLM_DEFAULT_MODEL_REF,
+    });
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "puter-web" || authChoice === "puter-api-key") {
+    let resolvedApiKey: string | undefined;
+    if (authChoice === "puter-web") {
+      const token = await getPuterAuthToken({ prompter: params.prompter });
+      if (token?.trim()) {
+        resolvedApiKey = normalizeApiKeyInput(token);
+        await setPuterApiKey(resolvedApiKey, params.agentDir, {
+          secretInputMode: requestedSecretInputMode,
+        });
+      } else {
+        await params.prompter.note(
+          "Puter web login did not return a token. Falling back to API key entry.",
+          "Puter web login",
+        );
+      }
+    }
+    if (!resolvedApiKey) {
+      resolvedApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
+        token: params.opts?.token,
+        provider: "puter",
+        tokenProvider: normalizedTokenProvider,
+        secretInputMode: requestedSecretInputMode,
+        config: nextConfig,
+        expectedProviders: ["puter"],
+        envLabel: "PUTER_API_KEY",
+        promptMessage: "Enter Puter API key (https://puter.com/?action=copyauth)",
+        normalize: normalizeApiKeyInput,
+        validate: validateApiKeyInput,
+        prompter: params.prompter,
+        setCredential: async (apiKey, mode) =>
+          setPuterApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+      });
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "puter:default",
+      provider: "puter",
+      mode: "api_key",
+    });
+    const puterModelId = await resolvePuterModelId({
+      apiKey: resolvedApiKey,
+      prompter: params.prompter,
+    });
+    const puterModelRef = `puter/${puterModelId}`;
+    await applyProviderDefaultModel({
+      defaultModel: puterModelRef,
+      applyDefaultConfig: (config) => applyPuterConfig(config, puterModelId),
+      applyProviderConfig: (config) => applyPuterProviderConfig(config, puterModelId),
+      noteDefault: puterModelRef,
     });
     return { config: nextConfig, agentModelOverride };
   }

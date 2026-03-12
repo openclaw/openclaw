@@ -245,7 +245,6 @@ describe("fetchBrowserJson loopback auth", () => {
     const thrown = await fetchBrowserJson<{ ok: boolean }>("http://example.com/").catch(
       (err: unknown) => err,
     );
-
     expect(thrown).toBeInstanceOf(Error);
     if (!(thrown instanceof Error)) {
       throw new Error(`Expected Error, got ${String(thrown)}`);

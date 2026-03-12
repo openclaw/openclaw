@@ -1089,6 +1089,8 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
+    authChoice === "puter-web" ||
+    authChoice === "puter-api-key" ||
     authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-portal"
