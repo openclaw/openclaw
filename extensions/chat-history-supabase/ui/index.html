@@ -768,9 +768,7 @@
           renderChatLoading(chatId);
           showInputBar(chatId);
 
-          if (!allMessages[chatId]) {
-            await loadMessages(chatId);
-          }
+          await loadMessages(chatId);
           renderChat(chatId);
         }
 
