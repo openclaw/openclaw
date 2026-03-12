@@ -434,7 +434,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "image":
         return "[Image]";
       case "file":
-        return `[File: ${parsed.file_name || "unknown"}]`;
+        return `[File: ${decodeRfc5987Filename(parsed.file_name) || "unknown"}]`;
       case "audio":
         return "[Audio]";
       case "video":
@@ -507,6 +507,17 @@ function normalizeFeishuCommandProbeBody(text: string): string {
 }
 
 /**
+ * Decode RFC 5987 encoded filename (e.g., filename*=UTF-8''%E7%A4%BA%E4%BE%8B.pdf -> 测试.pdf)
+ */
+function decodeRfc5987Filename(filename: string | undefined): string {
+  if (!filename) return "";
+  if (filename.startsWith("filename*=UTF-8''")) {
+    return decodeURIComponent(filename.replace("filename*=UTF-8''", ""));
+  }
+  return filename;
+}
+
+/**
  * Parse media keys from message content based on message type.
  */
 function parseMediaKeys(
@@ -525,7 +536,7 @@ function parseMediaKeys(
       case "image":
         return { imageKey };
       case "file":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName: decodeRfc5987Filename(parsed.file_name) };
       case "audio":
         return { fileKey };
       case "video":
