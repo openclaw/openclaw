@@ -27,6 +27,13 @@ private func bridgeToLocal(_ value: ProtocolAnyCodable?) -> AnyCodable? {
     value.map(bridgeToLocal)
 }
 
+func onboardingGatewayReadyFailureDescription(status: GatewayProcessManager.Status) -> String {
+    if case let .failed(message) = status {
+        return message
+    }
+    return "Gateway did not become ready. Check that it is running."
+}
+
 @MainActor
 @Observable
 final class OnboardingWizardModel {
@@ -83,7 +90,8 @@ final class OnboardingWizardModel {
                 throw NSError(
                     domain: "Gateway",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Gateway did not become ready. Check that it is running."])
+                    userInfo: [NSLocalizedDescriptionKey: onboardingGatewayReadyFailureDescription(
+                        status: GatewayProcessManager.shared.status)])
             }
             var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
             if let workspace, !workspace.isEmpty {
