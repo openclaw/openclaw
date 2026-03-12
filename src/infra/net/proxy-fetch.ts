@@ -46,9 +46,19 @@ function normalizeNoProxyEntry(entry: string): NoProxyEntry | null {
   return { pattern: value };
 }
 
+function resolveNoProxyValue(env: NodeJS.ProcessEnv): string {
+  if (typeof env.no_proxy === "string") {
+    return env.no_proxy;
+  }
+  if (typeof env.NO_PROXY === "string") {
+    return env.NO_PROXY;
+  }
+  return "";
+}
+
 function getNoProxyEntries(env: NodeJS.ProcessEnv): NoProxyEntry[] {
-  return [env.NO_PROXY, env.no_proxy]
-    .flatMap((value) => String(value ?? "").split(","))
+  return resolveNoProxyValue(env)
+    .split(",")
     .map(normalizeNoProxyEntry)
     .filter((entry): entry is NoProxyEntry => Boolean(entry));
 }

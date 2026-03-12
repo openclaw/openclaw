@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const ORIGINAL_NO_PROXY = process.env.NO_PROXY;
+const ORIGINAL_no_proxy = process.env.no_proxy;
+
 const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, getLastAgent } =
   vi.hoisted(() => {
     const undiciFetch = vi.fn();
@@ -60,8 +63,24 @@ describe("makeProxyFetch", () => {
 });
 
 describe("resolveProxyFetchFromEnv", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (ORIGINAL_NO_PROXY === undefined) {
+      delete process.env.NO_PROXY;
+    } else {
+      process.env.NO_PROXY = ORIGINAL_NO_PROXY;
+    }
+    if (ORIGINAL_no_proxy === undefined) {
+      delete process.env.no_proxy;
+    } else {
+      process.env.no_proxy = ORIGINAL_no_proxy;
+    }
+  });
 
   it("returns undefined when no proxy env vars are set", () => {
     vi.stubEnv("HTTPS_PROXY", "");
@@ -80,6 +99,15 @@ describe("resolveProxyFetchFromEnv", () => {
       resolveProxyFetchFromEnv("http://172.31.0.14:9001/v1/audio/transcriptions"),
     ).toBeUndefined();
     expect(envAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses lowercase no_proxy in preference to NO_PROXY", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "example.internal");
+    vi.stubEnv("no_proxy", "");
+
+    expect(resolveProxyFetchFromEnv("http://example.internal:9001/v1/models")).toBeDefined();
+    expect(envAgentSpy).toHaveBeenCalled();
   });
 
   it("returns undefined for IPv6 loopback targets", () => {
