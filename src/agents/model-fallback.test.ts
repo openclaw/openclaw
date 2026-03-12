@@ -2,14 +2,20 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { FailoverError } from "./failover-error.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  runWithImageModelFallback,
+  runWithModelFallback,
+  _transientRetryInternals,
+  _testHooks,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -81,6 +87,7 @@ async function expectFallsBackToHaiku(params: {
     cfg,
     provider: params.provider,
     model: params.model,
+    transientRetries: 0,
     run,
   });
 
@@ -333,6 +340,7 @@ describe("runWithModelFallback", () => {
       cfg,
       provider: "anthropic",
       model: "claude-haiku-3-5",
+      transientRetries: 0,
       run,
     });
 
@@ -752,6 +760,7 @@ describe("runWithModelFallback", () => {
       cfg,
       provider: "anthropic",
       model: "claude-sonnet-4",
+      transientRetries: 0,
       run,
     });
 
@@ -987,6 +996,7 @@ describe("runWithModelFallback", () => {
       cfg,
       provider: "openrouter",
       model: "meta-llama/llama-3.3-70b:free",
+      transientRetries: 0,
       run,
     });
 
@@ -1019,6 +1029,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-sonnet-4-20250514", // Different from config primary
+        transientRetries: 0,
         run,
       });
 
@@ -1049,6 +1060,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-opus-4-5", // Version difference from config
+        transientRetries: 0,
         run,
       });
 
@@ -1109,6 +1121,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-opus-4-6", // Exact match
+        transientRetries: 0,
         run,
       });
 
@@ -1307,6 +1320,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-opus-4-6",
+        transientRetries: 0,
         run,
         agentDir: tmpDir,
       });
@@ -1345,6 +1359,7 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-opus-4-6",
+        transientRetries: 0,
         run,
         agentDir: dir,
       });
@@ -1397,6 +1412,271 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
         allowTransientCooldownProbe: true,
       });
+    });
+  });
+
+  describe("transient error retry before failover", () => {
+    const originalSleep = _testHooks.sleep;
+    const sleepCalls: number[] = [];
+    beforeEach(() => {
+      sleepCalls.length = 0;
+      _testHooks.sleep = async (ms: number) => {
+        sleepCalls.push(ms);
+      };
+    });
+    afterEach(() => {
+      _testHooks.sleep = originalSleep;
+    });
+
+    it("retries same model on HTTP 408 timeout and succeeds on 2nd attempt", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("LLM request timed out", { reason: "timeout", status: 408 }),
+        )
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      // Should retry same model, not fall to the next candidate
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("gpt-4.1-mini");
+    });
+
+    it("retries same model on HTTP 429 rate limit and succeeds", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("Rate limit exceeded", { reason: "rate_limit", status: 429 }),
+        )
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["openai", "gpt-4.1-mini"]);
+    });
+
+    it("retries same model on HTTP 503 overloaded and succeeds", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("Service overloaded", { reason: "overloaded", status: 503 }),
+        )
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["openai", "gpt-4.1-mini"]);
+    });
+
+    it("exhausts transient retries then falls to next candidate", async () => {
+      const cfg = makeCfg();
+      const timeoutErr = new FailoverError("LLM request timed out", {
+        reason: "timeout",
+        status: 408,
+      });
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(timeoutErr) // 1st attempt
+        .mockRejectedValueOnce(timeoutErr) // 1st retry
+        .mockRejectedValueOnce(timeoutErr) // 2nd retry (exhausted)
+        .mockResolvedValueOnce("fallback ok"); // fallback candidate
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      // 3 attempts on primary (1 + 2 retries), then 1 on fallback
+      expect(run).toHaveBeenCalledTimes(4);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[2]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[3]).toEqual(["anthropic", "claude-haiku-3-5"]);
+      expect(result.provider).toBe("anthropic");
+      expect(result.model).toBe("claude-haiku-3-5");
+    });
+
+    it("does not retry on permanent error (401 auth)", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("Invalid API key", { reason: "auth", status: 401 }),
+        )
+        .mockResolvedValueOnce("fallback ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      // Should NOT retry — immediate failover
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    });
+
+    it("does not retry on permanent error (404 model not found)", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("Model not found", { reason: "model_not_found", status: 404 }),
+        )
+        .mockResolvedValueOnce("fallback ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    });
+
+    it("does not retry on format errors (400)", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("Invalid request format", { reason: "format", status: 400 }),
+        )
+        .mockResolvedValueOnce("fallback ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 2,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("respects transientRetries: 0 to disable retries", async () => {
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError("LLM request timed out", { reason: "timeout", status: 408 }),
+        )
+        .mockResolvedValueOnce("fallback ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        transientRetries: 0,
+        run,
+      });
+
+      expect(result.result).toBe("fallback ok");
+      // With retries disabled, should immediately fall to next candidate
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[0]).toEqual(["openai", "gpt-4.1-mini"]);
+      expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    });
+
+    it("uses default retry count when transientRetries is not specified", async () => {
+      expect(_transientRetryInternals.DEFAULT_TRANSIENT_RETRY_COUNT).toBe(2);
+    });
+
+    it("does not retry transient errors when there are no fallback candidates", async () => {
+      // Single model, no fallbacks — transient retry only applies when fallbacks exist
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4.1-mini",
+              fallbacks: [],
+            },
+          },
+        },
+      });
+      const timeoutErr = new FailoverError("LLM request timed out", {
+        reason: "timeout",
+        status: 408,
+      });
+      const run = vi.fn().mockRejectedValueOnce(timeoutErr);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          transientRetries: 2,
+          run,
+        }),
+      ).rejects.toThrow("LLM request timed out");
+
+      // Only 1 attempt — no retries when there are no fallback candidates
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("classifies timeout, rate_limit, and overloaded as transient", () => {
+      const { isTransientFailoverReason } = _transientRetryInternals;
+      expect(isTransientFailoverReason("timeout")).toBe(true);
+      expect(isTransientFailoverReason("rate_limit")).toBe(true);
+      expect(isTransientFailoverReason("overloaded")).toBe(true);
+    });
+
+    it("classifies auth, format, model_not_found, billing as non-transient", () => {
+      const { isTransientFailoverReason } = _transientRetryInternals;
+      expect(isTransientFailoverReason("auth")).toBe(false);
+      expect(isTransientFailoverReason("auth_permanent")).toBe(false);
+      expect(isTransientFailoverReason("format")).toBe(false);
+      expect(isTransientFailoverReason("model_not_found")).toBe(false);
+      expect(isTransientFailoverReason("billing")).toBe(false);
+      expect(isTransientFailoverReason("session_expired")).toBe(false);
+      expect(isTransientFailoverReason(null)).toBe(false);
+      expect(isTransientFailoverReason(undefined)).toBe(false);
     });
   });
 });
