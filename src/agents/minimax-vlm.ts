@@ -91,29 +91,30 @@ export async function minimaxUnderstandImage(params: {
   } catch (err) {
     throw new Error(
       `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 
   const traceId = res.headers.get("Trace-Id") ?? "";
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+    throw new Error(
+      `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+        body ? ` Body: ${body.slice(0, 400)}` : ""
+      }`,
+    );
+  }
+
   let json: unknown;
   try {
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-      throw new Error(
-        `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
-          body ? ` Body: ${body.slice(0, 400)}` : ""
-        }`,
-      );
-    }
-
-    json = (await res.json().catch(() => null)) as unknown;
+    json = await res.json();
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("MiniMax VLM request failed")) {
-      throw err;
-    }
+    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(
-      `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}`,
+      `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}.${trace}`,
+      { cause: err },
     );
   }
   if (!isRecord(json)) {
