@@ -674,14 +674,18 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        const isInternalBackendClient = shouldSkipBackendSelfPairing({
+          connectParams,
+          isLocalClient,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
+        // auth.mode=none disables all authentication — device pairing is an
+        // auth mechanism and must also be skipped when the operator opted out.
         const skipPairing =
-          shouldSkipBackendSelfPairing({
-            connectParams,
-            isLocalClient,
-            hasBrowserOriginHeader,
-            sharedAuthOk,
-            authMethod,
-          }) ||
+          resolvedAuth.mode === "none" ||
+          isInternalBackendClient ||
           shouldSkipControlUiPairing(
             controlUiAuthPolicy,
             role,
@@ -990,9 +994,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
-          isInternalBackendClient:
-            connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-            connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND,
+          isInternalBackendClient,
         };
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);
