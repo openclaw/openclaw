@@ -379,6 +379,9 @@ final class GatewayProcessManager {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !self.desiredActive { return false }
+            // Startup can fail before readiness polling begins (for example missing CLI).
+            // Return immediately so callers can surface the concrete failure reason.
+            if case .failed = self.status { return false }
             do {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 self.clearLastFailure()
@@ -419,6 +422,10 @@ final class GatewayProcessManager {
 extension GatewayProcessManager {
     func setTestingConnection(_ connection: GatewayConnection?) {
         self.testingConnection = connection
+    }
+
+    func setTestingStatus(_ status: Status) {
+        self.status = status
     }
 
     func setTestingDesiredActive(_ active: Bool) {
