@@ -180,4 +180,83 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
+
+  it("staggers Discord account connections when connectStagger is configured", async () => {
+    const startTimes: number[] = [];
+    const startAccount = vi.fn(async () => {
+      startTimes.push(Date.now());
+    });
+
+    const testPlugin = createTestPlugin({ startAccount });
+    // Override listAccountIds to return multiple accounts
+    testPlugin.config.listAccountIds = () => ["bot1", "bot2", "bot3"];
+
+    installTestRegistry(testPlugin);
+
+    // Configure connectStagger
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {
+            connectStagger: 2000,
+          },
+        },
+      }),
+    });
+
+    const startTime = Date.now();
+    await manager.startChannels();
+
+    expect(startAccount).toHaveBeenCalledTimes(3);
+    expect(startTimes).toHaveLength(3);
+
+    // Verify connections were staggered
+    const firstDelay = startTimes[1]! - startTimes[0]!;
+    const secondDelay = startTimes[2]! - startTimes[1]!;
+
+    // Allow some tolerance for timing
+    expect(firstDelay).toBeGreaterThanOrEqual(1900);
+    expect(firstDelay).toBeLessThan(2200);
+    expect(secondDelay).toBeGreaterThanOrEqual(1900);
+    expect(secondDelay).toBeLessThan(2200);
+
+    // Total time should be at least 4000ms (2 staggers * 2000ms)
+    const totalTime = Date.now() - startTime;
+    expect(totalTime).toBeGreaterThanOrEqual(3800);
+  });
+
+  it("connects concurrently when connectStagger is 0 or not configured", async () => {
+    const startTimes: number[] = [];
+    const startAccount = vi.fn(async () => {
+      startTimes.push(Date.now());
+      // Add a small delay to ensure we can measure concurrency
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+
+    const testPlugin = createTestPlugin({ startAccount });
+    testPlugin.config.listAccountIds = () => ["bot1", "bot2", "bot3"];
+
+    installTestRegistry(testPlugin);
+
+    const manager = createManager({
+      loadConfig: () => ({
+        channels: {
+          discord: {},
+        },
+      }),
+    });
+
+    const startTime = Date.now();
+    await manager.startChannels();
+
+    expect(startAccount).toHaveBeenCalledTimes(3);
+
+    // All connections should start nearly simultaneously
+    const maxSpread = Math.max(...startTimes) - Math.min(...startTimes);
+    expect(maxSpread).toBeLessThan(100); // Allow for some timing variance
+
+    // Total time should be close to 100ms (the artificial delay), not 300ms
+    const totalTime = Date.now() - startTime;
+    expect(totalTime).toBeLessThan(200);
+  });
 });

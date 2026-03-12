@@ -363,4 +363,10 @@ export type DiscordConfig = {
   accounts?: Record<string, DiscordAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
+  /**
+   * Delay (in milliseconds) between sequential Discord bot connections at gateway startup.
+   * Default: 0 (all bots connect simultaneously).
+   * Recommended: 2000 for deployments with 5+ bot accounts to avoid Discord API rate limits.
+   */
+  connectStagger?: number;
 } & DiscordAccountConfig;
