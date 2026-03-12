@@ -23,6 +23,7 @@ function createRequest(params?: {
   authorization?: string;
   remoteAddress?: string;
   url?: string;
+  headers?: Record<string, string>;
 }): IncomingMessage {
   return createGatewayRequest({
     method: "POST",
@@ -30,6 +31,7 @@ function createRequest(params?: {
     host: "127.0.0.1:18789",
     authorization: params?.authorization ?? "Bearer hook-secret",
     remoteAddress: params?.remoteAddress,
+    headers: params?.headers,
   });
 }
 
@@ -52,6 +54,7 @@ function createHandler(params?: {
   dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
   dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
   bindHost?: string;
+  getClientIpConfig?: HooksHandlerDeps["getClientIpConfig"];
 }) {
   return createHooksRequestHandler({
     getHooksConfig: () => createHooksConfig(),
@@ -63,6 +66,7 @@ function createHandler(params?: {
       info: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<typeof createSubsystemLogger>,
+    getClientIpConfig: params?.getClientIpConfig,
     dispatchWakeHook:
       params?.dispatchWakeHook ??
       ((() => {
@@ -118,6 +122,36 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
     expect(handled).toBe(true);
     expect(mappedRes.statusCode).toBe(429);
+    expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
+  });
+
+  test("uses trusted proxy forwarded client ip for hook auth throttling", async () => {
+    const handler = createHandler({
+      getClientIpConfig: () => ({ trustedProxies: ["10.0.0.1"] }),
+    });
+
+    for (let i = 0; i < 20; i++) {
+      const req = createRequest({
+        authorization: "Bearer wrong",
+        remoteAddress: "10.0.0.1",
+        headers: { "x-forwarded-for": "1.2.3.4" },
+      });
+      const { res } = createResponse();
+      const handled = await handler(req, res);
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+    }
+
+    const forwardedReq = createRequest({
+      authorization: "Bearer wrong",
+      remoteAddress: "10.0.0.1",
+      headers: { "x-forwarded-for": "1.2.3.4, 10.0.0.1" },
+    });
+    const { res: forwardedRes, setHeader } = createResponse();
+    const handled = await handler(forwardedReq, forwardedRes);
+
+    expect(handled).toBe(true);
+    expect(forwardedRes.statusCode).toBe(429);
     expect(setHeader).toHaveBeenCalledWith("Retry-After", expect.any(String));
   });
 

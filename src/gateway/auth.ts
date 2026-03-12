@@ -105,7 +105,7 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   });
 }
 
-function resolveRequestClientIp(
+export function resolveRequestClientIp(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,
