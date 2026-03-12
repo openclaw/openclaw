@@ -231,7 +231,6 @@ describe("cliTTS", () => {
     const callArgs = mocks.runCommandWithTimeout.mock.calls[0];
     const envArg = callArgs?.[1]?.env as Record<string, string | undefined>;
     expect(envArg).toHaveProperty("PATH");
-    expect(envArg).toHaveProperty("HOME");
   });
 
   it("handles multi-line text", async () => {

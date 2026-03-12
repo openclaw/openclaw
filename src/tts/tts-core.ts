@@ -11,7 +11,6 @@ import {
 } from "../agents/model-selection.js";
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type {
@@ -714,18 +713,19 @@ export async function cliTTS(params: {
 }): Promise<void> {
   const { text, outputPath, config, outputFormat, timeoutMs } = params;
 
-  const templateCtx = {
+  const TTS_TEMPLATE_VARS: Record<string, string> = {
     TtsText: text,
     TtsOutputPath: outputPath,
     TtsOutputFormat: outputFormat,
   };
+  const resolvedArgs = (config.args ?? []).map((arg) =>
+    arg.replace(/{{\s*(\w+)\s*}}/g, (match, key) => TTS_TEMPLATE_VARS[key] ?? match),
+  );
   const env = {
     ...process.env,
     TTS_OUTPUT_PATH: outputPath,
     TTS_OUTPUT_FORMAT: outputFormat,
   };
-
-  const resolvedArgs = (config.args ?? []).map((arg) => applyTemplate(arg, templateCtx));
 
   const result = await runCommandWithTimeout([config.command, ...resolvedArgs], { timeoutMs, env });
 

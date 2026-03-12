@@ -692,7 +692,11 @@ export async function textToSpeech(params: {
             timeoutMs: config.timeoutMs,
           });
         } catch (err) {
-          scheduleCleanup(tempDir);
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
           throw err;
         }
 
@@ -842,7 +846,11 @@ export async function textToSpeechTelephony(params: {
             sampleRate: sampleRate,
           };
         } catch (err) {
-          scheduleCleanup(tempDir);
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
           throw err;
         }
       }

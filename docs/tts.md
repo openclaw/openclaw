@@ -272,6 +272,7 @@ Then run:
 - `edge.timeoutMs`: request timeout override (ms).
 - `cli.command`: CLI binary path or name (searched in PATH).
 - `cli.args`: CLI arguments with template variables (`{{TtsText}}`, `{{TtsOutputPath}}`, `{{TtsOutputFormat}}`).
+- `cli.sampleRate`: PCM sample rate (Hz) produced by the CLI command for telephony paths (default: `22050`). Must match the actual output of your CLI tool when used in voice-call integrations.
 
 ## Model-driven overrides (default on)
 
