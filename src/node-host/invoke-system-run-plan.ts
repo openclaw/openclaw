@@ -278,7 +278,7 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
 }
 
 function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const executable = normalizePackageManagerExecToken(argv[0] ?? "");
   switch (executable) {
     case "npm":
       return unwrapNpmExecInvocation(argv);
@@ -292,6 +292,14 @@ function unwrapKnownPackageManagerExecInvocation(argv: string[]): string[] | nul
   }
 }
 
+function normalizePackageManagerExecToken(token: string): string {
+  const normalized = normalizeExecutableToken(token);
+  if (!normalized) {
+    return normalized;
+  }
+  return normalized.replace(/\.(?:c|m)?js$/i, "");
+}
+
 function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
   let idx = 1;
   while (idx < argv.length) {
@@ -300,8 +308,16 @@ function unwrapPnpmExecInvocation(argv: string[]): string[] | null {
       idx += 1;
       continue;
     }
+    if (token === "--") {
+      idx += 1;
+      continue;
+    }
     if (!token.startsWith("-")) {
-      return token === "exec" && idx + 1 < argv.length ? argv.slice(idx + 1) : null;
+      if (token !== "exec" || idx + 1 >= argv.length) {
+        return null;
+      }
+      const tail = argv.slice(idx + 1);
+      return tail[0] === "--" ? (tail.length > 1 ? tail.slice(1) : null) : tail;
     }
     if ((token === "-C" || token === "--dir" || token === "--filter") && !token.includes("=")) {
       idx += 2;
