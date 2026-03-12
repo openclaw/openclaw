@@ -335,7 +335,6 @@ describe("subagent announce formatting", () => {
       expect(params.deliver).toBe(true);
       expect(params.channel).toBe("feishu");
       expect(params.to).toBe("ou_test");
-
     } finally {
       setActivePluginRegistry(prevRegistry);
     }
