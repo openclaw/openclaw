@@ -1425,6 +1425,7 @@ export async function runEmbeddedAttempt(
 
     // Only inject workspace bootstrap files on the first message of a session.
     // Continuation messages already have them in context, saving ~35k tokens.
+    // Check once and reuse as `hadSessionFile` near the SessionManager.open() call.
     const isFirstMessage = !(await fs
       .stat(params.sessionFile)
       .then(() => true)
@@ -1724,10 +1725,7 @@ export async function runEmbeddedAttempt(
         sessionFile: params.sessionFile,
         warn: (message) => log.warn(message),
       });
-      const hadSessionFile = await fs
-        .stat(params.sessionFile)
-        .then(() => true)
-        .catch(() => false);
+      const hadSessionFile = !isFirstMessage;
 
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: params.model?.api,
