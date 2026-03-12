@@ -401,6 +401,41 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockClear();
   });
 
+  it("preserves the requester channel when injecting into another session", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-sessions-send" };
+      }
+      return { status: "timeout" };
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-channel-preserve", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    const agentCall = callGatewayMock.mock.calls
+      .map((call) => call[0] as { method?: string } | undefined)
+      .find((call) => call?.method === "agent");
+    expect(agentCall).toMatchObject({
+      method: "agent",
+      params: expect.objectContaining({
+        channel: MAIN_AGENT_CHANNEL,
+        inputProvenance: expect.objectContaining({
+          sourceChannel: MAIN_AGENT_CHANNEL,
+          sourceTool: "sessions_send",
+        }),
+      }),
+    });
+  });
+
   it("returns an error when neither sessionKey nor label is provided", async () => {
     const tool = createMainSessionsSendTool();
 
