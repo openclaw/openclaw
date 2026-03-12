@@ -182,6 +182,11 @@ let globalWatchdog: AgentWatchdog | undefined;
 export function getGlobalWatchdog(config?: WatchdogConfig): AgentWatchdog {
   if (!globalWatchdog) {
     globalWatchdog = new AgentWatchdog(config);
+  } else if (config !== undefined) {
+    // Warn if config is provided but singleton already exists
+    console.warn(
+      "[AgentWatchdog] getGlobalWatchdog: config ignored - singleton already initialized. Use stopGlobalWatchdog() first to reconfigure.",
+    );
   }
   return globalWatchdog;
 }
@@ -194,5 +199,7 @@ export function startGlobalWatchdog(config?: WatchdogConfig): void {
 export function stopGlobalWatchdog(): void {
   if (globalWatchdog) {
     globalWatchdog.stop();
+    // Clear the agent map to avoid stale state on restart
+    globalWatchdog = undefined;
   }
 }

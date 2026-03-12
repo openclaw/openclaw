@@ -176,5 +176,26 @@ describe("AgentWatchdog", () => {
       const wd2 = getGlobalWatchdog();
       expect(wd1).toBe(wd2);
     });
+
+    it("warns when config is provided but singleton exists", () => {
+      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      getGlobalWatchdog({ stalledThresholdMs: 30000 });
+      getGlobalWatchdog({ stalledThresholdMs: 60000 });
+
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe("stopGlobalWatchdog", () => {
+    it("resets singleton so new instance is created on next call", () => {
+      const wd1 = getGlobalWatchdog();
+      stopGlobalWatchdog();
+      const wd2 = getGlobalWatchdog();
+
+      // Should be a new instance, not the same one
+      expect(wd1).not.toBe(wd2);
+    });
   });
 });
