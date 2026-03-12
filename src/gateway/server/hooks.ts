@@ -108,6 +108,13 @@ export function createGatewayHooksRequestHandler(params: {
     bindHost,
     port,
     logHooks,
+    getClientIpConfig: () => {
+      const cfg = loadConfig();
+      return {
+        trustedProxies: cfg.gateway?.trustedProxies,
+        allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
+      };
+    },
     dispatchAgentHook,
     dispatchWakeHook,
   });
