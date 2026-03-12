@@ -79,7 +79,7 @@ export function createOpenClawTools(
      */
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
-    onYield?: () => void;
+    onYield?: (message: string) => Promise<void> | void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);

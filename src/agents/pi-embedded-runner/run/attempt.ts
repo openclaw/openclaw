@@ -148,6 +148,184 @@ type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
+const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
+
+// Persist a hidden context reminder so the next turn knows why the runner stopped.
+function buildSessionsYieldContextMessage(message: string): string {
+  return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
+}
+
+// Return a synthetic aborted response so pi-agent-core unwinds without a real provider call.
+function createYieldAbortedResponse(model: { api?: string; provider?: string; id?: string }): {
+  [Symbol.asyncIterator]: () => AsyncGenerator<never, void, unknown>;
+  result: () => Promise<{
+    role: "assistant";
+    content: Array<{ type: "text"; text: string }>;
+    stopReason: "aborted";
+    api: string;
+    provider: string;
+    model: string;
+    usage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      totalTokens: number;
+      cost: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+    };
+    timestamp: number;
+  }>;
+} {
+  const message = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "" }],
+    stopReason: "aborted" as const,
+    api: model.api ?? "",
+    provider: model.provider ?? "",
+    model: model.id ?? "",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    timestamp: Date.now(),
+  };
+  return {
+    async *[Symbol.asyncIterator]() {},
+    result: async () => message,
+  };
+}
+
+// Queue a hidden steering message so pi-agent-core skips any remaining tool calls.
+function queueSessionsYieldInterruptMessage(activeSession: {
+  agent: { steer: (message: AgentMessage) => void };
+}) {
+  activeSession.agent.steer({
+    role: "custom",
+    customType: SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE,
+    content: "[sessions_yield interrupt]",
+    display: false,
+    details: { source: "sessions_yield" },
+    timestamp: Date.now(),
+  });
+}
+
+// Append the caller-provided yield payload as a hidden session message once the run is idle.
+async function persistSessionsYieldContextMessage(
+  activeSession: {
+    sendCustomMessage: (
+      message: {
+        customType: string;
+        content: string;
+        display: boolean;
+        details?: Record<string, unknown>;
+      },
+      options?: { triggerTurn?: boolean },
+    ) => Promise<void>;
+  },
+  message: string,
+) {
+  await activeSession.sendCustomMessage(
+    {
+      customType: SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE,
+      content: buildSessionsYieldContextMessage(message),
+      display: false,
+      details: { source: "sessions_yield", message },
+    },
+    { triggerTurn: false },
+  );
+}
+
+// Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+function stripSessionsYieldArtifacts(activeSession: {
+  messages: AgentMessage[];
+  agent: { replaceMessages: (messages: AgentMessage[]) => void };
+  sessionManager?: {
+    fileEntries?: Array<{
+      type?: string;
+      id?: string;
+      parentId?: string | null;
+      message?: { role?: string; stopReason?: string };
+      customType?: string;
+    }>;
+    byId?: Map<string, { id: string }>;
+    leafId?: string | null;
+    _rewriteFile?: () => void;
+  };
+}) {
+  const strippedMessages = activeSession.messages.slice();
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as
+      | AgentMessage
+      | { role?: string; customType?: string; stopReason?: string };
+    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
+      strippedMessages.pop();
+      continue;
+    }
+    if (
+      last?.role === "custom" &&
+      "customType" in last &&
+      last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+    ) {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
+  }
+  if (strippedMessages.length !== activeSession.messages.length) {
+    activeSession.agent.replaceMessages(strippedMessages);
+  }
+
+  const sessionManager = activeSession.sessionManager;
+  const fileEntries = sessionManager?.fileEntries;
+  const byId = sessionManager?.byId;
+  if (!fileEntries || !byId) {
+    return;
+  }
+
+  let changed = false;
+  while (fileEntries.length > 1) {
+    const last = fileEntries.at(-1);
+    if (!last || last.type === "session") {
+      break;
+    }
+    const isYieldAbortAssistant =
+      last.type === "message" &&
+      last.message?.role === "assistant" &&
+      last.message?.stopReason === "aborted";
+    const isYieldInterruptMessage =
+      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
+      break;
+    }
+    fileEntries.pop();
+    if (last.id) {
+      byId.delete(last.id);
+    }
+    sessionManager.leafId = last.parentId ?? null;
+    changed = true;
+  }
+  if (changed) {
+    sessionManager._rewriteFile?.();
+  }
+}
+
 export function isOllamaCompatProvider(model: {
   provider?: string;
   baseUrl?: string;
@@ -1123,8 +1301,10 @@ export async function runEmbeddedAttempt(
     });
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
+    let yieldMessage: string | null = null;
     // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
+    let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
@@ -1170,8 +1350,10 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
-          onYield: () => {
+          onYield: (message) => {
             yieldDetected = true;
+            yieldMessage = message;
+            queueYieldInterruptForSession?.();
             runAbortController.abort("sessions_yield");
             abortSessionForYield?.();
           },
@@ -1488,6 +1670,9 @@ export async function runEmbeddedAttempt(
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
+      queueYieldInterruptForSession = () => {
+        queueSessionsYieldInterruptMessage(activeSession);
+      };
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1658,6 +1843,15 @@ export async function runEmbeddedAttempt(
           return inner(model, nextContext as typeof context, options);
         };
       }
+
+      const innerStreamFn = activeSession.agent.streamFn;
+      activeSession.agent.streamFn = (model, context, options) => {
+        const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
+          return createYieldAbortedResponse(model) as Awaited<ReturnType<typeof innerStreamFn>>;
+        }
+        return innerStreamFn(model, context, options);
+      };
 
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
@@ -2103,6 +2297,10 @@ export async function runEmbeddedAttempt(
             if (yieldAbortSettled) {
               // eslint-disable-next-line @typescript-eslint/await-thenable -- abort() returns Promise<void> per AgentSession.d.ts
               await yieldAbortSettled;
+            }
+            stripSessionsYieldArtifacts(activeSession);
+            if (yieldMessage) {
+              await persistSessionsYieldContextMessage(activeSession, yieldMessage);
             }
           } else {
             promptError = err;

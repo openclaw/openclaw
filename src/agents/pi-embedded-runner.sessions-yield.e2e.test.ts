@@ -32,11 +32,10 @@ function createMockUsage(input: number, output: number) {
   };
 }
 
-// Track call sequence to return tool_use first, then stop.
 let streamCallCount = 0;
-// When true, the first LLM response includes two tool calls: sessions_yield + read.
-// This tests that the abort prevents the second tool from executing.
 let multiToolMode = false;
+let responsePlan: Array<"toolUse" | "stop"> = [];
+let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
@@ -96,21 +95,27 @@ vi.mock("@mariozechner/pi-ai", async () => {
     ...actual,
     complete: async (model: { api: string; provider: string; id: string }) => {
       streamCallCount++;
-      return streamCallCount === 1 ? buildToolUseMessage(model) : buildStopMessage(model);
+      const next = responsePlan.shift() ?? "stop";
+      return next === "toolUse" ? buildToolUseMessage(model) : buildStopMessage(model);
     },
     completeSimple: async (model: { api: string; provider: string; id: string }) => {
       streamCallCount++;
-      return streamCallCount === 1 ? buildToolUseMessage(model) : buildStopMessage(model);
+      const next = responsePlan.shift() ?? "stop";
+      return next === "toolUse" ? buildToolUseMessage(model) : buildStopMessage(model);
     },
-    streamSimple: (model: { api: string; provider: string; id: string }) => {
+    streamSimple: (
+      model: { api: string; provider: string; id: string },
+      context: { messages?: Array<{ role?: string; content?: unknown }> },
+    ) => {
       streamCallCount++;
-      const isFirstCall = streamCallCount === 1;
-      const message = isFirstCall ? buildToolUseMessage(model) : buildStopMessage(model);
+      observedContexts.push((context.messages ?? []).map((message) => ({ ...message })));
+      const next = responsePlan.shift() ?? "stop";
+      const message = next === "toolUse" ? buildToolUseMessage(model) : buildStopMessage(model);
       const stream = actual.createAssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({
           type: "done",
-          reason: isFirstCall ? "toolUse" : "stop",
+          reason: next === "toolUse" ? "toolUse" : "stop",
           message,
         });
         stream.end();
@@ -128,6 +133,8 @@ let workspaceDir: string;
 beforeAll(async () => {
   vi.useRealTimers();
   streamCallCount = 0;
+  responsePlan = [];
+  observedContexts = [];
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-yield-e2e-"));
   agentDir = path.join(tempRoot, "agent");
@@ -181,13 +188,20 @@ const readSessionMessages = async (sessionFile: string) => {
     .map((entry) => entry.message) as Array<{ role?: string; content?: unknown }>;
 };
 
+const readSessionEntries = async (sessionFile: string) =>
+  (await fs.readFile(sessionFile, "utf-8"))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
 describe("sessions_yield e2e", () => {
   it(
-    "parent session is idle after yield — full path through attempt",
+    "parent session is idle after yield and preserves the follow-up payload",
     { timeout: 15_000 },
     async () => {
-      // Reset call counter so first call returns tool_use
       streamCallCount = 0;
+      responsePlan = ["toolUse"];
+      observedContexts = [];
 
       const sessionId = "yield-e2e-parent";
       const sessionFile = path.join(workspaceDir, "session-yield-e2e.jsonl");
@@ -220,19 +234,15 @@ describe("sessions_yield e2e", () => {
       // 4. Steer would fail — session not in ACTIVE_EMBEDDED_RUNS
       expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
 
-      // 5. The mock LLM was called twice (tool_use + stop)
-      expect(streamCallCount).toBe(2);
+      // 5. The yield stops at tool time — there is no second provider call.
+      expect(streamCallCount).toBe(1);
 
-      // 6. Session transcript contains the yield tool call and result
+      // 6. Session transcript contains only the original assistant tool call.
       const messages = await readSessionMessages(sessionFile);
       const roles = messages.map((m) => m?.role);
-      // Expect: user → assistant (tool_use) → [tool_result] → assistant (stop)
-      // The session file records user + assistant messages; tool results may be
-      // embedded as a separate role.
       expect(roles).toContain("user");
-      expect(roles.filter((r) => r === "assistant").length).toBeGreaterThanOrEqual(2);
+      expect(roles.filter((r) => r === "assistant")).toHaveLength(1);
 
-      // The first assistant message should contain the sessions_yield tool call
       const firstAssistant = messages.find((m) => m?.role === "assistant");
       const content = firstAssistant?.content;
       expect(Array.isArray(content)).toBe(true);
@@ -240,6 +250,46 @@ describe("sessions_yield e2e", () => {
         (c) => c.type === "toolCall" && c.name === "sessions_yield",
       );
       expect(toolCall).toBeDefined();
+
+      const entries = await readSessionEntries(sessionFile);
+      const yieldContext = entries.find(
+        (entry) =>
+          entry.type === "custom_message" && entry.customType === "openclaw.sessions_yield",
+      );
+      expect(yieldContext).toMatchObject({
+        content: expect.stringContaining("Yielding turn."),
+      });
+
+      streamCallCount = 0;
+      responsePlan = ["stop"];
+      observedContexts = [];
+      await runEmbeddedPiAgent({
+        sessionId,
+        sessionKey: "agent:test:yield-e2e",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "Subagent finished with the requested result.",
+        provider: "openai",
+        model: "mock-yield",
+        timeoutMs: 10_000,
+        agentDir,
+        runId: "run-yield-e2e-2",
+        enqueue: immediateEnqueue,
+      });
+
+      const resumeContext = observedContexts[0] ?? [];
+      const resumeTexts = resumeContext.flatMap((message) =>
+        Array.isArray(message.content)
+          ? (message.content as Array<{ type?: string; text?: string }>)
+              .filter((part) => part.type === "text" && typeof part.text === "string")
+              .map((part) => part.text ?? "")
+          : [],
+      );
+      expect(resumeTexts.some((text) => text.includes("Yielding turn."))).toBe(true);
+      expect(
+        resumeTexts.some((text) => text.includes("Subagent finished with the requested result.")),
+      ).toBe(true);
     },
   );
 
@@ -247,10 +297,10 @@ describe("sessions_yield e2e", () => {
     "abort prevents subsequent tool calls from executing after yield",
     { timeout: 15_000 },
     async () => {
-      // Enable multi-tool mode: LLM returns [sessions_yield, read] in one response.
-      // The abort should fire after yield, preventing read from executing.
       streamCallCount = 0;
       multiToolMode = true;
+      responsePlan = ["toolUse"];
+      observedContexts = [];
 
       const sessionId = "yield-e2e-abort";
       const sessionFile = path.join(workspaceDir, "session-yield-abort.jsonl");
@@ -274,13 +324,13 @@ describe("sessions_yield e2e", () => {
       // Reset for other tests
       multiToolMode = false;
 
-      // 1. Run completed with end_turn despite the second tool call
+      // 1. Run completed with end_turn despite the extra queued tool call
       expect(result.meta.stopReason).toBe("end_turn");
 
       // 2. Session is idle
       expect(isEmbeddedPiRunActive(sessionId)).toBe(false);
 
-      // 3. LLM was only called ONCE — abort prevented the post-tool model call
+      // 3. The yield prevented a post-tool provider call.
       expect(streamCallCount).toBe(1);
 
       // 4. Transcript should contain sessions_yield but NOT a successful read result
