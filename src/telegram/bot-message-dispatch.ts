@@ -717,7 +717,10 @@ export const dispatchTelegramMessage = async ({
           ? () => statusReactionController.setCompacting()
           : undefined,
         onCompactionEnd: statusReactionController
-          ? () => statusReactionController.setThinking()
+          ? async () => {
+              statusReactionController.cancelPending();
+              await statusReactionController.setThinking();
+            }
           : undefined,
         onModelSelected,
       },

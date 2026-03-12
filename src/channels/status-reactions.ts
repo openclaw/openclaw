@@ -40,6 +40,8 @@ export type StatusReactionController = {
   setThinking: () => Promise<void> | void;
   setTool: (toolName?: string) => Promise<void> | void;
   setCompacting: () => Promise<void> | void;
+  /** Cancel any pending debounced emoji (useful before forcing a state transition). */
+  cancelPending: () => void;
   setDone: () => Promise<void>;
   setError: () => Promise<void>;
   clear: () => Promise<void>;
@@ -314,6 +316,11 @@ export function createStatusReactionController(params: {
     scheduleEmoji(emojis.compacting);
   }
 
+  function cancelPending(): void {
+    clearDebounceTimer();
+    pendingEmoji = "";
+  }
+
   function finishWithEmoji(emoji: string): Promise<void> {
     if (!enabled) {
       return Promise.resolve();
@@ -384,6 +391,7 @@ export function createStatusReactionController(params: {
     setThinking,
     setTool,
     setCompacting,
+    cancelPending,
     setDone,
     setError,
     clear,
