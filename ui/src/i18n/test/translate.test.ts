@@ -92,6 +92,22 @@ describe("i18n", () => {
     expect(fresh.t("common.health")).toBe("健康状况");
   });
 
+  it("notifies subscribers when loadLocale resolves to default locale", () => {
+    const subscriber = vi.fn();
+    translate.i18n.subscribe(subscriber);
+    subscriber.mockClear();
+
+    // No saved locale — resolves to DEFAULT_LOCALE
+    localStorage.clear();
+    const internal = translate.i18n as unknown as { loadLocale: () => void };
+    // NOTE: loadLocale() is private and only called from the constructor; we invoke
+    // it directly here to simulate a re-initialisation after subscribing, since the
+    // constructor fires synchronously before any subscriber can register in production.
+    internal.loadLocale();
+
+    expect(subscriber).toHaveBeenCalledWith("en");
+  });
+
   it("keeps the version label available in shipped locales", () => {
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
