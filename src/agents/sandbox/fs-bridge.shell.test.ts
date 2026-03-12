@@ -129,6 +129,10 @@ describe("sandbox fs bridge shell compatibility", () => {
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });
 
     const scripts = getScriptsFromCalls();
+    expect(scripts.some((script) => script.includes("python3 - \"$@\" <<'PY'"))).toBe(false);
+    expect(scripts.some((script) => script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'"))).toBe(
+      true,
+    );
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
     expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
     expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);

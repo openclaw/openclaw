@@ -37,12 +37,15 @@ export interface UsageInfo {
   total_tokens: number;
 }
 
+export type OpenAIResponsesAssistantPhase = "commentary" | "final_answer";
+
 export type OutputItem =
   | {
       type: "message";
       id: string;
       role: "assistant";
       content: Array<{ type: "output_text"; text: string }>;
+      phase?: OpenAIResponsesAssistantPhase;
       status?: "in_progress" | "completed";
     }
   | {
@@ -190,6 +193,7 @@ export type InputItem =
       type: "message";
       role: "system" | "developer" | "user" | "assistant";
       content: string | ContentPart[];
+      phase?: OpenAIResponsesAssistantPhase;
     }
   | { type: "function_call"; id?: string; call_id?: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string }
@@ -204,11 +208,10 @@ export type ToolChoice =
 
 export interface FunctionToolDefinition {
   type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
 }
 
 /** Standard response.create event payload (full turn) */
