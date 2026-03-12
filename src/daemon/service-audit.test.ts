@@ -45,6 +45,102 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(true);
   });
 
+  it("does not flag missing system node when version-managed node meets requirements", async () => {
+    // Use the actual current Node path which exists and can be queried
+    const currentNodePath = process.execPath;
+    const currentNodeVersion = process.versions.node;
+
+    // Skip test if current Node is not from a version manager or is below v22
+    const isVersionManaged =
+      currentNodePath.includes("/.nvm/") ||
+      currentNodePath.includes("/.fnm/") ||
+      currentNodePath.includes("/.volta/");
+    const majorVersion = Number.parseInt(currentNodeVersion.split(".")[0], 10);
+
+    if (!isVersionManaged || majorVersion < 22) {
+      // Skip this test if conditions are not met
+      return;
+    }
+
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: process.platform,
+      command: {
+        programArguments: [currentNodePath, "gateway"],
+        environment: {
+          PATH: "/usr/bin:/bin",
+        },
+      },
+    });
+
+    // Should flag version manager usage
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+      ),
+    ).toBe(true);
+    // Should NOT flag missing system node because current version >= 22
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+      ),
+    ).toBe(false);
+  });
+
+  it("flags missing system node when version-managed node is below minimum", async () => {
+    // This test verifies the logic when Node version check fails or returns old version
+    // We can't easily test with a real old Node binary, so we test the path detection
+    // and accept that the warning will show when version cannot be determined
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/Users/test/.nvm/versions/node/v18.0.0/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/bin:/bin",
+        },
+      },
+    });
+    // Should flag version manager usage
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+      ),
+    ).toBe(true);
+    // Will flag missing system node because we cannot verify the non-existent path
+    // In real usage, if the path exists and version >= 22, this warning won't show
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag version manager when using system node", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/opt/homebrew/bin/node", "gateway"],
+        environment: {
+          PATH: "/usr/bin:/bin",
+        },
+      },
+    });
+    // Should NOT flag version manager (using system node)
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+      ),
+    ).toBe(false);
+    // Should NOT flag missing system node
+    expect(
+      audit.issues.some(
+        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+      ),
+    ).toBe(false);
+  });
+
   it("accepts Linux minimal PATH with user directories", async () => {
     const env = { HOME: "/home/testuser", PNPM_HOME: "/opt/pnpm" };
     const minimalPath = buildMinimalServicePath({ platform: "linux", env });

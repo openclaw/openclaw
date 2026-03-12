@@ -1,5 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -9,6 +12,14 @@ import {
 } from "./runtime-paths.js";
 import { getMinimalServicePathPartsFromEnv } from "./service-env.js";
 import { resolveSystemdUserUnitPath } from "./systemd.js";
+
+type ExecFileAsync = (
+  file: string,
+  args: readonly string[],
+  options: { encoding: "utf8" },
+) => Promise<{ stdout: string; stderr: string }>;
+
+const execFileAsync = promisify(execFile) as unknown as ExecFileAsync;
 
 export type GatewayServiceCommand = {
   programArguments: string[];
@@ -324,6 +335,21 @@ function auditGatewayServicePath(
   }
 }
 
+async function resolveNodeVersion(
+  nodePath: string,
+  execFileImpl: ExecFileAsync,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execFileImpl(nodePath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+    const value = stdout.trim();
+    return value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 async function auditGatewayRuntime(
   env: Record<string, string | undefined>,
   command: GatewayServiceCommand,
@@ -356,13 +382,19 @@ async function auditGatewayRuntime(
       detail: execPath,
       level: "recommended",
     });
-    if (!isSystemNodePath(execPath, env, platform)) {
+
+    // Check if current Node version is supported (>= 22)
+    const currentVersion = await resolveNodeVersion(execPath, execFileAsync);
+    const isCurrentVersionSupported = isSupportedNodeVersion(currentVersion);
+
+    // Only warn about missing system Node if current Node version is unsupported
+    // If current Node (even version-managed) meets version requirements, no additional warning needed
+    if (!isSystemNodePath(execPath, env, platform) && !isCurrentVersionSupported) {
       const systemNode = await resolveSystemNodePath(env, platform);
       if (!systemNode) {
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
-          message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+          message: "System Node 22+ not found; install it or upgrade your current Node version.",
           level: "recommended",
         });
       }
