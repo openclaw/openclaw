@@ -75,4 +75,23 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not report legacyPayloadKind issue when kind is already normalized", () => {
+    const jobs = [
+      {
+        id: "already-normalized",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: { kind: "agentTurn", message: "good morning" },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // Should NOT report legacyPayloadKind since kind is already "agentTurn"
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    // Should NOT mutate since everything is already normalized
+    expect(result.mutated).toBe(false);
+    // payload.kind should remain unchanged
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn" });
+  });
 });
