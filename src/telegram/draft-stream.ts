@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -66,6 +67,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** True when a preview sendMessage was attempted but the response was lost. */
+  sendMayHaveLanded?: () => boolean;
 };
 
 type TelegramDraftPreview = {
@@ -126,6 +129,7 @@ export function createTelegramDraftStream(params: {
   }
 
   const streamState = { stopped: false, final: false };
+  let messageSendAttempted = false;
   let streamMessageId: number | undefined;
   let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let previewTransport: "message" | "draft" = usesDraftTransport ? "draft" : "message";
@@ -192,12 +196,24 @@ export function createTelegramDraftStream(params: {
       }
       return true;
     }
-    const { sent } = await sendRenderedMessageWithThreadFallback({
-      renderedText,
-      renderedParseMode,
-      fallbackWarnMessage:
-        "telegram stream preview send failed with message_thread_id, retrying without thread",
-    });
+    messageSendAttempted = true;
+    let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
+    try {
+      ({ sent } = await sendRenderedMessageWithThreadFallback({
+        renderedText,
+        renderedParseMode,
+        fallbackWarnMessage:
+          "telegram stream preview send failed with message_thread_id, retrying without thread",
+      }));
+    } catch (err) {
+      // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
+      // guarantee the message was never delivered — clear the flag so
+      // sendMayHaveLanded() doesn't suppress fallback.
+      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+        messageSendAttempted = false;
+      }
+      throw err;
+    }
     const sentMessageId = sent?.message_id;
     if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
       streamState.stopped = true;
@@ -345,6 +361,7 @@ export function createTelegramDraftStream(params: {
     // Re-open the stream lifecycle for the next assistant segment.
     streamState.final = false;
     generation += 1;
+    messageSendAttempted = false;
     streamMessageId = undefined;
     if (previewTransport === "draft") {
       streamDraftId = allocateTelegramDraftId();
@@ -421,5 +438,6 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }

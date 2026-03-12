@@ -52,7 +52,7 @@ function createSetSessionModeRequest(sessionId: string, modeId: string): SetSess
 function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
-  value: string,
+  value: string | boolean,
 ): SetSessionConfigOptionRequest {
   return {
     sessionId,
@@ -365,6 +365,63 @@ describe("acp session UX bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("falls back to an empty transcript when sessions.get fails during loadSession", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "agent:main:recover",
+              label: "recover",
+              displayName: "Recover session",
+              kind: "direct",
+              updatedAt: 1_710_000_000_000,
+              thinkingLevel: "adaptive",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.get") {
+        throw new Error("sessions.get unavailable");
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.loadSession(createLoadSessionRequest("agent:main:recover"));
+
+    expect(result.modes?.currentModeId).toBe("adaptive");
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:recover",
+      update: expect.objectContaining({
+        sessionUpdate: "available_commands_update",
+      }),
+    });
+    expect(sessionUpdate).not.toHaveBeenCalledWith({
+      sessionId: "agent:main:recover",
+      update: expect.objectContaining({
+        sessionUpdate: "user_message_chunk",
+      }),
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp setSessionMode bridge behavior", () => {
@@ -587,6 +644,55 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("rejects non-string ACP config option values", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "bool-config-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("bool-config-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("bool-config-session", "thought_level", false),
+      ),
+    ).rejects.toThrow(
+      'ACP bridge does not support non-string session config option values for "thought_level".',
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ key: "bool-config-session" }),
+    );
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp tool streaming bridge behavior", () => {
@@ -768,6 +874,61 @@ describe("acp session metadata and usage updates", () => {
         },
       },
     });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("still resolves prompts when snapshot updates fail after completion", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "usage-session",
+              displayName: "Usage session",
+              kind: "direct",
+              updatedAt: 1_710_000_123_000,
+              thinkingLevel: "adaptive",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              totalTokens: 1200,
+              totalTokensFresh: true,
+              contextTokens: 4000,
+            },
+          ],
+        };
+      }
+      if (method === "chat.send") {
+        return new Promise(() => {});
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("usage-session"));
+    sessionUpdate.mockClear();
+    sessionUpdate.mockRejectedValueOnce(new Error("session update transport failed"));
+
+    const promptPromise = agent.prompt(createPromptRequest("usage-session", "hello"));
+    await agent.handleGatewayEvent(createChatFinalEvent("usage-session"));
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    const session = sessionStore.getSession("usage-session");
+    expect(session?.activeRunId).toBeNull();
+    expect(session?.abortController).toBeNull();
 
     sessionStore.clearAllSessionsForTest();
   });

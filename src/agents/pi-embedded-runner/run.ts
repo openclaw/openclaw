@@ -553,7 +553,7 @@ export async function runEmbeddedPiAgent(
             resolveProfilesUnavailableReason({
               store: authStore,
               profileIds,
-            }) ?? "rate_limit"
+            }) ?? "unknown"
           );
         }
         const classified = classifyFailoverReason(params.message);
@@ -669,14 +669,15 @@ export async function runEmbeddedPiAgent(
           ? (resolveProfilesUnavailableReason({
               store: authStore,
               profileIds: autoProfileCandidates,
-            }) ?? "rate_limit")
+            }) ?? "unknown")
           : null;
         const allowTransientCooldownProbe =
           params.allowTransientCooldownProbe === true &&
           allAutoProfilesInCooldown &&
           (unavailableReason === "rate_limit" ||
             unavailableReason === "overloaded" ||
-            unavailableReason === "billing");
+            unavailableReason === "billing" ||
+            unavailableReason === "unknown");
         let didTransientCooldownProbe = false;
 
         while (profileIndex < profileCandidates.length) {
@@ -763,6 +764,7 @@ export async function runEmbeddedPiAgent(
           reason,
           cfg: params.config,
           agentDir,
+          runId: params.runId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -849,6 +851,7 @@ export async function runEmbeddedPiAgent(
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             trigger: params.trigger,
+            memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
             agentAccountId: params.agentAccountId,
@@ -1025,37 +1028,84 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
-              const compactResult = await contextEngine.compact({
-                sessionId: params.sessionId,
-                sessionFile: params.sessionFile,
-                tokenBudget: ctxInfo.tokens,
-                force: true,
-                compactionTarget: "budget",
-                runtimeContext: {
-                  sessionKey: params.sessionKey,
-                  messageChannel: params.messageChannel,
-                  messageProvider: params.messageProvider,
-                  agentAccountId: params.agentAccountId,
-                  authProfileId: lastProfileId,
-                  workspaceDir: resolvedWorkspace,
-                  agentDir,
-                  config: params.config,
-                  skillsSnapshot: params.skillsSnapshot,
-                  senderIsOwner: params.senderIsOwner,
-                  provider,
-                  model: modelId,
-                  runId: params.runId,
-                  thinkLevel,
-                  reasoningLevel: params.reasoningLevel,
-                  bashElevated: params.bashElevated,
-                  extraSystemPrompt: params.extraSystemPrompt,
-                  ownerNumbers: params.ownerNumbers,
-                  trigger: "overflow",
-                  diagId: overflowDiagId,
-                  attempt: overflowCompactionAttempts,
-                  maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
-                },
-              });
+              let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              // When the engine owns compaction, hooks are not fired inside
+              // compactEmbeddedPiSessionDirect (which is bypassed).  Fire them
+              // here so subscribers (memory extensions, usage trackers) are
+              // notified even on overflow-recovery compactions.
+              const overflowEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+              const overflowHookRunner = overflowEngineOwnsCompaction ? hookRunner : null;
+              if (overflowHookRunner?.hasHooks("before_compaction")) {
+                try {
+                  await overflowHookRunner.runBeforeCompaction(
+                    { messageCount: -1, sessionFile: params.sessionFile },
+                    hookCtx,
+                  );
+                } catch (hookErr) {
+                  log.warn(
+                    `before_compaction hook failed during overflow recovery: ${String(hookErr)}`,
+                  );
+                }
+              }
+              try {
+                compactResult = await contextEngine.compact({
+                  sessionId: params.sessionId,
+                  sessionFile: params.sessionFile,
+                  tokenBudget: ctxInfo.tokens,
+                  force: true,
+                  compactionTarget: "budget",
+                  runtimeContext: {
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    authProfileId: lastProfileId,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    provider,
+                    model: modelId,
+                    runId: params.runId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                    trigger: "overflow",
+                    diagId: overflowDiagId,
+                    attempt: overflowCompactionAttempts,
+                    maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
+                  },
+                });
+              } catch (compactErr) {
+                log.warn(
+                  `contextEngine.compact() threw during overflow recovery for ${provider}/${modelId}: ${String(compactErr)}`,
+                );
+                compactResult = { ok: false, compacted: false, reason: String(compactErr) };
+              }
+              if (
+                compactResult.ok &&
+                compactResult.compacted &&
+                overflowHookRunner?.hasHooks("after_compaction")
+              ) {
+                try {
+                  await overflowHookRunner.runAfterCompaction(
+                    {
+                      messageCount: -1,
+                      compactedCount: -1,
+                      tokenCount: compactResult.result?.tokensAfter,
+                      sessionFile: params.sessionFile,
+                    },
+                    hookCtx,
+                  );
+                } catch (hookErr) {
+                  log.warn(
+                    `after_compaction hook failed during overflow recovery: ${String(hookErr)}`,
+                  );
+                }
+              }
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
@@ -1456,6 +1506,7 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1478,6 +1529,7 @@ export async function runEmbeddedPiAgent(
                 systemPromptReport: attempt.systemPromptReport,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
@@ -1525,6 +1577,7 @@ export async function runEmbeddedPiAgent(
                 : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
