@@ -62,7 +62,12 @@ export type ContactLookup = {
 
 export type GhlClient = {
   checkContact: (params: { name: string; email?: string; phone?: string }) => Promise<ContactLookup | null>;
-  createContact: (params: { name: string; email?: string; phone?: string }) => Promise<{ id: string }>;
+  createContact: (params: {
+    name: string;
+    email?: string;
+    phone?: string;
+    locationId: string;
+  }) => Promise<{ id: string }>;
   createOpportunity: (params: {
     contactId: string;
     name: string;

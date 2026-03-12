@@ -93,7 +93,7 @@ export function createGhlClient(env: Env = process.env): GhlClient {
       };
     },
 
-    async createContact({ name, email, phone, locationId }) { {
+    async createContact({ name, email, phone, locationId }) {
       const payload = await requestJson({
         baseUrl,
         apiKey,

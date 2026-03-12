@@ -53,6 +53,7 @@ export async function executeRevenueCommand(
       name: parsed.contactName,
       email: parsed.email,
       phone: parsed.phone,
+      locationId,
     }));
 
   let opportunityId: string | undefined;
