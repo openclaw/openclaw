@@ -61,6 +61,8 @@ export type CronRunOutcome = {
   error?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
+  /** Delivery-specific error text, separate from execution error state. */
+  deliveryError?: string;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -76,6 +78,16 @@ export type CronFailureAlert = {
   /** Account ID for multi-account channel configurations. */
   accountId?: string;
 };
+
+export type CronPacingProviderTarget = "claude" | "codex" | "gemini";
+export type CronPacingRole = "maintenance" | "report" | "review";
+
+export type CronPacingMetadata = {
+  providerTarget?: CronPacingProviderTarget;
+  role?: CronPacingRole;
+};
+
+export type CronPacingPatch = CronPacingMetadata | null;
 
 export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
 
@@ -134,8 +146,12 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
-  /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
+  /** Last failure alert timestamp (ms since epoch) for execution-error cooldown gating. */
   lastFailureAlertAtMs?: number;
+  /** Number of consecutive delivery failures with explicit deliveryError (reset when delivery succeeds or is clean). */
+  consecutiveDeliveryErrors?: number;
+  /** Last delivery-failure alert timestamp (ms since epoch) for cooldown gating. */
+  lastDeliveryFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
@@ -154,6 +170,7 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  pacing?: CronPacingMetadata;
   state: CronJobState;
 };
 
@@ -166,8 +183,11 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
+export type CronJobPatch = Partial<
+  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "pacing">
+> & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  pacing?: CronPacingPatch;
   state?: Partial<CronJobState>;
 };

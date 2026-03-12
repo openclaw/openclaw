@@ -117,6 +117,70 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("alerts after configured consecutive delivery failures and honors cooldown", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: false,
+      deliveryError: "announce failed",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 2,
+          cooldownMs: 60_000,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "delivery alert job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: job.id }),
+        channel: "telegram",
+        to: "19098680",
+        text: expect.stringContaining('Cron job "delivery alert job" delivery failed 2 times'),
+      }),
+    );
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+    expect(sendCronFailureAlert).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining('Cron job "delivery alert job" delivery failed 4 times'),
+      }),
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("supports per-job failure alert override when global alerts are disabled", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);
@@ -198,6 +262,52 @@ describe("CronService failure alerts", () => {
 
     await cron.run(job.id, "force");
     await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("skips delivery failure alerts for best-effort jobs", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: false,
+      deliveryError: "announce failed",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const bestEffortJob = await cron.add({
+      name: "best effort delivery alert job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "19098680",
+        bestEffort: true,
+      },
+    });
+
+    await cron.run(bestEffortJob.id, "force");
+    await cron.run(bestEffortJob.id, "force");
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
 
     cron.stop();

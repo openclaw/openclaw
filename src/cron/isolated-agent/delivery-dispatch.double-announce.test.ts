@@ -255,6 +255,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps execution-success semantics when direct delivery fails after work completed", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("announce failed"));
+
+    const params = makeBaseParams({ synthesizedText: "Briefing ready." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        summary: "Briefing ready.",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "announce failed",
+      }),
+    );
+  });
+
   it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {
     const params = makeBaseParams({
       synthesizedText: "Task done.",

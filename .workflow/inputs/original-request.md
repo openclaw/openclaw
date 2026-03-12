@@ -1,19 +1,23 @@
 # Original Request
 
-**Date:** 2026-03-08
+**Date:** 2026-03-11
 **Source:** Codex session
 **From:** Bryan
 
 ## The Ask
 
-> help me update openclaw with the newest features -
->
-> and fix this inability to read large posts (that have to go to .txt files)
->
-> Bryan Fisher: PastedText.txt Archie Bot: We have a group chat message from Bryan Fisher in group chat #13:fixing: infrastructure-loop > Infrastructure Expansion (Nanochat). There's a pasted file PastedText.txt. The user didn't write any explicit request, but presumably the pasted text contains a request. We need to open the file to see its contents. Archie Bot: Hey Bryan! I see you attached a text file, but I can’t open it directly from here. Could you let me know what you’d like to do with its contents? Feel free to paste the relevant part or describe the task, and I’ll help you out.
+> Zulip no longer needs a bigger fork to get meaningfully closer to Discord. The core primitives are already live in `clawdbot/extensions/zulip`. The next pass should be a targeted plugin hardening pass: durable interactive state, productized exec approvals and model picker UX, topic lifecycle/rebinding, and startup audit/resolution polish.
+
+## Interpreted Scope
+
+- Replace the older Phase 3 framing with a reality-based hardening pass.
+- Keep the work primarily inside `extensions/zulip`.
+- Prioritize reliability and correctness over new capability work.
+- Defer new `lionroot-zulip` fork work unless real usage proves button-first UX is no longer enough.
 
 ## Initial Context
 
-- The core OpenClaw media-understanding pipeline can already extract text-like attachments once they enter the media pipeline.
-- Lionroot-specific intake paths appear to drop or underutilize large `.txt` attachments before they reach that extractor.
-- The local clawdbot fork is substantially divergent from upstream and has a dirty worktree, so upstream sync must be handled as a separate, careful track.
+- `extensions/zulip` already ships draft streaming, button send/callbacks, widget-aware reply delivery, topic-bound sessions, exec approvals, model picker helpers, typing, reactions, uploads, and target resolution helpers.
+- The largest remaining gap is not transport capability; it is plugin-owned state durability and callback correctness.
+- The current `components-registry.ts` and `exec-approvals.ts` both keep critical interactive state in memory only.
+- `commands-approve.ts` already provides a shared text `/approve` path, so Zulip-local command work should validate reuse before adding duplication.

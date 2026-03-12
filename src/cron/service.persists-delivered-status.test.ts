@@ -40,7 +40,16 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  deliveryError?: string;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    deliveryError?: string;
+    source?: string;
+    correlationId?: string;
+    cronJobId?: string;
+  }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -53,6 +62,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: "ok" as const,
       summary: "done",
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
+      ...(params.deliveryError === undefined ? {} : { deliveryError: params.deliveryError }),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
@@ -60,6 +70,10 @@ function createIsolatedCronWithFinishedBarrier(params: {
           jobId: evt.jobId,
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
+          deliveryError: evt.deliveryError,
+          source: evt.source,
+          correlationId: evt.correlationId,
+          cronJobId: evt.cronJobId,
         });
       }
       finished.onEvent(evt);
@@ -117,12 +131,22 @@ function expectDeliveryNotRequested(
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
+  deliveryError?: string;
+  onFinished?: (evt: {
+    jobId: string;
+    delivered?: boolean;
+    deliveryStatus?: string;
+    deliveryError?: string;
+    source?: string;
+    correlationId?: string;
+    cronJobId?: string;
+  }) => void;
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.deliveryError !== undefined ? { deliveryError: params.deliveryError } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
@@ -160,6 +184,19 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists deliveryError without downgrading execution status", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivery-error"),
+      delivered: false,
+      deliveryError: "announce failed",
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("announce failed");
+    expect(updated?.state.lastError).toBeUndefined();
   });
 
   it("persists not-requested delivery state when delivery is not configured", async () => {
@@ -203,17 +240,67 @@ describe("CronService persists delivered status", () => {
   });
 
   it("emits delivered in the finished event", async () => {
-    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
+    let capturedEvent:
+      | {
+          jobId: string;
+          delivered?: boolean;
+          deliveryStatus?: string;
+          deliveryError?: string;
+          source?: string;
+          correlationId?: string;
+          cronJobId?: string;
+        }
+      | undefined;
     await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("event-test"),
-      delivered: true,
+      delivered: false,
+      deliveryError: "announce failed",
       onFinished: (evt) => {
         capturedEvent = evt;
       },
     });
 
     expect(capturedEvent).toBeDefined();
-    expect(capturedEvent?.delivered).toBe(true);
-    expect(capturedEvent?.deliveryStatus).toBe("delivered");
+    expect(capturedEvent?.delivered).toBe(false);
+    expect(capturedEvent?.deliveryStatus).toBe("not-delivered");
+    expect(capturedEvent?.deliveryError).toBe("announce failed");
+  });
+
+  it("emits cron attribution fields for manual finished events", async () => {
+    const store = await makeStorePath();
+    let capturedEvent:
+      | {
+          jobId: string;
+          source?: string;
+          correlationId?: string;
+          cronJobId?: string;
+        }
+      | undefined;
+    const { cron } = createIsolatedCronWithFinishedBarrier({
+      storePath: store.storePath,
+      delivered: false,
+      deliveryError: "announce failed",
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    await cron.start();
+    try {
+      const job = await cron.add({
+        ...buildIsolatedAgentTurnJob("manual-event-test"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      await cron.run(job.id, "force");
+
+      expect(capturedEvent).toBeDefined();
+      expect(capturedEvent?.jobId).toBe(job.id);
+      expect(capturedEvent?.source).toBe("cron");
+      expect(capturedEvent?.correlationId).toBe(job.id);
+      expect(capturedEvent?.cronJobId).toBe(job.id);
+    } finally {
+      cron.stop();
+    }
   });
 });

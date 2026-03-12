@@ -19,6 +19,7 @@ import {
   applyJobResult,
   armTimer,
   emit,
+  emitJobFinished,
   executeJobCoreWithTimeout,
   runMissedJobs,
   stopTimer,
@@ -458,6 +459,7 @@ async function finishPreparedManualRun(
       {
         status: coreResult.status,
         error: coreResult.error,
+        deliveryError: coreResult.deliveryError,
         delivered: coreResult.delivered,
         startedAt,
         endedAt,
@@ -465,24 +467,7 @@ async function finishPreparedManualRun(
       { preserveSchedule: mode === "force" },
     );
 
-    emit(state, {
-      jobId: job.id,
-      action: "finished",
-      status: coreResult.status,
-      error: coreResult.error,
-      summary: coreResult.summary,
-      delivered: coreResult.delivered,
-      deliveryStatus: job.state.lastDeliveryStatus,
-      deliveryError: job.state.lastDeliveryError,
-      sessionId: coreResult.sessionId,
-      sessionKey: coreResult.sessionKey,
-      runAtMs: startedAt,
-      durationMs: job.state.lastDurationMs,
-      nextRunAtMs: job.state.nextRunAtMs,
-      model: coreResult.model,
-      provider: coreResult.provider,
-      usage: coreResult.usage,
-    });
+    emitJobFinished(state, job, coreResult, startedAt);
 
     if (shouldDelete && state.store) {
       state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);

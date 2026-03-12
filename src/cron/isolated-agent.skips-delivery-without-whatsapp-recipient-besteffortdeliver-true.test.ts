@@ -91,7 +91,7 @@ async function expectStructuredTelegramFailure(params: {
         expect(res.deliveryAttempted).toBe(params.expectDeliveryAttempted);
       }
       if (params.expectedErrorFragment) {
-        expect(res.error).toContain(params.expectedErrorFragment);
+        expect(res.deliveryError ?? res.error).toContain(params.expectedErrorFragment);
       }
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
@@ -332,12 +332,13 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("fails when structured direct delivery fails and best-effort is disabled", async () => {
+  it("records deliveryError when structured direct delivery fails and best-effort is disabled", async () => {
     await expectStructuredTelegramFailure({
       payload: { text: "hello from cron", mediaUrl: "https://example.com/img.png" },
       bestEffort: false,
-      expectedStatus: "error",
+      expectedStatus: "ok",
       expectedErrorFragment: "boom",
+      expectDeliveryAttempted: true,
     });
   });
 
@@ -361,6 +362,7 @@ describe("runCronIsolatedAgentTurn", () => {
         expect(res.status).toBe("ok");
         expect(res.delivered).toBe(false);
         expect(res.deliveryAttempted).toBe(true);
+        expect(res.deliveryError).toContain("boom");
         expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
         expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
       },
@@ -401,7 +403,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("returns error when text direct delivery fails and best-effort is disabled", async () => {
+  it("records deliveryError when text direct delivery fails and best-effort is disabled", async () => {
     await withTelegramAnnounceFixture(
       async ({ home, storePath, deps }) => {
         mockAgentPayloads([{ text: "hello from cron" }]);
@@ -418,10 +420,11 @@ describe("runCronIsolatedAgentTurn", () => {
           },
         });
 
-        expect(res.status).toBe("error");
-        expect(res.delivered).toBeUndefined();
+        expect(res.status).toBe("ok");
+        expect(res.delivered).toBe(false);
         expect(res.deliveryAttempted).toBe(true);
-        expect(res.error).toContain("boom");
+        expect(res.deliveryError).toContain("boom");
+        expect(res.error).toBeUndefined();
         expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
         expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
       },

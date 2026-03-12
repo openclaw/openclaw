@@ -369,6 +369,52 @@ describe("CronService restart catch-up", () => {
     await store.cleanup();
   });
 
+  it("persists deliveryError from startup catch-up isolated runs", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2025-12-13T17:00:00.000Z");
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "startup-catchup-delivery-error",
+        name: "startup catch-up delivery error",
+        enabled: true,
+        createdAtMs: now - 60_000,
+        updatedAtMs: now - 60_000,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "produce a digest" },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+        state: { nextRunAtMs: now - 1_000 },
+      },
+    ]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "ok",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "boom",
+      })),
+    });
+
+    await runMissedJobs(state);
+
+    const updated = state.store?.jobs.find((job) => job.id === "startup-catchup-delivery-error");
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("boom");
+
+    await store.cleanup();
+  });
+
   it("reschedules deferred missed jobs from the post-catchup clock so they stay in the future", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");

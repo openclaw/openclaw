@@ -103,6 +103,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  deliveryError?: string;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -201,6 +202,7 @@ export async function dispatchCronDelivery(
   // Keep this strict so timer fallback can safely decide whether to wake main.
   let delivered = params.skipMessagingToolDelivery;
   let deliveryAttempted = params.skipMessagingToolDelivery;
+  let deliveryError: string | undefined;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -211,6 +213,14 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
+  const recordDeliveryError = (error: unknown) => {
+    const message = summarizeDirectCronDeliveryError(error);
+    if (!deliveryError) {
+      deliveryError = message;
+    }
+    logWarn(`[cron:${params.job.id}] direct announce delivery failed: ${message}`);
+    return message;
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
@@ -254,6 +264,9 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          onError: (error) => {
+            recordDeliveryError(error);
+          },
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
@@ -265,13 +278,15 @@ export async function dispatchCronDelivery(
       delivered = deliveryResults.length > 0;
       return null;
     } catch (err) {
+      const errorMessage = recordDeliveryError(err);
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
-          status: "error",
+          status: "ok",
           summary,
           outputText,
-          error: String(err),
+          delivered: false,
           deliveryAttempted,
+          deliveryError: errorMessage,
           ...params.telemetry,
         });
       }
@@ -415,6 +430,7 @@ export async function dispatchCronDelivery(
           result: failDeliveryTarget(params.resolvedDelivery.error.message),
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -432,6 +448,7 @@ export async function dispatchCronDelivery(
         }),
         delivered,
         deliveryAttempted,
+        deliveryError,
         summary,
         outputText,
         synthesizedText,
@@ -451,6 +468,7 @@ export async function dispatchCronDelivery(
           result: directResult,
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -464,6 +482,7 @@ export async function dispatchCronDelivery(
           result: finalizedTextResult,
           delivered,
           deliveryAttempted,
+          deliveryError,
           summary,
           outputText,
           synthesizedText,
@@ -478,6 +497,7 @@ export async function dispatchCronDelivery(
     deliveryAttempted,
     summary,
     outputText,
+    deliveryError,
     synthesizedText,
     deliveryPayloads,
   };

@@ -54,6 +54,7 @@ import {
   isExternalHookSession,
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronProviderRouting } from "../provider-routing.js";
 import type { CronAgentTurnContext, CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
@@ -410,6 +411,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Respect session model override — check session.modelOverride before falling
   // back to the default config model. This ensures /model changes are honoured
   // by cron and isolated agent runs.
+  let sessionModelOverrideApplied = false;
   if (!modelOverride && !hooksGmailModelApplied) {
     const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
@@ -425,6 +427,34 @@ export async function runCronIsolatedAgentTurn(params: {
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
+        sessionModelOverrideApplied = true;
+      }
+    }
+  }
+
+  if (!modelOverride && !hooksGmailModelApplied && !sessionModelOverrideApplied) {
+    const providerRouting = resolveCronProviderRouting({
+      job: params.job,
+      provider,
+      model,
+      configuredModelRefs: Object.keys(cfgWithAgentDefaults.agents?.defaults?.models ?? {}),
+    });
+    if (providerRouting) {
+      const resolvedRoutingModel = resolveAllowedModelRef({
+        cfg: cfgWithAgentDefaults,
+        catalog: await loadCatalog(),
+        raw: providerRouting.modelRef,
+        defaultProvider: resolvedDefault.provider,
+        defaultModel: resolvedDefault.model,
+      });
+      if (!("error" in resolvedRoutingModel)) {
+        provider = resolvedRoutingModel.ref.provider;
+        model = resolvedRoutingModel.ref.model;
+      } else if (providerRouting.source === "explicit") {
+        return withRunSession({
+          status: "error",
+          error: `[cron:${params.job.id}] explicit pacing.providerTarget '${providerRouting.providerTarget}' could not resolve '${providerRouting.modelRef}' (${resolvedRoutingModel.error})`,
+        });
       }
     }
   }
@@ -833,7 +863,11 @@ export async function runCronIsolatedAgentTurn(params: {
   const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
-  const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
+  const resolveRunOutcome = (params?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+    deliveryError?: string;
+  }) =>
     withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
@@ -843,6 +877,7 @@ export async function runCronIsolatedAgentTurn(params: {
       outputText,
       delivered: params?.delivered,
       deliveryAttempted: params?.deliveryAttempted,
+      deliveryError: params?.deliveryError,
       ...telemetry,
     });
 
@@ -903,8 +938,9 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const delivered = deliveryResult.delivered;
   const deliveryAttempted = deliveryResult.deliveryAttempted;
+  const deliveryError = deliveryResult.deliveryError;
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
-  return resolveRunOutcome({ delivered, deliveryAttempted });
+  return resolveRunOutcome({ delivered, deliveryAttempted, deliveryError });
 }

@@ -254,12 +254,14 @@ function emitFailureAlert(
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    kind?: "execution" | "delivery";
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const failureLabel = params.kind === "delivery" ? "delivery failed" : "failed";
   const text = [
-    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
+    `Cron job "${safeJobName}" ${failureLabel} ${params.consecutiveErrors} times`,
     `Last error: ${truncatedError}`,
   ].join("\n");
 
@@ -299,6 +301,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    deliveryError?: string;
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
@@ -328,39 +331,67 @@ export function applyJobResult(
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryStatus === "not-requested" ? undefined : result.deliveryError;
   job.updatedAtMs = result.endedAt;
 
-  // Track consecutive errors for backoff / auto-disable.
+  const alertConfig = resolveFailureAlert(state, job);
+  const isBestEffort =
+    job.delivery?.bestEffort === true ||
+    (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+
+  // Track consecutive execution errors for backoff / auto-disable.
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
-    const alertConfig = resolveFailureAlert(state, job);
-    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const isBestEffort =
-        job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
-      if (!isBestEffort) {
-        const now = state.deps.nowMs();
-        const lastAlert = job.state.lastFailureAlertAtMs;
-        const inCooldown =
-          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-        if (!inCooldown) {
-          emitFailureAlert(state, {
-            job,
-            error: result.error,
-            consecutiveErrors: job.state.consecutiveErrors,
-            channel: alertConfig.channel,
-            to: alertConfig.to,
-            mode: alertConfig.mode,
-            accountId: alertConfig.accountId,
-          });
-          job.state.lastFailureAlertAtMs = now;
-        }
+    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after && !isBestEffort) {
+      const now = state.deps.nowMs();
+      const lastAlert = job.state.lastFailureAlertAtMs;
+      const inCooldown =
+        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.error,
+          consecutiveErrors: job.state.consecutiveErrors,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+          mode: alertConfig.mode,
+          accountId: alertConfig.accountId,
+          kind: "execution",
+        });
+        job.state.lastFailureAlertAtMs = now;
       }
     }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.lastFailureAlertAtMs = undefined;
+  }
+
+  // Track consecutive delivery failures separately so delivery issues do not
+  // pollute execution status/backoff state.
+  if (result.deliveryError) {
+    job.state.consecutiveDeliveryErrors = (job.state.consecutiveDeliveryErrors ?? 0) + 1;
+    if (alertConfig && job.state.consecutiveDeliveryErrors >= alertConfig.after && !isBestEffort) {
+      const now = state.deps.nowMs();
+      const lastAlert = job.state.lastDeliveryFailureAlertAtMs;
+      const inCooldown =
+        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.deliveryError,
+          consecutiveErrors: job.state.consecutiveDeliveryErrors,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+          mode: alertConfig.mode,
+          accountId: alertConfig.accountId,
+          kind: "delivery",
+        });
+        job.state.lastDeliveryFailureAlertAtMs = now;
+      }
+    }
+  } else {
+    job.state.consecutiveDeliveryErrors = 0;
+    job.state.lastDeliveryFailureAlertAtMs = undefined;
   }
 
   const shouldDelete =
@@ -488,6 +519,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    deliveryError: result.deliveryError,
     delivered: result.delivered,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
@@ -933,6 +965,8 @@ async function runStartupCatchupCandidate(
       error: result.error,
       summary: result.summary,
       delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+      deliveryError: result.deliveryError,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -1181,6 +1215,7 @@ export async function executeJobCore(
   return {
     status: res.status,
     error: res.error,
+    deliveryError: res.deliveryError,
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
@@ -1225,6 +1260,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    deliveryError: coreResult.deliveryError,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
@@ -1238,7 +1274,7 @@ export async function executeJob(
   }
 }
 
-function emitJobFinished(
+export function emitJobFinished(
   state: CronServiceState,
   job: CronJob,
   result: {
