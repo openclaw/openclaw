@@ -105,6 +105,46 @@ describe("INTER_SESSION_CHANNEL sentinel routing", () => {
     ).toBe("channel:receiver-discord-channel");
   });
 
+  it("returns undefined from resolveLastToRaw when persistedLastChannel is empty string", () => {
+    // Empty string is not an external routing channel — treat same as absent.
+    // Returning stale persistedLastTo would risk a channel/to mismatch.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        persistedLastChannel: "",
+        persistedLastTo: "channel:some-target",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined from resolveLastToRaw when persistedLastChannel is the sentinel itself (leaked state)", () => {
+    // Guard against corrupted persisted state where persistedLastChannel was
+    // accidentally set to "inter_session". The sentinel is not a deliverable
+    // channel and should never be treated as an established external route.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        persistedLastChannel: INTER_SESSION_CHANNEL,
+        persistedLastTo: "channel:some-target",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves persistedLastTo for non-discord external channels (e.g. telegram)", () => {
+    // The sentinel path should work for any external channel, not just discord.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        originatingToRaw: "channel:sender-telegram",
+        persistedLastChannel: "telegram",
+        persistedLastTo: "user:987654321",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBe("user:987654321");
+  });
+
   it("does not treat a real deliverable channel named 'inter_session' as the sentinel (Codex P2 guard)", () => {
     // isInterSessionChannel guards against plugin channel collision:
     // if a real channel plugin registers with id="inter_session", it must not
