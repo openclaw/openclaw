@@ -46,6 +46,9 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    agentsList: null,
+    currentAgentId: "",
+    onAgentChange: () => undefined,
     ...overrides,
   };
 }

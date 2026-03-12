@@ -187,7 +187,7 @@ const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ProviderModelConfig> = [
   {
     id: "MiniMax-M2.5",
     name: "MiniMax-M2.5",
-    reasoning: false,
+    reasoning: true,
     input: ["text"],
     cost: MODELSTUDIO_DEFAULT_COST,
     contextWindow: 1_000_000,
