@@ -297,7 +297,7 @@ export async function workspaceBackupRunCommand(
   );
 
   const mirrored: WorkspaceBackupRunResult["workspaces"] = [];
-  const activeSourcePaths = new Set<string>();
+  const configuredSourcePaths = new Set(workspaceDirs);
   const previousStatus = await readWorkspaceBackupStatus(target);
 
   for (const workspaceDir of workspaceDirs) {
@@ -316,7 +316,6 @@ export async function workspaceBackupRunCommand(
     });
     await fs.mkdir(path.dirname(targetDir), { recursive: true });
     await replaceDirectoryAtomically(stagedDir, targetDir);
-    activeSourcePaths.add(workspaceDir);
     mirrored.push({
       sourcePath: workspaceDir,
       backupPath: targetDir,
@@ -324,7 +323,7 @@ export async function workspaceBackupRunCommand(
   }
 
   for (const previous of previousStatus?.workspaces ?? []) {
-    if (!activeSourcePaths.has(previous.sourcePath)) {
+    if (!configuredSourcePaths.has(previous.sourcePath)) {
       const staleMirrorPath = expectedMirrorPath(mirrorRoot, previous.sourcePath);
       await assertPathContainedWithinRoot(staleMirrorPath, mirrorRoot, "remove stale mirror");
       await fs.rm(staleMirrorPath, { recursive: true, force: true });
@@ -335,9 +334,7 @@ export async function workspaceBackupRunCommand(
   const statusFile: WorkspaceBackupStatusFile = {
     schemaVersion: WORKSPACE_BACKUP_SCHEMA_VERSION,
     updatedAt,
-    workspaces: mirrored.map((workspace) => ({
-      sourcePath: workspace.sourcePath,
-    })),
+    workspaces: [...configuredSourcePaths].map((sourcePath) => ({ sourcePath })),
   };
   await writeJsonAtomic(workspaceStatusPath(target), statusFile);
 

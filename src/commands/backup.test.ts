@@ -1,3 +1,4 @@
+import type { PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -399,7 +400,10 @@ describe("backup commands", () => {
     const configPath = path.join(tempHome.home, "custom-config.json");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-outside-"));
-    const originalReaddir = fs.readdir.bind(fs);
+    const originalReaddirWithFileTypes = fs.readdir.bind(fs) as unknown as (
+      target: PathLike,
+      options: { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+    ) => ReturnType<typeof fs.readdir>;
     const readdirSpy = vi.spyOn(fs, "readdir");
     try {
       process.env.OPENCLAW_CONFIG_PATH = configPath;
@@ -421,7 +425,10 @@ describe("backup commands", () => {
         path.join(externalWorkspace, "shared.txt"),
       );
 
-      readdirSpy.mockImplementation(async (target, options) => {
+      readdirSpy.mockImplementation((async (
+        target: PathLike,
+        options: { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+      ) => {
         if (target === externalWorkspace && typeof options === "object" && options?.withFileTypes) {
           return [
             {
@@ -430,10 +437,13 @@ describe("backup commands", () => {
               isDirectory: () => false,
               isSymbolicLink: () => false,
             },
-          ] as unknown as Awaited<ReturnType<typeof fs.readdir>>;
+          ] as unknown;
         }
-        return originalReaddir(target as never, options as never);
-      });
+        return originalReaddirWithFileTypes(
+          target,
+          options as { encoding: "buffer"; withFileTypes: true; recursive?: boolean },
+        );
+      }) as never);
 
       const runtime = {
         log: vi.fn(),

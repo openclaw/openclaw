@@ -184,4 +184,45 @@ describe("workspace backup commands", () => {
       }),
     ).rejects.toThrow("workspace path must not be inside backup.target/workspace");
   });
+
+  it("keeps existing mirrors when a configured workspace is temporarily missing", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const workspaceB = path.join(tempHome.home, "workspace-b");
+    targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-target-"));
+    await fs.mkdir(workspaceB, { recursive: true });
+    await fs.writeFile(path.join(workspaceB, "B.txt"), "b\n", "utf8");
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspaceB,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await workspaceBackupInitCommand(runtime, { target: targetDir });
+    await workspaceBackupRunCommand(runtime, {});
+
+    const mirrorB = path.join(
+      targetDir,
+      "workspace",
+      "mirrors",
+      encodeAbsolutePathForBackupArchive(workspaceB),
+    );
+    expect(await fs.readFile(path.join(mirrorB, "B.txt"), "utf8")).toBe("b\n");
+
+    await fs.rm(workspaceB, { recursive: true, force: true });
+    const rerun = await workspaceBackupRunCommand(runtime, {});
+
+    expect(rerun.workspaceCount).toBe(0);
+    expect(await fs.readFile(path.join(mirrorB, "B.txt"), "utf8")).toBe("b\n");
+
+    const statusFile = JSON.parse(
+      await fs.readFile(path.join(targetDir, "workspace", "status.json"), "utf8"),
+    ) as { workspaces: Array<{ sourcePath: string }> };
+    expect(statusFile.workspaces).toEqual([{ sourcePath: workspaceB }]);
+  });
 });

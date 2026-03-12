@@ -474,27 +474,13 @@ export async function buildRestoreOperations(params: {
       let workspaceTargetError: Error | undefined;
       let restoredWorkspace = false;
       let workspaceCoveredByState = false;
-      for (const candidateDirs of workspaceTargetCandidates) {
-        const workspaceTargetsBySourcePath = await mapWorkspaceTargetsBySourcePath(
-          candidateDirs,
-          workspaceAssetSourceKeys,
-        );
-        // Only fall back to positional matching when there is exactly 1 workspace
-        // (unambiguous). With multiple workspaces, positional mapping can silently
-        // restore to the wrong directory when counts match by coincidence.
-        const workspaceTargets =
-          workspaceTargetsBySourcePath ??
-          (workspaceAssets.length === 1
-            ? selectWorkspaceTargets({
-                workspaceAssetCount: workspaceAssets.length,
-                workspaceDirs: candidateDirs,
-              })
-            : undefined);
+      const tryWorkspaceTargets = async (
+        workspaceTargets: Map<string, string> | string[] | undefined,
+      ): Promise<"missing" | "invalid" | "covered" | "restored"> => {
         if (!workspaceTargets) {
-          continue;
+          return "missing";
         }
         const candidateOperations: RestoreOperation[] = [];
-        let candidateInvalid = false;
         for (const [index, asset] of workspaceAssets.entries()) {
           const assetSourceKey = workspaceAssetSourceKeys[index];
           const targetPath =
@@ -502,8 +488,7 @@ export async function buildRestoreOperations(params: {
               ? workspaceTargets.get(assetSourceKey)
               : workspaceTargets[index];
           if (!targetPath) {
-            candidateInvalid = true;
-            break;
+            return "invalid";
           }
           if (params.mode === "full-host" && stateAsset && isPathWithin(targetPath, stateDir)) {
             continue;
@@ -517,8 +502,7 @@ export async function buildRestoreOperations(params: {
             });
           } catch (error) {
             workspaceTargetError = error instanceof Error ? error : new Error(String(error));
-            candidateInvalid = true;
-            break;
+            return "invalid";
           }
           candidateOperations.push({
             kind: "workspace",
@@ -526,16 +510,45 @@ export async function buildRestoreOperations(params: {
             targetPath,
           });
         }
-        if (candidateInvalid) {
-          continue;
-        }
         if (candidateOperations.length === 0 && params.mode === "full-host" && stateAsset) {
+          return "covered";
+        }
+        operations.push(...candidateOperations);
+        return "restored";
+      };
+
+      // Prefer source-path matching across all candidate sets first.
+      for (const candidateDirs of workspaceTargetCandidates) {
+        const outcome = await tryWorkspaceTargets(
+          await mapWorkspaceTargetsBySourcePath(candidateDirs, workspaceAssetSourceKeys),
+        );
+        if (outcome === "covered") {
           workspaceCoveredByState = true;
           continue;
         }
-        operations.push(...candidateOperations);
-        restoredWorkspace = true;
-        break;
+        if (outcome === "restored") {
+          restoredWorkspace = true;
+          break;
+        }
+      }
+      // Only attempt positional fallback after all source-path matches fail.
+      if (!restoredWorkspace && workspaceAssets.length === 1) {
+        for (const candidateDirs of workspaceTargetCandidates) {
+          const outcome = await tryWorkspaceTargets(
+            selectWorkspaceTargets({
+              workspaceAssetCount: workspaceAssets.length,
+              workspaceDirs: candidateDirs,
+            }),
+          );
+          if (outcome === "covered") {
+            workspaceCoveredByState = true;
+            continue;
+          }
+          if (outcome === "restored") {
+            restoredWorkspace = true;
+            break;
+          }
+        }
       }
       if (!restoredWorkspace) {
         if (workspaceTargetError) {
