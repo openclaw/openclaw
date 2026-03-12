@@ -378,6 +378,18 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result).toBeNull();
   });
 
+  it("drops reactions when event chat_type is invalid and lookup cannot recover it", async () => {
+    const result = await resolveReactionWithLookup({
+      event: makeReactionEvent({
+        chat_id: "oc_group_from_event",
+        chat_type: "bogus" as "group",
+      }),
+      lookupChatId: "oc_group_from_lookup",
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("logs and drops reactions when lookup throws", async () => {
     const log = vi.fn();
     const event = makeReactionEvent();

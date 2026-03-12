@@ -7,7 +7,7 @@ import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
-import type { FeishuSendResult } from "./types.js";
+import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 
@@ -73,17 +73,6 @@ async function sendFallbackDirect(
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId);
 }
-
-export type FeishuMessageInfo = {
-  messageId: string;
-  chatId: string;
-  senderId?: string;
-  senderOpenId?: string;
-  senderType?: string;
-  content: string;
-  contentType: string;
-  createTime?: number;
-};
 
 function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
@@ -184,6 +173,7 @@ export async function getMessageFeishu(params: {
         items?: Array<{
           message_id?: string;
           chat_id?: string;
+          chat_type?: FeishuChatType;
           msg_type?: string;
           body?: { content?: string };
           sender?: {
@@ -195,6 +185,7 @@ export async function getMessageFeishu(params: {
         }>;
         message_id?: string;
         chat_id?: string;
+        chat_type?: FeishuChatType;
         msg_type?: string;
         body?: { content?: string };
         sender?: {
