@@ -183,16 +183,16 @@ describe("onboard (non-interactive): provider auth", () => {
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api",
+        authChoice: "minimax-global-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax:default"]?.provider).toBe("minimax");
-      expect(cfg.auth?.profiles?.["minimax:default"]?.mode).toBe("api_key");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
       expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax:default",
+        profileId: "minimax:global",
         provider: "minimax",
         key: "sk-minimax-test",
       });
@@ -202,17 +202,17 @@ describe("onboard (non-interactive): provider auth", () => {
   it("supports MiniMax CN API endpoint auth choice", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-cn-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "minimax-api-key-cn",
+        authChoice: "minimax-cn-api",
         minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
       });
 
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.provider).toBe("minimax-cn");
-      expect(cfg.auth?.profiles?.["minimax-cn:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.["minimax-cn"]?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
+      expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5");
       await expectApiKeyProfile({
-        profileId: "minimax-cn:default",
-        provider: "minimax-cn",
+        profileId: "minimax:cn",
+        provider: "minimax",
         key: "sk-minimax-test",
       });
     });
