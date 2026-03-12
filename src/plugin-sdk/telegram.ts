@@ -66,3 +66,11 @@ export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegr
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+
+export { sendMessageTelegram, editMessageTelegram } from "../telegram/send.js";
+export type { TelegramSendOpts, TelegramEditOpts, TelegramSendResult } from "../telegram/send.js";
+export type {
+  TelegramInlineButtons,
+  TelegramInlineButton,
+  TelegramButtonStyle,
+} from "../telegram/button-types.js";

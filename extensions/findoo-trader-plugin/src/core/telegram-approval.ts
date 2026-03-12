@@ -13,6 +13,7 @@
  * "telegram_callback_query" plugin hook to make this seamless.
  */
 
+import type { editMessageTelegram } from "openclaw/plugin-sdk/telegram";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import type { HttpReq, HttpRes } from "../types-http.js";
 import { parseJsonBody, jsonResponse, errorResponse } from "../types-http.js";
@@ -56,13 +57,7 @@ export function parseCallbackData(
 
 // ── Process approval ──
 
-/** Signature matching api.runtime.channel.telegram.editMessageTelegram */
-type EditMessageTelegramFn = (
-  chatId: string | number,
-  messageId: string | number,
-  text: string,
-  opts?: { token?: string; textMode?: "markdown" | "html"; buttons?: unknown[] },
-) => Promise<{ ok: true; messageId: string; chatId: string }>;
+type EditMessageTelegramFn = typeof editMessageTelegram;
 
 export async function processApproval(
   eventStore: AgentEventSqliteStore,

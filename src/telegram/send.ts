@@ -41,7 +41,7 @@ import { resolveTelegramVoiceSend } from "./voice.js";
 type TelegramApi = Bot["api"];
 type TelegramApiOverride = Partial<TelegramApi>;
 
-type TelegramSendOpts = {
+export type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
   token?: string;
   accountId?: string;
@@ -69,7 +69,7 @@ type TelegramSendOpts = {
   buttons?: TelegramInlineButtons;
 };
 
-type TelegramSendResult = {
+export type TelegramSendResult = {
   messageId: string;
   chatId: string;
 };
@@ -858,7 +858,7 @@ export async function deleteMessageTelegram(
   return { ok: true };
 }
 
-type TelegramEditOpts = {
+export type TelegramEditOpts = {
   token?: string;
   accountId?: string;
   verbose?: boolean;

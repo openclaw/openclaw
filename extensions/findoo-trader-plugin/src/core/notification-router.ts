@@ -6,21 +6,13 @@
  * so users can approve/reject directly from Telegram.
  */
 
+import type { sendMessageTelegram } from "openclaw/plugin-sdk/telegram";
 import type { AgentEventSqliteStore } from "./agent-event-sqlite-store.js";
 import type { AgentEvent, AgentEventType, EventSubscriber } from "./agent-event-store.js";
 
 // ── Types ──
 
-/** Signature matching api.runtime.channel.telegram.sendMessageTelegram */
-export type SendMessageTelegramFn = (
-  to: string,
-  text: string,
-  opts?: {
-    token?: string;
-    textMode?: "markdown" | "html";
-    buttons?: Array<Array<{ text: string; callback_data: string }>>;
-  },
-) => Promise<{ messageId: string; chatId: string }>;
+export type SendMessageTelegramFn = typeof sendMessageTelegram;
 
 export type NotificationLevel = "critical" | "action_required" | "info";
 
