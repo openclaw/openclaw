@@ -115,6 +115,42 @@ describe("infra runtime", () => {
       }
     });
 
+    it("runs coalesced pre-restart hooks when restart is already scheduled", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const firstHook = vi.fn(async () => {});
+        const secondHook = vi.fn(async () => {});
+
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+          beforeRestart: firstHook,
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+          beforeRestart: secondHook,
+        });
+
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(firstHook).toHaveBeenCalledTimes(1);
+        expect(secondHook).toHaveBeenCalledTimes(1);
+        const sigusr1Index = emitSpy.mock.calls.findIndex((args) => args[0] === "SIGUSR1");
+        expect(sigusr1Index).toBeGreaterThanOrEqual(0);
+        expect(secondHook.mock.invocationCallOrder[0]).toBeLessThan(
+          emitSpy.mock.invocationCallOrder[sigusr1Index] ?? Number.POSITIVE_INFINITY,
+        );
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("applies restart cooldown between emitted restart cycles", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
