@@ -1,3 +1,4 @@
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -36,7 +37,6 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
-const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -629,8 +629,8 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const modelLower = params.model.toLowerCase();
+  const _normalizedProvider = normalizeProviderId(params.provider);
+  const _modelLower = params.model.toLowerCase();
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
@@ -652,21 +652,11 @@ export function resolveThinkingDefault(params: {
   if (configured) {
     return configured;
   }
-  const isAnthropicFamilyModel =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "amazon-bedrock" ||
-    modelLower.includes("anthropic/") ||
-    modelLower.includes(".anthropic.");
-  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
-    return "adaptive";
-  }
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  if (candidate?.reasoning) {
-    return "low";
-  }
-  return "off";
+  return resolveThinkingDefaultForModel({
+    provider: params.provider,
+    model: params.model,
+    catalog: params.catalog,
+  });
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
