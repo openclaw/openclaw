@@ -104,6 +104,7 @@ import {
   rehydrateSessionStoreEntries,
   resolveSubagentRunResumability,
   routeResumedRun,
+  transcriptEndsWithCompletedAssistantTurn,
   transcriptHasAssistantTurn,
 } from "./subagent-resume.js";
 
@@ -158,6 +159,37 @@ function userMessageLine(text = "do something useful"): string {
     parentId: null,
     timestamp: new Date().toISOString(),
     message: { role: "user", content: text },
+  });
+}
+
+/** Build a JSONL line representing an assistant turn that has a pending tool_use block. */
+function assistantToolUseMessageLine(toolUseId = "toolu-1"): string {
+  return JSON.stringify({
+    type: "message",
+    id: "msg-tool-call",
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Let me check that for you." },
+        { type: "tool_use", id: toolUseId, name: "read_file", input: { path: "/tmp/foo" } },
+      ],
+    },
+  });
+}
+
+/** Build a JSONL line representing a user message that carries tool results. */
+function toolResultMessageLine(toolUseId = "toolu-1"): string {
+  return JSON.stringify({
+    type: "message",
+    id: "msg-tool-result",
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: "file contents here" }],
+    },
   });
 }
 
@@ -268,6 +300,121 @@ describe("transcriptHasAssistantTurn", () => {
 });
 
 // ---------------------------------------------------------------------------
+// transcriptEndsWithCompletedAssistantTurn
+// ---------------------------------------------------------------------------
+
+describe("transcriptEndsWithCompletedAssistantTurn", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-resume-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns true when the last turn is an assistant text-only message", () => {
+    const sessionId = "cft-1";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), assistantMessageLine()].join("\n"),
+    );
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(true);
+  });
+
+  it("returns true after a full tool round-trip ending in an assistant text reply", () => {
+    const sessionId = "cft-2";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        sessionHeaderLine(sessionId),
+        userMessageLine(),
+        assistantToolUseMessageLine("toolu-a"),
+        toolResultMessageLine("toolu-a"),
+        // Final assistant reply with no tool_use — run is complete.
+        assistantMessageLine(),
+      ].join("\n"),
+    );
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(true);
+  });
+
+  it("returns false when the last turn is an assistant message with tool_use blocks", () => {
+    const sessionId = "cft-3";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // Transcript ends mid-tool-use: assistant issued a tool call but the result
+    // never came back (run was interrupted).
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        sessionHeaderLine(sessionId),
+        userMessageLine(),
+        assistantToolUseMessageLine("toolu-b"),
+      ].join("\n"),
+    );
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(false);
+  });
+
+  it("returns false when the last turn is a user tool-result message (mid-tool-use)", () => {
+    const sessionId = "cft-4";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // The tool result arrived but the assistant never replied — interrupted
+    // between the tool result and the follow-up assistant turn.
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        sessionHeaderLine(sessionId),
+        userMessageLine(),
+        assistantToolUseMessageLine("toolu-c"),
+        toolResultMessageLine("toolu-c"),
+      ].join("\n"),
+    );
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(false);
+  });
+
+  it("returns false when transcript has only session header (no turns)", () => {
+    const sessionId = "cft-5";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, `${sessionHeaderLine(sessionId)}\n`);
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(false);
+  });
+
+  it("returns false when transcript has only user messages", () => {
+    const sessionId = "cft-6";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcriptPath, [sessionHeaderLine(sessionId), userMessageLine()].join("\n"));
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(false);
+  });
+
+  it("returns false when the file does not exist", () => {
+    expect(transcriptEndsWithCompletedAssistantTurn(path.join(tmpDir, "missing.jsonl"))).toBe(
+      false,
+    );
+  });
+
+  it("returns false for an empty file", () => {
+    const transcriptPath = path.join(tmpDir, "empty.jsonl");
+    fs.writeFileSync(transcriptPath, "");
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(false);
+  });
+
+  it("skips trailing malformed lines and evaluates the last valid message", () => {
+    const sessionId = "cft-7";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    // Last valid line is a completed assistant turn; trailing garbage ignored.
+    fs.writeFileSync(
+      transcriptPath,
+      [sessionHeaderLine(sessionId), userMessageLine(), assistantMessageLine(), "not-json"].join(
+        "\n",
+      ),
+    );
+    expect(transcriptEndsWithCompletedAssistantTurn(transcriptPath)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resolveSubagentRunResumability
 // ---------------------------------------------------------------------------
 
@@ -351,6 +498,53 @@ describe("resolveSubagentRunResumability", () => {
     const entry = makeRun({ childSessionKey: "" });
     mockLoadSessionStore.mockReturnValue({} as Record<string, unknown>);
     expect(resolveSubagentRunResumability(entry)).toBe("orphaned");
+  });
+
+  it("returns resumable-fresh (not resumable-replay) when transcript ends mid-tool-use", () => {
+    // The transcript has an assistant turn, but it ends with a pending tool_use
+    // block — the run was interrupted before the tool result arrived.
+    // Previously this would have returned resumable-replay (the bug); now it
+    // must return resumable-fresh so the run is re-dispatched.
+    const sessionId = "sess-mid-tool-use";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        sessionHeaderLine(sessionId),
+        userMessageLine(),
+        assistantToolUseMessageLine("toolu-x"),
+      ].join("\n"),
+    );
+
+    const entry = makeRun({ childSessionKey: "agent:main:subagent:mid-tool-use" });
+    mockLoadSessionStore.mockReturnValue({
+      [entry.childSessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    expect(resolveSubagentRunResumability(entry, { transcriptPath })).toBe("resumable-fresh");
+  });
+
+  it("returns resumable-fresh when transcript ends with a tool-result user turn (not final)", () => {
+    // The tool result arrived but the assistant never replied — interrupted
+    // between the tool result and the follow-up assistant turn.
+    const sessionId = "sess-tool-result-only";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        sessionHeaderLine(sessionId),
+        userMessageLine(),
+        assistantToolUseMessageLine("toolu-y"),
+        toolResultMessageLine("toolu-y"),
+      ].join("\n"),
+    );
+
+    const entry = makeRun({ childSessionKey: "agent:main:subagent:tool-result-only" });
+    mockLoadSessionStore.mockReturnValue({
+      [entry.childSessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+
+    expect(resolveSubagentRunResumability(entry, { transcriptPath })).toBe("resumable-fresh");
   });
 });
 
