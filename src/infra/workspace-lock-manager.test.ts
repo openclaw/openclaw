@@ -291,7 +291,11 @@ describe("workspace lock manager", () => {
     const originalRealpath = fs.realpath.bind(fs);
     const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (value) => {
       const asString = String(value);
-      if (path.resolve(asString) === path.resolve(mixedCaseAlias)) {
+      const resolved = path.resolve(asString);
+      const aliasResolved = path.resolve(mixedCaseAlias);
+      const sameAliasPath =
+        resolved === aliasResolved || resolved.toLowerCase() === aliasResolved.toLowerCase();
+      if (sameAliasPath) {
         return canonicalPath;
       }
       return originalRealpath(value);
