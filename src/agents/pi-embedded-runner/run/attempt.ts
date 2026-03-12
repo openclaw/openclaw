@@ -11,7 +11,10 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
-import { ensureGlobalUndiciStreamTimeouts } from "../../../infra/net/undici-global-dispatcher.js";
+import {
+  ensureGlobalUndiciEnvProxyDispatcher,
+  ensureGlobalUndiciStreamTimeouts,
+} from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -228,16 +231,16 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
   return (model, context, options) =>
     streamFn(model, context, {
       ...options,
-      onPayload: (payload: unknown, payloadModel) => {
+      onPayload: (payload: unknown) => {
         if (!payload || typeof payload !== "object") {
-          return options?.onPayload?.(payload, payloadModel);
+          return options?.onPayload?.(payload, model);
         }
         const payloadRecord = payload as Record<string, unknown>;
         if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
           payloadRecord.options = {};
         }
         (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        return options?.onPayload?.(payload, payloadModel);
+        return options?.onPayload?.(payload, model);
       },
     });
 }
@@ -749,6 +752,9 @@ export async function runEmbeddedAttempt(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
+  // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
+  // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
+  ensureGlobalUndiciEnvProxyDispatcher();
   ensureGlobalUndiciStreamTimeouts();
 
   log.debug(
@@ -869,13 +875,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
-          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-          spawnWorkspaceDir:
-            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
-          trigger: params.trigger,
-          memoryFlushWritePath: params.memoryFlushWritePath,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
           modelId: params.modelId,
@@ -1550,7 +1550,6 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
         didSendViaMessagingTool,
-        didSendDeterministicApprovalPrompt,
         getLastToolError,
         getUsageTotals,
         getCompactionCount,
@@ -1775,6 +1774,8 @@ export async function runEmbeddedAttempt(
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
                   messageProvider: params.messageProvider ?? undefined,
+                  trigger: params.trigger,
+                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
                 },
               )
               .catch((err) => {
@@ -1983,6 +1984,8 @@ export async function runEmbeddedAttempt(
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
+                trigger: params.trigger,
+                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
               },
             )
             .catch((err) => {
@@ -2043,6 +2046,8 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
               messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
             },
           )
           .catch((err) => {
@@ -2065,7 +2070,6 @@ export async function runEmbeddedAttempt(
         lastAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),
-        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPrompt(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),

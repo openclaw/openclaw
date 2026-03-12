@@ -18,6 +18,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("bash_env")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_exec_path")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -60,6 +61,7 @@ describe("sanitizeHostExecEnv", () => {
         ZDOTDIR: "/tmp/evil-zdotdir",
         BASH_ENV: "/tmp/pwn.sh",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
+        GIT_EXEC_PATH: "/tmp/git-exec-path",
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
@@ -73,6 +75,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    expect(env.GIT_EXEC_PATH).toBeUndefined();
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
@@ -211,6 +214,65 @@ describe("shell wrapper exploit regression", () => {
 });
 
 describe("git env exploit regression", () => {
+  it("blocks inherited GIT_EXEC_PATH so git cannot execute helper payloads", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const gitPath = "/usr/bin/git";
+    if (!fs.existsSync(gitPath)) {
+      return;
+    }
+
+    const helperDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-git-exec-path-${process.pid}-${Date.now()}-`),
+    );
+    const helperPath = path.join(helperDir, "git-remote-https");
+    const marker = path.join(
+      os.tmpdir(),
+      `openclaw-git-exec-path-marker-${process.pid}-${Date.now()}`,
+    );
+    try {
+      try {
+        fs.unlinkSync(marker);
+      } catch {
+        // no-op
+      }
+      fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(helperPath, 0o755);
+
+      const target = "https://127.0.0.1:1/does-not-matter";
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_EXEC_PATH: helperDir,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await new Promise<void>((resolve) => {
+        const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
+        child.once("error", () => resolve());
+        child.once("close", () => resolve());
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
+      fs.unlinkSync(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await new Promise<void>((resolve) => {
+        const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
+        child.once("error", () => resolve());
+        child.once("close", () => resolve());
+      });
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(helperDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
   it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
     if (process.platform === "win32") {
       return;

@@ -155,8 +155,8 @@ What you set:
   <Accordion title="xAI (Grok) API key">
     Prompts for `XAI_API_KEY` and configures xAI as a model provider.
   </Accordion>
-  <Accordion title="OpenCode Zen">
-    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).
+  <Accordion title="OpenCode">
+    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
   <Accordion title="API key (generic)">

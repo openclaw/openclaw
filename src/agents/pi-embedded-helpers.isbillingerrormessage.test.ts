@@ -106,6 +106,9 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      // Venice returns "Insufficient USD or Diem balance" which has extra words
+      // between "insufficient" and "balance"
+      "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -148,6 +151,11 @@ describe("isBillingErrorMessage", () => {
       "Let me know if you need more details on any of these topics!";
     expect(longResponse.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longResponse)).toBe(false);
+  });
+  it("does not false-positive on short non-billing text that mentions insufficient and balance", () => {
+    const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
   });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
@@ -439,6 +447,18 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes billing errors even when text matches context overflow patterns", () => {
+    const samples = [
+      "402 Payment Required: request token limit exceeded for this billing plan",
+      "insufficient credits: request size exceeds your current plan limits",
+      "Your credit balance is too low. Maximum request token limit exceeded.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
 });
 
 describe("isTransientHttpError", () => {
@@ -500,6 +520,26 @@ describe("isFailoverErrorMessage", () => {
       expect(classifyFailoverReason(sample)).toBe("timeout");
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
+  });
+
+  it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
+    const samples = [
+      "Unhandled stop reason: MALFORMED_RESPONSE",
+      "Unhandled stop reason: malformed_response",
+      "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
+    const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
+    expect(isTimeoutErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBe(null);
+    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });
 
@@ -618,6 +658,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
+    // Venice 402 billing error with extra words between "insufficient" and "balance"
+    expect(
+      classifyFailoverReason(
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
@@ -646,6 +692,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("402 Payment Required: Weekly/Monthly Limit Exhausted")).toBe(
       "billing",
     );
+    // Poe returns 402 without "payment required"; must be recognized for fallback
+    expect(
+      classifyFailoverReason(
+        "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
+      ),
+    ).toBe("billing");
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");

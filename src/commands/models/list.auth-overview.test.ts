@@ -42,8 +42,8 @@ describe("resolveProviderAuthOverview", () => {
       modelsPath: "/tmp/models.json",
     });
 
-    expect(overview.effective.kind).toBe("models.json");
-    expect(overview.effective.detail).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+    expect(overview.effective.kind).toBe("missing");
+    expect(overview.effective.detail).toBe("missing");
     expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
@@ -66,8 +66,41 @@ describe("resolveProviderAuthOverview", () => {
       modelsPath: "/tmp/models.json",
     });
 
-    expect(overview.effective.kind).toBe("models.json");
-    expect(overview.effective.detail).not.toContain("marker(");
-    expect(overview.effective.detail).not.toContain("OPENAI_API_KEY");
+    expect(overview.effective.kind).toBe("missing");
+    expect(overview.effective.detail).toBe("missing");
+    expect(overview.modelsJson?.value).not.toContain("marker(");
+    expect(overview.modelsJson?.value).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("treats env-var marker as usable only when the env key is currently resolvable", () => {
+    const prior = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-openai-from-env"; // pragma: allowlist secret
+    try {
+      const overview = resolveProviderAuthOverview({
+        provider: "openai",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as never,
+        store: { version: 1, profiles: {} } as never,
+        modelsPath: "/tmp/models.json",
+      });
+      expect(overview.effective.kind).toBe("env");
+      expect(overview.effective.detail).not.toContain("OPENAI_API_KEY");
+    } finally {
+      if (prior === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = prior;
+      }
+    }
   });
 });
