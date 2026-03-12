@@ -78,7 +78,7 @@ func (s *Snapshotter) Create(ctx context.Context, sandboxID string, dir string, 
 	}
 
 	// 2. Ensure output directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create snapshot directory: %w", err)
 	}
 
@@ -96,6 +96,10 @@ func (s *Snapshotter) Create(ctx context.Context, sandboxID string, dir string, 
 		_ = entry.ResumeVM(ctx) // best-effort recovery
 		return nil, fmt.Errorf("failed to create snapshot for %s: %w", sandboxID, err)
 	}
+
+	// 5a. Tighten permissions on snapshot artifacts (defense-in-depth).
+	_ = os.Chmod(memPath, 0600)
+	_ = os.Chmod(snapPath, 0600)
 
 	// 6. Resume if requested
 	if resume {
@@ -292,7 +296,7 @@ func writeMetadata(dir string, artifacts *SnapshotArtifacts, cfg *VMConfig) erro
 	}
 
 	metaPath := filepath.Join(dir, metadataFilename)
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+	if err := os.WriteFile(metaPath, data, 0600); err != nil {
 		return fmt.Errorf("write metadata file: %w", err)
 	}
 

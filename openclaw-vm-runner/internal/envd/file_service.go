@@ -22,7 +22,8 @@ const fileChunkSize = 65536 // 64KB
 const workspaceRoot = "/workspace"
 
 // resolvePath validates a user-supplied path and resolves it under workspaceRoot.
-// It rejects empty paths, absolute paths, and any traversal outside the workspace.
+// It rejects empty paths, absolute paths, any traversal outside the workspace,
+// and symlink-based escapes.
 func resolvePath(userPath string) (string, error) {
 	if userPath == "" {
 		return "", fmt.Errorf("path must not be empty")
@@ -32,10 +33,26 @@ func resolvePath(userPath string) (string, error) {
 	}
 	cleaned := filepath.Clean(userPath)
 	full := filepath.Join(workspaceRoot, cleaned)
-	// Ensure the resolved path is still under workspaceRoot.
+	// Ensure the resolved path is still under workspaceRoot (string check).
 	if !strings.HasPrefix(full, workspaceRoot+"/") && full != workspaceRoot {
 		return "", fmt.Errorf("path escapes workspace: %s", userPath)
 	}
+
+	// Resolve symlinks and re-check prefix to prevent symlink-based escapes.
+	// If the target doesn't exist yet (new file), resolve the parent directory.
+	resolved, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		// Path doesn't exist yet — resolve parent directory instead.
+		parentResolved, parentErr := filepath.EvalSymlinks(filepath.Dir(full))
+		if parentErr != nil {
+			return "", fmt.Errorf("cannot resolve parent path: %w", parentErr)
+		}
+		resolved = filepath.Join(parentResolved, filepath.Base(full))
+	}
+	if !strings.HasPrefix(resolved, workspaceRoot+"/") && resolved != workspaceRoot {
+		return "", fmt.Errorf("path escapes workspace via symlink: %s", userPath)
+	}
+
 	return full, nil
 }
 
@@ -154,7 +171,7 @@ func (s *FileServer) WriteFile(stream grpc.ClientStreamingServer[pb.WriteFileReq
 				return status.Errorf(codes.InvalidArgument, "%v", resolveErr)
 			}
 
-			mode := os.FileMode(req.GetMode())
+			mode := os.FileMode(req.GetMode()) & 0777 // strip setuid/setgid/sticky bits
 			if mode == 0 {
 				mode = 0644
 			}
@@ -234,7 +251,7 @@ func (s *FileServer) MakeDir(ctx context.Context, req *pb.MakeDirRequest) (*pb.M
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
-	mode := os.FileMode(req.GetMode())
+	mode := os.FileMode(req.GetMode()) & 0777 // strip setuid/setgid/sticky bits
 	if mode == 0 {
 		mode = 0755
 	}

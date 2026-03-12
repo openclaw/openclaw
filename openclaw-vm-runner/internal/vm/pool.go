@@ -197,7 +197,7 @@ func (p *Pool) createOneSnapshot(ctx context.Context) (string, error) {
 	// 4. Generate unique snapshot directory.
 	snapID := uuid.New().String()[:8]
 	snapDir := filepath.Join(p.snapshotDir, "pool-"+snapID)
-	if err := os.MkdirAll(snapDir, 0755); err != nil {
+	if err := os.MkdirAll(snapDir, 0700); err != nil {
 		return "", fmt.Errorf("create snapshot dir: %w", err)
 	}
 

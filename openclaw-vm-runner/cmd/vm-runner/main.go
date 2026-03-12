@@ -50,6 +50,7 @@ func main() {
 	flag.StringVar(&cfg.SnapshotDir, "snapshot-dir", cfg.SnapshotDir, "Directory for snapshot artifacts")
 	flag.IntVar(&cfg.VNCProxyPort, "vnc-proxy-port", cfg.VNCProxyPort, "TCP port for VNC WebSocket proxy (0 disables)")
 	flag.IntVar(&cfg.SnapshotDiskLimitMB, "snapshot-disk-limit-mb", cfg.SnapshotDiskLimitMB, "Max disk space for snapshots in MB (0 disables)")
+	flag.BoolVar(&cfg.EnableReflection, "enable-reflection", cfg.EnableReflection, "Enable gRPC reflection (for debugging only)")
 	flag.Parse()
 
 	// 1. Validate /dev/kvm exists
@@ -172,8 +173,10 @@ func main() {
 	healthpb.RegisterHealthServer(s, healthServer)
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
-	// Register reflection for grpcurl/grpc_cli debugging
-	reflection.Register(s)
+	// Register reflection for grpcurl/grpc_cli debugging (only when explicitly enabled).
+	if cfg.EnableReflection {
+		reflection.Register(s)
+	}
 
 	// 7. Start orphan sweeper with adapters
 	sweepCfg := reaper.SweepConfig{
@@ -214,6 +217,10 @@ func main() {
 	lis, err := net.Listen("unix", cfg.SocketPath)
 	if err != nil {
 		log.Fatalf("Failed to listen on %s: %v", cfg.SocketPath, err)
+	}
+	// Restrict socket access to owner only (do not rely on umask).
+	if err := os.Chmod(cfg.SocketPath, 0600); err != nil {
+		log.Fatalf("Failed to set socket permissions on %s: %v", cfg.SocketPath, err)
 	}
 
 	// 9. Signal handling for graceful shutdown

@@ -38,6 +38,10 @@ type ServiceConfig struct {
 	// SnapshotDiskLimitMB is the maximum disk space (in MB) for snapshot artifacts.
 	// Default 5120 (5GB). 0 disables disk limit enforcement.
 	SnapshotDiskLimitMB int
+
+	// EnableReflection enables gRPC server reflection (for debugging only).
+	// Disabled by default to reduce attack surface in production.
+	EnableReflection bool
 }
 
 // DefaultServiceConfig returns a ServiceConfig with sensible defaults.
