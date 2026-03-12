@@ -226,16 +226,19 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
-    const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
-
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
       string,
       unknown
     >;
+
+    // Use session's createdAt for the filename date, not the /new command timestamp.
+    // This ensures the memory file reflects when the session actually started,
+    // not when the user triggered /new (which could be on a different day).
+    const sessionCreatedAt = sessionEntry.createdAt as number | undefined;
+    const now = sessionCreatedAt ? new Date(sessionCreatedAt) : new Date(event.timestamp);
+    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
