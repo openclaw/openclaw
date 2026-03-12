@@ -311,4 +311,59 @@ describe("loadPluginManifestRegistry", () => {
       fs.realpathSync(second.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
     ).toBe(fs.realpathSync(matrixB));
   });
+
+  it("does not reuse cached load-path manifests across env home changes", () => {
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const demoA = path.join(homeA, "plugins", "demo");
+    const demoB = path.join(homeB, "plugins", "demo");
+    fs.mkdirSync(demoA, { recursive: true });
+    fs.mkdirSync(demoB, { recursive: true });
+    writeManifest(demoA, {
+      id: "demo",
+      name: "Demo A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(demoB, {
+      id: "demo",
+      name: "Demo B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(demoA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(demoB, "index.ts"), "export default {}", "utf-8");
+
+    const config = {
+      plugins: {
+        load: {
+          paths: ["~/plugins/demo"],
+        },
+      },
+    };
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeA,
+        OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeB,
+        OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoB));
+  });
 });

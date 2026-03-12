@@ -67,14 +67,14 @@ describe("formatPluginSourceForTable", () => {
             OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
             OPENCLAW_STATE_DIR: "~/state",
           },
-          workspaceDir: "/tmp/ws",
+          workspaceDir: "~/ws",
         }),
     );
 
     expect(roots).toEqual({
       stock: path.join("/tmp/openclaw-home", "bundled"),
       global: path.join("/tmp/openclaw-home", "state", "extensions"),
-      workspace: path.join("/tmp/ws", ".openclaw", "extensions"),
+      workspace: path.join("/tmp/openclaw-home", "ws", ".openclaw", "extensions"),
     });
   });
 });

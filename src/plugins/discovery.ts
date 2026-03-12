@@ -82,7 +82,7 @@ function buildDiscoveryCacheKey(params: {
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((entry) => resolveUserPath(entry))
+    .map((entry) => resolveUserPath(entry, params.env))
     .toSorted();
   const ownershipUid = params.ownershipUid ?? currentUid();
   return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
@@ -530,11 +530,12 @@ function discoverFromPath(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
-  const resolved = resolveUserPath(params.rawPath);
+  const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
     params.diagnostics.push({
       level: "error",
@@ -667,7 +668,7 @@ export function discoverOpenClawPlugins(params: {
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
   const workspaceDir = params.workspaceDir?.trim();
-  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir) : undefined;
+  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
 
   const extra = params.extraPaths ?? [];
@@ -684,6 +685,7 @@ export function discoverOpenClawPlugins(params: {
       origin: "config",
       ownershipUid: params.ownershipUid,
       workspaceDir: workspaceDir?.trim() || undefined,
+      env,
       candidates,
       diagnostics,
       seen,

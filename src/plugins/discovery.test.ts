@@ -82,6 +82,27 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("beta");
   });
 
+  it("resolves tilde workspace dirs against the provided env", () => {
+    const stateDir = makeTempDir();
+    const homeDir = makeTempDir();
+    const workspaceRoot = path.join(homeDir, "workspace");
+    const workspaceExt = path.join(workspaceRoot, ".openclaw", "extensions");
+    fs.mkdirSync(workspaceExt, { recursive: true });
+    fs.writeFileSync(path.join(workspaceExt, "tilde-workspace.ts"), "export default {}", "utf-8");
+
+    const result = discoverOpenClawPlugins({
+      workspaceDir: "~/workspace",
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        HOME: homeDir,
+      },
+    });
+
+    expect(result.candidates.some((candidate) => candidate.idHint === "tilde-workspace")).toBe(
+      true,
+    );
+  });
+
   it("ignores backup and disabled plugin directories in scanned roots", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
@@ -421,5 +442,39 @@ describe("discoverOpenClawPlugins", () => {
     expect(first.candidates.some((candidate) => candidate.idHint === "beta")).toBe(false);
     expect(second.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(false);
     expect(second.candidates.some((candidate) => candidate.idHint === "beta")).toBe(true);
+  });
+
+  it("does not reuse extra-path discovery across env home changes", () => {
+    const stateDir = makeTempDir();
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const pluginA = path.join(homeA, "plugins", "demo.ts");
+    const pluginB = path.join(homeB, "plugins", "demo.ts");
+    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
+    fs.mkdirSync(path.dirname(pluginB), { recursive: true });
+    fs.writeFileSync(pluginA, "export default {}", "utf-8");
+    fs.writeFileSync(pluginB, "export default {}", "utf-8");
+
+    const first = discoverOpenClawPlugins({
+      extraPaths: ["~/plugins/demo.ts"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        HOME: homeA,
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+    const second = discoverOpenClawPlugins({
+      extraPaths: ["~/plugins/demo.ts"],
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        HOME: homeB,
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+
+    expect(first.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(pluginA);
+    expect(second.candidates.find((candidate) => candidate.idHint === "demo")?.source).toBe(
+      pluginB,
+    );
   });
 });

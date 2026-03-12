@@ -13,7 +13,7 @@ export function resolvePluginSourceRoots(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginSourceRoots {
   const env = params.env ?? process.env;
-  const workspaceRoot = params.workspaceDir ? resolveUserPath(params.workspaceDir) : undefined;
+  const workspaceRoot = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
   const stock = resolveBundledPluginsDir(env);
   const global = path.join(resolveConfigDir(env), "extensions");
   const workspace = workspaceRoot ? path.join(workspaceRoot, ".openclaw", "extensions") : undefined;
