@@ -6,7 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { Timestamp } from "../../../google/protobuf/timestamp";
+import { Timestamp } from "../../../google/protobuf/timestamp.js";
 
 export const protobufPackage = "openclaw.sandbox.v1";
 
