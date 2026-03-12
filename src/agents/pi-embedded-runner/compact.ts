@@ -808,6 +808,9 @@ export async function compactEmbeddedPiSessionDirect(
         // assistant message to be byte-identical — but the serialization pipeline
         // can corrupt them. Since compaction is summarizing (not continuing), strip
         // ALL thinking blocks so the compaction LLM call won't be rejected.
+        // Note: this mutates session state before the compaction call. If compaction
+        // fails, thinking blocks remain stripped — this is intentional because absent
+        // blocks are API-compatible whereas corrupted blocks cause permanent rejection.
         if (transcriptPolicy.preserveSignatures) {
           const withoutThinking = dropThinkingBlocks(session.messages);
           if (withoutThinking !== session.messages) {
