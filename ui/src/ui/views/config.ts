@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
@@ -403,7 +404,8 @@ function truncateValue(value: unknown, maxLen = 40): string {
 }
 
 export function renderConfig(props: ConfigProps) {
-  const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
+  const validityKey = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
+  const validity = t(`config.status.${validityKey}`);
   const analysis = analyzeConfigSchema(props.schema);
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
 
@@ -469,10 +471,10 @@ export function renderConfig(props: ConfigProps) {
       <!-- Sidebar -->
       <aside class="config-sidebar">
         <div class="config-sidebar__header">
-          <div class="config-sidebar__title">Settings</div>
+          <div class="config-sidebar__title">${t("config.sidebar.title")}</div>
           <span
             class="pill pill--sm ${
-              validity === "valid" ? "pill--ok" : validity === "invalid" ? "pill--danger" : ""
+              validityKey === "valid" ? "pill--ok" : validityKey === "invalid" ? "pill--danger" : ""
             }"
             >${validity}</span
           >
@@ -494,7 +496,7 @@ export function renderConfig(props: ConfigProps) {
             <input
               type="text"
               class="config-search__input"
-              placeholder="Search settings..."
+              placeholder="${t("config.sidebar.searchPlaceholder")}"
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -512,13 +514,13 @@ export function renderConfig(props: ConfigProps) {
             }
           </div>
           <div class="config-search__hint">
-            <span class="config-search__hint-label" id="config-tag-filter-label">Tag filters:</span>
+            <span class="config-search__hint-label" id="config-tag-filter-label">${t("config.sidebar.tagFilters")}</span>
             <details class="config-search__tag-picker">
               <summary class="config-search__tag-trigger" aria-labelledby="config-tag-filter-label">
                 ${
                   selectedTags.size === 0
                     ? html`
-                        <span class="config-search__tag-placeholder">Add tags</span>
+                        <span class="config-search__tag-placeholder">${t("config.sidebar.addTags")}</span>
                       `
                     : html`
                         <div class="config-search__tag-chips">
@@ -599,13 +601,13 @@ export function renderConfig(props: ConfigProps) {
               ?disabled=${props.schemaLoading || !props.schema}
               @click=${() => props.onFormModeChange("form")}
             >
-              Form
+              ${t("config.sidebar.formMode")}
             </button>
             <button
               class="config-mode-toggle__btn ${props.formMode === "raw" ? "active" : ""}"
               @click=${() => props.onFormModeChange("raw")}
             >
-              Raw
+              ${t("config.sidebar.rawMode")}
             </button>
           </div>
         </div>
@@ -622,13 +624,13 @@ export function renderConfig(props: ConfigProps) {
                   <span class="config-changes-badge"
                     >${
                       props.formMode === "raw"
-                        ? "Unsaved changes"
-                        : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
+                        ? t("config.actions.unsavedChanges")
+                        : t("config.actions.unsavedCount", { count: String(diff.length) })
                     }</span
                   >
                 `
                 : html`
-                    <span class="config-status muted">No changes</span>
+                    <span class="config-status muted">${t("config.actions.noChanges")}</span>
                   `
             }
           </div>
@@ -638,28 +640,28 @@ export function renderConfig(props: ConfigProps) {
               ?disabled=${props.loading}
               @click=${props.onReload}
             >
-              ${props.loading ? "Loading…" : "Reload"}
+              ${props.loading ? t("config.actions.loading") : t("config.actions.reload")}
             </button>
             <button
               class="btn btn--sm primary"
               ?disabled=${!canSave}
               @click=${props.onSave}
             >
-              ${props.saving ? "Saving…" : "Save"}
+              ${props.saving ? t("config.actions.saving") : t("config.actions.save")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!canApply}
               @click=${props.onApply}
             >
-              ${props.applying ? "Applying…" : "Apply"}
+              ${props.applying ? t("config.actions.applying") : t("config.actions.apply")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!canUpdate}
               @click=${props.onUpdate}
             >
-              ${props.updating ? "Updating…" : "Update"}
+              ${props.updating ? t("config.actions.updating") : t("config.actions.update")}
             </button>
           </div>
         </div>
@@ -671,8 +673,7 @@ export function renderConfig(props: ConfigProps) {
               <details class="config-diff">
                 <summary class="config-diff__summary">
                   <span
-                    >View ${diff.length} pending
-                    change${diff.length !== 1 ? "s" : ""}</span
+                    >${t("config.diff.pendingChanges", { count: String(diff.length) })}</span
                   >
                   <svg
                     class="config-diff__chevron"
@@ -737,7 +738,7 @@ export function renderConfig(props: ConfigProps) {
                   class="config-subnav__item ${effectiveSubsection === null ? "active" : ""}"
                   @click=${() => props.onSubsectionChange(ALL_SUBSECTION)}
                 >
-                  All
+                  ${t("config.sidebar.allSections")}
                 </button>
                 ${subsections.map(
                   (entry) => html`

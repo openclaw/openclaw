@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
@@ -237,42 +238,66 @@ const sectionIcons = {
 };
 
 // Section metadata
-export const SECTION_META: Record<string, { label: string; description: string }> = {
-  env: {
-    label: "Environment Variables",
-    description: "Environment variables passed to the gateway process",
+// Section keys for iteration — labels and descriptions come from i18n
+const SECTION_KEYS = [
+  "env",
+  "update",
+  "agents",
+  "auth",
+  "channels",
+  "apiKeys",
+  "memory",
+  "history",
+  "messages",
+  "commands",
+  "hooks",
+  "skills",
+  "tools",
+  "gateway",
+  "wizard",
+  "meta",
+  "logging",
+  "browser",
+  "ui",
+  "models",
+  "bindings",
+  "broadcast",
+  "audio",
+  "session",
+  "cron",
+  "web",
+  "discovery",
+  "canvasHost",
+  "talk",
+  "plugins",
+] as const;
+
+export function getSectionMeta(key: string): { label: string; description: string } {
+  const label = t(`config.sections.${key}.label`);
+  const desc = t(`config.sections.${key}.description`);
+  // If translation returns the key itself, fall back to humanized key name
+  if (label.startsWith("config.sections.")) {
+    const fallbackLabel = key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, " $1");
+    return { label: fallbackLabel, description: "" };
+  }
+  return { label, description: desc };
+}
+
+// Backward-compatible static accessor (re-evaluated on each access for locale changes)
+export const SECTION_META: Record<string, { label: string; description: string }> = new Proxy(
+  {} as Record<string, { label: string; description: string }>,
+  {
+    get(_target, prop: string) {
+      return getSectionMeta(prop);
+    },
+    ownKeys() {
+      return [...SECTION_KEYS];
+    },
+    getOwnPropertyDescriptor() {
+      return { configurable: true, enumerable: true };
+    },
   },
-  update: { label: "Updates", description: "Auto-update settings and release channel" },
-  agents: { label: "Agents", description: "Agent configurations, models, and identities" },
-  auth: { label: "Authentication", description: "API keys and authentication profiles" },
-  channels: {
-    label: "Channels",
-    description: "Messaging channels (Telegram, Discord, Slack, etc.)",
-  },
-  messages: { label: "Messages", description: "Message handling and routing settings" },
-  commands: { label: "Commands", description: "Custom slash commands" },
-  hooks: { label: "Hooks", description: "Webhooks and event hooks" },
-  skills: { label: "Skills", description: "Skill packs and capabilities" },
-  tools: { label: "Tools", description: "Tool configurations (browser, search, etc.)" },
-  gateway: { label: "Gateway", description: "Gateway server settings (port, auth, binding)" },
-  wizard: { label: "Setup Wizard", description: "Setup wizard state and history" },
-  // Additional sections
-  meta: { label: "Metadata", description: "Gateway metadata and version information" },
-  logging: { label: "Logging", description: "Log levels and output configuration" },
-  browser: { label: "Browser", description: "Browser automation settings" },
-  ui: { label: "UI", description: "User interface preferences" },
-  models: { label: "Models", description: "AI model configurations and providers" },
-  bindings: { label: "Bindings", description: "Key bindings and shortcuts" },
-  broadcast: { label: "Broadcast", description: "Broadcast and notification settings" },
-  audio: { label: "Audio", description: "Audio input/output settings" },
-  session: { label: "Session", description: "Session management and persistence" },
-  cron: { label: "Cron", description: "Scheduled tasks and automation" },
-  web: { label: "Web", description: "Web server and API settings" },
-  discovery: { label: "Discovery", description: "Service discovery and networking" },
-  canvasHost: { label: "Canvas Host", description: "Canvas rendering and display" },
-  talk: { label: "Talk", description: "Voice and speech settings" },
-  plugins: { label: "Plugins", description: "Plugin management and extensions" },
-};
+);
 
 function getSectionIcon(key: string) {
   return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
@@ -319,14 +344,14 @@ function matchesSearch(params: {
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html`
-      <div class="muted">Schema unavailable.</div>
+      <div class="muted">${t("config.form.schemaUnavailable")}</div>
     `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
     return html`
-      <div class="callout danger">Unsupported schema. Use Raw.</div>
+      <div class="callout danger">${t("config.form.unsupportedSchema")}</div>
     `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
