@@ -337,7 +337,7 @@ export async function runEmbeddedPiAgent(
       if (hookRunner?.hasHooks("before_agent_start")) {
         try {
           legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
-            { 
+            {
               prompt: params.prompt,
               sessionKey: params.sessionKey,
               agentId: workspaceResolution.agentId,

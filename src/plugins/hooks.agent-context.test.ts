@@ -13,7 +13,12 @@ import type { PluginHookRegistration } from "./types.js";
 function addAgentEndHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (event: { messages: unknown[]; success: boolean; sessionKey?: string; agentId?: string }) => void | Promise<void>,
+  handler: (event: {
+    messages: unknown[];
+    success: boolean;
+    sessionKey?: string;
+    agentId?: string;
+  }) => void | Promise<void>,
   priority?: number,
 ) {
   addTestHook({
@@ -28,7 +33,12 @@ function addAgentEndHook(
 function addBeforeAgentStartHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (event: { prompt: string; messages?: unknown[]; sessionKey?: string; agentId?: string }) => void | Promise<void>,
+  handler: (event: {
+    prompt: string;
+    messages?: unknown[];
+    sessionKey?: string;
+    agentId?: string;
+  }) => void | Promise<void>,
   priority?: number,
 ) {
   addTestHook({
@@ -51,12 +61,12 @@ describe("hook events include sessionKey and agentId", () => {
   describe("agent_end hook", () => {
     it("receives sessionKey and agentId in event", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
-      
+
       addAgentEndHook(registry, "memory-plugin", handler);
-      
+
       const runner = createHookRunner(registry);
       const testMessages = [{ role: "user", content: "hello" }];
-      
+
       await runner.runAgentEnd(
         {
           messages: testMessages,
@@ -80,12 +90,12 @@ describe("hook events include sessionKey and agentId", () => {
 
     it("works with default values when sessionKey and agentId are not provided", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
-      
+
       addAgentEndHook(registry, "memory-plugin", handler);
-      
+
       const runner = createHookRunner(registry);
       const testMessages = [{ role: "user", content: "hello" }];
-      
+
       // Call without sessionKey and agentId (backward compatibility)
       await runner.runAgentEnd(
         {
@@ -95,26 +105,23 @@ describe("hook events include sessionKey and agentId", () => {
         stubCtx,
       );
 
-      expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: testMessages,
-          success: true,
-          sessionKey: undefined,
-          agentId: undefined,
-        }),
-        stubCtx,
-      );
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0]).toEqual({
+        messages: testMessages,
+        success: true,
+      });
+      expect(handler.mock.calls[0]?.[1]).toBe(stubCtx);
     });
   });
 
   describe("before_agent_start hook", () => {
     it("receives sessionKey and agentId in event", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
-      
+
       addBeforeAgentStartHook(registry, "memory-plugin", handler);
-      
+
       const runner = createHookRunner(registry);
-      
+
       await runner.runBeforeAgentStart(
         {
           prompt: "hello",
@@ -137,11 +144,11 @@ describe("hook events include sessionKey and agentId", () => {
 
     it("works with legacy event shape (backward compatibility)", async () => {
       const handler = vi.fn().mockResolvedValue({ prependContext: "context" });
-      
+
       addBeforeAgentStartHook(registry, "legacy-plugin", handler);
-      
+
       const runner = createHookRunner(registry);
-      
+
       // Call with legacy event shape (without sessionKey and agentId)
       await runner.runBeforeAgentStart(
         {
@@ -150,14 +157,11 @@ describe("hook events include sessionKey and agentId", () => {
         stubCtx,
       );
 
-      expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: "hello",
-          sessionKey: undefined,
-          agentId: undefined,
-        }),
-        stubCtx,
-      );
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0]).toEqual({
+        prompt: "hello",
+      });
+      expect(handler.mock.calls[0]?.[1]).toBe(stubCtx);
     });
   });
 });
