@@ -69,6 +69,11 @@ export async function startGatewaySidecars(params: {
     params.logBrowser.error(`server failed to start: ${String(err)}`);
   }
 
+  // TODO: Issue #43989 - Start Exec Approvals socket server if configured
+  // This requires implementing the socket server infrastructure
+  // The socket is for communication with Mac App Exec Host
+  // For now, this is a placeholder for future implementation
+
   // Start Gmail watcher if configured (hooks.gmail.account).
   await startGmailWatcherWithLogs({
     cfg: params.cfg,
