@@ -664,6 +664,40 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects full-host restore when OPENCLAW_CONFIG_PATH resolves to the home directory", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = tempHome.home;
+      const canonicalHomeDir = await fs.realpath(tempHome.home);
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: extractDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [],
+          },
+        }),
+      ).rejects.toThrow(
+        `Refusing full-host restore: OPENCLAW_CONFIG_PATH resolves to ${canonicalHomeDir}, which is too broad.`,
+      );
+    } finally {
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");

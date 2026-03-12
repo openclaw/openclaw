@@ -544,7 +544,7 @@ export async function buildRestoreOperations(params: {
     const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
     for (const [label, targetPath] of [
       ["OPENCLAW_STATE_DIR", stateDir],
-      ["OPENCLAW_CONFIG_PATH", path.dirname(configPath)],
+      ["OPENCLAW_CONFIG_PATH", configPath],
       ["OPENCLAW_OAUTH_DIR", oauthDir],
     ] as const) {
       const resolved = await canonicalizePathForContainment(targetPath);
