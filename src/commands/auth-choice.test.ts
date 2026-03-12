@@ -1323,7 +1323,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
-      expect(resolvePreferredProviderForAuthChoice(scenario.authChoice)).toBe(
+      expect(resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice })).toBe(
         scenario.expectedProvider,
       );
     }
