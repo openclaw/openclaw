@@ -86,3 +86,16 @@ describe("DeliverySerializer", () => {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+it("handles synchronous throw from fn without hanging", async () => {
+  const serializer = new DeliverySerializer();
+
+  const p1 = serializer.serialize("key", () => {
+    throw new Error("sync boom");
+  });
+  const p2 = serializer.serialize("key", async () => "after-sync-throw");
+
+  await expect(p1).rejects.toThrow("sync boom");
+  expect(await p2).toBe("after-sync-throw");
+  expect(serializer.size).toBe(0);
+});
