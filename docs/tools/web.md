@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Parallel, and Perplexity providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Parallel, or Perplexity Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -35,6 +35,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Gemini**                | AI-synthesized answers + citations | —                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| **Parallel**              | Structured excerpts                | —                                            | LLM-optimized search excerpts from real-time web results                       | `PARALLEL_API_KEY`                          |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 
 ### Auto-detection
@@ -45,7 +46,8 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 2. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
 3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
+5. **Parallel** — `PARALLEL_API_KEY` env var or `tools.web.search.parallel.apiKey` config
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -225,6 +227,39 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using Parallel
+
+Parallel provides an LLM-optimized search API that returns structured excerpts from real-time web results.
+
+### Getting a Parallel API key
+
+1. Go to [parallel.ai](https://parallel.ai)
+2. Create an API key
+3. Set `PARALLEL_API_KEY` in the Gateway environment, or configure `tools.web.search.parallel.apiKey`
+
+### Setting up Parallel search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "parallel",
+        parallel: {
+          // API key (optional if PARALLEL_API_KEY is set)
+          apiKey: "par-...", // pragma: allowlist secret
+          // Base URL (defaults to "https://api.parallel.ai")
+          // baseUrl: "https://api.parallel.ai",
+        },
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `PARALLEL_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
 ## web_search
 
 Search the web using your configured provider.
@@ -237,6 +272,7 @@ Search the web using your configured provider.
   - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **Parallel**: `PARALLEL_API_KEY` or `tools.web.search.parallel.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
 - All provider key fields above support SecretRef objects.
 

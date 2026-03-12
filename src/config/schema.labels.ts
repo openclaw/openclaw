@@ -226,6 +226,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.parallel.apiKey": "Parallel API Key", // pragma: allowlist secret
+  "tools.web.search.parallel.baseUrl": "Parallel Base URL",
   "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
   "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
   "tools.web.search.perplexity.model": "Perplexity Model",
@@ -243,6 +245,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
   "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Firecrawl Timeout (sec)",
+  "tools.web.fetch.parallel.enabled": "Enable Parallel Extract Fallback",
+  "tools.web.fetch.parallel.apiKey": "Parallel Extract API Key", // pragma: allowlist secret
+  "tools.web.fetch.parallel.baseUrl": "Parallel Extract Base URL",
+  "tools.web.fetch.parallel.timeoutSeconds": "Parallel Extract Timeout (sec)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",

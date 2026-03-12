@@ -22,6 +22,8 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveParallelApiKey,
+  resolveParallelBaseUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
 } = __testing;
@@ -466,5 +468,36 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+describe("web_search parallel config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveParallelApiKey({ apiKey: "parallel-test-key" })).toBe("parallel-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to PARALLEL_API_KEY env var", () => {
+    const key = "parallel-env-key"; // pragma: allowlist secret
+    withEnv({ PARALLEL_API_KEY: key }, () => {
+      expect(resolveParallelApiKey({})).toBe(key);
+    });
+  });
+
+  it("returns undefined when no key is available", () => {
+    withEnv({ PARALLEL_API_KEY: undefined }, () => {
+      expect(resolveParallelApiKey({})).toBeUndefined();
+      expect(resolveParallelApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default baseUrl", () => {
+    expect(resolveParallelBaseUrl({})).toBe("https://api.parallel.ai");
+    expect(resolveParallelBaseUrl(undefined)).toBe("https://api.parallel.ai");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveParallelBaseUrl({ baseUrl: "https://custom.parallel.ai" })).toBe(
+      "https://custom.parallel.ai",
+    );
   });
 });
