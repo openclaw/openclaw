@@ -299,7 +299,8 @@ export class OpenAIRealtimeVoiceBridge {
       this.ws.close(1000, "Bridge closed");
       this.ws = null;
     }
-    this.config.onClose?.();
+    // onClose fires from the ws "close" event handler (intentionallyClosed branch)
+    // to avoid double-firing on explicit close().
   }
 
   /** True if the WebSocket is open and the session is configured. */
