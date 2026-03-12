@@ -43,7 +43,12 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
-import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -67,6 +72,20 @@ function resolveGatewaySessionTargetFromKey(key: string) {
   const cfg = loadConfig();
   const target = resolveGatewaySessionStoreTarget({ cfg, key });
   return { cfg, target, storePath: target.storePath };
+}
+
+function emitSessionsChanged(
+  broadcast: GatewayRequestContext["broadcast"],
+  payload: { sessionKey?: string; reason: string; compacted?: boolean },
+) {
+  broadcast(
+    "sessions.changed",
+    {
+      ...payload,
+      ts: Date.now(),
+    },
+    { dropIfSlow: true },
+  );
 }
 
 function rejectWebchatSessionMutation(params: {
@@ -107,6 +126,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       opts: p,
     });
     respond(true, result, undefined);
+  },
+  "sessions.subscribe": ({ respond }) => {
+    respond(true, { subscribed: true }, undefined);
+  },
+  "sessions.unsubscribe": ({ respond }) => {
+    respond(true, { subscribed: false }, undefined);
   },
   "sessions.preview": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
@@ -226,8 +251,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     };
     respond(true, result, undefined);
+    emitSessionsChanged(context.broadcast, {
+      sessionKey: target.canonicalKey,
+      reason: "patch",
+    });
   },
-  "sessions.reset": async ({ params, respond }) => {
+  "sessions.reset": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -248,8 +277,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
+    emitSessionsChanged(context.broadcast, {
+      sessionKey: result.key,
+      reason,
+    });
   },
-  "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
+  "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -319,6 +352,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
+    if (deleted) {
+      emitSessionsChanged(context.broadcast, {
+        sessionKey: target.canonicalKey,
+        reason: "delete",
+      });
+    }
   },
   "sessions.get": ({ params, respond }) => {
     const p = params;
@@ -342,7 +381,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
     respond(true, { messages }, undefined);
   },
-  "sessions.compact": async ({ params, respond }) => {
+  "sessions.compact": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -443,5 +482,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    emitSessionsChanged(context.broadcast, {
+      sessionKey: target.canonicalKey,
+      reason: "compact",
+      compacted: true,
+    });
   },
 };

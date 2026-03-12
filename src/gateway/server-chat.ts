@@ -639,5 +639,16 @@ export function createAgentEventHandler({
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
     }
+
+    if (
+      sessionKey &&
+      (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error")
+    ) {
+      broadcast(
+        "sessions.changed",
+        { sessionKey, phase: lifecyclePhase, runId: evt.runId, ts: evt.ts },
+        { dropIfSlow: true },
+      );
+    }
   };
 }
