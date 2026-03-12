@@ -151,6 +151,7 @@ async function resolveModelOverride(params: {
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
+    agentId: params.agentId,
   });
 
   const resolved = resolveModelRefFromString({

@@ -328,6 +328,98 @@ describe("model-selection", () => {
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
       ]);
     });
+
+    it("includes fallback models in allowed set", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: ["anthropic/claude-sonnet-4-6", "google/gemini-3-pro"],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(true);
+      expect(result.allowAny).toBe(false);
+    });
+
+    it("handles empty fallbacks gracefully", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowAny).toBe(false);
+    });
+
+    it("prefers per-agent fallback overrides when agentId is provided", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-4o": {},
+            },
+            model: {
+              primary: "openai/gpt-4o",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          list: [
+            {
+              id: "coder",
+              model: {
+                primary: "openai/gpt-4o",
+                fallbacks: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        agentId: "coder",
+      });
+
+      expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
+      expect(result.allowAny).toBe(false);
+    });
   });
 
   describe("resolveAllowedModelRef", () => {

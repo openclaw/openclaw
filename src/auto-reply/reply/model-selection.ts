@@ -263,6 +263,7 @@ function scoreFuzzyMatch(params: {
 
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -315,6 +316,7 @@ export async function createModelSelectionState(params: {
       catalog: modelCatalog,
       defaultProvider,
       defaultModel,
+      agentId: params.agentId,
     });
     allowedModelCatalog = allowed.allowedCatalog;
     allowedModelKeys = allowed.allowedKeys;
