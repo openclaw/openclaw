@@ -266,6 +266,79 @@ describe("session_status tool", () => {
     });
   });
 
+  it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+          sandbox: { sessionToolsVisibility: "spawned" },
+        },
+      },
+    };
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return {
+          sessions:
+            request.params?.spawnedBy === "main" ? [{ key: "agent:main:subagent:child" }] : [],
+        };
+      }
+      return {};
+    });
+
+    const tool = getSessionStatusTool("main", {
+      sandboxed: true,
+    });
+
+    const mainResult = await tool.execute("call8", {});
+    const mainDetails = mainResult.details as { ok?: boolean; sessionKey?: string };
+    expect(mainDetails.ok).toBe(true);
+    expect(mainDetails.sessionKey).toBe("agent:main:main");
+
+    const childResult = await tool.execute("call9", {
+      sessionKey: "agent:main:subagent:child",
+    });
+    const childDetails = childResult.details as { ok?: boolean; sessionKey?: string };
+    expect(childDetails.ok).toBe(true);
+    expect(childDetails.sessionKey).toBe("agent:main:subagent:child");
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit: 500,
+        spawnedBy: "main",
+      },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        limit: 500,
+        spawnedBy: "main",
+      },
+    });
+  });
+
   it("scopes bare session keys to the requester agent", async () => {
     loadSessionStoreMock.mockClear();
     updateSessionStoreMock.mockClear();
