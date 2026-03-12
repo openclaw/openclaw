@@ -15,6 +15,7 @@ import {
   type RuntimeEnv,
   type RuntimeLogger,
 } from "openclaw/plugin-sdk/matrix";
+import { createDraftStreamLoop } from "../../../../../src/channels/draft-stream-loop.js";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -679,54 +680,64 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const reasoningDraftState = {
         messageId: undefined as string | undefined,
         lastText: "",
-        updateChain: Promise.resolve(),
+        stopUpdates: false,
       };
+      const reasoningDraftLoop = createDraftStreamLoop({
+        throttleMs: 0,
+        isStopped: () => reasoningDraftState.stopUpdates,
+        sendOrEditStreamMessage: async (text: string) => {
+          const trimmedText = text.trim();
+          if (!trimmedText || trimmedText === reasoningDraftState.lastText) {
+            return;
+          }
+          reasoningDraftState.lastText = trimmedText;
+          if (!reasoningDraftState.messageId) {
+            const relation = threadTarget
+              ? buildThreadRelation(threadTarget, replyToMode === "off" ? undefined : messageId)
+              : buildReplyRelation(replyToMode === "off" ? undefined : messageId);
+            const eventId = await enqueueSend(
+              roomId,
+              async () => await client.sendMessage(roomId, buildTextContent(trimmedText, relation)),
+            );
+            if (eventId) {
+              reasoningDraftState.messageId = eventId;
+            }
+            return;
+          }
+          await enqueueSend(
+            roomId,
+            async () =>
+              await client.sendMessage(roomId, {
+                msgtype: "m.text",
+                body: `* ${trimmedText}`,
+                "m.new_content": {
+                  msgtype: "m.text",
+                  body: trimmedText,
+                },
+                "m.relates_to": {
+                  rel_type: RelationType.Replace,
+                  event_id: reasoningDraftState.messageId,
+                },
+              }),
+          );
+        },
+      });
       const enqueueReasoningDraftUpdate = async (text?: string) => {
         const trimmedText = text?.trim();
-        if (!trimmedText || trimmedText === reasoningDraftState.lastText) {
+        if (!trimmedText || reasoningDraftState.stopUpdates) {
           return;
         }
-        reasoningDraftState.lastText = trimmedText;
-        reasoningDraftState.updateChain = reasoningDraftState.updateChain
-          .then(async () => {
-            if (!reasoningDraftState.messageId) {
-              const relation = threadTarget
-                ? buildThreadRelation(threadTarget, replyToMode === "off" ? undefined : messageId)
-                : buildReplyRelation(replyToMode === "off" ? undefined : messageId);
-              const eventId = await enqueueSend(
-                roomId,
-                async () =>
-                  await client.sendMessage(roomId, buildTextContent(trimmedText, relation)),
-              );
-              if (eventId) {
-                reasoningDraftState.messageId = eventId;
-              }
-              return;
-            }
-            await enqueueSend(
-              roomId,
-              async () =>
-                await client.sendMessage(roomId, {
-                  msgtype: "m.text",
-                  body: `* ${trimmedText}`,
-                  "m.new_content": {
-                    msgtype: "m.text",
-                    body: trimmedText,
-                  },
-                  "m.relates_to": {
-                    rel_type: RelationType.Replace,
-                    event_id: reasoningDraftState.messageId,
-                  },
-                }),
-            );
-          })
-          .catch((err) => {
-            runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
-          });
-        await reasoningDraftState.updateChain;
+        reasoningDraftLoop.update(trimmedText);
+        try {
+          await reasoningDraftLoop.flush();
+        } catch (err) {
+          runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
+        }
       };
       const clearReasoningDraft = async () => {
-        await reasoningDraftState.updateChain;
+        reasoningDraftState.stopUpdates = true;
+        reasoningDraftLoop.stop();
+        await reasoningDraftLoop.waitForInFlight();
         if (!reasoningDraftState.messageId) {
           return;
         }
