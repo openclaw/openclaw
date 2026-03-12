@@ -170,7 +170,10 @@ export function buildAgentPeerSessionKey(params: {
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
   const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
-  return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
+  const accountId = normalizeAccountId(params.accountId);
+  // Include accountId for channel/group peer kinds to prevent session key collisions
+  // across multiple accounts/tenants (e.g., multiple Slack workspaces with same channel IDs)
+  return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:${peerKind}:${peerId}`;
 }
 
 function resolveLinkedPeerId(params: {
