@@ -73,17 +73,6 @@ export function assertWebChannel(input: string): asserts input is WebChannel {
   }
 }
 
-export function normalizePath(p: string): string {
-  if (!p.startsWith("/")) {
-    return `/${p}`;
-  }
-  return p;
-}
-
-export function withWhatsAppPrefix(number: string): string {
-  return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
-}
-
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
@@ -282,7 +271,11 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
   return sliceUtf16Safe(input, 0, limit);
 }
 
-export function resolveUserPath(input: string): string {
+export function resolveUserPath(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
   if (!input) {
     return "";
   }
@@ -292,9 +285,9 @@ export function resolveUserPath(input: string): string {
   }
   if (trimmed.startsWith("~")) {
     const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(process.env, os.homedir),
-      env: process.env,
-      homedir: os.homedir,
+      home: resolveRequiredHomeDir(env, homedir),
+      env,
+      homedir,
     });
     return path.resolve(expanded);
   }
@@ -307,7 +300,7 @@ export function resolveConfigDir(
 ): string {
   const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env, homedir);
   }
   const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
   try {
