@@ -99,6 +99,7 @@ export async function start(state: CronServiceState) {
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
+    const now = state.deps.nowMs();
     for (const job of jobs) {
       if (typeof job.state.runningAtMs === "number") {
         state.deps.log.warn(
@@ -107,16 +108,31 @@ export async function start(state: CronServiceState) {
         );
         job.state.runningAtMs = undefined;
         startupInterruptedJobIds.add(job.id);
+        // Interrupted jobs are excluded from catch-up (skipJobIds) and will
+        // not be executed again for the missed slot.  Advance their
+        // nextRunAtMs so the timer schedules them for the next regular
+        // period instead of treating the stale past-due value as
+        // immediately runnable (#42883).
+        const next = computeJobNextRunAtMs(job, now);
+        if (typeof next === "number") {
+          job.state.nextRunAtMs = next;
+        }
       }
     }
     await persist(state);
   });
 
-  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
-
+  // Arm the timer BEFORE running catch-up so that regular due jobs start
+  // firing immediately.  Before #42883 the `armTimer` call came AFTER
+  // `await runMissedJobs(…)`, which blocked the scheduler for the entire
+  // duration of the catch-up phase — up to hours when jobs involve slow
+  // LLM calls — leaving the scheduler completely inert.
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    recomputeNextRuns(state);
+    // Use maintenance-only recompute so that past-due nextRunAtMs values
+    // set by the stagger logic in applyStartupCatchupOutcomes are preserved
+    // instead of being silently advanced to the next period (#42883).
+    recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);
     state.deps.log.info(
@@ -128,6 +144,12 @@ export async function start(state: CronServiceState) {
       "cron: started",
     );
   });
+
+  // Run catch-up after arming the timer.  The timer is already active so
+  // non-catch-up due jobs will fire on schedule even while this awaits.
+  // planStartupCatchup marks candidates with runningAtMs, preventing the
+  // timer from double-executing them.
+  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
 }
 
 export function stop(state: CronServiceState) {
