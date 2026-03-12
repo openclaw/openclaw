@@ -3,7 +3,6 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   anthropic: ["ANTHROPIC_API_KEY"],
   google: ["GEMINI_API_KEY"],
   minimax: ["MINIMAX_API_KEY"],
-  "minimax-cn": ["MINIMAX_API_KEY"],
   moonshot: ["MOONSHOT_API_KEY"],
   "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
