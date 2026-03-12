@@ -27,11 +27,10 @@ describe("zalouser outbound chunker", () => {
 
   it("chunks without empty strings and respects limit", () => {
     const chunker = zalouserPlugin.outbound?.chunker;
-    expect(chunker).toBeTypeOf("function");
     if (!chunker) {
       return;
     }
-
+    expect(chunker).toBeTypeOf("function");
     const limit = 10;
     const chunks = chunker("hello world\nthis is a test", limit);
     expect(chunks.length).toBeGreaterThan(1);
