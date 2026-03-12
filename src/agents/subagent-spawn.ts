@@ -153,6 +153,25 @@ async function cleanupProvisionalSession(
   }
 }
 
+async function cleanupFailedSpawnBeforeAgentStart(params: {
+  childSessionKey: string;
+  attachmentAbsDir?: string;
+  emitLifecycleHooks?: boolean;
+  deleteTranscript?: boolean;
+}): Promise<void> {
+  if (params.attachmentAbsDir) {
+    try {
+      await fs.rm(params.attachmentAbsDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+  await cleanupProvisionalSession(params.childSessionKey, {
+    emitLifecycleHooks: params.emitLifecycleHooks,
+    deleteTranscript: params.deleteTranscript,
+  });
+}
+
 function resolveSpawnMode(params: {
   requestedMode?: SpawnSubagentMode;
   threadRequested: boolean;
@@ -566,6 +585,12 @@ export async function spawnSubagentDirect(
     ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
   });
   if (spawnLineagePatchError) {
+    await cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey,
+      attachmentAbsDir,
+      emitLifecycleHooks: threadBindingReady,
+      deleteTranscript: true,
+    });
     return {
       status: "error",
       error: spawnLineagePatchError,
