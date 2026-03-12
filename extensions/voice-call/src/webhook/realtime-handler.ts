@@ -233,7 +233,6 @@ export class RealtimeCallHandler {
 
       onTranscript: (role, text, isFinal) => {
         if (isFinal) {
-          // Emit user speech through the manager for transcript persistence
           if (role === "user") {
             const event: NormalizedEvent = {
               id: `realtime-speech-${callSid}-${Date.now()}`,
@@ -245,6 +244,17 @@ export class RealtimeCallHandler {
               isFinal: true,
             };
             this.manager.processEvent(event);
+          } else if (role === "assistant") {
+            // Log assistant turns via call.speaking so they appear as speaker:"bot"
+            // in the transcript (same mechanism Telnyx uses for TTS speech).
+            this.manager.processEvent({
+              id: `realtime-bot-${callSid}-${Date.now()}`,
+              type: "call.speaking",
+              callId,
+              providerCallId: callSid,
+              timestamp: Date.now(),
+              text,
+            });
           }
         }
       },
