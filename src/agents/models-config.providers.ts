@@ -15,6 +15,7 @@ import {
 } from "../providers/kilocode-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { AVIAN_BASE_URL, discoverAvianModels } from "./avian-models.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
   buildBytePlusModelDefinition,
@@ -183,17 +184,6 @@ const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
 const QIANFAN_DEFAULT_COST = {
   input: 0,
   output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-const AVIAN_BASE_URL = "https://api.avian.io/v1";
-const AVIAN_DEFAULT_MODEL_ID = "deepseek/deepseek-v3.2";
-const AVIAN_DEFAULT_CONTEXT_WINDOW = 164000;
-const AVIAN_DEFAULT_MAX_TOKENS = 65536;
-const AVIAN_DEFAULT_COST = {
-  input: 0.26,
-  output: 0.38,
   cacheRead: 0,
   cacheWrite: 0,
 };
@@ -879,48 +869,12 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
-export function buildAvianProvider(): ProviderConfig {
+export async function buildAvianProvider(): Promise<ProviderConfig> {
+  const models = await discoverAvianModels();
   return {
     baseUrl: AVIAN_BASE_URL,
     api: "openai-completions",
-    models: [
-      {
-        id: AVIAN_DEFAULT_MODEL_ID,
-        name: "DeepSeek V3.2",
-        reasoning: false,
-        input: ["text"],
-        cost: AVIAN_DEFAULT_COST,
-        contextWindow: AVIAN_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: AVIAN_DEFAULT_MAX_TOKENS,
-      },
-      {
-        id: "moonshotai/kimi-k2.5",
-        name: "Kimi K2.5",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0.45, output: 2.2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131000,
-        maxTokens: 8192,
-      },
-      {
-        id: "z-ai/glm-5",
-        name: "GLM 5",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0.3, output: 2.55, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131000,
-        maxTokens: 16384,
-      },
-      {
-        id: "minimax/minimax-m2.5",
-        name: "MiniMax M2.5",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0.3, output: 1.1, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000000,
-        maxTokens: 1000000,
-      },
-    ],
+    models,
   };
 }
 
@@ -1196,7 +1150,7 @@ export async function resolveImplicitProviders(params: {
     resolveEnvApiKeyVarName("avian") ??
     resolveApiKeyFromProfiles({ provider: "avian", store: authStore });
   if (avianKey) {
-    providers.avian = { ...buildAvianProvider(), apiKey: avianKey };
+    providers.avian = { ...(await buildAvianProvider()), apiKey: avianKey };
   }
 
   return providers;
