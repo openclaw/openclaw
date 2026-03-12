@@ -369,15 +369,18 @@ export function attachGatewayWsMessageHandler(params: {
     if (isClosed()) {
       return;
     }
-    if (!getClient() && rawDataToString(data).length > MAX_PREAUTH_PAYLOAD_BYTES) {
+
+    const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
+    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
       setHandshakeState("failed");
       setCloseCause("preauth-payload-too-large", {
-        payloadBytes: rawDataToString(data).length,
+        payloadBytes: preauthPayloadBytes,
         limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
       });
       close(1009, "preauth payload too large");
       return;
     }
+
     const text = rawDataToString(data);
     try {
       const parsed = JSON.parse(text);
@@ -1253,4 +1256,17 @@ export function attachGatewayWsMessageHandler(params: {
       }
     }
   });
+}
+
+function getRawDataByteLength(data: unknown): number {
+  if (Buffer.isBuffer(data)) {
+    return data.byteLength;
+  }
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  if (data instanceof ArrayBuffer) {
+    return data.byteLength;
+  }
+  return Buffer.byteLength(String(data));
 }

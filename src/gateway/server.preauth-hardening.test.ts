@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_HANDSHAKE_TIMEOUT_MS, MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
 
 let cleanupEnv: Array<() => void> = [];
@@ -34,7 +34,7 @@ describe("gateway pre-auth hardening", () => {
       });
       expect(close.code).toBe(1000);
       expect(close.elapsedMs).toBeGreaterThanOrEqual(150);
-      expect(close.elapsedMs).toBeLessThan(DEFAULT_HANDSHAKE_TIMEOUT_MS);
+      expect(close.elapsedMs).toBeLessThan(400);
     } finally {
       await harness.close();
     }
