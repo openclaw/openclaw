@@ -635,6 +635,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 for (const chunk of chunks.length > 0 ? chunks : [text]) {
                   if (!chunk) continue;
                   await sendMessageMattermost(to, chunk, {
+                    cfg,
                     accountId: account.accountId,
                   });
                 }
@@ -644,6 +645,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const caption = first ? text : "";
                   first = false;
                   await sendMessageMattermost(to, caption, {
+                    cfg,
                     accountId: account.accountId,
                     mediaUrl,
                   });
@@ -947,6 +949,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 continue;
               }
               await sendMessageMattermost(to, chunk, {
+                cfg,
                 accountId: account.accountId,
               });
             }
@@ -958,6 +961,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             const caption = first ? text : "";
             first = false;
             await sendMessageMattermost(to, caption, {
+              cfg,
               accountId: account.accountId,
               mediaUrl,
             });
@@ -1326,7 +1330,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   idLine: `Your Mattermost user id: ${senderId}`,
                   code,
                 }),
-                { accountId: account.accountId },
+                { cfg, accountId: account.accountId },
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
@@ -1653,6 +1657,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 continue;
               }
               await sendMessageMattermost(to, chunk, {
+                cfg,
                 accountId: account.accountId,
                 replyToId: resolveMattermostReplyRootId({
                   threadRootId,
@@ -1666,6 +1671,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               const caption = first ? text : "";
               first = false;
               await sendMessageMattermost(to, caption, {
+                cfg,
                 accountId: account.accountId,
                 mediaUrl,
                 replyToId: resolveMattermostReplyRootId({

@@ -8,6 +8,25 @@ import {
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
+/**
+ * Compute effective sandbox scope from raw config records.
+ * Mirrors `resolveSandboxScope` logic: agent scope > agent perSession > defaults scope > defaults perSession > "agent".
+ */
+function computeEffectiveSandboxScope(
+  agentSandbox: Record<string, unknown> | undefined,
+  defaultsSandbox: Record<string, unknown> | undefined,
+): string {
+  const scope = agentSandbox?.scope ?? defaultsSandbox?.scope;
+  if (typeof scope === "string" && scope.length > 0) {
+    return scope;
+  }
+  const perSession = agentSandbox?.perSession ?? defaultsSandbox?.perSession;
+  if (typeof perSession === "boolean") {
+    return perSession ? "session" : "shared";
+  }
+  return "agent";
+}
+
 type ProviderLike = {
   apiKey?: unknown;
   headers?: unknown;
@@ -313,6 +332,124 @@ function collectCronAssignments(params: {
   });
 }
 
+function collectSandboxDockerEnvAssignments(params: {
+  env: Record<string, unknown>;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active: boolean;
+  inactiveReason?: string;
+}): void {
+  for (const [key, value] of Object.entries(params.env)) {
+    collectSecretInputAssignment({
+      value,
+      path: `${params.pathPrefix}.${key}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (resolved) => {
+        params.env[key] = resolved as string;
+      },
+    });
+  }
+}
+
+function collectAgentSandboxDockerEnvAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  if (!isRecord(agents)) {
+    return;
+  }
+
+  // Collect from agents.defaults.sandbox.docker.env
+  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
+  const defaultsSandbox = isRecord(defaultsConfig?.sandbox) ? defaultsConfig.sandbox : undefined;
+  const defaultsDocker = isRecord(defaultsSandbox?.docker) ? defaultsSandbox.docker : undefined;
+  const defaultsEnv = isRecord(defaultsDocker?.env) ? defaultsDocker.env : undefined;
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  const defaultsMode = typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : "off";
+
+  // Per-key activity: a defaults env key is active when at least one agent consumes it.
+  // An agent consumes a defaults env key when it is enabled, its effective sandbox mode
+  // is not "off", and either its scope is "shared" (agent docker ignored, defaults env
+  // used directly) or it does not override that key in its own sandbox.docker.env.
+  if (defaultsEnv) {
+    for (const [key, value] of Object.entries(defaultsEnv)) {
+      const active =
+        list.length === 0
+          ? defaultsMode !== "off"
+          : list.some((rawAgent) => {
+              if (!isRecord(rawAgent) || rawAgent.enabled === false) {
+                return false;
+              }
+              const agentSandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+              const effectiveMode =
+                typeof agentSandbox?.mode === "string" ? agentSandbox.mode : defaultsMode;
+              if (effectiveMode === "off") {
+                return false;
+              }
+              const effectiveScope = computeEffectiveSandboxScope(agentSandbox, defaultsSandbox);
+              if (effectiveScope === "shared") {
+                return true;
+              }
+              const docker = isRecord(agentSandbox?.docker) ? agentSandbox.docker : undefined;
+              const agentEnv = isRecord(docker?.env) ? docker.env : undefined;
+              return !agentEnv || !Object.prototype.hasOwnProperty.call(agentEnv, key);
+            });
+
+      collectSecretInputAssignment({
+        value,
+        path: `agents.defaults.sandbox.docker.env.${key}`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason: active
+          ? undefined
+          : "defaults env key is not consumed by any active agent.",
+        apply: (resolved) => {
+          defaultsEnv[key] = resolved as string;
+        },
+      });
+    }
+  }
+
+  list.forEach((rawAgent, index) => {
+    if (!isRecord(rawAgent)) {
+      return;
+    }
+    const sandbox = isRecord(rawAgent.sandbox) ? rawAgent.sandbox : undefined;
+    const docker = isRecord(sandbox?.docker) ? sandbox.docker : undefined;
+    const env = isRecord(docker?.env) ? docker.env : undefined;
+    if (env) {
+      const enabled = rawAgent.enabled !== false;
+      const effectiveScope = computeEffectiveSandboxScope(sandbox, defaultsSandbox);
+      const effectiveMode = typeof sandbox?.mode === "string" ? sandbox.mode : defaultsMode;
+      // Inactive when: agent disabled, scope is shared (agent docker ignored), or mode is off.
+      const active = enabled && effectiveScope !== "shared" && effectiveMode !== "off";
+      const inactiveReason = !enabled
+        ? "agent is disabled."
+        : effectiveScope === "shared"
+          ? "agent sandbox scope is shared; agent-level docker env is ignored."
+          : "sandbox mode is off; env refs are not consumed.";
+      collectSandboxDockerEnvAssignments({
+        env,
+        pathPrefix: `agents.list.${index}.sandbox.docker.env`,
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason,
+      });
+    }
+  });
+}
+
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -337,6 +474,7 @@ export function collectCoreConfigAssignments(params: {
   }
 
   collectAgentMemorySearchAssignments(params);
+  collectAgentSandboxDockerEnvAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
   collectMessagesTtsAssignments(params);
