@@ -1,0 +1,8 @@
+# Compiled binaries
+/vm-runner
+
+# Test binaries
+*.test
+
+# Output of go coverage
+*.out
