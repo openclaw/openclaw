@@ -20,6 +20,11 @@ This technical note focuses on:
 - which outcome signals are added first
 - what is intentionally deferred
 
+The delivery layer also needs a first-class visible-delivery taxonomy. Even
+before watchdog-triggered status sends are enabled, the reply dispatcher should
+model `status` as a distinct visible kind rather than overloading `block` or
+`final`.
+
 ## Context
 
 The current runtime already has a conversation presentation seam:

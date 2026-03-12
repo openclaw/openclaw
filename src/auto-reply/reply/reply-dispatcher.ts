@@ -7,7 +7,7 @@ import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normaliz
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type ReplyDispatchKind = "tool" | "block" | "status" | "final";
 
 export type FirstVisibleReplyInfo = {
   kind: ReplyDispatchKind;
@@ -85,6 +85,7 @@ type ReplyDispatcherWithTypingResult = {
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
+  sendStatusReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
@@ -130,6 +131,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
     block: 0,
+    status: 0,
     final: 0,
   };
   let firstVisibleDelivered = false;
@@ -225,6 +227,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   return {
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
+    sendStatusReply: (payload) => enqueue("status", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),

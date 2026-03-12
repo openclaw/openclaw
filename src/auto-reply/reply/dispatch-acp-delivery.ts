@@ -61,6 +61,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     routedCounts: {
       tool: 0,
       block: 0,
+      status: 0,
       final: 0,
     },
     toolMessageByCallId: new Map(),
@@ -183,6 +184,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "block") {
       return params.dispatcher.sendBlockReply(ttsPayload);
     }
+    if (kind === "status") {
+      return params.dispatcher.sendStatusReply(ttsPayload);
+    }
     return params.dispatcher.sendFinalReply(ttsPayload);
   };
 
@@ -195,6 +199,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
+      counts.status += state.routedCounts.status;
       counts.final += state.routedCounts.final;
     },
   };

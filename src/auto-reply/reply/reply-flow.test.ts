@@ -1354,6 +1354,23 @@ describe("createReplyDispatcher", () => {
     });
   });
 
+  it("treats status replies as first-class visible deliveries", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const onFirstVisible = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onFirstVisible });
+
+    dispatcher.sendStatusReply({ text: "working..." });
+
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledWith({ text: "working..." }, { kind: "status" });
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, status: 1, final: 0 });
+    expect(onFirstVisible).toHaveBeenCalledWith({
+      kind: "status",
+      payload: expect.objectContaining({ text: "working..." }),
+    });
+  });
+
   it("waits for the first successful delivery before firing onFirstVisible", async () => {
     const deliver = vi
       .fn()
@@ -1456,10 +1473,11 @@ describe("createReplyDispatcher", () => {
 
     dispatcher.sendToolResult({ text: "tool" });
     dispatcher.sendBlockReply({ text: "block" });
+    dispatcher.sendStatusReply({ text: "status" });
     dispatcher.sendFinalReply({ text: "final" });
 
     await dispatcher.waitForIdle();
-    expect(delivered).toEqual(["tool", "block", "final"]);
+    expect(delivered).toEqual(["tool", "block", "status", "final"]);
   });
 
   it("fires onIdle when the queue drains", async () => {

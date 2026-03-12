@@ -52,7 +52,7 @@ const ttsMocks = vi.hoisted(() => {
     maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
         payload: ReplyPayload;
-        kind: "tool" | "block" | "final";
+        kind: "tool" | "block" | "status" | "final";
       };
       if (
         state.synthesizeFinalAudio &&
@@ -164,9 +164,10 @@ function createDispatcher(): ReplyDispatcher {
   return {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
+    sendStatusReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, status: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }

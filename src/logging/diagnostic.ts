@@ -246,7 +246,7 @@ export function logMessageFirstVisible(params: {
   chatId?: number | string;
   sessionId?: string;
   sessionKey?: string;
-  kind: "tool" | "block" | "final";
+  kind: "tool" | "block" | "status" | "final";
   dispatchToFirstVisibleMs: number;
 }) {
   if (diag.isEnabled("debug")) {

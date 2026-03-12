@@ -89,7 +89,7 @@ export type DiagnosticMessageFirstVisibleEvent = DiagnosticBaseEvent & {
   chatId?: number | string;
   sessionKey?: string;
   sessionId?: string;
-  kind: "tool" | "block" | "final";
+  kind: "tool" | "block" | "status" | "final";
   dispatchToFirstVisibleMs: number;
 };
 

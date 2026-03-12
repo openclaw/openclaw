@@ -89,12 +89,13 @@ const sessionKey = "agent:codex-acp:session-1";
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
-  counts: Record<"tool" | "block" | "final", number>;
+  counts: Record<"tool" | "block" | "status" | "final", number>;
 } {
-  const counts = { tool: 0, block: 0, final: 0 };
+  const counts = { tool: 0, block: 0, status: 0, final: 0 };
   const dispatcher: ReplyDispatcher = {
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn(() => true),
+    sendStatusReply: vi.fn(() => true),
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
