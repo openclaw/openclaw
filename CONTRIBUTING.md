@@ -92,6 +92,7 @@ Welcome to the lobster tank! 🦞
 - Describe what & why
 - Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- Use American English spelling and grammar in code, comments, docs, and UI strings
 
 ## Review Conversations Are Author-Owned
 
