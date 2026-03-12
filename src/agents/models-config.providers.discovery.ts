@@ -22,6 +22,7 @@ export {
   buildKilocodeProviderWithDiscovery,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
+  buildDeepInfraProviderWithDiscovery,
 } from "../plugin-sdk/provider-catalog.js";
 
 export { resolveOllamaApiBase } from "./ollama-models.js";

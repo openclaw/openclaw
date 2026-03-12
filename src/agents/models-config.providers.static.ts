@@ -5,6 +5,7 @@ export {
   buildBytePlusProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildDeepInfraStaticProvider,
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
   MODELSTUDIO_BASE_URL,

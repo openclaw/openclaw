@@ -1,0 +1,66 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.ts";
+import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.ts";
+import { buildDeepInfraStaticProvider } from "./models-config.providers.ts";
+
+const DEEPINFRA_MODEL_IDS = [
+    "openai/gpt-oss-120b",
+    "minimaxai/minimax-m2.5",
+    "zai-org/glm-5",
+    "moonshotai/kimi-k2.5"
+];
+
+describe("DeepInfra implicit provider", () => {
+  it("should include deepinfra when DEEPINFRA_API_KEY is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["DEEPINFRA_API_KEY"]);
+    process.env.DEEPINFRA_API_KEY = "test-key"; // pragma: allowlist secret
+
+    try {
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
+      expect(providers?.deepinfra).toBeDefined();
+      expect(providers?.deepinfra?.models?.length).toBeGreaterThan(0);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("should not include deepinfra when no API key is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const envSnapshot = captureEnv(["DEEPINFRA_API_KEY"]);
+    delete process.env.DEEPINFRA_API_KEY;
+
+    try {
+      const providers = await resolveImplicitProvidersForTest({ agentDir });
+      expect(providers?.deepinfra).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
+  it("should build deepinfra provider with correct configuration", () => {
+    const provider = buildDeepInfraStaticProvider();
+    expect(provider.baseUrl).toBe("https://api.deepinfra.com/v1/openai/");
+    expect(provider.api).toBe("openai-completions");
+    expect(provider.models).toBeDefined();
+    expect(provider.models.length).toBeGreaterThan(0);
+  });
+
+  it("should include the default deepinfra model", () => {
+    const provider = buildDeepInfraStaticProvider();
+    const modelIds = provider.models.map((m) => m.id);
+    expect(modelIds).toContain("deepinfra/openai/gpt-oss-120b");
+  });
+
+  it("should include the static fallback catalog", () => {
+    const provider = buildDeepInfraStaticProvider();
+    const modelIds = provider.models.map((m) => m.id);
+    for (const modelId of DEEPINFRA_MODEL_IDS) {
+      expect(modelIds).toContain(modelId);
+    }
+    expect(provider.models).toHaveLength(DEEPINFRA_MODEL_IDS.length);
+  });
+});

@@ -158,6 +158,7 @@ describe("resolveTranscriptPolicy", () => {
     { provider: "openrouter", modelId: "google/gemini-2.5-pro-preview" },
     { provider: "opencode", modelId: "google/gemini-2.5-flash" },
     { provider: "kilocode", modelId: "gemini-2.0-flash" },
+    { provider: "deepinfra", modelId: "google/gemini-2.5-pro" },
   ])("sanitizes Gemini thought signatures for $provider routes", ({ provider, modelId }) => {
     const policy = resolveTranscriptPolicy({
       provider,

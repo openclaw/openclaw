@@ -252,6 +252,16 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
+### DeepInfra
+
+- Provider: `deepinfra`
+- Auth: `DEEPINFRA_API_KEY`
+- Example model: `deepinfra/openai/gpt-oss-120b`
+- CLI: `openclaw onboard --deepinfra-api-key <key>`
+- Base URL: `https://api.deepinfra.com/v1/openai/`
+
+See [/providers/deepinfra](/providers/deepinfra) for setup details.
+
 ### Other bundled provider plugins
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
