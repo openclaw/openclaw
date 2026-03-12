@@ -27,6 +27,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 private const val TEST_TIMEOUT_MS = 8_000L
@@ -40,6 +41,10 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
 
   override fun saveToken(deviceId: String, role: String, token: String) {
     tokens["${deviceId.trim()}|${role.trim()}"] = token.trim()
+  }
+
+  override fun clearToken(deviceId: String, role: String) {
+    tokens.remove("${deviceId.trim()}|${role.trim()}")
   }
 }
 
@@ -139,6 +144,70 @@ class GatewaySessionInvokeTest {
       val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
       assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
       assertNull(auth?.get("bootstrapToken"))
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
+  fun connect_retriesWithStoredDeviceTokenAfterSharedTokenMismatch() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val firstConnectAuth = CompletableDeferred<JsonObject?>()
+    val secondConnectAuth = CompletableDeferred<JsonObject?>()
+    val connectAttempts = AtomicInteger(0)
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
+            when (connectAttempts.incrementAndGet()) {
+              1 -> {
+                if (!firstConnectAuth.isCompleted) {
+                  firstConnectAuth.complete(auth)
+                }
+                webSocket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"unauthorized","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true,"recommendedNextStep":"retry_with_device_token"}}}""",
+                )
+                webSocket.close(1000, "retry")
+              }
+              else -> {
+                if (!secondConnectAuth.isCompleted) {
+                  secondConnectAuth.complete(auth)
+                }
+                webSocket.send(connectResponseFrame(id))
+                webSocket.close(1000, "done")
+              }
+            }
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+      harness.deviceAuthStore.saveToken(deviceId, "node", "stored-device-token")
+
+      connectNodeSession(
+        session = harness.session,
+        port = server.port,
+        token = "shared-auth-token",
+        bootstrapToken = null,
+      )
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
+      val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
+      assertEquals("shared-auth-token", firstAuth?.get("token")?.jsonPrimitive?.content)
+      assertNull(firstAuth?.get("deviceToken"))
+      assertEquals("shared-auth-token", secondAuth?.get("token")?.jsonPrimitive?.content)
+      assertEquals("stored-device-token", secondAuth?.get("deviceToken")?.jsonPrimitive?.content)
     } finally {
       shutdownHarness(harness, server)
     }
