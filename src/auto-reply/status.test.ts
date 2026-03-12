@@ -113,6 +113,23 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("includes Cortex mode details when provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      cortexLine: "🧠 Cortex: minimal (session override)",
+    });
+
+    expect(normalizeTestText(text)).toContain("Cortex: minimal (session override)");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -677,6 +694,12 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
+    expect(text).toContain(
+      "/cortex [text] - Inspect or override Cortex prompt mode for this conversation.",
+    );
+    expect(text).toContain(
+      "Tip: /cortex preview shows the active Cortex context; /status shows mode and source.",
+    );
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
@@ -703,6 +726,10 @@ describe("buildHelpMessage", () => {
     const text = buildHelpMessage({
       commands: { config: false, debug: false },
     } as unknown as OpenClawConfig);
+    expect(text).toContain("Cortex");
+    expect(text).toContain("/cortex preview");
+    expect(text).toContain("/cortex mode show");
+    expect(text).toContain("/cortex mode set <mode>");
     expect(text).toContain("Skills");
     expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
@@ -722,6 +749,7 @@ describe("buildCommandsMessagePaginated", () => {
     expect(result.text).toContain("ℹ️ Commands (1/");
     expect(result.text).toContain("Session");
     expect(result.text).toContain("/stop - Stop the current run.");
+    expect(result.text).toContain("Tip: /cortex preview shows context; /status shows mode/source.");
   });
 
   it("includes plugin commands in the paginated list", () => {
