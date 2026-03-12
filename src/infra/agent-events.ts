@@ -59,6 +59,48 @@ export function resetAgentRunContextForTest() {
   runContextById.clear();
 }
 
+/**
+ * RFC-A2A-RESPONSE-ROUTING: Extract routing info from skill_invocation message.
+ * Returns { correlationId, returnTo, timeout?, skill?, targetSessionKey? } if message is a valid skill_invocation.
+ */
+export function extractSkillInvocationRouting(
+  message: string,
+): {
+  correlationId: string;
+  returnTo: string;
+  timeout?: number;
+  skill?: string;
+  targetSessionKey?: string;
+} | null {
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed?.kind === "skill_invocation") {
+      const correlationId =
+        typeof parsed.correlationId === "string" && parsed.correlationId.trim()
+          ? parsed.correlationId.trim()
+          : undefined;
+      const returnTo =
+        typeof parsed.returnTo === "string" && parsed.returnTo.trim()
+          ? parsed.returnTo.trim()
+          : undefined;
+      const timeout =
+        typeof parsed.timeout === "number" && parsed.timeout > 0 ? parsed.timeout : undefined;
+      const skill =
+        typeof parsed.skill === "string" && parsed.skill.trim() ? parsed.skill.trim() : undefined;
+      const targetSessionKey =
+        typeof parsed.targetSessionKey === "string" && parsed.targetSessionKey.trim()
+          ? parsed.targetSessionKey.trim()
+          : undefined;
+      if (correlationId && returnTo) {
+        return { correlationId, returnTo, timeout, skill, targetSessionKey };
+      }
+    }
+  } catch {
+    // Not JSON or not skill_invocation - return null
+  }
+  return null;
+}
+
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
   seqByRun.set(event.runId, nextSeq);
