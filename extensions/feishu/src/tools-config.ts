@@ -13,6 +13,7 @@ export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   perm: false,
   scopes: true,
   sheets: true,
+  board: true,
 };
 
 /**

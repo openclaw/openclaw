@@ -57,6 +57,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     perm: false,
     scopes: false,
     sheets: false,
+    board: false,
   };
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
@@ -67,6 +68,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     merged.perm = merged.perm || cfg.perm;
     merged.scopes = merged.scopes || cfg.scopes;
     merged.sheets = merged.sheets || cfg.sheets;
+    merged.board = merged.board || cfg.board;
   }
   return merged;
 }

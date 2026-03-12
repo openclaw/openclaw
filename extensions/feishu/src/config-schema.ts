@@ -93,6 +93,7 @@ const FeishuToolsConfigSchema = z
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
     sheets: z.boolean().optional(), // Spreadsheet read operations (default: true)
+    board: z.boolean().optional(), // Whiteboard/board operations (default: true)
   })
   .strict()
   .optional();
