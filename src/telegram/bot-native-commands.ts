@@ -186,7 +186,7 @@ async function resolveTelegramCommandAuth(params: {
     isForum,
     messageThreadId,
   });
-  const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+  const threadParams = buildTelegramThreadParams(threadSpec);
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
@@ -244,7 +244,6 @@ async function resolveTelegramCommandAuth(params: {
     : null;
 
   const sendAuthMessage = async (text: string) => {
-    const threadParams = buildTelegramThreadParams(threadSpec);
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () =>
