@@ -2,6 +2,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeStoredCronJobs } from "../cron/store-migration.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
+import {
+  calculateCronReliabilityMetrics,
+  cronJobNeedsAttention,
+  formatCronReliabilityMetrics,
+  getCronJobRecommendations,
+} from "../cron/reliability.js";
 import type { CronJob } from "../cron/types.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -179,5 +185,50 @@ export async function maybeRepairLegacyCronStore(params: {
 
   if (notifyMigration.warnings.length > 0) {
     note(notifyMigration.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
+/**
+ * Check cron job reliability and report any issues.
+ * Provides visibility into stuck or failed cron jobs.
+ */
+export async function checkCronReliability(params: {
+  cfg: OpenClawConfig;
+  options: DoctorOptions;
+}) {
+  const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const store = await loadCronStore(storePath);
+  const jobs = store.jobs ?? [];
+
+  if (jobs.length === 0) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  const metrics = calculateCronReliabilityMetrics(jobs, nowMs);
+
+  // Report overall health
+  if (metrics.stuckJobs > 0 || metrics.failedJobs > 0) {
+    const lines: string[] = [
+      "",
+      `Cron Reliability Issues:`,
+      formatCronReliabilityMetrics(metrics),
+    ];
+
+    // List jobs needing attention
+    const problematicJobs = jobs.filter((job) => cronJobNeedsAttention(job, nowMs));
+    if (problematicJobs.length > 0) {
+      lines.push("");
+      lines.push("Jobs needing attention:");
+      for (const job of problematicJobs) {
+        lines.push(`  - ${job.name} (${job.id}): ${job.state.status}`);
+        const recommendations = getCronJobRecommendations(job);
+        for (const rec of recommendations) {
+          lines.push(`    → ${rec}`);
+        }
+      }
+    }
+
+    note(lines.join("\n"), "Cron reliability");
   }
 }
