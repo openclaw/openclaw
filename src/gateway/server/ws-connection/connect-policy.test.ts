@@ -385,7 +385,8 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
-    // Backend client authenticated via verified Tailscale identity is trusted.
+    // Backend client authenticated via verified Tailscale identity is trusted via authOk,
+    // not sharedAuthOk (sharedAuthOk stays false for tailscale per auth-context.ts).
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -394,7 +395,8 @@ describe("ws connect policy", () => {
         ),
         isLocalClient: true,
         hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
+        sharedAuthOk: false,
+        authOk: true,
         authMethod: "tailscale",
       }),
     ).toBe(true);
@@ -408,10 +410,26 @@ describe("ws connect policy", () => {
         ),
         isLocalClient: false,
         hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
+        sharedAuthOk: false,
+        authOk: true,
         authMethod: "tailscale",
       }),
     ).toBe(true);
+
+    // Tailscale with authOk=false is rejected.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authOk: false,
+        authMethod: "tailscale",
+      }),
+    ).toBe(false);
 
     // Browser-origin Tailscale backend connection is still rejected.
     expect(
@@ -422,7 +440,8 @@ describe("ws connect policy", () => {
         ),
         isLocalClient: false,
         hasBrowserOriginHeader: true,
-        sharedAuthOk: true,
+        sharedAuthOk: false,
+        authOk: true,
         authMethod: "tailscale",
       }),
     ).toBe(false);
