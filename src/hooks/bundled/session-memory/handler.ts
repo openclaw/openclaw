@@ -139,6 +139,27 @@ function stripResetSuffix(fileName: string): string {
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }
 
+/**
+ * Extract session creation timestamp from the first line of a session file.
+ * Returns null if the file cannot be read or parsed.
+ */
+async function getSessionCreatedAt(sessionFilePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const firstLine = content.split("\n")[0];
+    if (!firstLine) {
+      return null;
+    }
+    const entry = JSON.parse(firstLine);
+    if (entry.type === "session" && typeof entry.timestamp === "string") {
+      return entry.timestamp;
+    }
+  } catch {
+    // Ignore read/parse errors
+  }
+  return null;
+}
+
 async function findPreviousSessionFile(params: {
   sessionsDir: string;
   currentSessionFile?: string;
@@ -226,10 +247,6 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
-    const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
-
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
@@ -269,6 +286,20 @@ const saveSessionToMemory: HookHandler = async (event) => {
     });
 
     const sessionFile = currentSessionFile || undefined;
+
+    // Determine the date for the memory filename:
+    // Prefer the session's creation timestamp from the session file header,
+    // fallback to the event timestamp if no session file is available.
+    const now = new Date(event.timestamp);
+    let dateStr: string;
+    if (sessionFile) {
+      const sessionCreatedAt = await getSessionCreatedAt(sessionFile);
+      dateStr = sessionCreatedAt
+        ? new Date(sessionCreatedAt).toISOString().split("T")[0]
+        : now.toISOString().split("T")[0];
+    } else {
+      dateStr = now.toISOString().split("T")[0];
+    }
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");

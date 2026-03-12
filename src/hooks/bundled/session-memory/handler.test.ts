@@ -572,4 +572,130 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
   });
+
+  describe("session creation date for memory filename", () => {
+    it("uses session file timestamp for date when session header is present", async () => {
+      // Session created on 2026-03-10 but /new triggered on 2026-03-12
+      const sessionHeader = JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "test-session-id",
+        timestamp: "2026-03-10T15:30:00.000Z",
+        cwd: "/test",
+      });
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Hello on March 10" },
+        { role: "assistant", content: "Hi there" },
+      ]);
+      const fullContent = sessionHeader + "\n" + sessionContent;
+
+      const { files } = await runNewWithPreviousSession({ sessionContent: fullContent });
+
+      // Filename should use the session creation date (2026-03-10), not /new date
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^2026-03-10-/);
+    });
+
+    it("falls back to event timestamp when session file has no session header", async () => {
+      // No session header, just messages
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Hello without header" },
+        { role: "assistant", content: "Hi there" },
+      ]);
+
+      const { files } = await runNewWithPreviousSession({ sessionContent });
+
+      // Filename should use today's date (event timestamp) as fallback
+      expect(files.length).toBe(1);
+      // The date will be whatever "now" is when the test runs
+      expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-/);
+    });
+
+    it("falls back to event timestamp when no session file is available", async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg: {
+          agents: { defaults: { workspace: tempDir } },
+        } satisfies OpenClawConfig,
+        // No previousSessionEntry, no sessionFile
+        previousSessionEntry: {
+          sessionId: "test-123",
+        },
+      });
+
+      await handler(event);
+
+      const memoryDir = path.join(tempDir, "memory");
+      const files = await fs.readdir(memoryDir);
+
+      // Should still create a memory file using event timestamp
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+    });
+
+    it("uses session timestamp even when /new is triggered days later", async () => {
+      // Simulate: session created on March 1, /new triggered on March 12
+      const sessionHeader = JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "old-session-id",
+        timestamp: "2026-03-01T08:00:00.000Z",
+        cwd: "/test",
+      });
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Session from March 1" },
+        { role: "assistant", content: "Recorded" },
+      ]);
+      const fullContent = sessionHeader + "\n" + sessionContent;
+
+      const { files, memoryContent } = await runNewWithPreviousSession({
+        sessionContent: fullContent,
+      });
+
+      // Filename should be dated March 1, not the current date
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^2026-03-01-/);
+      // The header in the memory file should also show March 1
+      expect(memoryContent).toContain("# Session: 2026-03-01");
+    });
+
+    it("ignores malformed session header and falls back to event timestamp", async () => {
+      // Invalid JSON as first line
+      const malformedHeader = "this is not valid json";
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Hello with malformed header" },
+        { role: "assistant", content: "Hi there" },
+      ]);
+      const fullContent = malformedHeader + "\n" + sessionContent;
+
+      const { files } = await runNewWithPreviousSession({ sessionContent: fullContent });
+
+      // Should fallback to event timestamp
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-/);
+    });
+
+    it("ignores session header without timestamp field", async () => {
+      // Session header exists but missing timestamp
+      const sessionHeader = JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "no-timestamp-session",
+        // No timestamp field
+        cwd: "/test",
+      });
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Hello without timestamp" },
+        { role: "assistant", content: "Hi there" },
+      ]);
+      const fullContent = sessionHeader + "\n" + sessionContent;
+
+      const { files } = await runNewWithPreviousSession({ sessionContent: fullContent });
+
+      // Should fallback to event timestamp
+      expect(files.length).toBe(1);
+      expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-/);
+    });
+  });
 });
