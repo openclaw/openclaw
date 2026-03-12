@@ -47,6 +47,74 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
+  it("does not report mutation when payload kind is already correctly cased", () => {
+    const jobs = [
+      {
+        id: "correctly-cased-job",
+        schedule: { kind: "cron", expr: "0 * * * *" },
+        payload: {
+          kind: "agentTurn",
+          message: "already correct",
+        },
+      },
+      {
+        id: "correctly-cased-system-event",
+        schedule: { kind: "cron", expr: "0 * * * *" },
+        payload: {
+          kind: "systemEvent",
+          text: "system message",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // Should not report legacyPayloadKind issue when kind is already correct
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+    expect(jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "already correct",
+    });
+    expect(jobs[1]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "system message",
+    });
+  });
+
+  it("normalizes incorrectly cased payload kind", () => {
+    const jobs = [
+      {
+        id: "lowercase-agentturn",
+        schedule: { kind: "cron", expr: "0 * * * *" },
+        payload: {
+          kind: "AGENTTURN",
+          message: "uppercase",
+        },
+      },
+      {
+        id: "mixed-case-systemevent",
+        schedule: { kind: "cron", expr: "0 * * * *" },
+        payload: {
+          kind: "SystemEvent",
+          text: "mixed case",
+        },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect(jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "uppercase",
+    });
+    expect(jobs[1]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "mixed case",
+    });
+  });
+
   it("normalizes payload provider alias into channel", () => {
     const jobs = [
       {
