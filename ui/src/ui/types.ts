@@ -398,6 +398,7 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;

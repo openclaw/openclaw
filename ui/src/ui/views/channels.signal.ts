@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { SignalStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { renderChannelTitleIcon } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderSignalCard(params: {
@@ -13,7 +14,7 @@ export function renderSignalCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Signal</div>
+      <div class="card-title">${renderChannelTitleIcon("signal", "Signal")}</div>
       <div class="card-sub">signal-cli status and channel configuration.</div>
       ${accountCountLabel}
 

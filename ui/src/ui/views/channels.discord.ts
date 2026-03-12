@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { DiscordStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
+import { renderChannelTitleIcon } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderDiscordCard(params: {
@@ -13,7 +14,7 @@ export function renderDiscordCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Discord</div>
+      <div class="card-title">${renderChannelTitleIcon("discord", "Discord")}</div>
       <div class="card-sub">Bot status and channel configuration.</div>
       ${accountCountLabel}
 

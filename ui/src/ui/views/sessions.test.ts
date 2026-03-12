@@ -31,6 +31,112 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("shows telegram icon with username-like identifier in session key cell", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:direct:muhammedirfan00",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("✈️");
+    expect(platformMeta?.textContent).toContain("@muhammedirfan00");
+  });
+
+  it("shows whatsapp icon with phone identifier in session key cell", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:whatsapp:direct:+919999888777",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("🟢");
+    expect(platformMeta?.textContent).toContain("+919999888777");
+  });
+
+  it("prefers key phone for whatsapp even if displayName looks like a handle", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:whatsapp:direct:+919111222333",
+            kind: "direct",
+            updatedAt: Date.now(),
+            displayName: "Alice",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("+919111222333");
+    expect(platformMeta?.textContent).not.toContain("@Alice");
+  });
+
+  it("parses account-scoped direct keys for telegram", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:atlas:direct:muhammedirfan00",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("✈️");
+    expect(platformMeta?.textContent).toContain("@muhammedirfan00");
+  });
+
+  it("shows channel icon for dm-scoped whatsapp keys", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:whatsapp:default:dm:+15551234567",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const platformMeta = container.querySelector(".session-platform-meta");
+    expect(platformMeta?.textContent).toContain("🟢");
+    expect(platformMeta?.textContent).toContain("+15551234567");
+  });
+
   it("renders verbose=full without falling back to inherit", async () => {
     const container = document.createElement("div");
     render(

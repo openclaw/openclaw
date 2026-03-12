@@ -214,6 +214,91 @@ export function renderSessions(props: SessionsProps) {
   `;
 }
 
+function inferSessionChannel(row: GatewaySessionRow): string {
+  const directFromRow = (row.channel ?? row.surface ?? "").trim().toLowerCase();
+  if (directFromRow) {
+    return directFromRow;
+  }
+
+  const parts = row.key.split(":");
+  if (parts.length < 3 || parts[0] !== "agent") {
+    return "";
+  }
+
+  const kindIndex = parts.findIndex((part) => {
+    const lowered = part.toLowerCase();
+    return lowered === "direct" || lowered === "group" || lowered === "dm";
+  });
+  if (kindIndex >= 3) {
+    return parts[2]?.toLowerCase() ?? "";
+  }
+
+  return parts[2]?.toLowerCase() ?? "";
+}
+
+const CHANNEL_ICONS: Record<string, string> = {
+  telegram: "✈️",
+  whatsapp: "🟢",
+  discord: "🎮",
+  slack: "💬",
+  signal: "🔒",
+  imessage: "💭",
+  googlechat: "🗨️",
+  nostr: "⚡",
+  line: "📗",
+  irc: "#️⃣",
+  matrix: "🔷",
+  msteams: "👥",
+};
+
+function extractDirectPeerFromSessionKey(key: string): string {
+  const parts = key.split(":");
+  const directIndex = parts.findIndex((part) => part.toLowerCase() === "direct");
+  if (directIndex < 0 || directIndex + 1 >= parts.length) {
+    return "";
+  }
+  return parts
+    .slice(directIndex + 1)
+    .join(":")
+    .trim();
+}
+
+function inferSessionHandle(row: GatewaySessionRow, channel: string): string {
+  const keyDirectMatch = extractDirectPeerFromSessionKey(row.key);
+  const candidates = [keyDirectMatch, row.displayName, row.subject, row.room, row.label]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (/^\+?\d{8,}$/.test(candidate)) {
+      return candidate;
+    }
+    if (channel === "telegram") {
+      const atHandle = candidate.match(/@([A-Za-z0-9_]{4,})/);
+      if (atHandle) {
+        return `@${atHandle[1]}`;
+      }
+      if (/^[A-Za-z0-9_]{4,}$/.test(candidate) && !/^\d+$/.test(candidate)) {
+        return `@${candidate}`;
+      }
+    }
+  }
+
+  return "";
+}
+
+function renderSessionPlatformMeta(row: GatewaySessionRow) {
+  const channel = inferSessionChannel(row);
+  const icon = CHANNEL_ICONS[channel];
+  if (!icon) {
+    return nothing;
+  }
+  const handle = inferSessionHandle(row, channel);
+  return html`<span class="muted session-platform-meta" title=${channel}>${icon}${
+    handle ? ` ${handle}` : ""
+  }</span>`;
+}
+
 function renderRow(
   row: GatewaySessionRow,
   basePath: string,
@@ -245,6 +330,7 @@ function renderRow(
     <div class="table-row">
       <div class="mono session-key-cell">
         ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${renderSessionPlatformMeta(row)}
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
       </div>
       <div>

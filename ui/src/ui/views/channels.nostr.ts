@@ -7,6 +7,7 @@ import {
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
 } from "./channels.nostr-profile-form.ts";
+import { renderChannelTitleIcon } from "./channels.shared.ts";
 import type { ChannelsProps } from "./channels.types.ts";
 
 /**
@@ -184,7 +185,7 @@ export function renderNostrCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Nostr</div>
+      <div class="card-title">${renderChannelTitleIcon("nostr", "Nostr")}</div>
       <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
       ${accountCountLabel}
 

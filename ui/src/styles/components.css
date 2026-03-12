@@ -1496,6 +1496,12 @@
   font-size: 11px;
 }
 
+.session-platform-meta {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* ===========================================
    Log Stream
    =========================================== */
