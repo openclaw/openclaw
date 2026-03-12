@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import JSON5 from "json5";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
@@ -207,12 +208,63 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+function extractTextFromSerializedChatBlocks(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const chunks: string[] = [];
+  let sawTypedBlock = false;
+  for (const block of value) {
+    if (!block || typeof block !== "object") {
+      return null;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typeof typed.type !== "string") {
+      return null;
+    }
+    sawTypedBlock = true;
+    if (typed.type === "text" && typeof typed.text === "string" && typed.text.trim()) {
+      chunks.push(typed.text);
+    }
+  }
+
+  if (!sawTypedBlock || chunks.length === 0) {
+    return null;
+  }
+  return chunks.join("\n");
+}
+
+function unwrapSerializedAssistantText(text: string): string {
+  let current = text;
+  for (let i = 0; i < 3; i += 1) {
+    const trimmed = current.trim();
+    if (!trimmed || (trimmed[0] !== "[" && trimmed[0] !== "{")) {
+      break;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON5.parse(trimmed);
+    } catch {
+      break;
+    }
+
+    const extracted = extractTextFromSerializedChatBlocks(parsed);
+    if (!extracted || extracted === current) {
+      break;
+    }
+    current = extracted;
+  }
+  return current;
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) =>
         stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          stripDowngradedToolCallText(stripMinimaxToolCallXml(unwrapSerializedAssistantText(text))),
         ).trim(),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),

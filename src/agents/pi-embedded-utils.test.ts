@@ -473,6 +473,22 @@ File contents here`,
       expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
   });
+
+  it("unwraps nested serialized text blocks from openai-compatible responses", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "[{'type': 'text', 'text': '[{\\'type\\': \\'text\\', \\'text\\': \\'The current time is 11:06 AM (UTC+8).\\'}]'}]",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("The current time is 11:06 AM (UTC+8).");
+  });
 });
 
 describe("formatReasoningMessage", () => {
