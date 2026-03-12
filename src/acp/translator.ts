@@ -937,11 +937,16 @@ export class AcpGatewayAgent implements Agent {
 
   private resolveSessionConfigPatch(
     configId: string,
-    value: string,
+    value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
     patch: Record<string, string>;
   } {
+    if (typeof value !== "string") {
+      throw new Error(
+        `ACP bridge does not support non-string session config option values for "${configId}".`,
+      );
+    }
     switch (configId) {
       case ACP_THOUGHT_LEVEL_CONFIG_ID:
         return {
