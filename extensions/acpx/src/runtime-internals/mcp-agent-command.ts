@@ -1,9 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "../config.js";
 import { spawnAndCollect, type SpawnCommandOptions } from "./process.js";
 
 const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
-  codex: "npx @zed-industries/codex-acp",
+  // Keep Codex ACP adapter plugin-local so ACP harness startup does not depend on npx/package fetches.
+  codex: ACPX_CODEX_ACP_BUNDLED_BIN,
   claude: "npx -y @zed-industries/claude-agent-acp",
   gemini: "gemini",
   opencode: "npx -y opencode-ai acp",

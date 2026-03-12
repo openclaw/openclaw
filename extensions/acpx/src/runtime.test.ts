@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { ACPX_CODEX_ACP_BUNDLED_BIN } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -125,6 +126,22 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--ttl");
     expect(promptArgs).toContain("180");
     expect(promptArgs).toContain("--approve-all");
+  });
+
+  it("passes the bundled plugin-local codex-acp command to acpx by default", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:local-command",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    const agentFlagIndex = ensureArgs.indexOf("--agent");
+    expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(ensureArgs[agentFlagIndex + 1]).toBe(ACPX_CODEX_ACP_BUNDLED_BIN);
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {

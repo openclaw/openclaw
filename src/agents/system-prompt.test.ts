@@ -263,6 +263,9 @@ describe("buildAgentSystemPrompt", () => {
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
     expect(prompt).toContain(
+      '`agents_list` only covers `runtime="subagent"` allowlists; do not use it to check whether `codex`/`claude`/`gemini` ACP harnesses are available.',
+    );
+    expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
     );
     expect(prompt).toContain(
