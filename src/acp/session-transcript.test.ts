@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveSessionTranscriptFileMock: vi.fn(),
+  warnMock: vi.fn(),
 }));
 
 vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
@@ -16,6 +17,22 @@ vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
     resolveSessionTranscriptFile: (params: unknown) =>
       hoisted.resolveSessionTranscriptFileMock(params),
   };
+});
+
+vi.mock("../logging/subsystem.js", () => {
+  const makeLogger = () => ({
+    subsystem: "acp/session-transcript",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: hoisted.warnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => makeLogger(),
+  });
+  return { createSubsystemLogger: () => makeLogger() };
 });
 
 const { persistAcpPromptTranscript, persistAcpTurnTranscript } =
@@ -32,6 +49,8 @@ describe("ACP session transcript persistence", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    hoisted.warnMock.mockReset();
+    vi.restoreAllMocks();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
@@ -137,5 +156,91 @@ describe("ACP session transcript persistence", () => {
     const messages = readTranscriptMessages(sessionFile);
     expect(messages).toHaveLength(2);
     expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
+  });
+
+  it("flushes prompt-only transcripts even when SessionManager.isPersisted is unavailable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-3.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-3",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+
+    const realManager = SessionManager.open(sessionFile);
+    const rewriteSpy = vi.fn();
+    (
+      realManager as unknown as {
+        isPersisted?: undefined;
+        _rewriteFile?: () => void;
+      }
+    ).isPersisted = undefined;
+    (
+      realManager as unknown as {
+        _rewriteFile?: () => void;
+      }
+    )._rewriteFile = rewriteSpy;
+
+    vi.spyOn(SessionManager, "open").mockReturnValue(realManager);
+
+    await persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-3",
+      sessionKey: "agent:codex:acp:3",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+    });
+
+    expect(rewriteSpy).toHaveBeenCalledOnce();
+    expect(hoisted.warnMock).not.toHaveBeenCalled();
+  });
+
+  it("warns when the SessionManager private flush hook is unavailable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-4.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-4",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+
+    const realManager = SessionManager.open(sessionFile);
+    (
+      realManager as unknown as {
+        isPersisted?: () => boolean;
+        _rewriteFile?: undefined;
+      }
+    ).isPersisted = () => true;
+    (
+      realManager as unknown as {
+        _rewriteFile?: undefined;
+      }
+    )._rewriteFile = undefined;
+
+    vi.spyOn(SessionManager, "open").mockReturnValue(realManager);
+
+    await persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-4",
+      sessionKey: "agent:codex:acp:4",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+    });
+
+    expect(hoisted.warnMock).toHaveBeenCalledWith(
+      "ACP prompt-only transcript flush skipped because SessionManager._rewriteFile is unavailable",
+    );
   });
 });

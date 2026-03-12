@@ -4,6 +4,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   applyInputProvenanceToUserMessage,
   normalizeInputProvenance,
@@ -12,6 +13,7 @@ import {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*]\s*/;
+const log = createSubsystemLogger("acp/session-transcript");
 
 export const ACP_TRANSCRIPT_USAGE = {
   input: 0,
@@ -195,10 +197,16 @@ function forcePersistPromptOnlyTranscript(
     isPersisted?: () => boolean;
     _rewriteFile?: () => void;
   };
-  if (!manager.isPersisted?.()) {
+  if (typeof manager.isPersisted === "function" && !manager.isPersisted()) {
     return;
   }
   // pi-coding-agent keeps prompt-only sessions in memory until the first assistant
   // message arrives. ACP spawn needs the initial task on disk immediately.
-  manager._rewriteFile?.();
+  if (typeof manager._rewriteFile !== "function") {
+    log.warn(
+      "ACP prompt-only transcript flush skipped because SessionManager._rewriteFile is unavailable",
+    );
+    return;
+  }
+  manager._rewriteFile();
 }
