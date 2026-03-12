@@ -311,11 +311,7 @@ function isBinaryMediaMime(mime?: string): boolean {
   if (mime === "application/octet-stream") {
     return true;
   }
-  if (
-    mime === "application/msword" ||
-    mime === "application/vnd.ms-word" ||
-    mime === "application/vnd.ms-office"
-  ) {
+  if (mime === "application/msword") {
     return true;
   }
   if (
