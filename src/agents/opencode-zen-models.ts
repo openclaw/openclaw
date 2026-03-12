@@ -102,6 +102,21 @@ export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   if (lower.startsWith("gemini-")) {
     return "google-generative-ai";
   }
+  // OpenCode proxy models (glm, kimi, qwen, mimo, nemotron, trinity, big-*) are
+  // served via the chat-completions compatible endpoint. Keep them on
+  // openai-completions to preserve the request shape used before aliases were
+  // expanded.
+  if (
+    lower.startsWith("glm-") ||
+    lower.startsWith("kimi-") ||
+    lower.startsWith("qwen") ||
+    lower.startsWith("mimo-") ||
+    lower.startsWith("nemotron-") ||
+    lower.startsWith("trinity-") ||
+    lower.startsWith("big-")
+  ) {
+    return "openai-completions";
+  }
   return "openai-completions";
 }
 

@@ -71,6 +71,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.mode": "Gateway Mode",
   "gateway.bind": "Gateway Bind Mode",
   "gateway.customBindHost": "Gateway Custom Bind Host",
+  "gateway.push": "Gateway Push",
   "gateway.controlUi": "Control UI",
   "gateway.controlUi.enabled": "Control UI Enabled",
   "gateway.auth": "Gateway Auth",
