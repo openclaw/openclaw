@@ -685,6 +685,8 @@ describe("session-memory hook", () => {
         hooks: { internal: { entries: { "session-memory": { enabled: true, llmSlug: false } } } },
       } as OpenClawConfig;
 
+      // Capture time before calling the handler to avoid minute-boundary flakiness
+      const preRunTime = new Date();
       const { files } = await runNewWithPreviousSessionEntry({
         tempDir,
         cfg,
@@ -696,7 +698,7 @@ describe("session-memory hook", () => {
       // The HHMM should NOT be 0830 (session creation time) but rather current time
       const hhmm = files[0].match(/2026-03-10-(\d{4})\.md$/)?.[1];
       // HHMM should be from current time, not from sessionCreatedAt
-      const nowHHMM = new Date().toISOString().split("T")[1].split(":").slice(0, 2).join("");
+      const nowHHMM = preRunTime.toISOString().split("T")[1].split(":").slice(0, 2).join("");
       expect(hhmm).toBe(nowHHMM);
     });
 
