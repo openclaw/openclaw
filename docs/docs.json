@@ -104,6 +104,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/opencode-go",
+      "destination": "/providers/opencode-go"
+    },
+    {
       "source": "/qianfan",
       "destination": "/providers/qianfan"
     },
@@ -1013,8 +1017,7 @@
                   "tools/browser",
                   "tools/browser-login",
                   "tools/chrome-extension",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                  "tools/browser-linux-troubleshooting"
                 ]
               },
               {
@@ -1112,6 +1115,7 @@
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
+                  "providers/opencode-go",
                   "providers/opencode",
                   "providers/openrouter",
                   "providers/qianfan",
