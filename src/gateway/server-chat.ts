@@ -89,7 +89,7 @@ function isSilentReplyLeadFragment(text: string): boolean {
   return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
-export function appendUniqueSuffix(base: string, suffix: string): string {
+export function appendDelta(base: string, suffix: string): string {
   if (!suffix) {
     return base;
   }
@@ -127,7 +127,7 @@ function resolveMergedAssistantText(params: {
     }
   }
   if (nextDelta) {
-    return appendUniqueSuffix(previousText, nextDelta);
+    return appendDelta(previousText, nextDelta);
   }
   if (nextText) {
     return nextText;
