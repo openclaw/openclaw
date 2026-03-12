@@ -340,22 +340,20 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
       ...base.modelOverrides,
       ...override.modelOverrides,
     },
-    elevenlabs: {
-      ...base.elevenlabs,
-      ...override.elevenlabs,
-      voiceSettings: {
-        ...base.elevenlabs?.voiceSettings,
-        ...override.elevenlabs?.voiceSettings,
-      },
-    },
-    openai: {
-      ...base.openai,
-      ...override.openai,
-    },
-    edge: {
-      ...base.edge,
-      ...override.edge,
-    },
+    ...(base.elevenlabs || override.elevenlabs
+      ? {
+          elevenlabs: {
+            ...base.elevenlabs,
+            ...override.elevenlabs,
+            voiceSettings: {
+              ...base.elevenlabs?.voiceSettings,
+              ...override.elevenlabs?.voiceSettings,
+            },
+          },
+        }
+      : {}),
+    ...(base.openai || override.openai ? { openai: { ...base.openai, ...override.openai } } : {}),
+    ...(base.edge || override.edge ? { edge: { ...base.edge, ...override.edge } } : {}),
   };
 }
 
