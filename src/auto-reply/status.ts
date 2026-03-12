@@ -463,7 +463,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const freshSessionTotalTokens = resolveFreshSessionTotalTokens(entry);
   let totalTokens =
     freshSessionTotalTokens ??
-    (freshSessionTotalTokens === undefined && entry?.totalTokensFresh === false
+    (entry?.totalTokensFresh === false
       ? undefined
       : (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0) || undefined);
 
