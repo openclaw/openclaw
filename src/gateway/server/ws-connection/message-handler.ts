@@ -126,7 +126,7 @@ function resolveHandshakeBrowserSecurityContext(params: {
   };
 }
 
-function shouldAllowSilentLocalPairing(params: {
+export function shouldAllowSilentLocalPairing(params: {
   isLocalClient: boolean;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
@@ -136,7 +136,9 @@ function shouldAllowSilentLocalPairing(params: {
   return (
     params.isLocalClient &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" || params.reason === "scope-upgrade")
+    (params.reason === "not-paired" ||
+      params.reason === "scope-upgrade" ||
+      params.reason === "role-upgrade")
   );
 }
 
