@@ -116,12 +116,14 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
   getApiKeyMock: ReturnType<typeof vi.fn>;
+  findModelMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
     model: undefined,
     sessionManager: params.sessionManager,
     modelRegistry: {
       getApiKey: params.getApiKeyMock,
+      find: params.findModelMock,
     },
   }) as unknown as Partial<ExtensionContext>;
 
@@ -1450,6 +1452,122 @@ describe("compaction-safeguard recent-turn preservation", () => {
 });
 
 describe("compaction-safeguard extension model fallback", () => {
+  it("falls back to configured models when compaction summarization hits rate limits", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages
+      .mockRejectedValueOnce(
+        new Error(
+          "Cloud Code Assist API error (429): You have exhausted your capacity on this model.",
+        ),
+      )
+      .mockResolvedValueOnce(
+        [
+          "## Decisions",
+          "Use fallback model.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Preserve identifiers.",
+          "## Pending user asks",
+          "Summarize latest context.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      );
+
+    const sessionManager = stubSessionManager();
+    const primaryModel = createAnthropicModelFixture();
+    const fallbackModel = createAnthropicModelFixture({
+      id: "gpt-4.1-mini",
+      name: "GPT-4.1 mini",
+      provider: "openai",
+      api: "openai-responses" as Model<Api>["api"],
+      baseUrl: "https://api.openai.com/v1",
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setCompactionSafeguardRuntime(sessionManager, {
+      cfg,
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      model: primaryModel,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn(async (candidateModel: Model<Api>) => {
+      if (candidateModel.provider === "anthropic") {
+        return "anthropic-key";
+      }
+      if (candidateModel.provider === "openai") {
+        return "openai-key";
+      }
+      return null;
+    });
+    const findModelMock = vi.fn((provider: string, modelId: string) => {
+      if (provider === "openai" && modelId === "gpt-4.1-mini") {
+        return fallbackModel;
+      }
+      return null;
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+      findModelMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "please summarize this thread", timestamp: 1 },
+          { role: "assistant", content: "working on it", timestamp: 2 } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("Use fallback model.");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    expect(mockSummarizeInStages.mock.calls[0]?.[0]?.model).toBe(primaryModel);
+    expect(mockSummarizeInStages.mock.calls[1]?.[0]?.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-4.1-mini",
+    });
+    expect(getApiKeyMock).toHaveBeenCalledWith(primaryModel);
+    expect(getApiKeyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-4.1-mini",
+      }),
+    );
+    expect(findModelMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+  });
+
   it("uses runtime.model when ctx.model is undefined (compact.ts workflow)", async () => {
     // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
     // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.

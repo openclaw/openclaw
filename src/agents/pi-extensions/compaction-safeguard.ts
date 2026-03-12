@@ -20,6 +20,8 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { runWithModelFallback } from "../model-fallback.js";
+import { resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -735,16 +737,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
-    if (!apiKey) {
-      console.warn(
-        "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+    const resolvedProvider = (runtime?.provider ?? model.provider ?? "").trim();
+    const resolvedModelId = (runtime?.modelId ?? model.id ?? "").trim();
+    if (!resolvedProvider || !resolvedModelId) {
+      log.warn(
+        "Compaction safeguard: missing provider/model metadata for summarization; cancelling compaction.",
       );
       return { cancel: true };
     }
 
-    try {
-      const modelContextWindow = resolveContextWindowTokens(model);
+    const buildCompactionSummary = async (
+      summarizationModel: typeof model,
+      summarizationApiKey: string,
+    ) => {
+      const modelContextWindow = resolveContextWindowTokens(summarizationModel);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
@@ -803,8 +809,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 droppedSummary = await summarizeInStages({
                   messages: pruned.droppedMessagesList,
-                  model,
-                  apiKey,
+                  model: summarizationModel,
+                  apiKey: summarizationApiKey,
                   signal,
                   reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
                   maxChunkTokens: droppedMaxChunkTokens,
@@ -870,8 +876,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             messagesToSummarize.length > 0
               ? await summarizeInStages({
                   messages: messagesToSummarize,
-                  model,
-                  apiKey,
+                  model: summarizationModel,
+                  apiKey: summarizationApiKey,
                   signal,
                   reserveTokens,
                   maxChunkTokens,
@@ -886,8 +892,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeInStages({
               messages: turnPrefixMessages,
-              model,
-              apiKey,
+              model: summarizationModel,
+              apiKey: summarizationApiKey,
               signal,
               reserveTokens,
               maxChunkTokens,
@@ -968,6 +974,40 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           details: { readFiles, modifiedFiles },
         },
       };
+    };
+
+    try {
+      const fallbackResult = await runWithModelFallback({
+        cfg: runtime?.cfg,
+        provider: resolvedProvider,
+        model: resolvedModelId,
+        agentDir: runtime?.agentDir,
+        fallbacksOverride: runtime?.fallbacksOverride,
+        run: async (provider, modelId) => {
+          const candidateModel =
+            provider === resolvedProvider && modelId === resolvedModelId
+              ? model
+              : resolveModelWithRegistry({
+                  provider,
+                  modelId,
+                  modelRegistry: ctx.modelRegistry,
+                  cfg: runtime?.cfg,
+                });
+          if (!candidateModel) {
+            throw new Error(
+              `Compaction safeguard: unknown summarization model ${provider}/${modelId}`,
+            );
+          }
+          const candidateApiKey = await ctx.modelRegistry.getApiKey(candidateModel);
+          if (!candidateApiKey) {
+            throw new Error(
+              `Compaction safeguard: no API key available for ${provider}/${modelId}.`,
+            );
+          }
+          return buildCompactionSummary(candidateModel, candidateApiKey);
+        },
+      });
+      return fallbackResult.result;
     } catch (error) {
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${

@@ -583,6 +583,9 @@ export async function compactEmbeddedPiSessionDirect(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        agentDir,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
         provider,
         modelId,
         model,

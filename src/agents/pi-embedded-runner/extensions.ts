@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveRunModelFallbacksOverride } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -64,6 +65,9 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
+  agentDir?: string;
+  agentId?: string;
+  sessionKey?: string;
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
@@ -80,6 +84,15 @@ export function buildEmbeddedExtensionFactories(params: {
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: params.modelId,
+      fallbacksOverride: resolveRunModelFallbacksOverride({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }),
       maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
       identifierPolicy: compactionCfg?.identifierPolicy,

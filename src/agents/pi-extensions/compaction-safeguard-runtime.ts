@@ -1,8 +1,14 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-defaults.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
 export type CompactionSafeguardRuntimeValue = {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  provider?: string;
+  modelId?: string;
+  fallbacksOverride?: string[];
   maxHistoryShare?: number;
   contextWindowTokens?: number;
   identifierPolicy?: AgentCompactionIdentifierPolicy;
