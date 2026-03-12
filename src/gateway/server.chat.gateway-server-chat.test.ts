@@ -496,6 +496,38 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history strips inline image source payloads from content blocks", async () => {
+    const inlineImage = `data:image/png;base64,${"A".repeat(90_000)}`;
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "image upload" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: inlineImage },
+          },
+        ],
+        timestamp: 7,
+      },
+    ]);
+
+    expect(historyMessages).toHaveLength(1);
+    const message = historyMessages[0] as { content?: Array<Record<string, unknown>> };
+    expect(Array.isArray(message.content)).toBe(true);
+    const imageBlock = message.content?.[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      omitted: true,
+      bytes: inlineImage.length,
+      source: { type: "base64", media_type: "image/png" },
+    });
+    const sanitizedSource = imageBlock?.source as { data?: unknown } | undefined;
+    expect(sanitizedSource).toBeDefined();
+    expect(sanitizedSource?.data).toBeUndefined();
+    expect(JSON.stringify(historyMessages)).not.toContain(inlineImage.slice(0, 256));
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
