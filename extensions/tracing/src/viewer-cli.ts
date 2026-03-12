@@ -6,6 +6,15 @@
 
 import type { TraceSpan } from "./types.js";
 
+/** Collapse duplicate spanIds, preferring closed spans (with endMs). */
+function dedupeSpans(spans: TraceSpan[]): TraceSpan[] {
+  const best = new Map<string, TraceSpan>();
+  for (const s of spans) {
+    if (!best.has(s.spanId) || s.endMs != null) best.set(s.spanId, s);
+  }
+  return [...best.values()];
+}
+
 // ── ANSI colors ──
 const c = {
   reset: "\x1b[0m",
@@ -52,7 +61,8 @@ function fmtTokens(span: TraceSpan): string {
 /**
  * Render a nested call tree by parentSpanId, sorted by startMs.
  */
-export function renderCallTree(spans: TraceSpan[]): string[] {
+export function renderCallTree(rawSpans: TraceSpan[]): string[] {
+  const spans = dedupeSpans(rawSpans);
   if (spans.length === 0) return [];
 
   const lines: string[] = [];
@@ -126,7 +136,8 @@ export function renderCallTree(spans: TraceSpan[]): string[] {
 /**
  * Render an agent relationship tree with aggregated stats.
  */
-export function renderEntityTree(spans: TraceSpan[]): string[] {
+export function renderEntityTree(rawSpans: TraceSpan[]): string[] {
+  const spans = dedupeSpans(rawSpans);
   if (spans.length === 0) return [];
 
   const lines: string[] = [];
@@ -264,7 +275,8 @@ export function renderEntityTree(spans: TraceSpan[]): string[] {
 /**
  * Render a waterfall timeline bar chart.
  */
-export function renderWaterfall(spans: TraceSpan[]): string[] {
+export function renderWaterfall(rawSpans: TraceSpan[]): string[] {
+  const spans = dedupeSpans(rawSpans);
   if (spans.length === 0) return [];
 
   const lines: string[] = [];

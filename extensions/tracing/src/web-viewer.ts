@@ -433,9 +433,12 @@ function renderEntityTree() {
   }
 
   // Find parent-child relationships between entities via session parentSpanId
-  const sessionSpanToKey = new Map();
+  // Index both session and subagent spans: child sessions may have parentSpanId
+  // pointing to a subagent span (not a session span)
+  const spanToSessionKey = new Map();
   for (const s of deduped) {
-    if (s.kind === 'session') sessionSpanToKey.set(s.spanId, s.sessionKey);
+    if (s.kind === 'session') spanToSessionKey.set(s.spanId, s.sessionKey);
+    if (s.kind === 'subagent' && s.sessionKey) spanToSessionKey.set(s.spanId, s.sessionKey);
   }
 
   const nodes = [];
@@ -479,7 +482,7 @@ function renderEntityTree() {
   // Parent → child (subagent spawns) links
   for (const [sk, a] of entities) {
     if (a.parentSessionSpanId) {
-      const parentSk = sessionSpanToKey.get(a.parentSessionSpanId);
+      const parentSk = spanToSessionKey.get(a.parentSessionSpanId);
       if (parentSk) {
         const si = nodeIdx.get('entity:'+parentSk), ti = nodeIdx.get('entity:'+sk);
         if (si != null && ti != null) links.push({ source: si, target: ti, type: 'spawns' });
