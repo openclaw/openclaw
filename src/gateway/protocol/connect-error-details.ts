@@ -7,6 +7,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_PASSWORD_MISSING: "AUTH_PASSWORD_MISSING", // pragma: allowlist secret
   AUTH_PASSWORD_MISMATCH: "AUTH_PASSWORD_MISMATCH", // pragma: allowlist secret
   AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED", // pragma: allowlist secret
+  AUTH_BOOTSTRAP_TOKEN_INVALID: "AUTH_BOOTSTRAP_TOKEN_INVALID",
   AUTH_DEVICE_TOKEN_MISMATCH: "AUTH_DEVICE_TOKEN_MISMATCH",
   AUTH_RATE_LIMITED: "AUTH_RATE_LIMITED",
   AUTH_TAILSCALE_IDENTITY_MISSING: "AUTH_TAILSCALE_IDENTITY_MISSING",
@@ -44,6 +45,8 @@ export function resolveAuthConnectErrorDetailCode(
       return ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH;
     case "password_missing_config":
       return ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED;
+    case "bootstrap_token_invalid":
+      return ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID;
     case "tailscale_user_missing":
       return ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING;
     case "tailscale_proxy_missing":

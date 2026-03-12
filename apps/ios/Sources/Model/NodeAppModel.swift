@@ -1646,6 +1646,7 @@ extension NodeAppModel {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions)
     {
@@ -1658,6 +1659,7 @@ extension NodeAppModel {
             stableID: stableID,
             tls: tls,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
@@ -1665,6 +1667,7 @@ extension NodeAppModel {
             url: url,
             stableID: effectiveStableID,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions,
             sessionBox: sessionBox)
@@ -1672,6 +1675,7 @@ extension NodeAppModel {
             url: url,
             stableID: effectiveStableID,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions,
             sessionBox: sessionBox)
@@ -1687,6 +1691,7 @@ extension NodeAppModel {
             gatewayStableID: cfg.stableID,
             tls: cfg.tls,
             token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             connectOptions: cfg.nodeOptions)
     }
@@ -1766,6 +1771,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1803,6 +1809,7 @@ private extension NodeAppModel {
                     try await self.operatorGateway.connect(
                         url: url,
                         token: token,
+                        bootstrapToken: bootstrapToken,
                         password: password,
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
@@ -1860,6 +1867,7 @@ private extension NodeAppModel {
         url: URL,
         stableID: String,
         token: String?,
+        bootstrapToken: String?,
         password: String?,
         nodeOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?)
@@ -1908,6 +1916,7 @@ private extension NodeAppModel {
                     try await self.nodeGateway.connect(
                         url: url,
                         token: token,
+                        bootstrapToken: bootstrapToken,
                         password: password,
                         connectOptions: currentOptions,
                         sessionBox: sessionBox,

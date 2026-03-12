@@ -200,8 +200,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         viewModel.setManualHost(config.host)
         viewModel.setManualPort(config.port)
         viewModel.setManualTls(config.tls)
+        viewModel.setGatewayBootstrapToken(config.bootstrapToken)
         if (config.token.isNotBlank()) {
           viewModel.setGatewayToken(config.token)
+        } else if (config.bootstrapToken.isNotBlank()) {
+          viewModel.setGatewayToken("")
         }
         viewModel.setGatewayPassword(config.password)
         viewModel.connectManual()
