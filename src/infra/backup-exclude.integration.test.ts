@@ -331,7 +331,7 @@ describe("backup create — exclude patterns", () => {
 
 describe("backup verify — tolerant manifest reader", () => {
   let tempHome: TempHomeEnv;
-  let realBackupVerifyCommand: (typeof import("./backup-verify.js"))["backupVerifyCommand"];
+  let realBackupVerifyCommand: (typeof import("../commands/backup-verify.js"))["backupVerifyCommand"];
 
   beforeAll(async () => {
     // Import the REAL backupVerifyCommand — the module-scope vi.mock above

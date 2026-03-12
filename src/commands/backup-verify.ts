@@ -20,7 +20,10 @@ type BackupManifestExcludedEntry = {
 };
 
 // P2-012: Tolerant reader manifest extends shared base with optional/permissive types.
-type BackupManifest = Partial<BackupManifestBase> & {
+// Omit 'excluded' from the base so the local BackupManifestExcludedEntry[] definition
+// (tolerant reader with source: string) does not conflict with the strict ExcludedEntry
+// type (source: PatternSource) when TypeScript intersects the two.
+type BackupManifest = Omit<Partial<BackupManifestBase>, "excluded"> & {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
