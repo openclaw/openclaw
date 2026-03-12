@@ -45,11 +45,7 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
     const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
     const host = parsed.hostname.trim().toLowerCase();
     const isLoopbackHost =
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      host === "[::1]" ||
-      host.startsWith("127.");
+      host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.startsWith("127.");
     const pathname =
       parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
     const hostPort = isLoopbackHost
