@@ -4,11 +4,9 @@ import ignore from "ignore";
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-import type { ExcludedEntry } from "../commands/backup-shared.js";
+import type { ExcludedStats, PatternSource } from "../commands/backup-shared.js";
 
-export type { ExcludedEntry };
-
-export type PatternSource = ExcludedEntry["source"];
+export type { PatternSource };
 
 export interface ExcludeSpec {
   readonly exclude: readonly string[];
@@ -22,8 +20,8 @@ export interface ExcludeSpec {
 export interface ExcludeFilterResult {
   /** Return `true` to include the entry in the archive, `false` to exclude. */
   readonly filter: (entryPath: string, stat: { size?: number }) => boolean;
-  /** Snapshot of every entry the filter excluded (populated as a side-effect). */
-  readonly getExcluded: () => readonly ExcludedEntry[];
+  /** Aggregated per-pattern exclusion stats (populated as a side-effect of filter calls). */
+  readonly getExcludedStats: () => ExcludedStats;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +280,10 @@ export function buildExcludeFilter(
   }
 
   if (patterns.length === 0) {
-    return { filter: () => true, getExcluded: () => [] };
+    return {
+      filter: () => true,
+      getExcludedStats: () => ({ totalFiles: 0, totalBytes: 0, byPattern: [] }),
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -310,7 +311,26 @@ export function buildExcludeFilter(
     matcher: ignore().add(p),
   }));
 
-  const excluded: ExcludedEntry[] = [];
+  // Per-pattern counters — keyed by pattern string.
+  const patternCounters = new Map<
+    string,
+    { pattern: string; source: PatternSource; files: number; bytes: number }
+  >();
+
+  function recordExclusion(pattern: string, bytes: number): void {
+    const existing = patternCounters.get(pattern);
+    if (existing) {
+      existing.files += 1;
+      existing.bytes += bytes;
+    } else {
+      patternCounters.set(pattern, {
+        pattern,
+        source: sources.get(pattern) ?? "cli",
+        files: 1,
+        bytes,
+      });
+    }
+  }
 
   const filter = (entryPath: string, stat: { size?: number }): boolean => {
     try {
@@ -332,12 +352,7 @@ export function buildExcludeFilter(
       // Fast path: prefix check for simple directory/file name patterns.
       for (const { prefix, pattern } of prefixPatterns) {
         if (rel === prefix || rel.startsWith(`${prefix}/`)) {
-          excluded.push({
-            path: rel,
-            pattern,
-            source: sources.get(pattern) ?? "cli",
-            bytes: stat.size ?? 0,
-          });
+          recordExclusion(pattern, stat.size ?? 0);
           return false; // exclude — prunes entire subtree if directory
         }
       }
@@ -346,12 +361,7 @@ export function buildExcludeFilter(
       if (ig.ignores(rel)) {
         // P2-006: Use pre-built matchers for attribution.
         const matchedPattern = findMatchingPattern(rel, patternMatchers) ?? "(pattern)";
-        excluded.push({
-          path: rel,
-          pattern: matchedPattern,
-          source: sources.get(matchedPattern) ?? "cli",
-          bytes: stat.size ?? 0,
-        });
+        recordExclusion(matchedPattern, stat.size ?? 0);
         return false;
       }
 
@@ -363,17 +373,21 @@ export function buildExcludeFilter(
       console.warn(
         `⚠️  Filter error for "${entryPath}", excluding for safety: ${(err as Error).message}`,
       );
-      excluded.push({
-        path: entryPath,
-        pattern: "(filter-error)",
-        source: "cli",
-        bytes: 0,
-      });
+      recordExclusion("(filter-error)", 0);
       return false;
     }
   };
 
-  return { filter, getExcluded: () => [...excluded] };
+  const getExcludedStats = (): ExcludedStats => {
+    const byPattern = [...patternCounters.values()];
+    return {
+      totalFiles: byPattern.reduce((sum, p) => sum + p.files, 0),
+      totalBytes: byPattern.reduce((sum, p) => sum + p.bytes, 0),
+      byPattern,
+    };
+  };
+
+  return { filter, getExcludedStats };
 }
 
 // ---------------------------------------------------------------------------

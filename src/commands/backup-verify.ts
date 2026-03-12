@@ -20,10 +20,9 @@ type BackupManifestExcludedEntry = {
 };
 
 // P2-012: Tolerant reader manifest extends shared base with optional/permissive types.
-// Omit 'excluded' from the base so the local BackupManifestExcludedEntry[] definition
-// (tolerant reader with source: string) does not conflict with the strict ExcludedEntry
-// type (source: PatternSource) when TypeScript intersects the two.
-type BackupManifest = Omit<Partial<BackupManifestBase>, "excluded"> & {
+// Omit 'excludedStats' from the base so the local definition (source: string)
+// does not conflict with the strict PatternSource when TypeScript intersects the two.
+type BackupManifest = Omit<Partial<BackupManifestBase>, "excludedStats"> & {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -49,6 +48,17 @@ type BackupManifest = Omit<Partial<BackupManifestBase>, "excluded"> & {
   }>;
   /** Optional field added in the exclude patterns feature. Absent in v1 archives. */
   excluded?: BackupManifestExcludedEntry[];
+  /** Per-pattern exclusion stats. Present in new archives; absent in legacy archives. */
+  excludedStats?: {
+    totalFiles: number;
+    totalBytes: number;
+    byPattern: Array<{
+      pattern: string;
+      files: number;
+      bytes: number;
+      source: string;
+    }>;
+  };
 };
 
 export type BackupVerifyOptions = {
@@ -255,21 +265,15 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     }
   }
 
-  // Build a set of excluded paths so we can skip them during asset checks.
-  // Their absence from the archive is intentional — not a verification failure.
-  const excludedPaths = new Set((manifest.excluded ?? []).map((e) => e.path));
+  // excludedStats provides auditability only; asset presence is verified unconditionally.
+  // When both legacy excluded[] and excludedStats are present (transition archives),
+  // excluded[] is ignored for all verification decisions.
 
   const payloadRoot = path.posix.join(archiveRoot, "payload");
   for (const asset of manifest.assets) {
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
-    }
-
-    // Skip verification for assets whose source paths are excluded.
-    // The asset was intentionally omitted from the archive.
-    if (excludedPaths.has(asset.sourcePath) || excludedPaths.has(asset.archivePath)) {
-      continue;
     }
 
     const exact = normalizedEntrySet.has(assetArchivePath);

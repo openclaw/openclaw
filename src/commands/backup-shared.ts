@@ -42,7 +42,7 @@ export interface BackupManifestBase {
     reason?: string;
     coveredBy?: string;
   }>;
-  excluded?: ExcludedEntry[];
+  excludedStats?: ExcludedStats;
 }
 
 // P3-016: Shared archive entry listing used by both backup-create and backup-verify.
@@ -71,13 +71,13 @@ export type ExcludedEntry = {
 };
 
 export type ExcludedStats = {
-  totalFiles: number;
-  totalBytes: number;
-  byPattern: Array<{
-    pattern: string;
-    files: number;
-    bytes: number;
-    source: string;
+  readonly totalFiles: number;
+  readonly totalBytes: number;
+  readonly byPattern: ReadonlyArray<{
+    readonly pattern: string;
+    readonly files: number;
+    readonly bytes: number;
+    readonly source: PatternSource;
   }>;
 };
 

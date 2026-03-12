@@ -13,7 +13,6 @@ import {
   listArchiveEntries,
   type BackupAsset,
   type BackupManifestBase,
-  type ExcludedEntry,
   type ExcludedStats,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
@@ -86,7 +85,6 @@ export type BackupCreateResult = {
     reason: string;
     coveredBy?: string;
   }>;
-  excluded?: ExcludedEntry[];
   excludedStats?: ExcludedStats;
 };
 
@@ -214,7 +212,6 @@ function buildManifest(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs: string[];
-  excluded?: ExcludedEntry[];
   excludedStats?: ExcludedStats;
 }): BackupManifest {
   const manifest: BackupManifest = {
@@ -247,9 +244,6 @@ function buildManifest(params: {
       coveredBy: entry.coveredBy,
     })),
   };
-  if (params.excluded && params.excluded.length > 0) {
-    manifest.excluded = params.excluded;
-  }
   if (params.excludedStats) {
     manifest.excludedStats = params.excludedStats;
   }
@@ -272,22 +266,9 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       }
     }
   }
-  if (result.excluded && result.excluded.length > 0) {
-    lines.push(
-      `Excluded ${result.excluded.length} path${result.excluded.length === 1 ? "" : "s"}:`,
-    );
-    const displayLimit = 20;
-    const toShow = result.excluded.slice(0, displayLimit);
-    for (const entry of toShow) {
-      lines.push(`- ${entry.path} (${entry.pattern}, ${entry.source})`);
-    }
-    if (result.excluded.length > displayLimit) {
-      lines.push(`  … and ${result.excluded.length - displayLimit} more`);
-    }
-    if (result.excludedStats) {
-      const mb = (result.excludedStats.totalBytes / (1024 * 1024)).toFixed(1);
-      lines.push(`Excluded ${result.excludedStats.totalFiles} files (${mb} MB)`);
-    }
+  if (result.excludedStats && result.excludedStats.totalFiles > 0) {
+    const mb = (result.excludedStats.totalBytes / (1024 * 1024)).toFixed(1);
+    lines.push(`Excluded ${result.excludedStats.totalFiles} files (${mb} MB)`);
   }
   if (result.dryRun) {
     lines.push("Dry run only; archive was not written.");
@@ -310,43 +291,6 @@ function remapArchiveEntryPath(params: {
     return path.posix.join(params.archiveRoot, "manifest.json");
   }
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
-}
-
-// P3-017: byPattern computation is lazy — only built when jsonOutput is true.
-function buildExcludedStats(
-  excluded: readonly ExcludedEntry[],
-  opts?: { jsonOutput?: boolean },
-): ExcludedStats {
-  const totalFiles = excluded.length;
-  const totalBytes = excluded.reduce((sum, e) => sum + e.bytes, 0);
-
-  if (!opts?.jsonOutput) {
-    // Non-JSON output only displays totals — skip per-pattern aggregation.
-    return { totalFiles, totalBytes, byPattern: [] };
-  }
-
-  const byPatternMap = new Map<string, { files: number; bytes: number; source: string }>();
-  for (const entry of excluded) {
-    const existing = byPatternMap.get(entry.pattern);
-    if (existing) {
-      existing.files += 1;
-      existing.bytes += entry.bytes;
-    } else {
-      byPatternMap.set(entry.pattern, {
-        files: 1,
-        bytes: entry.bytes,
-        source: entry.source,
-      });
-    }
-  }
-  return {
-    totalFiles,
-    totalBytes,
-    byPattern: [...byPatternMap.entries()].map(([pattern, stats]) => ({
-      pattern,
-      ...stats,
-    })),
-  };
 }
 
 export async function createBackupArchive(
@@ -398,7 +342,7 @@ export async function createBackupArchive(
   );
 
   // Build the filter once (pre-compiled, outside the hot path).
-  const { filter: excludeFilter, getExcluded } = buildExcludeFilter(
+  const { filter: excludeFilter, getExcludedStats } = buildExcludeFilter(
     excludePatterns,
     patternSources,
     plan.stateDir,
@@ -422,9 +366,8 @@ export async function createBackupArchive(
   };
 
   if (opts.dryRun) {
-    // For dry-run, populate excluded info if patterns are active.
+    // For dry-run, populate excludedStats with zero-count patterns if active.
     if (excludePatterns.length > 0) {
-      result.excluded = [];
       result.excludedStats = {
         totalFiles: 0,
         totalBytes: 0,
@@ -443,6 +386,8 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  // Bug B fix: declared outside try/finally so cleanup can reach it.
+  let uncompressedTarPath: string | undefined;
   try {
     const hasExcludes = excludePatterns.length > 0;
 
@@ -462,10 +407,10 @@ export async function createBackupArchive(
 
     if (hasExcludes) {
       // Two-step archive creation: create uncompressed tar with payload only,
-      // collect excluded entries via filter side-effect, write the final
-      // manifest (with excluded[]) and append it, then gzip.
+      // collect excludedStats via filter side-effect, write the final
+      // manifest (with excludedStats) and append it, then gzip.
       // This ensures the in-archive manifest accurately records what was excluded.
-      const uncompressedTarPath = `${tempArchivePath}.tar`;
+      uncompressedTarPath = `${tempArchivePath}.tar`;
 
       const tarFilter = (entryPath: string, stat: { size?: number }) => {
         return excludeFilter(entryPath, stat);
@@ -485,17 +430,15 @@ export async function createBackupArchive(
         result.assets.map((asset) => asset.sourcePath),
       );
 
-      // Collect excluded entries from filter side-effect.
-      const excluded = getExcluded();
-      if (excluded.length > 0) {
-        result.excluded = [...excluded];
-        result.excludedStats = buildExcludedStats(excluded, { jsonOutput: Boolean(opts.json) });
+      // Collect per-pattern exclusion stats from filter side-effect.
+      const excludedStats = getExcludedStats();
+      if (excludedStats.totalFiles > 0) {
+        result.excludedStats = excludedStats;
       }
 
-      // Write final manifest WITH excluded data.
+      // Write final manifest WITH excludedStats.
       const manifest = buildManifest({
         ...manifestBuildParams,
-        excluded: result.excluded,
         excludedStats: result.excludedStats,
       });
       await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -544,16 +487,12 @@ export async function createBackupArchive(
     }
 
     // P3-016: Post-tar cross-check — verify archive contains expected assets.
+    // excludedStats provides auditability only; asset presence is verified unconditionally
     {
       const archiveEntries = await listArchiveEntries(tempArchivePath);
       const entrySet = new Set(archiveEntries);
-      const excludedPaths = new Set((result.excluded ?? []).map((e) => e.path));
       for (const asset of result.assets) {
         const expectedPath = buildBackupArchivePath(archiveRoot, asset.sourcePath);
-        // Skip assets that were excluded — their absence is intentional.
-        if (excludedPaths.has(asset.sourcePath) || excludedPaths.has(asset.archivePath)) {
-          continue;
-        }
         // Check for exact match or nested entries under this path.
         const found =
           entrySet.has(expectedPath) ||
@@ -568,6 +507,9 @@ export async function createBackupArchive(
 
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
+    if (uncompressedTarPath) {
+      await fs.rm(uncompressedTarPath, { force: true }).catch(() => undefined);
+    }
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
