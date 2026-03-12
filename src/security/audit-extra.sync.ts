@@ -328,20 +328,52 @@ function resolveToolPolicies(params: {
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey ||
-    search?.perplexity?.apiKey ||
-    search?.gemini?.apiKey ||
-    search?.grok?.apiKey ||
-    search?.kimi?.apiKey ||
-    env.BRAVE_API_KEY ||
-    env.PERPLEXITY_API_KEY ||
-    env.OPENROUTER_API_KEY ||
-    env.GEMINI_API_KEY ||
-    env.XAI_API_KEY ||
-    env.KIMI_API_KEY ||
-    env.MOONSHOT_API_KEY,
+  const provider = resolveConfiguredWebSearchProvider(search);
+  if (provider) {
+    return hasWebSearchKeyForProvider(search, env, provider);
+  }
+  return (
+    hasWebSearchKeyForProvider(search, env, "brave") ||
+    hasWebSearchKeyForProvider(search, env, "gemini") ||
+    hasWebSearchKeyForProvider(search, env, "grok") ||
+    hasWebSearchKeyForProvider(search, env, "kimi") ||
+    hasWebSearchKeyForProvider(search, env, "perplexity")
   );
+}
+
+const WEB_SEARCH_PROVIDER_IDS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDER_IDS)[number];
+type WebSearchConfig = OpenClawConfig["tools"] extends infer T
+  ? T extends { web?: infer W }
+    ? W extends { search?: infer S }
+      ? S
+      : never
+    : never
+  : never;
+
+function resolveConfiguredWebSearchProvider(search: WebSearchConfig): WebSearchProviderId | undefined {
+  const raw = typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  return WEB_SEARCH_PROVIDER_IDS.find((provider) => provider === raw);
+}
+
+function hasWebSearchKeyForProvider(
+  search: WebSearchConfig,
+  env: NodeJS.ProcessEnv,
+  provider: WebSearchProviderId,
+): boolean {
+  if (provider === "brave") {
+    return Boolean(search?.apiKey || env.BRAVE_API_KEY);
+  }
+  if (provider === "gemini") {
+    return Boolean(search?.gemini?.apiKey || env.GEMINI_API_KEY);
+  }
+  if (provider === "grok") {
+    return Boolean(search?.grok?.apiKey || env.XAI_API_KEY);
+  }
+  if (provider === "kimi") {
+    return Boolean(search?.kimi?.apiKey || env.KIMI_API_KEY || env.MOONSHOT_API_KEY);
+  }
+  return Boolean(search?.perplexity?.apiKey || env.PERPLEXITY_API_KEY || env.OPENROUTER_API_KEY);
 }
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

@@ -62,10 +62,10 @@ describe("collectSmallModelRiskFindings", () => {
   });
 
   it.each([
-    ["perplexity", { perplexity: { apiKey: "pplx-key" } }],
-    ["gemini", { gemini: { apiKey: "gemini-key" } }],
-    ["grok", { grok: { apiKey: "grok-key" } }],
-    ["kimi", { kimi: { apiKey: "kimi-key" } }],
+    ["perplexity", { perplexity: { apiKey: "pplx-key" } }], // pragma: allowlist secret
+    ["gemini", { gemini: { apiKey: "gemini-key" } }], // pragma: allowlist secret
+    ["grok", { grok: { apiKey: "grok-key" } }], // pragma: allowlist secret
+    ["kimi", { kimi: { apiKey: "kimi-key" } }], // pragma: allowlist secret
   ])("treats %s search config credentials as enabling web_search exposure", (_provider, search) => {
     const findings = collectSmallModelRiskFindings({
       cfg: {
@@ -86,6 +86,89 @@ describe("collectSmallModelRiskFindings", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.detail).toContain("web_search");
     expect(findings[0]?.detail).not.toContain("web=[off]");
+  });
+
+  it.each([
+    ["perplexity", { OPENROUTER_API_KEY: "sk-or-v1-test" }], // pragma: allowlist secret
+    ["grok", { XAI_API_KEY: "xai-env-key" }], // pragma: allowlist secret
+  ])("treats %s explicit provider env credentials as enabling web_search exposure", (provider, env) => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "qwen2.5-7b-instruct",
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      env: env as NodeJS.ProcessEnv,
+    });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.detail).toContain("web_search");
+    expect(findings[0]?.detail).not.toContain("web=[off]");
+  });
+
+  it.each([
+    [
+      "perplexity ignores unrelated grok env keys",
+      "perplexity",
+      { XAI_API_KEY: "xai-env-key" }, // pragma: allowlist secret
+      undefined,
+    ],
+    [
+      "perplexity ignores unrelated grok config keys",
+      "perplexity",
+      {},
+      { grok: { apiKey: "grok-key" } }, // pragma: allowlist secret
+    ],
+    [
+      "grok ignores unrelated perplexity env keys",
+      "grok",
+      { OPENROUTER_API_KEY: "sk-or-v1-test" }, // pragma: allowlist secret
+      undefined,
+    ],
+    [
+      "grok ignores unrelated perplexity config keys",
+      "grok",
+      {},
+      { perplexity: { apiKey: "pplx-key" } }, // pragma: allowlist secret
+    ],
+  ])("%s", (_name, provider, env, searchOverrides) => {
+    const findings = collectSmallModelRiskFindings({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "qwen2.5-7b-instruct",
+          },
+        },
+        browser: {
+          enabled: false,
+        },
+        tools: {
+          web: {
+            fetch: {
+              enabled: false,
+            },
+            search: {
+              provider,
+              ...searchOverrides,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      env: env as NodeJS.ProcessEnv,
+    });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.detail).not.toContain("web_search");
+    expect(findings[0]?.detail).toContain("web=[off]");
   });
 });
 
