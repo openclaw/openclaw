@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as noteModule from "../terminal/note.js";
 import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 let tempRoot: string | null = null;
 
@@ -210,6 +211,71 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(persisted.jobs[0]?.jobId).toBe("legacy-job");
     expect(persisted.jobs[0]?.notify).toBe(true);
     expect(noteSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("Cron store normalized"),
+      "Doctor changes",
+    );
+  });
+
+  it("repairs in non-interactive mode when --repair is set", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-job",
+              name: "Legacy job",
+              notify: true,
+              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+              payload: {
+                kind: "systemEvent",
+                text: "Morning brief",
+              },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: () => {},
+        error: () => {},
+        exit: () => {
+          throw new Error("unexpected exit");
+        },
+      },
+      options: { nonInteractive: true, repair: true },
+    });
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: {
+          store: storePath,
+          webhook: "https://example.invalid/cron-finished",
+        },
+      },
+      options: { nonInteractive: true, repair: true },
+      prompter,
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs[0]?.jobId).toBeUndefined();
+    expect(persisted.jobs[0]?.id).toBe("legacy-job");
+    expect(persisted.jobs[0]?.notify).toBeUndefined();
+    expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("Cron store normalized"),
       "Doctor changes",
     );
