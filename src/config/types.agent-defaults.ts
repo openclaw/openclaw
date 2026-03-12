@@ -326,6 +326,11 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Maximum session file size in bytes before compaction is triggered.
+   * When set, compaction fires if the session .jsonl file exceeds this size,
+   * regardless of token count. Useful when tool outputs inflate file size
+   * faster than token count grows. Disabled when unset. */
+  maxSessionBytes?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

@@ -801,6 +801,46 @@ export async function runEmbeddedPiAgent(
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
+
+      // ── Pre-turn session file size check (maxSessionBytes) ──────────────
+      const maxSessionBytes =
+        params.config?.agents?.defaults?.compaction?.maxSessionBytes;
+      if (
+        typeof maxSessionBytes === "number" &&
+        maxSessionBytes > 0 &&
+        params.sessionFile
+      ) {
+        try {
+          const sessionStat = await fs.stat(params.sessionFile);
+          if (sessionStat.size > maxSessionBytes) {
+            log.warn(
+              `[session-bytes-compaction] sessionFile=${redactedSessionId} ` +
+                `size=${sessionStat.size} maxSessionBytes=${maxSessionBytes}; ` +
+                `forcing pre-turn compaction`,
+            );
+            const ctxTokens = ctxInfo.tokens;
+            await contextEngine.compact({
+              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
+              tokenBudget: ctxTokens,
+              force: true,
+              compactionTarget: "budget",
+              runtimeContext: {
+                sessionKey: params.sessionKey,
+                messageChannel: params.messageChannel,
+                messageProvider: params.messageProvider,
+                agentAccountId: params.agentAccountId,
+                workspaceDir: resolvedWorkspace,
+                agentDir,
+                config: params.config,
+              },
+            });
+          }
+        } catch {
+          // Best-effort: if stat or compact fails, proceed with normal turn
+        }
+      }
+
       try {
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
