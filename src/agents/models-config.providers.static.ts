@@ -531,6 +531,8 @@ export function buildNvidiaProvider(): ProviderConfig {
 }
 
 const MERLIN_BASE_URL = "https://www.getmerlin.in/arcane/api";
+// Conservative defaults — Merlin may impose lower limits per-model.
+// Run `scripts/probe-merlin-limits.ts` to discover actual limits.
 const MERLIN_DEFAULT_CONTEXT_WINDOW = 128_000;
 const MERLIN_DEFAULT_MAX_TOKENS = 8192;
 const MERLIN_DEFAULT_COST = {
