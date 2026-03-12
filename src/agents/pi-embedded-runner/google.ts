@@ -140,6 +140,27 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
+function isSyntheticAssistantTranscriptMessage(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const provider = (message as { provider?: unknown }).provider;
+  return provider === "openclaw";
+}
+
+function dropSyntheticAssistantTranscriptMessages(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+  for (const message of messages) {
+    if (isSyntheticAssistantTranscriptMessage(message)) {
+      changed = true;
+      continue;
+    }
+    out.push(message);
+  }
+  return changed ? out : messages;
+}
+
 function parseMessageTimestamp(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -537,8 +558,9 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const replayableMessages = dropSyntheticAssistantTranscriptMessages(withInterSessionMarkers);
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    withInterSessionMarkers,
+    replayableMessages,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
