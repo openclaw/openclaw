@@ -144,6 +144,14 @@ export type PluginRuntimeChannel = {
     monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
     handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
     createLoginTool: typeof import("../../channels/plugins/agent-tools/whatsapp-login.js").createWhatsAppLoginTool;
+    checkOnWhatsApp: (
+      jids: string[],
+      accountId?: string | null,
+    ) => Promise<import("../../web/active-listener.js").OnWhatsAppResult[]>;
+    getMessageAckStatus: (
+      messageId: string,
+      accountId?: string | null,
+    ) => import("../../web/ack-tracker.js").MessageAckEntry | null;
   };
   line: {
     listLineAccountIds: typeof import("../../line/accounts.js").listLineAccountIds;

@@ -25,6 +25,9 @@ type MockWebListener = {
   sendPoll: () => Promise<{ messageId: string }>;
   sendReaction: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
+  onWhatsApp: (...jids: string[]) => Promise<{ exists: boolean; jid: string }[]>;
+  getMessageStatus: (messageId: string) => unknown;
+  ackTracker: { trackOutbound: unknown; updateStatus: unknown; getStatus: unknown };
 };
 
 export const TEST_NET_IP = "203.0.113.10";
@@ -180,6 +183,9 @@ export function createMockWebListener(): MockWebListener {
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => undefined),
     sendComposingTo: vi.fn(async () => undefined),
+    onWhatsApp: vi.fn(async () => []),
+    getMessageStatus: vi.fn(() => null),
+    ackTracker: { trackOutbound: vi.fn(), updateStatus: vi.fn(), getStatus: vi.fn(() => null) },
   };
 }
 

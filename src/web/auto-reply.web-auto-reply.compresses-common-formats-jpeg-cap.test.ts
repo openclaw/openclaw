@@ -29,10 +29,14 @@ describe("web auto-reply", () => {
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
     let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
-    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+    const listenerFactory = (async ({
+      onMessage,
+    }: {
+      onMessage: (msg: WebInboundMessage) => Promise<void>;
+    }) => {
       capturedOnMessage = onMessage;
       return createMockWebListener();
-    };
+    }) as unknown as ListenerFactory;
 
     await monitorWebChannel(false, listenerFactory, false, resolver);
     expect(capturedOnMessage).toBeDefined();

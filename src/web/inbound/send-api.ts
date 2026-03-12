@@ -1,6 +1,7 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+import type { AckTracker } from "../ack-tracker.js";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 
 function recordWhatsAppOutbound(accountId: string) {
@@ -23,6 +24,7 @@ export function createWebSendApi(params: {
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  ackTracker?: AckTracker;
 }) {
   return {
     sendMessage: async (
@@ -67,6 +69,7 @@ export function createWebSendApi(params: {
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
+      params.ackTracker?.trackOutbound(messageId, jid);
       return { messageId };
     },
     sendPoll: async (
@@ -83,6 +86,7 @@ export function createWebSendApi(params: {
       } as AnyMessageContent);
       recordWhatsAppOutbound(params.defaultAccountId);
       const messageId = resolveOutboundMessageId(result);
+      params.ackTracker?.trackOutbound(messageId, jid);
       return { messageId };
     },
     sendReaction: async (

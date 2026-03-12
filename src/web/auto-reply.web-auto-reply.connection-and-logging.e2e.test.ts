@@ -459,7 +459,7 @@ describe("web auto-reply connection", () => {
 
     await monitorWebChannel(
       false,
-      async ({ onMessage }) => {
+      (async ({ onMessage }: { onMessage: (msg: WebInboundMessage) => Promise<void> }) => {
         await onMessage({
           id: "m1",
           from: "+1000",
@@ -475,7 +475,8 @@ describe("web auto-reply connection", () => {
           sendMedia,
         });
         return createMockWebListener();
-      },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
       false,
       replyResolver,
     );

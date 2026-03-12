@@ -57,6 +57,10 @@ function detectAutoKind(input: string): ChannelResolveKind {
   ) {
     return "user";
   }
+  // E.164 phone numbers (WhatsApp)
+  if (/^\+?\d{7,15}$/.test(trimmed)) {
+    return "user";
+  }
   return "group";
 }
 

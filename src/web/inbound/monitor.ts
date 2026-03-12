@@ -8,6 +8,7 @@ import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
+import { createAckTracker } from "../ack-tracker.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -426,6 +427,21 @@ export async function monitorWebInbox(options: {
   };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
 
+  // Track outbound message ACK status (sent/delivered/read).
+  const ackTracker = createAckTracker();
+  type MessageUpdateEntry = {
+    key: { id?: string; remoteJid?: string };
+    update: { status?: number };
+  };
+  const handleMessagesUpdate = (updates: MessageUpdateEntry[]) => {
+    for (const { key, update } of updates) {
+      if (key.id && typeof update.status === "number") {
+        ackTracker.updateStatus(key.id, key.remoteJid ?? "", update.status);
+      }
+    }
+  };
+  sock.ev.on("messages.update", handleMessagesUpdate as (...args: unknown[]) => void);
+
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
@@ -451,6 +467,7 @@ export async function monitorWebInbox(options: {
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    ackTracker,
   });
 
   return {
@@ -466,12 +483,17 @@ export async function monitorWebInbox(options: {
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesUpdateHandler = handleMessagesUpdate as unknown as (
+          ...args: unknown[]
+        ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
           ev.off("connection.update", connectionUpdateHandler);
+          ev.off("messages.update", messagesUpdateHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
+          ev.removeListener("messages.update", messagesUpdateHandler);
         }
         sock.ws?.close();
       } catch (err) {
@@ -484,5 +506,11 @@ export async function monitorWebInbox(options: {
     },
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
+    onWhatsApp: async (...jids: string[]) => {
+      const results = await sock.onWhatsApp(...jids);
+      return (results ?? []).map((r) => ({ exists: r.exists, jid: r.jid }));
+    },
+    getMessageStatus: (messageId: string) => ackTracker.getStatus(messageId),
+    ackTracker,
   } as const;
 }

@@ -19,6 +19,7 @@ import { registerMessagePollCommand } from "./message/register.poll.js";
 import { registerMessageReactionsCommands } from "./message/register.reactions.js";
 import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./message/register.send.js";
+import { registerMessageStatusCommand } from "./message/register.status.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
 
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
@@ -64,5 +65,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
   registerMessageThreadCommands(message, helpers);
   registerMessageEmojiCommands(message, helpers);
   registerMessageStickerCommands(message, helpers);
+  registerMessageStatusCommand(message, helpers);
   registerMessageDiscordAdminCommands(message, helpers);
 }

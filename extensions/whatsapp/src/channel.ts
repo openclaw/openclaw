@@ -225,6 +225,53 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       hint: "<E.164|group JID>",
     },
   },
+  resolver: {
+    resolveTargets: async ({ accountId, inputs, kind }) => {
+      if (kind === "group") {
+        // onWhatsApp only resolves user JIDs, not groups
+        return inputs.map((input) => ({
+          input,
+          resolved: false,
+          note: "WhatsApp resolve only supports user numbers, not groups",
+        }));
+      }
+      try {
+        const results = await getWhatsAppRuntime().channel.whatsapp.checkOnWhatsApp(
+          inputs,
+          accountId,
+        );
+        const byJid = new Map(results.map((r) => [r.jid, r]));
+        return inputs.map((input) => {
+          // Match by input: Baileys normalizes to <number>@s.whatsapp.net
+          const match =
+            results.find((r) => {
+              const num = r.jid.replace(/@s\.whatsapp\.net$/, "");
+              return input.replace(/^\+/, "") === num || input === r.jid;
+            }) ?? byJid.get(input);
+          if (match?.exists) {
+            return {
+              input,
+              resolved: true,
+              id: match.jid,
+              name: match.jid.replace(/@s\.whatsapp\.net$/, ""),
+            };
+          }
+          return {
+            input,
+            resolved: false,
+            note: match ? "number not on WhatsApp" : "lookup returned no match",
+          };
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return inputs.map((input) => ({
+          input,
+          resolved: false,
+          note: msg,
+        }));
+      }
+    },
+  },
   directory: {
     self: async ({ cfg, accountId }) => {
       const account = resolveWhatsAppAccount({ cfg, accountId });
@@ -256,10 +303,35 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (gate("polls")) {
         actions.add("poll");
       }
+      actions.add("message-status");
       return Array.from(actions);
     },
-    supportsAction: ({ action }) => action === "react",
+    supportsAction: ({ action }) => action === "react" || action === "message-status",
     handleAction: async ({ action, params, cfg, accountId }) => {
+      if (action === "message-status") {
+        const messageId = readStringParam(params, "messageId", { required: true });
+        const entry = getWhatsAppRuntime().channel.whatsapp.getMessageAckStatus(
+          messageId,
+          accountId,
+        );
+        const payload = entry
+          ? {
+              messageId: entry.messageId,
+              status: entry.ackLevel,
+              rawStatus: entry.rawStatus,
+              remoteJid: entry.remoteJid,
+              updatedAt: new Date(entry.updatedAt).toISOString(),
+            }
+          : {
+              messageId,
+              status: "unknown",
+              note: "No ACK data found. The message may not have been sent in this session.",
+            };
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+          details: payload,
+        };
+      }
       if (action !== "react") {
         throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
       }

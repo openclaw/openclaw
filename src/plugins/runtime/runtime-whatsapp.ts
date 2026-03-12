@@ -1,5 +1,5 @@
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
-import { getActiveWebListener } from "../../web/active-listener.js";
+import { getActiveWebListener, resolveWebAccountId } from "../../web/active-listener.js";
 import {
   getWebAuthAgeMs,
   logoutWeb,
@@ -105,5 +105,23 @@ export function createRuntimeWhatsApp(): PluginRuntime["channel"]["whatsapp"] {
     monitorWebChannel: monitorWebChannelLazy,
     handleWhatsAppAction: handleWhatsAppActionLazy,
     createLoginTool: createWhatsAppLoginTool,
+    checkOnWhatsApp: async (jids: string[], accountId?: string | null) => {
+      const id = resolveWebAccountId(accountId);
+      const listener = getActiveWebListener(id);
+      if (!listener?.onWhatsApp) {
+        throw new Error(
+          `No active WhatsApp listener with onWhatsApp support (account: ${id}). Ensure the gateway is running.`,
+        );
+      }
+      return listener.onWhatsApp(...jids);
+    },
+    getMessageAckStatus: (messageId: string, accountId?: string | null) => {
+      const id = resolveWebAccountId(accountId);
+      const listener = getActiveWebListener(id);
+      if (!listener?.getMessageStatus) {
+        return null;
+      }
+      return listener.getMessageStatus(messageId);
+    },
   };
 }

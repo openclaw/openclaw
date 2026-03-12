@@ -52,6 +52,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "ban",
   "set-presence",
   "download-file",
+  "message-status",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

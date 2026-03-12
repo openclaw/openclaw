@@ -1,11 +1,17 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PollInput } from "../polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import type { MessageAckEntry } from "./ack-tracker.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
+};
+
+export type OnWhatsAppResult = {
+  exists: boolean;
+  jid: string;
 };
 
 export type ActiveWebListener = {
@@ -25,6 +31,10 @@ export type ActiveWebListener = {
     participant?: string,
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
+  /** Check if phone numbers are registered on WhatsApp (Baileys onWhatsApp). */
+  onWhatsApp?: (...jids: string[]) => Promise<OnWhatsAppResult[]>;
+  /** Query the ACK status for an outbound message. */
+  getMessageStatus?: (messageId: string) => MessageAckEntry | null;
   close?: () => Promise<void>;
 };
 
