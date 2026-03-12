@@ -224,6 +224,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to plain text when card send fails", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() } as never;
+    sendMarkdownCardFeishuMock.mockRejectedValueOnce(
+      new Error("Create card request failed with HTTP 400"),
+    );
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+      },
+    });
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```md\nfallback please\n```" }, { kind: "final" });
+
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "```md\nfallback please\n```",
+      }),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("feishu: card send failed, falling back to plain text"),
+    );
+  });
+
   it("suppresses internal block payload delivery", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,

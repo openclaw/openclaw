@@ -148,6 +148,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
+  const sendPlainTextChunks = async (text: string) => {
+    const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+    let first = true;
+    for (const chunk of core.channel.text.chunkTextWithMode(converted, textChunkLimit, chunkMode)) {
+      await sendMessageFeishu({
+        cfg,
+        to: chatId,
+        text: chunk,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        mentions: first ? mentionTargets : undefined,
+        accountId,
+      });
+      first = false;
+    }
+  };
+
   const queueStreamingUpdate = (
     nextText: string,
     options?: {
@@ -305,43 +322,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           let first = true;
           if (useCard) {
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMarkdownCardFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
+            try {
+              for (const chunk of core.channel.text.chunkTextWithMode(
+                text,
+                textChunkLimit,
+                chunkMode,
+              )) {
+                await sendMarkdownCardFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  mentions: first ? mentionTargets : undefined,
+                  accountId,
+                });
+                first = false;
+              }
+            } catch (error) {
+              params.runtime.error?.(
+                `feishu: card send failed, falling back to plain text: ${String(error)}`,
+              );
+              await sendPlainTextChunks(text);
             }
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
             }
           } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-            for (const chunk of core.channel.text.chunkTextWithMode(
-              converted,
-              textChunkLimit,
-              chunkMode,
-            )) {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: chunk,
-                replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
-                mentions: first ? mentionTargets : undefined,
-                accountId,
-              });
-              first = false;
-            }
+            await sendPlainTextChunks(text);
             if (info?.kind === "final") {
               deliveredFinalTexts.add(text);
             }
