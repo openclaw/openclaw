@@ -19,6 +19,7 @@ import {
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
+  appendDocumentPathsToPrompt,
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
@@ -31,6 +32,7 @@ import {
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
+  writeCliDocuments,
   writeCliImages,
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
@@ -69,6 +71,7 @@ export async function runCliAgent(params: {
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  documents?: Array<{ type: "document"; data: string; mimeType: string; fileName?: string }>;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -210,6 +213,7 @@ export async function runCliAgent(params: {
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
+    let cleanupDocuments: (() => Promise<void>) | undefined;
     let prompt = params.prompt;
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
@@ -218,6 +222,15 @@ export async function runCliAgent(params: {
       if (!backend.imageArg) {
         prompt = appendImagePathsToPrompt(prompt, imagePaths);
       }
+    }
+
+    // CLI backends don't support binary document injection (no onPayload hook).
+    // Write PDFs to temp files and append their paths to the prompt so the
+    // underlying CLI agent (e.g. claude-code, codex) can read them directly.
+    if (params.documents && params.documents.length > 0) {
+      const docPayload = await writeCliDocuments(params.documents);
+      cleanupDocuments = docPayload.cleanup;
+      prompt = appendDocumentPathsToPrompt(prompt, docPayload.paths);
     }
 
     const { argsPrompt, stdin } = resolvePromptInput({
@@ -400,6 +413,9 @@ export async function runCliAgent(params: {
     } finally {
       if (cleanupImages) {
         await cleanupImages();
+      }
+      if (cleanupDocuments) {
+        await cleanupDocuments();
       }
     }
   };

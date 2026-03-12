@@ -182,6 +182,35 @@
   object-fit: contain;
 }
 
+.chat-attachment__document {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  gap: 4px;
+  padding: 6px;
+  color: var(--text-muted, #94a3b8);
+}
+
+.chat-attachment__document svg {
+  flex-shrink: 0;
+}
+
+.chat-attachment__document-name {
+  font-size: 9px;
+  line-height: 1.2;
+  text-align: center;
+  word-break: break-all;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  color: var(--text-muted, #94a3b8);
+  max-width: 100%;
+}
+
 .chat-attachment__remove {
   position: absolute;
   top: 4px;
@@ -257,6 +286,76 @@
 /* User message images align right */
 .chat-group.user .chat-message-images {
   justify-content: flex-end;
+}
+
+/* Hidden file inputs for attach/camera */
+.chat-compose__file-input {
+  display: none;
+}
+
+/* Attach & camera buttons column */
+.chat-compose__attach-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
+.chat-compose__attach-btn,
+.chat-compose__camera-btn {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  padding: 0 !important;
+}
+
+.chat-compose__attach-btn svg,
+.chat-compose__camera-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Drag-and-drop overlay */
+.chat-drop-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  border-radius: 12px;
+  border: 2px dashed var(--accent);
+  align-items: center;
+  justify-content: center;
+}
+
+.chat--drag-over .chat-drop-overlay {
+  display: flex;
+}
+
+.chat-drop-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.chat-drop-overlay__content svg {
+  width: 48px;
+  height: 48px;
+  stroke: var(--accent);
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+:root[data-theme="light"] .chat-drop-overlay {
+  background: rgba(255, 255, 255, 0.8);
 }
 
 /* Compose input row - horizontal layout */
@@ -458,6 +557,12 @@
     gap: 8px;
   }
 
+  /* Mobile: attach buttons go horizontal */
+  .chat-compose__attach-buttons {
+    flex-direction: row;
+    align-self: flex-start;
+  }
+
   /* Mobile: stack action buttons vertically */
   .chat-compose__actions {
     flex-direction: column;
@@ -468,6 +573,11 @@
   /* Mobile: full-width buttons */
   .chat-compose .chat-compose__actions .btn {
     width: 100%;
+  }
+
+  /* Mobile: hide camera button label, keep icon */
+  .chat-compose__camera-btn {
+    display: inline-flex;
   }
 
   .chat-controls {

@@ -326,6 +326,38 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
   return `${trimmed}${separator}${paths.join("\n")}`;
 }
 
+export function appendDocumentPathsToPrompt(prompt: string, paths: string[]): string {
+  if (!paths.length) {
+    return prompt;
+  }
+  const trimmed = prompt.trimEnd();
+  const separator = trimmed ? "\n\n" : "";
+  const fileLines = paths.map((p) => `[Attached document: ${p}]`).join("\n");
+  return `${trimmed}${separator}${fileLines}`;
+}
+
+export async function writeCliDocuments(
+  documents: Array<{ type: "document"; data: string; mimeType: string; fileName?: string }>,
+): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-documents-"));
+  const paths: string[] = [];
+  for (let i = 0; i < documents.length; i += 1) {
+    const doc = documents[i];
+    const ext = doc.mimeType === "application/pdf" ? "pdf" : "bin";
+    // Sanitize fileName: strip any path separators to prevent directory
+    // traversal (e.g. "../../../etc/passwd" from a crafted attachment name).
+    const baseName = path.basename(doc.fileName ?? `document-${i + 1}.${ext}`);
+    const filePath = path.join(tempDir, `${i + 1}-${baseName}`);
+    const buffer = Buffer.from(doc.data, "base64");
+    await fs.writeFile(filePath, buffer, { mode: 0o600 });
+    paths.push(filePath);
+  }
+  const cleanup = async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  };
+  return { paths, cleanup };
+}
+
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {

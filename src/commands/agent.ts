@@ -375,6 +375,14 @@ function runAgentAttempt(params: {
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
+        documents: (() => {
+          if (params.isFallbackRetry && params.opts.documents?.length) {
+            log?.warn?.(
+              `Dropping ${params.opts.documents.length} document(s) for fallback retry to ${params.modelOverride}`,
+            );
+          }
+          return params.isFallbackRetry ? undefined : params.opts.documents;
+        })(),
         streamParams: params.opts.streamParams,
       });
     return runCliWithSession(cliSessionId).catch(async (err) => {
@@ -479,6 +487,14 @@ function runAgentAttempt(params: {
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
+    documents: (() => {
+      if (params.isFallbackRetry && params.opts.documents?.length) {
+        log?.warn?.(
+          `Dropping ${params.opts.documents.length} document(s) for fallback retry to ${params.modelOverride}`,
+        );
+      }
+      return params.isFallbackRetry ? undefined : params.opts.documents;
+    })(),
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,

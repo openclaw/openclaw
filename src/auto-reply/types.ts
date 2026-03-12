@@ -27,6 +27,8 @@ export type GetReplyOptions = {
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
+  /** Optional inbound documents/PDFs (used for webchat attachments). */
+  documents?: Array<{ type: "document"; data: string; mimeType: string; fileName?: string }>;
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;
