@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatEffectiveThinkingResolution,
   listThinkingLevelLabels,
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
+  resolveEffectiveThinking,
+  resolveThinkingCapabilities,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -79,6 +82,11 @@ describe("listThinkingLevelLabels", () => {
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
   });
 
+  it("accepts ZAI provider aliases", () => {
+    expect(listThinkingLevelLabels("z.ai", "glm-4.7")).toEqual(["off", "on"]);
+    expect(listThinkingLevelLabels("z-ai", "glm-4.7")).toEqual(["off", "on"]);
+  });
+
   it("returns full levels for non-ZAI", () => {
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).toContain("low");
     expect(listThinkingLevelLabels("openai", "gpt-4.1-mini")).not.toContain("on");
@@ -119,6 +127,20 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 });
 
+describe("resolveThinkingCapabilities", () => {
+  it("keeps provider-name normalization as an outer-edge convenience", () => {
+    expect(resolveThinkingCapabilities({ provider: "z.ai" })).toEqual({ binaryThinking: true });
+    expect(resolveThinkingCapabilities({ provider: "z-ai" })).toEqual({ binaryThinking: true });
+  });
+
+  it("omits undefined capability fields", () => {
+    expect(resolveThinkingCapabilities({ nativeAdaptive: true })).toEqual({ nativeAdaptive: true });
+    expect(resolveThinkingCapabilities({ reasoningSupported: false })).toEqual({
+      reasoningSupported: false,
+    });
+  });
+});
+
 describe("normalizeReasoningLevel", () => {
   it("accepts on/off", () => {
     expect(normalizeReasoningLevel("on")).toBe("on");
@@ -133,5 +155,177 @@ describe("normalizeReasoningLevel", () => {
   it("accepts stream", () => {
     expect(normalizeReasoningLevel("stream")).toBe("stream");
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
+  });
+});
+
+describe("resolveEffectiveThinking", () => {
+  it("short-circuits off even when capabilities would otherwise conflict", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "off",
+        capabilities: {
+          reasoningSupported: false,
+          binaryThinking: true,
+          nativeAdaptive: true,
+        },
+      }),
+    ).toEqual({
+      requested: "off",
+      effective: "off",
+      status: "exact",
+    });
+  });
+
+  it("preserves adaptive as requested intent for native adaptive providers", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "adaptive",
+        capabilities: {
+          nativeAdaptive: true,
+          reasoningSupported: true,
+        },
+      }),
+    ).toEqual({
+      requested: "adaptive",
+      effective: "adaptive",
+      status: "exact",
+    });
+  });
+
+  it("downgrades adaptive best-effort for graded providers without native adaptive", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "adaptive",
+        capabilities: {
+          reasoningSupported: true,
+        },
+      }),
+    ).toEqual({
+      requested: "adaptive",
+      effective: "medium",
+      status: "downgraded",
+      reason: "adaptive_best_effort",
+    });
+  });
+
+  it("maps adaptive to on for binary thinking providers", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "adaptive",
+        capabilities: {
+          reasoningSupported: true,
+          binaryThinking: true,
+        },
+      }),
+    ).toEqual({
+      requested: "adaptive",
+      effective: "on",
+      status: "downgraded",
+      reason: "binary_enabled",
+    });
+  });
+
+  it.each(["minimal", "low", "high"] as const)(
+    "maps %s to on for binary thinking providers",
+    (requested) => {
+      expect(
+        resolveEffectiveThinking({
+          requested,
+          capabilities: {
+            reasoningSupported: true,
+            binaryThinking: true,
+          },
+        }),
+      ).toEqual({
+        requested,
+        effective: "on",
+        status: "downgraded",
+        reason: "binary_enabled",
+      });
+    },
+  );
+
+  it("reports unsupported reasoning clearly", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "low",
+        capabilities: {
+          reasoningSupported: false,
+        },
+      }),
+    ).toEqual({
+      requested: "low",
+      status: "unsupported",
+      reason: "reasoning_unsupported",
+    });
+  });
+
+  it("does not infer binary behavior when capabilities are omitted", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "adaptive",
+      }),
+    ).toEqual({
+      requested: "adaptive",
+      effective: "medium",
+      status: "downgraded",
+      reason: "adaptive_best_effort",
+    });
+  });
+
+  it("passes through graded levels when capability inputs are omitted", () => {
+    expect(
+      resolveEffectiveThinking({
+        requested: "low",
+      }),
+    ).toEqual({
+      requested: "low",
+      effective: "low",
+      status: "exact",
+    });
+  });
+});
+
+describe("formatEffectiveThinkingResolution", () => {
+  it("returns undefined for exact resolutions", () => {
+    expect(
+      formatEffectiveThinkingResolution({
+        requested: "low",
+        effective: "low",
+        status: "exact",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("formats unsupported reasoning clearly", () => {
+    expect(
+      formatEffectiveThinkingResolution({
+        requested: "low",
+        status: "unsupported",
+        reason: "reasoning_unsupported",
+      }),
+    ).toBe("Reasoning is not supported for this model.");
+  });
+
+  it("formats adaptive best-effort downgrade clearly", () => {
+    expect(
+      formatEffectiveThinkingResolution({
+        requested: "adaptive",
+        effective: "medium",
+        status: "downgraded",
+        reason: "adaptive_best_effort",
+      }),
+    ).toBe("Adaptive thinking is not supported natively; using medium instead.");
+  });
+
+  it("formats binary downgrade clearly", () => {
+    expect(
+      formatEffectiveThinkingResolution({
+        requested: "high",
+        effective: "on",
+        status: "downgraded",
+        reason: "binary_enabled",
+      }),
+    ).toBe("Binary thinking only supports off/on; using on instead.");
   });
 });

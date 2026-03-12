@@ -46,13 +46,8 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
 export function shouldApplySiliconFlowThinkingOffCompat(params: {
   provider: string;
   modelId: string;
-  thinkingLevel?: ThinkLevel;
 }): boolean {
-  return (
-    params.provider === "siliconflow" &&
-    params.thinkingLevel === "off" &&
-    params.modelId.startsWith("Pro/")
-  );
+  return params.provider === "siliconflow" && params.modelId.startsWith("Pro/");
 }
 
 export function shouldApplyMoonshotPayloadCompat(params: {
@@ -97,21 +92,23 @@ export function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefi
 
 export function resolveMoonshotThinkingType(params: {
   configuredThinking: unknown;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkLevel | (() => ThinkLevel | undefined);
 }): MoonshotThinkingType | undefined {
   const configured = normalizeMoonshotThinkingType(params.configuredThinking);
   if (configured) {
     return configured;
   }
-  if (!params.thinkingLevel) {
+  const thinkingLevel =
+    typeof params.thinkingLevel === "function" ? params.thinkingLevel() : params.thinkingLevel;
+  if (!thinkingLevel) {
     return undefined;
   }
-  return params.thinkingLevel === "off" ? "disabled" : "enabled";
+  return thinkingLevel === "off" ? "disabled" : "enabled";
 }
 
 export function createMoonshotThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingType?: MoonshotThinkingType,
+  thinkingType?: MoonshotThinkingType | (() => MoonshotThinkingType | undefined),
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -122,10 +119,12 @@ export function createMoonshotThinkingWrapper(
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
           let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
+          const resolvedThinkingType =
+            typeof thinkingType === "function" ? thinkingType() : thinkingType;
 
-          if (thinkingType) {
-            payloadObj.thinking = { type: thinkingType };
-            effectiveThinkingType = thinkingType;
+          if (resolvedThinkingType) {
+            payloadObj.thinking = { type: resolvedThinkingType };
+            effectiveThinkingType = resolvedThinkingType;
           }
 
           if (

@@ -80,6 +80,12 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+type ThinkingLevelSource = ThinkLevel | (() => ThinkLevel | undefined);
+
+function resolveThinkingLevelSource(source?: ThinkingLevelSource): ThinkLevel | undefined {
+  return typeof source === "function" ? source() : source;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -220,7 +226,7 @@ function sanitizeGoogleThinkingPayload(params: {
 
 function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkingLevelSource,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -232,7 +238,7 @@ function createGoogleThinkingPayloadWrapper(
           sanitizeGoogleThinkingPayload({
             payload,
             modelId: model.id,
-            thinkingLevel,
+            thinkingLevel: resolveThinkingLevelSource(thinkingLevel),
           });
         }
         return onPayload?.(payload, model);
@@ -333,7 +339,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkingLevelSource,
   agentId?: string,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
@@ -371,7 +377,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
   }
 
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId })) {
     log.debug(
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
     );
@@ -379,16 +385,21 @@ export function applyExtraParamsToAgent(
   }
 
   if (shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
-    const moonshotThinkingType = resolveMoonshotThinkingType({
-      configuredThinking: merged?.thinking,
-      thinkingLevel,
-    });
-    if (moonshotThinkingType) {
+    const resolveMoonshotThinkingTypeForRequest = () =>
+      resolveMoonshotThinkingType({
+        configuredThinking: merged?.thinking,
+        thinkingLevel,
+      });
+    const initialMoonshotThinkingType = resolveMoonshotThinkingTypeForRequest();
+    if (initialMoonshotThinkingType) {
       log.debug(
-        `applying Moonshot thinking=${moonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
+        `applying Moonshot thinking=${initialMoonshotThinkingType} payload wrapper for ${provider}/${modelId}`,
       );
     }
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, moonshotThinkingType);
+    agent.streamFn = createMoonshotThinkingWrapper(
+      agent.streamFn,
+      resolveMoonshotThinkingTypeForRequest,
+    );
   }
 
   agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn);

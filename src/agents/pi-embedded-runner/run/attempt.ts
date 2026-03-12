@@ -11,8 +11,18 @@ import { resolveSignalReactionLevel } from "../../../../extensions/signal/src/re
 import { resolveTelegramInlineButtonsScope } from "../../../../extensions/telegram/src/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import {
+  resolveEffectiveThinking,
+  resolveThinkingCapabilities,
+  type ThinkLevel,
+} from "../../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "../../../config/sessions.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -53,6 +63,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
+import { resolveThinkingDefault } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
@@ -1461,12 +1472,66 @@ export async function runEmbeddedAttempt(
       : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-
+    const initialDefaultThinkingLevel = resolveThinkingDefault({
+      cfg: params.config ?? {},
+      provider: params.provider,
+      model: params.modelId,
+      catalog: [
+        {
+          provider: params.provider,
+          id: params.modelId,
+          name: params.model.name,
+          reasoning: params.model.reasoning,
+        },
+      ],
+    });
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
     });
+    const initialSessionThinkingLevel = (() => {
+      if (!params.config || !sandboxSessionKey) {
+        return params.thinkLevel !== initialDefaultThinkingLevel ? params.thinkLevel : undefined;
+      }
+      const storePath = resolveStorePath(params.config.session?.store, { agentId: sessionAgentId });
+      const store = loadSessionStore(storePath);
+      return resolveSessionStoreEntry({
+        store,
+        sessionKey: sandboxSessionKey,
+      }).existing?.thinkingLevel as ThinkLevel | undefined;
+    })();
+    const runThinkingState: {
+      defaultRequested: ThinkLevel;
+      sessionRequested: ThinkLevel | undefined;
+      turnRequested: ThinkLevel | undefined;
+    } = {
+      defaultRequested: initialDefaultThinkingLevel,
+      sessionRequested: initialSessionThinkingLevel,
+      turnRequested: undefined,
+    };
+    const currentThinkingCapabilities = resolveThinkingCapabilities({
+      provider: params.provider,
+      model: params.modelId,
+      reasoningSupported: params.model.reasoning,
+    });
+    const resolveCurrentRequestedThinkingLevel = (): ThinkLevel =>
+      runThinkingState.turnRequested ??
+      runThinkingState.sessionRequested ??
+      runThinkingState.defaultRequested;
+    const resolveCurrentEffectiveThinkingLevel = (): ThinkLevel => {
+      const requested = resolveCurrentRequestedThinkingLevel();
+      const resolution = resolveEffectiveThinking({
+        requested,
+        capabilities: currentThinkingCapabilities,
+      });
+      if (resolution.status === "unsupported") {
+        return "off";
+      }
+      return resolution.effective === "on" ? "low" : resolution.effective;
+    };
+    let applyEffectiveThinkingLevel = (_level: ThinkLevel) => undefined;
+
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
       sessionAgentId,
@@ -1526,6 +1591,19 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          reasoningSupported: params.model.reasoning,
+          getRequestedThinkingLevel: resolveCurrentRequestedThinkingLevel,
+          setRequestedThinkingLevelForScope: (scope, level) => {
+            if (scope === "turn") {
+              runThinkingState.turnRequested = level;
+              return;
+            }
+            runThinkingState.sessionRequested = level;
+            runThinkingState.turnRequested = undefined;
+          },
+          applyEffectiveThinkingLevel: (level) => {
+            applyEffectiveThinkingLevel(level);
+          },
           onYield: (message) => {
             yieldDetected = true;
             yieldMessage = message;
@@ -1835,7 +1913,7 @@ export async function runEmbeddedAttempt(
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
         model: params.model,
-        thinkingLevel: mapThinkingLevel(params.thinkLevel),
+        thinkingLevel: mapThinkingLevel(resolveCurrentEffectiveThinkingLevel()),
         tools: builtInTools,
         customTools: allCustomTools,
         sessionManager,
@@ -1847,6 +1925,10 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      applyEffectiveThinkingLevel = (level: ThinkLevel) => {
+        activeSession.setThinkingLevel(mapThinkingLevel(level));
+      };
+      applyEffectiveThinkingLevel(resolveCurrentEffectiveThinkingLevel());
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -1942,7 +2024,7 @@ export async function runEmbeddedAttempt(
           ...params.streamParams,
           fastMode: params.fastMode,
         },
-        params.thinkLevel,
+        resolveCurrentEffectiveThinkingLevel,
         sessionAgentId,
       );
 

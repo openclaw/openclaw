@@ -6,11 +6,24 @@ import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
+const createOpenClawToolsMock = vi.fn();
+const listSkillCommandsForWorkspaceMock = vi.fn();
+const resolveSkillCommandInvocationMock = vi.fn();
 
 vi.mock("./commands.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: vi.fn(),
   buildCommandContext: vi.fn(),
+}));
+
+vi.mock("../../agents/openclaw-tools.js", () => ({
+  createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
+}));
+
+vi.mock("../skill-commands.js", () => ({
+  listReservedChatSlashCommandNames: (names: string[]) => new Set(names),
+  listSkillCommandsForWorkspace: (...args: unknown[]) => listSkillCommandsForWorkspaceMock(...args),
+  resolveSkillCommandInvocation: (...args: unknown[]) => resolveSkillCommandInvocationMock(...args),
 }));
 
 // Import after mocks.
@@ -100,6 +113,9 @@ async function expectInlineActionSkipped(params: {
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
+    createOpenClawToolsMock.mockReset();
+    listSkillCommandsForWorkspaceMock.mockReset();
+    resolveSkillCommandInvocationMock.mockReset();
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {
@@ -221,5 +237,63 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes provider and model into createOpenClawTools for skill-tool dispatch", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/demo do thing",
+      CommandBody: "/demo do thing",
+    });
+    listSkillCommandsForWorkspaceMock.mockReturnValue([
+      {
+        name: "demo",
+        skillName: "demo-skill",
+        dispatch: { kind: "tool", toolName: "set_thinking_level" },
+      },
+    ]);
+    resolveSkillCommandInvocationMock.mockReturnValue({
+      command: {
+        name: "demo",
+        skillName: "demo-skill",
+        dispatch: { kind: "tool", toolName: "set_thinking_level" },
+      },
+      args: "medium turn",
+    });
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "set_thinking_level",
+        execute: vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "ok" }],
+          details: { ok: true },
+        }),
+      },
+    ]);
+
+    await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/demo do thing",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          commandBodyNormalized: "/demo do thing",
+        },
+        overrides: {
+          allowTextCommands: true,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          skillFilter: [],
+        },
+      }),
+    );
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+      }),
+    );
   });
 });
