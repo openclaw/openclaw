@@ -76,6 +76,8 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** True when the current session has an explicit model override (for example /model). */
+  hasSessionModelOverride?: boolean;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

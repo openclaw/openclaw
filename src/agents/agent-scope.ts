@@ -234,8 +234,12 @@ export function hasConfiguredModelFallbacks(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;
   sessionKey?: string | null;
+  hasSessionModelOverride?: boolean;
 }): boolean {
   const fallbacksOverride = resolveRunModelFallbacksOverride(params);
+  if (params.hasSessionModelOverride) {
+    return (fallbacksOverride ?? []).length > 0;
+  }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
