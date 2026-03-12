@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package openclaw.sandbox.v1;
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/openclaw/sandbox/v1;sandboxv1";
+
+// FileService provides filesystem operations inside sandboxes.
+// Each request includes a sandbox_id for routing to the correct VM.
+service FileService {
+  // ReadFile reads a file and streams its content in chunks.
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
+
+  // WriteFile accepts a stream of chunks and writes them to a file.
+  rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
+
+  // ListDir returns directory entries with metadata.
+  rpc ListDir(ListDirRequest) returns (ListDirResponse);
+
+  // Stat returns metadata for a file or directory.
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // MakeDir creates directories recursively.
+  rpc MakeDir(MakeDirRequest) returns (MakeDirResponse);
+
+  // Remove deletes files or directories.
+  rpc Remove(RemoveRequest) returns (RemoveResponse);
+}
+
+// FileInfo describes a file or directory entry.
+message FileInfo {
+  string name = 1;
+  int64 size = 2;
+  uint32 mode = 3;
+  bool is_dir = 4;
+  int64 mod_time_unix = 5;
+}
+
+message ReadFileRequest {
+  string sandbox_id = 1;
+  string path = 2;
+}
+
+message ReadFileResponse {
+  bytes data = 1;
+  bool eof = 2;
+}
+
+message WriteFileRequest {
+  // Sandbox ID for routing (must be set in the first chunk).
+  string sandbox_id = 1;
+
+  // Path to write to (must be set in the first chunk).
+  string path = 2;
+
+  // File permission mode (optional, default 0644, only used from first chunk).
+  uint32 mode = 3;
+
+  // File data chunk.
+  bytes data = 4;
+}
+
+message WriteFileResponse {
+  int64 bytes_written = 1;
+}
+
+message ListDirRequest {
+  string sandbox_id = 1;
+  string path = 2;
+}
+
+message ListDirResponse {
+  repeated FileInfo entries = 1;
+}
+
+message StatRequest {
+  string sandbox_id = 1;
+  string path = 2;
+}
+
+message StatResponse {
+  string path = 1;
+  int64 size = 2;
+  uint32 mode = 3;
+  bool is_dir = 4;
+  int64 mod_time_unix = 5;
+}
+
+message MakeDirRequest {
+  string sandbox_id = 1;
+  string path = 2;
+
+  // Permission mode (default 0755).
+  uint32 mode = 3;
+}
+
+message MakeDirResponse {}
+
+message RemoveRequest {
+  string sandbox_id = 1;
+  string path = 2;
+
+  // If true, removes directory contents recursively.
+  bool recursive = 3;
+}
+
+message RemoveResponse {}

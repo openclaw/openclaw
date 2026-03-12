@@ -1,0 +1,64 @@
+#!/sbin/openrc-run
+
+description="OpenClaw desktop environment (Xvfb + fluxbox + x11vnc)"
+
+depend() {
+    need localmount
+    after envd
+}
+
+start_pre() {
+    # Generate a random 8-char VNC password for this boot.
+    local pw
+    pw="$(head -c 6 /dev/urandom | base64)"
+    echo -n "$pw" > /run/vnc_password
+    chmod 600 /run/vnc_password
+
+    checkpath --directory --mode 0755 /run
+    checkpath --directory --mode 0755 /tmp/.X11-unix
+}
+
+start() {
+    ebegin "Starting Xvfb on display :99"
+    start-stop-daemon --start --background \
+        --pidfile /run/xvfb.pid --make-pidfile \
+        --exec /usr/bin/Xvfb -- :99 -screen 0 1280x720x24 -ac
+    eend $? || return 1
+
+    # Brief pause to let Xvfb initialize the display socket.
+    sleep 1
+
+    ebegin "Starting fluxbox window manager"
+    DISPLAY=:99 start-stop-daemon --start --background \
+        --pidfile /run/fluxbox.pid --make-pidfile \
+        --exec /usr/bin/fluxbox
+    eend $? || return 1
+
+    ebegin "Starting x11vnc on localhost:5900"
+    start-stop-daemon --start --background \
+        --pidfile /run/x11vnc.pid --make-pidfile \
+        --exec /usr/bin/x11vnc -- \
+            -display :99 \
+            -rfbport 5900 \
+            -rfbauth /run/vnc_password \
+            -localhost \
+            -forever \
+            -shared \
+            -noxdamage
+    eend $?
+}
+
+stop() {
+    # Kill in reverse order: x11vnc, fluxbox, Xvfb.
+    ebegin "Stopping x11vnc"
+    start-stop-daemon --stop --pidfile /run/x11vnc.pid 2>/dev/null
+    eend $?
+
+    ebegin "Stopping fluxbox"
+    start-stop-daemon --stop --pidfile /run/fluxbox.pid 2>/dev/null
+    eend $?
+
+    ebegin "Stopping Xvfb"
+    start-stop-daemon --stop --pidfile /run/xvfb.pid 2>/dev/null
+    eend $?
+}
