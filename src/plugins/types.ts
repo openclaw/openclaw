@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
 import type {
@@ -305,7 +306,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram";
+export type PluginInteractiveChannel = "telegram" | "discord";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -346,13 +347,59 @@ export type PluginInteractiveTelegramHandlerContext = {
   };
 };
 
-export type PluginInteractiveHandlerRegistration = {
-  channel: PluginInteractiveChannel;
+export type PluginInteractiveDiscordHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveDiscordHandlerContext = {
+  channel: "discord";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  guildId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  interaction: {
+    kind: "button" | "select" | "modal";
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId?: string;
+    values?: string[];
+    fields?: Array<{ id: string; name: string; values: string[] }>;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    followUp: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+    editMessage: (params: { text?: string; components?: TopLevelComponents[] }) => Promise<void>;
+    clearComponents: (params?: { text?: string }) => Promise<void>;
+  };
+};
+
+export type PluginInteractiveTelegramHandlerRegistration = {
+  channel: "telegram";
   namespace: string;
   handler: (
     ctx: PluginInteractiveTelegramHandlerContext,
   ) => Promise<PluginInteractiveTelegramHandlerResult> | PluginInteractiveTelegramHandlerResult;
 };
+
+export type PluginInteractiveDiscordHandlerRegistration = {
+  channel: "discord";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveDiscordHandlerContext,
+  ) => Promise<PluginInteractiveDiscordHandlerResult> | PluginInteractiveDiscordHandlerResult;
+};
+
+export type PluginInteractiveHandlerRegistration =
+  | PluginInteractiveTelegramHandlerRegistration
+  | PluginInteractiveDiscordHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";

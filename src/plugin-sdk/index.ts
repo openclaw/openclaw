@@ -103,6 +103,7 @@ export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginInteractiveDiscordHandlerContext,
   PluginInteractiveHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
   PluginLogger,

@@ -1,7 +1,10 @@
 import { createDedupeCache } from "../infra/dedupe.js";
 import type {
+  PluginInteractiveDiscordHandlerContext,
   PluginInteractiveButtons,
+  PluginInteractiveDiscordHandlerRegistration,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveTelegramHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
 
@@ -83,12 +86,21 @@ export function registerPluginInteractiveHandler(
       error: `Interactive handler namespace "${namespace}" already registered by plugin "${existing.pluginId}"`,
     };
   }
-  interactiveHandlers.set(key, {
-    ...registration,
-    namespace,
-    channel: registration.channel,
-    pluginId,
-  });
+  if (registration.channel === "telegram") {
+    interactiveHandlers.set(key, {
+      ...registration,
+      namespace,
+      channel: "telegram",
+      pluginId,
+    });
+  } else {
+    interactiveHandlers.set(key, {
+      ...registration,
+      namespace,
+      channel: "discord",
+      pluginId,
+    });
+  }
   return { ok: true };
 }
 
@@ -123,34 +135,128 @@ export async function dispatchPluginInteractiveHandler(params: {
     clearButtons: () => Promise<void>;
     deleteMessage: () => Promise<void>;
   };
+}): Promise<InteractiveDispatchResult>;
+export async function dispatchPluginInteractiveHandler(params: {
+  channel: "discord";
+  data: string;
+  interactionId: string;
+  ctx: Omit<PluginInteractiveDiscordHandlerContext, "interaction" | "respond" | "channel"> & {
+    interaction: Omit<
+      PluginInteractiveDiscordHandlerContext["interaction"],
+      "data" | "namespace" | "payload"
+    >;
+  };
+  respond: PluginInteractiveDiscordHandlerContext["respond"];
+}): Promise<InteractiveDispatchResult>;
+export async function dispatchPluginInteractiveHandler(params: {
+  channel: "telegram" | "discord";
+  data: string;
+  callbackId?: string;
+  interactionId?: string;
+  ctx:
+    | (Omit<PluginInteractiveTelegramHandlerContext, "callback" | "respond" | "channel"> & {
+        callbackMessage: {
+          messageId: number;
+          chatId: string;
+          messageText?: string;
+        };
+      })
+    | (Omit<PluginInteractiveDiscordHandlerContext, "interaction" | "respond" | "channel"> & {
+        interaction: Omit<
+          PluginInteractiveDiscordHandlerContext["interaction"],
+          "data" | "namespace" | "payload"
+        >;
+      });
+  respond:
+    | {
+        reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+        editMessage: (params: {
+          text: string;
+          buttons?: PluginInteractiveButtons;
+        }) => Promise<void>;
+        editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
+        clearButtons: () => Promise<void>;
+        deleteMessage: () => Promise<void>;
+      }
+    | PluginInteractiveDiscordHandlerContext["respond"];
 }): Promise<InteractiveDispatchResult> {
   const match = resolveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
 
-  if (callbackDedupe.check(params.callbackId)) {
+  const dedupeKey =
+    params.channel === "telegram" ? params.callbackId?.trim() : params.interactionId?.trim();
+  if (dedupeKey && callbackDedupe.check(dedupeKey)) {
     return { matched: true, handled: true, duplicate: true };
   }
 
-  const { callbackMessage, ...handlerContext } = params.ctx;
-  const result = await match.registration.handler({
-    ...handlerContext,
-    channel: "telegram",
-    callback: {
-      data: params.data,
-      namespace: match.namespace,
-      payload: match.payload,
-      messageId: callbackMessage.messageId,
-      chatId: callbackMessage.chatId,
-      messageText: callbackMessage.messageText,
-    },
-    respond: params.respond,
-  });
+  let result:
+    | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
+    | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>;
+  if (params.channel === "telegram") {
+    const { callbackMessage, ...handlerContext } = params.ctx as Omit<
+      PluginInteractiveTelegramHandlerContext,
+      "callback" | "respond" | "channel"
+    > & {
+      callbackMessage: {
+        messageId: number;
+        chatId: string;
+        messageText?: string;
+      };
+    };
+    result = (
+      match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveTelegramHandlerRegistration
+    ).handler({
+      ...handlerContext,
+      channel: "telegram",
+      callback: {
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+        messageId: callbackMessage.messageId,
+        chatId: callbackMessage.chatId,
+        messageText: callbackMessage.messageText,
+      },
+      respond: params.respond as PluginInteractiveTelegramHandlerContext["respond"],
+    });
+  } else {
+    result = (
+      match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveDiscordHandlerRegistration
+    ).handler({
+      ...(params.ctx as Omit<
+        PluginInteractiveDiscordHandlerContext,
+        "interaction" | "respond" | "channel"
+      > & {
+        interaction: Omit<
+          PluginInteractiveDiscordHandlerContext["interaction"],
+          "data" | "namespace" | "payload"
+        >;
+      }),
+      channel: "discord",
+      interaction: {
+        ...(
+          params.ctx as {
+            interaction: Omit<
+              PluginInteractiveDiscordHandlerContext["interaction"],
+              "data" | "namespace" | "payload"
+            >;
+          }
+        ).interaction,
+        data: params.data,
+        namespace: match.namespace,
+        payload: match.payload,
+      },
+      respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
+    });
+  }
+  const resolved = await result;
 
   return {
     matched: true,
-    handled: result?.handled ?? true,
+    handled: resolved?.handled ?? true,
     duplicate: false,
   };
 }

@@ -7,7 +7,18 @@ import { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.
 import { probeDiscord } from "../../../extensions/discord/src/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../../extensions/discord/src/send.js";
+import {
+  createThreadDiscord,
+  deleteMessageDiscord,
+  editChannelDiscord,
+  editMessageDiscord,
+  pinMessageDiscord,
+  sendDiscordComponentMessage,
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendTypingDiscord,
+  unpinMessageDiscord,
+} from "../../../extensions/discord/src/send.js";
 import { monitorIMessageProvider } from "../../../extensions/imessage/src/monitor.js";
 import { probeIMessage } from "../../../extensions/imessage/src/probe.js";
 import { sendMessageIMessage } from "../../../extensions/imessage/src/send.js";
@@ -114,6 +125,8 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { createDiscordTypingLease } from "./runtime-discord-typing.js";
+import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -209,9 +222,33 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       probeDiscord,
       resolveChannelAllowlist: resolveDiscordChannelAllowlist,
       resolveUserAllowlist: resolveDiscordUserAllowlist,
+      sendComponentMessage: sendDiscordComponentMessage,
       sendMessageDiscord,
       sendPollDiscord,
       monitorDiscordProvider,
+      typing: {
+        pulse: sendTypingDiscord,
+        start: async ({ channelId, accountId, cfg, intervalMs }) =>
+          await createDiscordTypingLease({
+            channelId,
+            accountId,
+            cfg,
+            intervalMs,
+            pulse: async ({ channelId, accountId, cfg }) =>
+              void (await sendTypingDiscord(channelId, {
+                accountId,
+                cfg,
+              })),
+          }),
+      },
+      conversationActions: {
+        editMessage: editMessageDiscord,
+        deleteMessage: deleteMessageDiscord,
+        pinMessage: pinMessageDiscord,
+        unpinMessage: unpinMessageDiscord,
+        createThread: createThreadDiscord,
+        editChannel: editChannelDiscord,
+      },
     },
     slack: {
       listDirectoryGroupsLive: listSlackDirectoryGroupsLive,

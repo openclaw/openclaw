@@ -13,6 +13,7 @@ import {
   type ModalInteraction,
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
+  type TopLevelComponents,
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
@@ -40,6 +41,7 @@ import { logDebug, logError } from "../../../../src/logger.js";
 import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
 import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
 import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { dispatchPluginInteractiveHandler } from "../../../../src/plugins/interactive.js";
 import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
 import {
@@ -771,6 +773,113 @@ function formatModalSubmissionText(
   return lines.join("\n");
 }
 
+function resolveDiscordInteractionId(interaction: AgentComponentInteraction): string {
+  const rawId =
+    interaction.rawData && typeof interaction.rawData === "object" && "id" in interaction.rawData
+      ? (interaction.rawData as { id?: unknown }).id
+      : undefined;
+  if (typeof rawId === "string" && rawId.trim()) {
+    return rawId.trim();
+  }
+  if (typeof rawId === "number" && Number.isFinite(rawId)) {
+    return String(rawId);
+  }
+  return `discord-interaction:${Date.now()}`;
+}
+
+async function dispatchPluginDiscordInteractiveEvent(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  interactionCtx: ComponentInteractionContext;
+  channelCtx: DiscordChannelContext;
+  data: string;
+  kind: "button" | "select" | "modal";
+  values?: string[];
+  fields?: Array<{ id: string; name: string; values: string[] }>;
+  messageId?: string;
+}): Promise<"handled" | "unmatched"> {
+  let responded = false;
+  const respond = {
+    acknowledge: async () => {
+      responded = true;
+      await params.interaction.acknowledge();
+    },
+    reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
+      responded = true;
+      await params.interaction.reply({
+        content: text,
+        ephemeral,
+      });
+    },
+    followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
+      responded = true;
+      await params.interaction.followUp({
+        content: text,
+        ephemeral,
+      });
+    },
+    editMessage: async ({
+      text,
+      components,
+    }: {
+      text?: string;
+      components?: TopLevelComponents[];
+    }) => {
+      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+        throw new Error("Discord interaction cannot update the source message");
+      }
+      responded = true;
+      await params.interaction.update({
+        ...(text !== undefined ? { content: text } : {}),
+        ...(components !== undefined ? { components } : {}),
+      });
+    },
+    clearComponents: async (input?: { text?: string }) => {
+      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+        throw new Error("Discord interaction cannot clear components on the source message");
+      }
+      responded = true;
+      await params.interaction.update({
+        ...(input?.text !== undefined ? { content: input.text } : {}),
+        components: [],
+      });
+    },
+  };
+  const dispatched = await dispatchPluginInteractiveHandler({
+    channel: "discord",
+    data: params.data,
+    interactionId: resolveDiscordInteractionId(params.interaction),
+    ctx: {
+      accountId: params.ctx.accountId,
+      interactionId: resolveDiscordInteractionId(params.interaction),
+      conversationId: params.interactionCtx.channelId,
+      parentConversationId: params.channelCtx.parentId,
+      guildId: params.interactionCtx.rawGuildId,
+      senderId: params.interactionCtx.userId,
+      senderUsername: params.interactionCtx.username,
+      auth: { isAuthorizedSender: true },
+      interaction: {
+        kind: params.kind,
+        messageId: params.messageId,
+        values: params.values,
+        fields: params.fields,
+      },
+    },
+    respond,
+  });
+  if (!dispatched.matched) {
+    return "unmatched";
+  }
+  if (dispatched.handled && !responded) {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // Interaction may have expired after the handler finished.
+    }
+  }
+  return "handled";
+}
+
 function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;
@@ -1162,6 +1271,21 @@ async function handleDiscordComponentEvent(params: {
   }
 
   const values = params.values ? mapSelectValues(consumed, params.values) : undefined;
+  if (consumed.callbackData) {
+    const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
+      ctx: params.ctx,
+      interaction: params.interaction,
+      interactionCtx,
+      channelCtx,
+      data: consumed.callbackData,
+      kind: consumed.kind === "select" ? "select" : "button",
+      values,
+      messageId: consumed.messageId ?? params.interaction.message?.id,
+    });
+    if (pluginDispatch === "handled") {
+      return;
+    }
+  }
   const eventText = formatDiscordComponentEventText({
     kind: consumed.kind === "select" ? "select" : "button",
     label: consumed.label,
@@ -1723,6 +1847,24 @@ class DiscordComponentModal extends Modal {
       return;
     }
 
+    const modalAllowed = await ensureComponentUserAllowed({
+      entry: {
+        id: modalEntry.id,
+        kind: "button",
+        label: modalEntry.title,
+        allowedUsers: modalEntry.allowedUsers,
+      },
+      interaction,
+      user,
+      replyOpts,
+      componentLabel: "form",
+      unauthorizedReply: "You are not authorized to use this form.",
+      allowNameMatching: isDangerousNameMatchingEnabled(this.ctx.discordConfig),
+    });
+    if (!modalAllowed) {
+      return;
+    }
+
     const consumed = resolveDiscordModalEntry({
       id: modalId,
       consume: !modalEntry.reusable,
@@ -1737,6 +1879,27 @@ class DiscordComponentModal extends Modal {
         // Interaction may have expired
       }
       return;
+    }
+
+    if (consumed.callbackData) {
+      const fields = consumed.fields.map((field) => ({
+        id: field.id,
+        name: field.name,
+        values: resolveModalFieldValues(field, interaction),
+      }));
+      const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
+        ctx: this.ctx,
+        interaction,
+        interactionCtx,
+        channelCtx,
+        data: consumed.callbackData,
+        kind: "modal",
+        fields,
+        messageId: consumed.messageId,
+      });
+      if (pluginDispatch === "handled") {
+        return;
+      }
     }
 
     try {

@@ -88,4 +88,62 @@ describe("plugin interactive handlers", () => {
       error: 'Interactive handler namespace "codex" already registered by plugin "plugin-a"',
     });
   });
+
+  it("routes Discord interactions by namespace and dedupes interaction ids", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "discord",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = {
+      channel: "discord" as const,
+      data: "codex:approve:thread-1",
+      interactionId: "ix-1",
+      ctx: {
+        accountId: "default",
+        interactionId: "ix-1",
+        conversationId: "channel-1",
+        parentConversationId: "parent-1",
+        guildId: "guild-1",
+        senderId: "user-1",
+        senderUsername: "ada",
+        auth: { isAuthorizedSender: true },
+        interaction: {
+          kind: "button" as const,
+          messageId: "message-1",
+          values: ["allow"],
+        },
+      },
+      respond: {
+        acknowledge: vi.fn(async () => {}),
+        reply: vi.fn(async () => {}),
+        followUp: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+        clearComponents: vi.fn(async () => {}),
+      },
+    };
+
+    const first = await dispatchPluginInteractiveHandler(baseParams);
+    const duplicate = await dispatchPluginInteractiveHandler(baseParams);
+
+    expect(first).toEqual({ matched: true, handled: true, duplicate: false });
+    expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        conversationId: "channel-1",
+        interaction: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve:thread-1",
+          messageId: "message-1",
+          values: ["allow"],
+        }),
+      }),
+    );
+  });
 });
