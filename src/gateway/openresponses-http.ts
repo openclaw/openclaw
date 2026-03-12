@@ -319,7 +319,7 @@ export async function handleOpenResponsesHttpRequest(
   try {
     if (Array.isArray(payload.input)) {
       for (const item of payload.input) {
-        if (item.type === "message" && typeof item.content !== "string") {
+        if (item.type === "message" && Array.isArray(item.content)) {
           for (const part of item.content) {
             if (part.type === "input_image") {
               const source = part.source as {

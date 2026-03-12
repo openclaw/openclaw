@@ -450,7 +450,8 @@ export function buildAssistantMessageFromResponse(
       if (itemPhase) {
         assistantPhase = itemPhase;
       }
-      for (const part of item.content ?? []) {
+      const contentParts = Array.isArray(item.content) ? item.content : [];
+      for (const part of contentParts) {
         if (part.type === "output_text" && part.text) {
           content.push({
             type: "text",

@@ -696,6 +696,71 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.phase).toBe("final_answer");
     expect(msg.content[0]?.text).toBe("Final answer");
   });
+
+  it("ignores non-array message content in malformed provider payloads", () => {
+    const response = {
+      ...makeResponseObject("resp_9"),
+      output: [
+        {
+          type: "message",
+          id: "item_bad",
+          role: "assistant",
+          content: { type: "output_text", text: "bad shape" },
+        },
+        {
+          type: "message",
+          id: "item_ok",
+          role: "assistant",
+          content: [{ type: "output_text", text: "good text" }],
+        },
+      ],
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+
+    expect(msg.content).toEqual([
+      { type: "text", text: "good text", textSignature: expect.any(String) },
+    ]);
+    expect(msg.stopReason).toBe("stop");
+  });
+
+  it("handles string content without crashing", () => {
+    const response = {
+      ...makeResponseObject("resp_10"),
+      output: [
+        {
+          type: "message",
+          id: "item_str",
+          role: "assistant",
+          content: "plain text response",
+        },
+      ],
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+
+    expect(msg.content).toEqual([]);
+    expect(msg.stopReason).toBe("stop");
+  });
+
+  it("handles null content without crashing", () => {
+    const response = {
+      ...makeResponseObject("resp_11"),
+      output: [
+        {
+          type: "message",
+          id: "item_null",
+          role: "assistant",
+          content: null,
+        },
+      ],
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+
+    expect(msg.content).toEqual([]);
+    expect(msg.stopReason).toBe("stop");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

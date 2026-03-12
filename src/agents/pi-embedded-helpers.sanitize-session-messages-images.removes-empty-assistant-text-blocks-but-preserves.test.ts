@@ -288,6 +288,66 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[1]?.role).toBe("toolResult");
   });
 
+  it("normalizes malformed assistant error content to an empty array", async () => {
+    const input = castAgentMessages([
+      { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "upstream failed",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(2);
+    expect(out[1]?.role).toBe("assistant");
+    if (out[1]?.role === "assistant") {
+      expect(Array.isArray(out[1].content)).toBe(true);
+      expect(out[1].content).toEqual([]);
+    }
+  });
+
+  it("normalizes malformed assistant string content into a text block", async () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: "legacy assistant text",
+        stopReason: "stop",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    if (out[0]?.role === "assistant") {
+      expect(out[0].content).toEqual([{ type: "text", text: "legacy assistant text" }]);
+    }
+  });
+
+  it("normalizes malformed assistant object content into a single-item array", async () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: { type: "text", text: "object content" },
+        stopReason: "stop",
+        timestamp: nextTimestamp(),
+      },
+    ]);
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("assistant");
+    if (out[0]?.role === "assistant") {
+      expect(Array.isArray(out[0].content)).toBe(true);
+      expect(out[0].content).toHaveLength(1);
+    }
+  });
+
   describe("thought_signature stripping", () => {
     it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
       const input = castAgentMessages([
