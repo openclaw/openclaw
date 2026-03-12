@@ -52,7 +52,7 @@ export async function listArchiveEntries(archivePath: string): Promise<string[]>
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push(entry.path.replaceAll("\\", "/"));
     },
   });
   return entries;
