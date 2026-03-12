@@ -1,7 +1,7 @@
 # Staging deployment for smoke-testing new builds before production.
 # Usage: fly deploy --config fly-staging.toml --app openclaw-jhs-staging
 #
-# No persistent volume — gateway starts with empty state dir.
+# Uses a persistent volume (openclaw_staging_data) mounted at /data.
 # Machine auto-stops after inactivity to save cost.
 
 app = "openclaw-jhs-staging"
@@ -13,10 +13,13 @@ dockerfile = "Dockerfile"
 [env]
 NODE_ENV = "production"
 OPENCLAW_PREFER_PNPM = "1"
-# Use ephemeral /tmp for state — no persistent volume on staging
-OPENCLAW_STATE_DIR = "/tmp/openclaw-state"
-OPENCLAW_HOME = "/tmp/openclaw-home"
+OPENCLAW_STATE_DIR = "/data"
+OPENCLAW_HOME = "/data"
 NODE_OPTIONS = "--max-old-space-size=4096"
+
+[[mounts]]
+source = "openclaw_staging_data"
+destination = "/data"
 
 [processes]
 # Skip fly-entrypoint.sh on staging — no tools or workspace needed
