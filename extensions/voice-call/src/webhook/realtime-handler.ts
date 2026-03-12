@@ -61,7 +61,9 @@ export class RealtimeCallHandler {
    */
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(request.url ?? "/", "wss://localhost");
-    const token = url.searchParams.get("token");
+    // Token is embedded as the last path segment (e.g. /voice/stream/realtime/<uuid>)
+    // to survive reverse proxies that strip query parameters (e.g. Tailscale Funnel).
+    const token = url.pathname.split("/").pop() ?? null;
     const callerMeta = token ? this.consumeStreamToken(token) : null;
     if (!callerMeta) {
       console.warn("[voice-call] Rejecting WS upgrade: missing or invalid stream token");
@@ -123,7 +125,7 @@ export class RealtimeCallHandler {
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
     });
-    const wsUrl = `wss://${host}/voice/stream/realtime?token=${token}`;
+    const wsUrl = `wss://${host}/voice/stream/realtime/${token}`;
     console.log(
       `[voice-call] Returning realtime TwiML with WebSocket: wss://${host}/voice/stream/realtime`,
     );
