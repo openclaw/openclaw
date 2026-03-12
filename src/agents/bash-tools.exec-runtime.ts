@@ -489,12 +489,14 @@ export async function runExecProcess(opts: {
       const durationMs = Date.now() - startedAt;
       const isNormalExit = exit.reason === "exit";
       const exitCode = exit.exitCode ?? 0;
+      // Any non-zero exit should surface as a failed tool call so the agent
+      // cannot mistake a failed shell/API attempt for a completed command.
+      const exitedSuccessfully = isNormalExit && exitCode === 0;
       // Shell exit codes 126 (not executable) and 127 (command not found) are
-      // unrecoverable infrastructure failures that should surface as real errors
-      // rather than silently completing — e.g. `python: command not found`.
+      // still called out explicitly because they usually indicate environment
+      // or invocation mistakes rather than command-level business failure.
       const isShellFailure = exitCode === 126 || exitCode === 127;
-      const status: "completed" | "failed" =
-        isNormalExit && !isShellFailure ? "completed" : "failed";
+      const status: "completed" | "failed" = exitedSuccessfully ? "completed" : "failed";
 
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
@@ -517,15 +519,17 @@ export async function runExecProcess(opts: {
         ? exitCode === 127
           ? "Command not found"
           : "Command not executable (permission denied)"
-        : exit.reason === "overall-timeout"
-          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
-            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
-          : exit.reason === "no-output-timeout"
-            ? "Command timed out waiting for output"
-            : exit.exitSignal != null
-              ? `Command aborted by signal ${exit.exitSignal}`
-              : "Command aborted before exit code was captured";
+        : isNormalExit
+          ? `Command exited with code ${exitCode}`
+          : exit.reason === "overall-timeout"
+            ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
+              ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+              : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
+            : exit.reason === "no-output-timeout"
+              ? "Command timed out waiting for output"
+              : exit.exitSignal != null
+                ? `Command aborted by signal ${exit.exitSignal}`
+                : "Command aborted before exit code was captured";
       return {
         status: "failed",
         exitCode: exit.exitCode,
