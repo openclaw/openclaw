@@ -229,6 +229,10 @@ function renderGroupedMessage(
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
+  const hasAssistantError =
+    role.toLowerCase() === "assistant" &&
+    ((typeof m.stopReason === "string" && m.stopReason === "error") ||
+      (typeof m.errorMessage === "string" && Boolean(m.errorMessage.trim())));
   const isToolResult =
     isToolResultMessage(message) ||
     role.toLowerCase() === "toolresult" ||
@@ -251,6 +255,7 @@ function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    hasAssistantError ? "chat-bubble--error" : "",
     canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
@@ -262,7 +267,7 @@ function renderGroupedMessage(
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  if (!markdown && !hasToolCards && !hasImages && !hasAssistantError) {
     return nothing;
   }
 
@@ -270,6 +275,13 @@ function renderGroupedMessage(
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
+      ${
+        hasAssistantError
+          ? html`
+              <div class="chat-error-label">Model error</div>
+            `
+          : nothing
+      }
       ${
         reasoningMarkdown
           ? html`<div class="chat-thinking">${unsafeHTML(

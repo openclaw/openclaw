@@ -149,6 +149,46 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function normalizeErrorMessage(error: unknown, fallback = "chat error"): string {
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return String(error);
+  }
+  if (typeof error === "object" && error !== null) {
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function appendAssistantErrorMessage(
+  state: ChatState,
+  errorMessage: string,
+  timestamp = Date.now(),
+) {
+  state.chatMessages = [
+    ...state.chatMessages,
+    {
+      role: "assistant",
+      content: [],
+      errorMessage,
+      stopReason: "error",
+      timestamp,
+    },
+  ];
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -223,19 +263,12 @@ export async function sendChatMessage(
     });
     return runId;
   } catch (err) {
-    const error = String(err);
+    const error = normalizeErrorMessage(err);
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
-    state.chatMessages = [
-      ...state.chatMessages,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
-        timestamp: Date.now(),
-      },
-    ];
+    appendAssistantErrorMessage(state, error);
     return null;
   } finally {
     state.chatSending = false;
@@ -327,10 +360,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    const errorMessage = normalizeErrorMessage(payload.errorMessage);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
-    state.lastError = payload.errorMessage ?? "chat error";
+    state.lastError = errorMessage;
+    appendAssistantErrorMessage(state, errorMessage);
   }
   return payload.state;
 }
