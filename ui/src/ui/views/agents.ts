@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -169,22 +170,25 @@ export function renderAgents(props: AgentsProps) {
                 ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel))}
                 ${
                   props.activePanel === "overview"
-                    ? renderAgentOverview({
-                        agent: selectedAgent,
-                        defaultId,
-                        configForm: props.configForm,
-                        agentFilesList: props.agentFilesList,
-                        agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                        agentIdentityError: props.agentIdentityError,
-                        agentIdentityLoading: props.agentIdentityLoading,
-                        configLoading: props.configLoading,
-                        configSaving: props.configSaving,
-                        configDirty: props.configDirty,
-                        onConfigReload: props.onConfigReload,
-                        onConfigSave: props.onConfigSave,
-                        onModelChange: props.onModelChange,
-                        onModelFallbacksChange: props.onModelFallbacksChange,
-                      })
+                    ? keyed(
+                        selectedAgent.id,
+                        renderAgentOverview({
+                          agent: selectedAgent,
+                          defaultId,
+                          configForm: props.configForm,
+                          agentFilesList: props.agentFilesList,
+                          agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+                          agentIdentityError: props.agentIdentityError,
+                          agentIdentityLoading: props.agentIdentityLoading,
+                          configLoading: props.configLoading,
+                          configSaving: props.configSaving,
+                          configDirty: props.configDirty,
+                          onConfigReload: props.onConfigReload,
+                          onConfigSave: props.onConfigSave,
+                          onModelChange: props.onModelChange,
+                          onModelFallbacksChange: props.onModelFallbacksChange,
+                        }),
+                      )
                     : nothing
                 }
                 ${
