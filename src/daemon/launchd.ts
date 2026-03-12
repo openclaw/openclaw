@@ -430,10 +430,17 @@ async function ensurePidGone(pid: number, preBootoutIdentity?: string | null): P
     return true;
   }
 
+  // If we never captured a pre-bootout identity we cannot safely determine
+  // whether the PID still belongs to the original process.  Skip SIGKILL to
+  // avoid accidentally killing an unrelated process that reused the PID.
+  if (identityBefore === null) {
+    return false;
+  }
+
   // Re-validate identity: if the start time changed the original process is
   // already gone and a new, unrelated process now owns this PID — do not kill it.
   const identityNow = await getPidStartTime(pid);
-  if (identityBefore !== null && identityNow !== null && identityBefore !== identityNow) {
+  if (identityNow !== null && identityBefore !== identityNow) {
     // Different process; the one we wanted is gone.
     return true;
   }
