@@ -216,8 +216,12 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       // failure doesn't escalate backoff using stale counts. Without this,
       // cross-provider fallbacks are blocked after a 429 because the primary
       // provider's error count keeps growing and re-enters cooldown instantly.
-      stats.errorCount = 0;
-      stats.failureCounts = undefined;
+      // Only reset counters here if no disabledUntil is still active;
+      // otherwise the billing/auth error history would be wiped prematurely.
+      if (!isActiveUnusableWindow(stats.disabledUntil, ts)) {
+        stats.errorCount = 0;
+        stats.failureCounts = undefined;
+      }
       profileMutated = true;
     }
     if (disabledExpired) {
