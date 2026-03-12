@@ -24,6 +24,7 @@ import {
   type PollStartContent,
 } from "../poll-types.js";
 import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import { buildReplyRelation, buildTextContent, buildThreadRelation } from "../send/formatting.js";
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
@@ -688,14 +689,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         reasoningDraftState.updateChain = reasoningDraftState.updateChain
           .then(async () => {
             if (!reasoningDraftState.messageId) {
-              const result = await sendMessageMatrix(`room:${roomId}`, trimmedText, {
-                client,
-                replyToId: replyToMode === "off" ? undefined : messageId,
-                threadId: threadTarget,
-                accountId: route.accountId,
-              });
-              if (result.messageId) {
-                reasoningDraftState.messageId = result.messageId;
+              const relation = threadTarget
+                ? buildThreadRelation(threadTarget, replyToMode === "off" ? undefined : messageId)
+                : buildReplyRelation(replyToMode === "off" ? undefined : messageId);
+              const eventId = await client.sendMessage(
+                roomId,
+                buildTextContent(trimmedText, relation),
+              );
+              if (eventId) {
+                reasoningDraftState.messageId = eventId;
               }
               return;
             }
@@ -725,11 +727,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const eventId = reasoningDraftState.messageId;
         try {
           await client.redactEvent(roomId, eventId);
+          reasoningDraftState.messageId = undefined;
+          reasoningDraftState.lastText = "";
         } catch (err) {
           logVerboseMessage(`matrix reasoning draft cleanup failed (${eventId}): ${String(err)}`);
         }
-        reasoningDraftState.messageId = undefined;
-        reasoningDraftState.lastText = "";
       };
 
       let didSendReply = false;
