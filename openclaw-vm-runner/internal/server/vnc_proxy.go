@@ -201,11 +201,37 @@ func (p *VNCProxy) HandleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// vnc -> ws: read from VNC connection, write as WebSocket binary messages
+	// Dedicated ping goroutine: sends WebSocket pings independently of VNC
+	// frame reads, so idle desktops (no framebuffer updates) don't starve
+	// keepalive and cause spurious disconnects.
+	pingDone := make(chan struct{})
 	go func() {
-		buf := make([]byte, 64*1024) // 64KB buffer
+		defer close(pingDone)
 		ticker := time.NewTicker(vncPingPeriod)
 		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				wsConn.SetWriteDeadline(time.Now().Add(vncWriteWait))
+				if pErr := wsConn.WriteMessage(websocket.PingMessage, nil); pErr != nil {
+					errc <- pErr
+					return
+				}
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+
+	// vnc -> ws: read from VNC connection, write as WebSocket binary messages
+	go func() {
+		defer func() {
+			select {
+			case pingDone <- struct{}{}:
+			default:
+			}
+		}()
+		buf := make([]byte, 64*1024) // 64KB buffer
 
 		for {
 			n, err := vncConn.Read(buf)
@@ -223,17 +249,6 @@ func (p *VNCProxy) HandleWS(w http.ResponseWriter, r *http.Request) {
 					errc <- nil
 				}
 				return
-			}
-
-			// Send ping on schedule (non-blocking check).
-			select {
-			case <-ticker.C:
-				wsConn.SetWriteDeadline(time.Now().Add(vncWriteWait))
-				if pErr := wsConn.WriteMessage(websocket.PingMessage, nil); pErr != nil {
-					errc <- pErr
-					return
-				}
-			default:
 			}
 		}
 	}()
