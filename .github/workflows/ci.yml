@@ -258,8 +258,14 @@ jobs:
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
 
-      - name: Run Node 22 compatibility gate
-        run: pnpm build && pnpm test
+      - name: Build under Node 22
+        run: pnpm build
+
+      - name: Run tests under Node 22
+        run: pnpm test
+
+      - name: Verify npm pack under Node 22
+        run: pnpm release:check
 
   skills-python:
     needs: [docs-scope, changed-scope]
