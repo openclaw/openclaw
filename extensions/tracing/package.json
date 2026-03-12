@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/tracing",
+  "version": "2026.3.12",
+  "description": "Agent execution tracing with web UI, call tree, entity graph, and work index",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

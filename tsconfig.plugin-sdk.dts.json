@@ -29,6 +29,7 @@
     "src/plugin-sdk/copilot-proxy.ts",
     "src/plugin-sdk/device-pair.ts",
     "src/plugin-sdk/diagnostics-otel.ts",
+    "src/plugin-sdk/tracing.ts",
     "src/plugin-sdk/diffs.ts",
     "src/plugin-sdk/feishu.ts",
     "src/plugin-sdk/google-gemini-cli-auth.ts",
