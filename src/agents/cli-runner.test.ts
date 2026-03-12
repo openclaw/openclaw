@@ -4,11 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runCliAgent } from "./cli-runner.js";
-import {
-  parseCliJson,
-  parseCliJsonl,
-  resolveCliNoOutputTimeoutMs,
-} from "./cli-runner/helpers.js";
+import { parseCliJson, parseCliJsonl, resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
