@@ -98,7 +98,7 @@ describe("backup create — exclude patterns", () => {
       expect(venvEntries.length).toBeGreaterThan(0);
 
       // No exclusion data at all
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
       expect(result.excludedStats).toBeUndefined();
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
@@ -118,7 +118,7 @@ describe("backup create — exclude patterns", () => {
       });
 
       // Per-file excluded[] is no longer returned
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
 
       // excludedStats should be populated with per-pattern aggregates
       expect(result.excludedStats).toBeDefined();
@@ -161,7 +161,7 @@ describe("backup create — exclude patterns", () => {
       });
 
       // include-all overrides smart-exclude: no exclusion data
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
       expect(result.excludedStats).toBeUndefined();
 
       // venvs should be in the archive
@@ -187,7 +187,7 @@ describe("backup create — exclude patterns", () => {
       });
 
       // Per-file excluded[] is no longer returned
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
 
       // excludedStats should record the pattern
       expect(result.excludedStats).toBeDefined();
@@ -219,7 +219,7 @@ describe("backup create — exclude patterns", () => {
       });
 
       // Per-file excluded[] is no longer returned
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
 
       // excludedStats should track both patterns from the file
       expect(result.excludedStats).toBeDefined();
@@ -324,7 +324,7 @@ describe("backup create — exclude patterns", () => {
       });
 
       // No exclude options → neither excluded nor excludedStats
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
       expect(result.excludedStats).toBeUndefined();
 
       // Everything including venvs should be in the archive
@@ -404,7 +404,7 @@ describe("backup verify — tolerant manifest reader", () => {
       });
 
       // Per-file excluded[] is no longer returned; excludedStats provides auditability
-      expect(result.excluded).toBeUndefined();
+      expect((result as unknown as Record<string, unknown>).excluded).toBeUndefined();
       expect(result.excludedStats).toBeDefined();
       expect(result.excludedStats!.totalFiles).toBeGreaterThan(0);
 
