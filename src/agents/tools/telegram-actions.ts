@@ -89,10 +89,16 @@ export function readTelegramButtons(
           `buttons[${rowIndex}][${buttonIndex}] style must be one of ${TELEGRAM_BUTTON_STYLES.join(", ")}`,
         );
       }
+      if (callbackData) {
+        return {
+          text,
+          callback_data: callbackData,
+          ...(style ? { style: style as TelegramButtonStyle } : {}),
+        };
+      }
       return {
         text,
-        ...(callbackData ? { callback_data: callbackData } : {}),
-        ...(url ? { url } : {}),
+        url,
         ...(style ? { style: style as TelegramButtonStyle } : {}),
       };
     });
