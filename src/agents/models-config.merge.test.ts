@@ -9,6 +9,20 @@ import type { ProviderConfig } from "./models-config.providers.js";
 
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
+  const kimiModel: ProviderConfig["models"][number] = {
+    id: "k2p5",
+    name: "Kimi for Coding",
+    input: ["text", "image"],
+    reasoning: true,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8_000,
+  };
 
   it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
@@ -70,27 +84,15 @@ describe("models-config merge helpers", () => {
     const merged = mergeProviderModels(
       {
         api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
         headers: { "User-Agent": "claude-code/0.1.0" },
-        models: [
-          {
-            id: "k2p5",
-            name: "Kimi for Coding",
-            input: ["text", "image"],
-            reasoning: true,
-          },
-        ],
+        models: [kimiModel],
       } as ProviderConfig,
       {
         api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
         headers: { "X-Kimi-Tenant": "tenant-a" },
-        models: [
-          {
-            id: "k2p5",
-            name: "Kimi for Coding",
-            input: ["text", "image"],
-            reasoning: true,
-          },
-        ],
+        models: [kimiModel],
       } as ProviderConfig,
     );
 
