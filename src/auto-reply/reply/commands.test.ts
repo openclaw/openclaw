@@ -682,7 +682,7 @@ describe("extractMessageText", () => {
   });
 });
 
-describe("handleCommands /config configWrites gating", () => {
+describe("handleCommands /config owner gating", () => {
   it("blocks /config show from authorized non-owner senders", async () => {
     const cfg = {
       commands: { config: true, text: true },
@@ -695,6 +695,24 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.reply).toBeUndefined();
   });
 
+  it("keeps /config show working for owners", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackreaction: ":)" } },
+    });
+    const params = buildParams("/config show messages.ackReaction", cfg);
+    params.command.senderIsOwner = true;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config messages.ackreaction");
+  });
+});
+
+describe("handleCommands /config configWrites gating", () => {
   it("blocks /config set when channel config writes are disabled", async () => {
     const cfg = {
       commands: { config: true, text: true },
