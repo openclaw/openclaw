@@ -172,7 +172,7 @@ function resolveTelegramDmTopicTarget(peerId: string, threadSuffix?: string): st
   }
   const scopedMatch = /^-?\d+:(-?\d+)$/.exec(trimmedThreadSuffix);
   const threadId = scopedMatch?.[1] ?? trimmedThreadSuffix;
-  return threadId ? `${trimmedPeerId}:topic:${threadId}` : trimmedPeerId;
+  return `${trimmedPeerId}:topic:${threadId}`;
 }
 
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
