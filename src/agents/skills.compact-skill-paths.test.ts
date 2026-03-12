@@ -15,6 +15,39 @@ async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
 }
 
 describe("compactSkillPaths", () => {
+  it("keeps workspace-local skills when the char budget fits the compacted prompt", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const skillDir = path.join(workspaceDir, "skills", "test-skill");
+
+      await writeSkill({
+        dir: skillDir,
+        name: "test-skill",
+        description: "A test skill for prompt budget compaction",
+      });
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+      });
+
+      const promptWithTightBudget = buildWorkspaceSkillsPrompt(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxSkillsInPrompt: 1,
+              maxSkillsPromptChars: prompt.length,
+            },
+          },
+        },
+        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+      });
+
+      expect(promptWithTightBudget).toContain("<location>skills/test-skill/SKILL.md</location>");
+      expect(promptWithTightBudget).not.toContain("⚠️ Skills truncated");
+    });
+  });
+
   it("uses workspace-relative paths for workspace-local skill locations", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const skillDir = path.join(workspaceDir, "skills", "test-skill");
