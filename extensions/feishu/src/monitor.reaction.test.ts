@@ -136,6 +136,7 @@ function createTextEvent(params: {
 async function setupDebounceMonitor(params?: {
   botOpenId?: string;
   botName?: string;
+  statusSink?: (patch: Record<string, unknown>) => void;
 }): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -155,6 +156,7 @@ async function setupDebounceMonitor(params?: {
       botOpenId: params?.botOpenId ?? "ou_bot",
       botName: params?.botName,
     },
+    statusSink: params?.statusSink,
   });
 
   const onMessage = handlers["im.message.receive_v1"];
@@ -406,6 +408,24 @@ describe("Feishu inbound debounce regressions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("updates statusSink with lastEventAt when inbound message events arrive", async () => {
+    setDedupPassThroughMocks();
+    const statusSink = vi.fn();
+    const onMessage = await setupDebounceMonitor({ statusSink });
+
+    await onMessage(createTextEvent({ messageId: "om_status_1", text: "hello" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: true,
+        lastError: null,
+        lastEventAt: expect.any(Number),
+      }),
+    );
   });
 
   it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {
