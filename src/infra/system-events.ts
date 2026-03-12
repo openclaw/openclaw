@@ -100,6 +100,20 @@ export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
+export function requeueSystemEventEntries(sessionKey: string, events: SystemEvent[]) {
+  const key = requireSessionKey(sessionKey);
+  for (const event of events) {
+    const cleaned = event.text.trim();
+    if (!cleaned) {
+      continue;
+    }
+    enqueueSystemEvent(cleaned, {
+      sessionKey: key,
+      contextKey: event.contextKey,
+    });
+  }
+}
+
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   return queues.get(key)?.queue.map((event) => ({ ...event })) ?? [];

@@ -46,3 +46,51 @@ describe("feishuPlugin.status.probeAccount", () => {
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
   });
 });
+
+describe("feishuPlugin.status.buildAccountSnapshot", () => {
+  it("preserves websocket lifecycle runtime fields for health monitoring", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            main: {
+              appId: "cli_main",
+              appSecret: "secret_main",
+              enabled: true,
+              connectionMode: "websocket",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = feishuPlugin.config.resolveAccount(cfg, "main");
+    const snapshot = await feishuPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: {
+        accountId: "main",
+        running: true,
+        connected: false,
+        reconnectAttempts: 4,
+        lastConnectedAt: 123,
+        lastDisconnect: { at: 456, error: "socket dropped" },
+        lastEventAt: 789,
+        mode: "websocket",
+        port: 3000,
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      accountId: "main",
+      connected: false,
+      reconnectAttempts: 4,
+      lastConnectedAt: 123,
+      lastDisconnect: { at: 456, error: "socket dropped" },
+      lastEventAt: 789,
+      mode: "websocket",
+      port: 3000,
+    });
+  });
+});

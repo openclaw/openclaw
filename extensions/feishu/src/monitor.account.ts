@@ -132,6 +132,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  statusSink?: (patch: { connected?: boolean; lastEventAt?: number | null }) => void;
 };
 
 /**
@@ -242,6 +243,7 @@ function registerEventHandlers(
   const enqueue = createChatQueue();
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const chatId = event.message.chat_id?.trim() || "unknown";
+    context.statusSink?.({ connected: true, lastEventAt: Date.now() });
     const task = () =>
       handleFeishuMessage({
         cfg,
@@ -495,6 +497,17 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  statusSink?: (patch: {
+    connected?: boolean;
+    reconnectAttempts?: number;
+    lastConnectedAt?: number | null;
+    lastDisconnect?: {
+      at: number;
+      error?: string;
+    } | null;
+    lastError?: string | null;
+    lastEventAt?: number | null;
+  }) => void;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -536,10 +549,25 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     runtime,
     chatHistories,
     fireAndForget: true,
+    statusSink: params.statusSink,
   });
 
   if (connectionMode === "webhook") {
-    return monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return monitorWebhook({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      statusSink: params.statusSink,
+    });
   }
-  return monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+  return monitorWebSocket({
+    account,
+    accountId,
+    runtime,
+    abortSignal,
+    eventDispatcher,
+    statusSink: params.statusSink,
+  });
 }
