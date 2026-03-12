@@ -58,6 +58,7 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_EDGE_VOICE_BUBBLE_OUTPUT_FORMAT = "ogg-24khz-16bit-mono-opus";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -514,7 +515,10 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
 }
 
-function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
+function resolveEdgeOutputFormat(config: ResolvedTtsConfig, channelId?: ChannelId | null): string {
+  if (!config.edge.outputFormatConfigured && channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
+    return DEFAULT_EDGE_VOICE_BUBBLE_OUTPUT_FORMAT;
+  }
   return config.edge.outputFormat;
 }
 
@@ -597,7 +601,7 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        let edgeOutputFormat = resolveEdgeOutputFormat(config, channelId);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 

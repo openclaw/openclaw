@@ -252,12 +252,19 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("uses default edge output format unless overridden", () => {
+    it("uses channel-aware edge output defaults unless overridden", () => {
       const cases = [
         {
-          name: "default",
+          name: "default non-voice channel",
           cfg: baseCfg,
+          channel: "discord",
           expected: "audio-24khz-48kbitrate-mono-mp3",
+        },
+        {
+          name: "voice-bubble channel",
+          cfg: baseCfg,
+          channel: "matrix",
+          expected: "ogg-24khz-16bit-mono-opus",
         },
         {
           name: "override",
@@ -269,12 +276,15 @@ describe("tts", () => {
               },
             },
           } as OpenClawConfig,
+          channel: "matrix",
           expected: "audio-24khz-96kbitrate-mono-mp3",
         },
       ] as const;
       for (const testCase of cases) {
         const config = resolveTtsConfig(testCase.cfg);
-        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+        expect(resolveEdgeOutputFormat(config, testCase.channel), testCase.name).toBe(
+          testCase.expected,
+        );
       }
     });
   });
