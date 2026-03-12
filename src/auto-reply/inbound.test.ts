@@ -427,6 +427,41 @@ describe("createInboundDebouncer", () => {
     }
   });
 
+  it("keeps retry backoff when new debounced items arrive on a failed key", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      let attempts = 0;
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          attempts += 1;
+          if (attempts < 3) {
+            throw new Error("temporary flush failure");
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await vi.advanceTimersByTimeAsync(20); // First two attempts fail at t=10ms and t=20ms.
+      expect(attempts).toBe(2);
+
+      await debouncer.enqueue({ key: "a", id: "2" });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(attempts).toBe(2);
+      expect(delivered).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(attempts).toBe(3);
+      expect(delivered).toEqual([["1", "2"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops buffered items after max retry ceiling is exceeded", async () => {
     vi.useFakeTimers();
     try {
@@ -466,6 +501,7 @@ describe("createInboundDebouncer", () => {
     try {
       const delivered: Array<string[]> = [];
       const errors: Array<{ err: unknown; items: string[] }> = [];
+      const rawKey = 'sender:"alice"\n+15550001111';
 
       const debouncer = createInboundDebouncer<{ key: string; id: string }>({
         debounceMs: 10,
@@ -479,9 +515,9 @@ describe("createInboundDebouncer", () => {
         },
       });
 
-      await debouncer.enqueue({ key: "a", id: "1" });
-      await debouncer.enqueue({ key: "a", id: "2" });
-      await debouncer.enqueue({ key: "a", id: "3" });
+      await debouncer.enqueue({ key: rawKey, id: "1" });
+      await debouncer.enqueue({ key: rawKey, id: "2" });
+      await debouncer.enqueue({ key: rawKey, id: "3" });
       await vi.advanceTimersByTimeAsync(10);
 
       expect(delivered).toEqual([["1", "2"]]);
@@ -489,7 +525,50 @@ describe("createInboundDebouncer", () => {
       expect(errors[0]?.items).toEqual(["3"]);
       expect(errors[0]?.err).toMatchObject({
         code: "INBOUND_DEBOUNCE_BUFFER_OVERFLOW",
+        debounceKeyHash: expect.any(String),
       });
+      expect(String(errors[0]?.err)).toBe("Error: inbound debounce buffer overflow");
+      expect(String(errors[0]?.err)).not.toContain(rawKey);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to direct flush when active debounce key capacity is exceeded", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const errors: Array<{ err: unknown; items: string[] }> = [];
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        maxKeys: 2,
+        onFlush: async (items) => {
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: (err, items) => {
+          errors.push({ err, items: items.map((entry) => entry.id) });
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      await debouncer.enqueue({ key: "b", id: "2" });
+      await debouncer.enqueue({ key: "c", id: "3" });
+
+      expect(delivered).toEqual([["3"]]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.items).toEqual(["3"]);
+      expect(errors[0]?.err).toMatchObject({
+        code: "INBOUND_DEBOUNCE_MAX_KEYS_EXCEEDED",
+        debounceKeyHash: expect.any(String),
+        maxKeys: 2,
+      });
+      expect(String(errors[0]?.err)).toBe("Error: inbound debounce key capacity exceeded");
+      expect(vi.getTimerCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(delivered).toEqual([["3"], ["1"], ["2"]]);
     } finally {
       vi.useRealTimers();
     }
@@ -534,6 +613,56 @@ describe("createInboundDebouncer", () => {
 
       await vi.advanceTimersByTimeAsync(20);
       expect(delivered).toEqual([["1", "2"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears stale retry timers before dropping an exhausted key", async () => {
+    vi.useFakeTimers();
+    try {
+      const delivered: Array<string[]> = [];
+      const firstFlush = { reject: null as ((reason?: unknown) => void) | null };
+      let holdFirstFlush = true;
+
+      const debouncer = createInboundDebouncer<{
+        key: string;
+        id: string;
+        debounce: boolean;
+      }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        shouldDebounce: (item) => item.debounce,
+        maxFlushRetries: 0,
+        onFlush: async (items) => {
+          if (holdFirstFlush) {
+            holdFirstFlush = false;
+            await new Promise<void>((_resolve, reject) => {
+              firstFlush.reject = reject;
+            });
+            return;
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+        onError: () => {},
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+      await vi.advanceTimersByTimeAsync(10); // Start the first flush and keep it in flight.
+
+      await debouncer.enqueue({ key: "a", id: "2", debounce: true });
+      firstFlush.reject?.(new Error("persistent failure"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await debouncer.enqueue({ key: "a", id: "3", debounce: true });
+      await vi.advanceTimersByTimeAsync(9); // A stale timer would fire here and delete the new buffer.
+
+      expect(delivered).toEqual([]);
+
+      await debouncer.enqueue({ key: "a", id: "4", debounce: false });
+      expect(delivered).toEqual([["3"], ["4"]]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
