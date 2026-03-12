@@ -15,6 +15,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- macOS/Reminders: add the missing `NSRemindersUsageDescription` to the bundled app so `apple-reminders` can trigger the system permission prompt from OpenClaw.app. (#8559) Thanks @dinakars777.
+
 ## 2026.3.11
 
 ### Security
