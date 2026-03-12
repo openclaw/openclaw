@@ -105,6 +105,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
   messagesSnapshot: [],
   assistantTexts: [],
   toolMetas: [],
+  toolResultPayloads: [],
   lastAssistant: undefined,
   didSendViaMessagingTool: false,
   messagingToolSentTexts: [],
@@ -488,6 +489,59 @@ async function runTurnWithCooldownSeed(params: {
     return { usageStats: await readUsageStats(agentDir), now };
   });
 }
+
+describe("runEmbeddedPiAgent tool-result payload preservation", () => {
+  it("returns preserved tool-result payloads ahead of assistant payloads", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          toolResultPayloads: [
+            {
+              text: "generated image",
+              mediaUrls: ["https://example.com/generated.png"],
+            },
+          ],
+          assistantTexts: ["ok"],
+          lastAssistant: buildAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:tool-result-payloads",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        runId: "run:tool-result-payloads",
+      });
+
+      expect(result.payloads).toEqual([
+        {
+          text: "generated image",
+          mediaUrls: ["https://example.com/generated.png"],
+        },
+        {
+          text: "ok",
+          mediaUrls: undefined,
+          mediaUrl: undefined,
+          isError: undefined,
+          replyToId: undefined,
+          replyToTag: false,
+          replyToCurrent: false,
+          audioAsVoice: false,
+        },
+      ]);
+    });
+  });
+});
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
   it("refreshes copilot token after auth error and retries once", async () => {

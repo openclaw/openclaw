@@ -2184,6 +2184,8 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      const toolResultPayloads: Array<{ text?: string; mediaUrls?: string[] }> = [];
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -2193,7 +2195,17 @@ export async function runEmbeddedAttempt(
         toolResultFormat: params.toolResultFormat,
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
-        onToolResult: params.onToolResult,
+        onToolResult: (payload) => {
+          toolResultPayloads.push({
+            ...(typeof payload.text === "string" && payload.text.trim()
+              ? { text: payload.text }
+              : {}),
+            ...(Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0
+              ? { mediaUrls: payload.mediaUrls }
+              : {}),
+          });
+          return params.onToolResult?.(payload);
+        },
         onReasoningStream: params.onReasoningStream,
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
@@ -2771,6 +2783,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,
+        toolResultPayloads,
         lastAssistant,
         lastToolError: getLastToolError?.(),
         didSendViaMessagingTool: didSendViaMessagingTool(),

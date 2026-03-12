@@ -45,6 +45,10 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolResultPayloads: Array<{
+    text?: string;
+    mediaUrls?: string[];
+  }>;
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: {
     toolName: string;
