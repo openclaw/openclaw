@@ -61,15 +61,17 @@ function renderRecentsViewRows(
 }
 
 describe("loadDiscordModelPickerData", () => {
-  it("reuses buildModelsProviderData as source of truth", async () => {
+  it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
+    const cfg = {} as OpenClawConfig;
     const spy = vi
       .spyOn(modelsCommandModule, "buildModelsProviderData")
       .mockResolvedValue(expected);
 
-    const result = await loadDiscordModelPickerData({} as OpenClawConfig);
+    const result = await loadDiscordModelPickerData(cfg, "support");
 
     expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(cfg, "support");
     expect(result).toBe(expected);
   });
 });
@@ -114,6 +116,28 @@ describe("Discord model picker custom_id", () => {
       userId: "42",
       provider: "anthropic",
       page: 2,
+    });
+  });
+
+  it("parses compact custom_id aliases", () => {
+    const parsed = parseDiscordModelPickerData({
+      c: "models",
+      a: "submit",
+      v: "models",
+      u: "42",
+      p: "openai",
+      g: "3",
+      mi: "2",
+    });
+
+    expect(parsed).toEqual({
+      command: "models",
+      action: "submit",
+      view: "models",
+      userId: "42",
+      provider: "openai",
+      page: 3,
+      modelIndex: 2,
     });
   });
 
@@ -178,6 +202,21 @@ describe("Discord model picker custom_id", () => {
         userId: "42",
       }),
     ).toThrow(/custom_id exceeds/i);
+  });
+
+  it("keeps typical submit ids under Discord max length", () => {
+    const customId = buildDiscordModelPickerCustomId({
+      command: "models",
+      action: "submit",
+      view: "models",
+      provider: "azure-openai-responses",
+      page: 1,
+      providerPage: 1,
+      modelIndex: 10,
+      userId: "12345678901234567890",
+    });
+
+    expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
   });
 });
 
@@ -325,7 +364,7 @@ describe("Discord model picker rendering", () => {
       return parsed?.action === "provider";
     });
     expect(providerButtons).toHaveLength(Object.keys(entries).length);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(":act=nav:"))).toBe(
+    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
       false,
     );
   });
@@ -352,7 +391,7 @@ describe("Discord model picker rendering", () => {
     expect(rows.length).toBeGreaterThan(0);
 
     const allButtons = rows.flatMap((row) => row.components ?? []);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(":act=nav:"))).toBe(
+    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
       false,
     );
   });

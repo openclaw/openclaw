@@ -45,6 +45,26 @@ export function buildBaseChannelStatusSummary(snapshot: {
   };
 }
 
+export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
+  snapshot: {
+    configured?: boolean | null;
+    running?: boolean | null;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    probe?: unknown;
+    lastProbeAt?: number | null;
+  },
+  extra?: TExtra,
+) {
+  return {
+    ...buildBaseChannelStatusSummary(snapshot),
+    ...(extra ?? ({} as TExtra)),
+    probe: snapshot.probe,
+    lastProbeAt: snapshot.lastProbeAt ?? null,
+  };
+}
+
 export function buildBaseAccountStatusSnapshot(params: {
   account: {
     accountId: string;
@@ -61,13 +81,44 @@ export function buildBaseAccountStatusSnapshot(params: {
     name: account.name,
     enabled: account.enabled,
     configured: account.configured,
+    ...buildRuntimeAccountStatusSnapshot({ runtime, probe }),
+    lastInboundAt: runtime?.lastInboundAt ?? null,
+    lastOutboundAt: runtime?.lastOutboundAt ?? null,
+  };
+}
+
+export function buildComputedAccountStatusSnapshot(params: {
+  accountId: string;
+  name?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { accountId, name, enabled, configured, runtime, probe } = params;
+  return buildBaseAccountStatusSnapshot({
+    account: {
+      accountId,
+      name,
+      enabled,
+      configured,
+    },
+    runtime,
+    probe,
+  });
+}
+
+export function buildRuntimeAccountStatusSnapshot(params: {
+  runtime?: RuntimeLifecycleSnapshot | null;
+  probe?: unknown;
+}) {
+  const { runtime, probe } = params;
+  return {
     running: runtime?.running ?? false,
     lastStartAt: runtime?.lastStartAt ?? null,
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
-    lastInboundAt: runtime?.lastInboundAt ?? null,
-    lastOutboundAt: runtime?.lastOutboundAt ?? null,
   };
 }
 

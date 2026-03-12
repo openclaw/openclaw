@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
+import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
@@ -14,6 +17,16 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
+
+function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
+  const tokens = argv.slice(2).filter((token) => token.length > 0 && !token.startsWith("-"));
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (tokens[index] === "secrets" && tokens[index + 1] === "audit") {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
@@ -29,8 +42,20 @@ if (
   // Imported as a dependency — skip all entry-point side effects.
 } else {
   process.title = "openclaw";
+  ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
+  if (!isTruthyEnvValue(process.env.NODE_DISABLE_COMPILE_CACHE)) {
+    try {
+      enableCompileCache();
+    } catch {
+      // Best-effort only; never block startup.
+    }
+  }
+
+  if (shouldForceReadOnlyAuthStore(process.argv)) {
+    process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+  }
 
   if (process.argv.includes("--no-color")) {
     process.env.NO_COLOR = "1";
@@ -100,6 +125,44 @@ if (
     return true;
   }
 
+  function tryHandleRootVersionFastPath(argv: string[]): boolean {
+    if (!isRootVersionInvocation(argv)) {
+      return false;
+    }
+    Promise.all([import("./version.js"), import("./infra/git-commit.js")])
+      .then(([{ VERSION }, { resolveCommitHash }]) => {
+        const commit = resolveCommitHash({ moduleUrl: import.meta.url });
+        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+        process.exit(0);
+      })
+      .catch((error) => {
+        console.error(
+          "[openclaw] Failed to resolve version:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exitCode = 1;
+      });
+    return true;
+  }
+
+  function tryHandleRootHelpFastPath(argv: string[]): boolean {
+    if (!isRootHelpInvocation(argv)) {
+      return false;
+    }
+    import("./cli/program.js")
+      .then(({ buildProgram }) => {
+        buildProgram().outputHelp();
+      })
+      .catch((error) => {
+        console.error(
+          "[openclaw] Failed to display help:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exitCode = 1;
+      });
+    return true;
+  }
+
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureExperimentalWarningSuppressed()) {
@@ -116,14 +179,16 @@ if (
       process.argv = parsed.argv;
     }
 
-    import("./cli/run-main.js")
-      .then(({ runCli }) => runCli(process.argv))
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to start CLI:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
+    if (!tryHandleRootVersionFastPath(process.argv) && !tryHandleRootHelpFastPath(process.argv)) {
+      import("./cli/run-main.js")
+        .then(({ runCli }) => runCli(process.argv))
+        .catch((error) => {
+          console.error(
+            "[openclaw] Failed to start CLI:",
+            error instanceof Error ? (error.stack ?? error.message) : error,
+          );
+          process.exitCode = 1;
+        });
+    }
   }
 }

@@ -20,7 +20,7 @@ export async function runNonInteractiveOnboarding(
     return;
   }
 
-  const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+  const baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
     runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);

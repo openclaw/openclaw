@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
   {
@@ -16,23 +16,59 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TalkProviderConfigSchema = Type.Object(
+  {
+    voiceId: Type.Optional(Type.String()),
+    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+    modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
+    apiKey: Type.Optional(SecretInputSchema),
+  },
+  { additionalProperties: true },
+);
+
+const ResolvedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.String(),
+    config: TalkProviderConfigSchema,
+  },
+  { additionalProperties: false },
+);
+
+const LegacyTalkConfigSchema = Type.Object(
+  {
+    voiceId: Type.Optional(Type.String()),
+    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+    modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
+    apiKey: Type.Optional(SecretInputSchema),
+    interruptOnSpeech: Type.Optional(Type.Boolean()),
+    silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+const NormalizedTalkConfigSchema = Type.Object(
+  {
+    provider: Type.Optional(Type.String()),
+    providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
+    resolved: ResolvedTalkConfigSchema,
+    voiceId: Type.Optional(Type.String()),
+    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+    modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
+    apiKey: Type.Optional(SecretInputSchema),
+    interruptOnSpeech: Type.Optional(Type.Boolean()),
+    silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
       {
-        talk: Type.Optional(
-          Type.Object(
-            {
-              voiceId: Type.Optional(Type.String()),
-              voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-              modelId: Type.Optional(Type.String()),
-              outputFormat: Type.Optional(Type.String()),
-              apiKey: Type.Optional(Type.String()),
-              interruptOnSpeech: Type.Optional(Type.Boolean()),
-            },
-            { additionalProperties: false },
-          ),
-        ),
+        talk: Type.Optional(Type.Union([LegacyTalkConfigSchema, NormalizedTalkConfigSchema])),
         session: Type.Optional(
           Type.Object(
             {
@@ -82,6 +118,9 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    busy: Type.Optional(Type.Boolean()),
+    activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastProbeAt: Type.Optional(Type.Integer({ minimum: 0 })),
     mode: Type.Optional(Type.String()),
     dmPolicy: Type.Optional(Type.String()),

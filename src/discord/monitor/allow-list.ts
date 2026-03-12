@@ -6,6 +6,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "../../channels/channel-config.js";
+import { evaluateGroupRouteAccessForPolicy } from "../../plugin-sdk/group-access.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -16,10 +17,13 @@ export type DiscordAllowList = {
 
 export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
+const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
+
 export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
@@ -28,6 +32,7 @@ export type DiscordGuildEntryResolved = {
     {
       allow?: boolean;
       requireMention?: boolean;
+      ignoreOtherMentions?: boolean;
       skills?: string[];
       enabled?: boolean;
       users?: string[];
@@ -35,6 +40,7 @@ export type DiscordGuildEntryResolved = {
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
+      autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
     }
   >;
 };
@@ -42,6 +48,7 @@ export type DiscordGuildEntryResolved = {
 export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
+  ignoreOtherMentions?: boolean;
   skills?: string[];
   enabled?: boolean;
   users?: string[];
@@ -49,6 +56,7 @@ export type DiscordChannelConfigResolved = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -265,6 +273,32 @@ export function resolveDiscordOwnerAllowFrom(params: {
   return [match.matchKey];
 }
 
+export function resolveDiscordOwnerAccess(params: {
+  allowFrom?: string[];
+  sender: { id: string; name?: string; tag?: string };
+  allowNameMatching?: boolean;
+}): {
+  ownerAllowList: DiscordAllowList | null;
+  ownerAllowed: boolean;
+} {
+  const ownerAllowList = normalizeDiscordAllowList(
+    params.allowFrom,
+    DISCORD_OWNER_ALLOWLIST_PREFIXES,
+  );
+  const ownerAllowed = ownerAllowList
+    ? allowListMatches(
+        ownerAllowList,
+        {
+          id: params.sender.id,
+          name: params.sender.name,
+          tag: params.sender.tag,
+        },
+        { allowNameMatching: params.allowNameMatching },
+      )
+    : false;
+  return { ownerAllowList, ownerAllowed };
+}
+
 export function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
   allowFrom?: string[];
@@ -361,6 +395,7 @@ function resolveDiscordChannelConfigEntry(
   const resolved: DiscordChannelConfigResolved = {
     allowed: entry.allow !== false,
     requireMention: entry.requireMention,
+    ignoreOtherMentions: entry.ignoreOtherMentions,
     skills: entry.skills,
     enabled: entry.enabled,
     users: entry.users,
@@ -368,6 +403,7 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    autoArchiveDuration: entry.autoArchiveDuration,
   };
   return resolved;
 }
@@ -480,20 +516,18 @@ export function isDiscordGroupAllowedByPolicy(params: {
   channelAllowlistConfigured: boolean;
   channelAllowed: boolean;
 }): boolean {
-  const { groupPolicy, guildAllowlisted, channelAllowlistConfigured, channelAllowed } = params;
-  if (groupPolicy === "disabled") {
+  if (params.groupPolicy === "allowlist" && !params.guildAllowlisted) {
     return false;
   }
-  if (groupPolicy === "open") {
-    return true;
-  }
-  if (!guildAllowlisted) {
-    return false;
-  }
-  if (!channelAllowlistConfigured) {
-    return true;
-  }
-  return channelAllowed;
+
+  return evaluateGroupRouteAccessForPolicy({
+    groupPolicy:
+      params.groupPolicy === "allowlist" && !params.channelAllowlistConfigured
+        ? "open"
+        : params.groupPolicy,
+    routeAllowlistConfigured: params.channelAllowlistConfigured,
+    routeMatched: params.channelAllowed,
+  }).allowed;
 }
 
 export function resolveGroupDmAllow(params: {
@@ -522,6 +556,9 @@ export function shouldEmitDiscordReactionNotification(params: {
   userId: string;
   userName?: string;
   userTag?: string;
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  memberRoleIds?: string[];
   allowlist?: string[];
   allowNameMatching?: boolean;
 }) {
@@ -529,26 +566,31 @@ export function shouldEmitDiscordReactionNotification(params: {
   if (mode === "off") {
     return false;
   }
+  const accessGuildInfo =
+    params.guildInfo ??
+    (params.allowlist ? ({ users: params.allowlist } satisfies DiscordGuildEntryResolved) : null);
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig: params.channelConfig,
+    guildInfo: accessGuildInfo,
+    memberRoleIds: params.memberRoleIds ?? [],
+    sender: {
+      id: params.userId,
+      name: params.userName,
+      tag: params.userTag,
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
+  if (mode === "allowlist") {
+    return hasAccessRestrictions && memberAllowed;
+  }
+  if (hasAccessRestrictions && !memberAllowed) {
+    return false;
+  }
   if (mode === "all") {
     return true;
   }
   if (mode === "own") {
     return Boolean(params.botId && params.messageAuthorId === params.botId);
-  }
-  if (mode === "allowlist") {
-    const list = normalizeDiscordAllowList(params.allowlist, ["discord:", "user:", "pk:"]);
-    if (!list) {
-      return false;
-    }
-    return allowListMatches(
-      list,
-      {
-        id: params.userId,
-        name: params.userName,
-        tag: params.userTag,
-      },
-      { allowNameMatching: params.allowNameMatching },
-    );
   }
   return false;
 }

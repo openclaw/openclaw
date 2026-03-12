@@ -38,11 +38,26 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "auto_compaction_start" });
     expect(subscription.getCompactionCount()).toBe(0);
 
-    emit({ type: "auto_compaction_end", willRetry: true });
+    // willRetry with result — counter IS incremented (overflow compaction succeeded)
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "s" } });
+    expect(subscription.getCompactionCount()).toBe(1);
+
+    // willRetry=false with result — counter incremented again
+    emit({ type: "auto_compaction_end", willRetry: false, result: { summary: "s2" } });
+    expect(subscription.getCompactionCount()).toBe(2);
+  });
+
+  it("does not count compaction when result is absent", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-no-result",
+    });
+
+    // No result (e.g. aborted or cancelled) — counter stays at 0
+    emit({ type: "auto_compaction_end", willRetry: false, result: undefined });
     expect(subscription.getCompactionCount()).toBe(0);
 
-    emit({ type: "auto_compaction_end", willRetry: false });
-    expect(subscription.getCompactionCount()).toBe(1);
+    emit({ type: "auto_compaction_end", willRetry: false, aborted: true });
+    expect(subscription.getCompactionCount()).toBe(0);
   });
 
   it("emits compaction events on the agent event bus", async () => {

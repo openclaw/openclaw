@@ -4,7 +4,12 @@ import {
   getSubagentDepth,
   isCronSessionKey,
 } from "../sessions/session-key-utils.js";
-import { classifySessionKeyShape } from "./session-key.js";
+import {
+  classifySessionKeyShape,
+  isValidAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "./session-key.js";
 
 describe("classifySessionKeyShape", () => {
   it("classifies empty keys as missing", () => {
@@ -91,5 +96,37 @@ describe("deriveSessionChatType", () => {
     expect(deriveSessionChatType("agent:main:main")).toBe("unknown");
     expect(deriveSessionChatType("agent:main")).toBe("unknown");
     expect(deriveSessionChatType("")).toBe("unknown");
+  });
+});
+
+describe("session key canonicalization", () => {
+  it("parses agent keys case-insensitively and returns lowercase tokens", () => {
+    expect(parseAgentSessionKey("AGENT:Main:Hook:Webhook:42")).toEqual({
+      agentId: "main",
+      rest: "hook:webhook:42",
+    });
+  });
+
+  it("does not double-prefix already-qualified agent keys", () => {
+    expect(
+      toAgentStoreSessionKey({
+        agentId: "main",
+        requestKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
+  });
+});
+
+describe("isValidAgentId", () => {
+  it("accepts valid agent ids", () => {
+    expect(isValidAgentId("main")).toBe(true);
+    expect(isValidAgentId("my-research_agent01")).toBe(true);
+  });
+
+  it("rejects malformed agent ids", () => {
+    expect(isValidAgentId("")).toBe(false);
+    expect(isValidAgentId("Agent not found: xyz")).toBe(false);
+    expect(isValidAgentId("../../../etc/passwd")).toBe(false);
+    expect(isValidAgentId("a".repeat(65))).toBe(false);
   });
 });

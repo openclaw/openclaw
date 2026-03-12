@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolveEnableState,
+} from "./config-state.js";
 
 describe("normalizePluginsConfig", () => {
   it("uses default memory slot when not specified", () => {
@@ -47,14 +51,38 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.slots.memory).toBe("memory-core");
   });
+
+  it("normalizes plugin hook policy flags", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: false,
+          },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks?.allowPromptInjection).toBe(false);
+  });
+
+  it("drops invalid plugin hook policy values", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          hooks: {
+            allowPromptInjection: "nope",
+          } as unknown as { allowPromptInjection: boolean },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.hooks).toBeUndefined();
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {
-  it("enables bundled channels when channels.<id>.enabled=true", () => {
-    const normalized = normalizePluginsConfig({
-      enabled: true,
-    });
-    const state = resolveEffectiveEnableState({
+  function resolveBundledTelegramState(config: Parameters<typeof normalizePluginsConfig>[0]) {
+    const normalized = normalizePluginsConfig(config);
+    return resolveEffectiveEnableState({
       id: "telegram",
       origin: "bundled",
       config: normalized,
@@ -66,11 +94,17 @@ describe("resolveEffectiveEnableState", () => {
         },
       },
     });
+  }
+
+  it("enables bundled channels when channels.<id>.enabled=true", () => {
+    const state = resolveBundledTelegramState({
+      enabled: true,
+    });
     expect(state).toEqual({ enabled: true });
   });
 
   it("keeps explicit plugin-level disable authoritative", () => {
-    const normalized = normalizePluginsConfig({
+    const state = resolveBundledTelegramState({
       enabled: true,
       entries: {
         telegram: {
@@ -78,18 +112,37 @@ describe("resolveEffectiveEnableState", () => {
         },
       },
     });
-    const state = resolveEffectiveEnableState({
-      id: "telegram",
-      origin: "bundled",
-      config: normalized,
-      rootConfig: {
-        channels: {
-          telegram: {
-            enabled: true,
+    expect(state).toEqual({ enabled: false, reason: "disabled in config" });
+  });
+});
+
+describe("resolveEnableState", () => {
+  it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "bundled",
+      normalizePluginsConfig({
+        allow: ["telegram"],
+        slots: { memory: "memory-core" },
+      }),
+    );
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("keeps explicit disable authoritative for the selected memory slot plugin", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "bundled",
+      normalizePluginsConfig({
+        allow: ["telegram"],
+        slots: { memory: "memory-core" },
+        entries: {
+          "memory-core": {
+            enabled: false,
           },
         },
-      },
-    });
+      }),
+    );
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
   });
 });

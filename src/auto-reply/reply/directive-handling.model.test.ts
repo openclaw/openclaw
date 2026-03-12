@@ -172,6 +172,21 @@ describe("/model chat UX", () => {
       isDefault: false,
     });
   });
+
+  it("keeps cloudflare @cf model segments for exact selections", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/@cf/openai/gpt-oss-20b",
+      allowedModelKeys: new Set(["openai/@cf/openai/gpt-oss-20b"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "@cf/openai/gpt-oss-20b",
+      isDefault: false,
+    });
+  });
 });
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {

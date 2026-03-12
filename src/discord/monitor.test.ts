@@ -1,5 +1,5 @@
 import { ChannelType, type Guild } from "@buape/carbon";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   allowListMatches,
@@ -20,6 +20,12 @@ import {
 } from "./monitor.js";
 import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
 
+const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+}));
+
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
 const makeEntries = (
@@ -32,6 +38,7 @@ const makeEntries = (
       requireMention: value.requireMention,
       reactionNotifications: value.reactionNotifications,
       users: value.users,
+      roles: value.roles,
       channels: value.channels,
     };
   }
@@ -82,16 +89,7 @@ describe("DiscordMessageListener", () => {
     };
   }
 
-  async function expectPending(promise: Promise<unknown>) {
-    let resolved = false;
-    void promise.then(() => {
-      resolved = true;
-    });
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-  }
-
-  it("awaits the handler before returning", async () => {
+  it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
     const handler = vi.fn(async () => {
@@ -105,17 +103,54 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("@buape/carbon").Client,
     );
 
-    // Handler should be called but not yet resolved
-    expect(handler).toHaveBeenCalledOnce();
+    // handle() returns immediately while the background queue starts on the next tick.
+    await expect(handlePromise).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledOnce();
+    });
     expect(handlerResolved).toBe(false);
-    await expectPending(handlePromise);
 
-    // Release the handler
+    // Release and let background handler finish.
     deferred.resolve();
-
-    // Now await handle() - it should complete only after handler resolves
-    await handlePromise;
+    await Promise.resolve();
     expect(handlerResolved).toBe(true);
+  });
+
+  it("dispatches subsequent events concurrently without blocking on prior handler", async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+    let runCount = 0;
+    const handler = vi.fn(async () => {
+      runCount += 1;
+      if (runCount === 1) {
+        await first.promise;
+        return;
+      }
+      await second.promise;
+    });
+    const listener = new DiscordMessageListener(handler);
+
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("@buape/carbon").Client,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("@buape/carbon").Client,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Both handlers are dispatched concurrently (fire-and-forget).
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    first.resolve();
+    second.resolve();
+    await Promise.resolve();
   });
 
   it("logs handler failures", async () => {
@@ -132,48 +167,33 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await Promise.resolve();
-
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    await vi.waitFor(() => {
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    });
   });
 
-  it("logs slow handlers after the threshold", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+  it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
+    const deferred = createDeferred();
+    const handler = vi.fn(() => deferred.promise);
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
+    const listener = new DiscordMessageListener(handler, logger);
 
-    try {
-      const deferred = createDeferred();
-      const handler = vi.fn(() => deferred.promise);
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
-      const listener = new DiscordMessageListener(handler, logger);
+    const handlePromise = listener.handle(
+      {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+      {} as unknown as import("@buape/carbon").Client,
+    );
+    await expect(handlePromise).resolves.toBeUndefined();
 
-      // Start handle() but don't await yet
-      const handlePromise = listener.handle(
-        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
-      );
-      await expectPending(handlePromise);
-
-      // Advance time past the slow listener threshold
-      vi.setSystemTime(31_000);
-
-      // Release the handler
-      deferred.resolve();
-
-      // Now await handle() - it should complete and log the slow listener
-      await handlePromise;
-
-      expect(logger.warn).toHaveBeenCalled();
-      const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
-      const [, meta] = warnMock.mock.calls[0] ?? [];
-      const durationMs = (meta as { durationMs?: number } | undefined)?.durationMs;
-      expect(durationMs).toBeGreaterThanOrEqual(30_000);
-    } finally {
-      vi.useRealTimers();
-    }
+    deferred.resolve();
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledOnce();
+    });
+    // The listener no longer wraps handlers with slow-listener logging;
+    // that responsibility moved to the inbound worker.
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -712,6 +732,17 @@ describe("discord reaction notification gating", () => {
         expected: true,
       },
       {
+        name: "all mode blocks non-allowlisted guild member",
+        input: {
+          mode: "all" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "user-2",
+          guildInfo: { users: ["trusted-user"] },
+        },
+        expected: false,
+      },
+      {
         name: "own mode with bot-authored message",
         input: {
           mode: "own" as const,
@@ -728,6 +759,17 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "user-2",
           userId: "user-3",
+        },
+        expected: false,
+      },
+      {
+        name: "own mode still blocks member outside users allowlist",
+        input: {
+          mode: "own" as const,
+          botId: "bot-1",
+          messageAuthorId: "bot-1",
+          userId: "user-3",
+          guildInfo: { users: ["trusted-user"] },
         },
         expected: false,
       },
@@ -750,7 +792,7 @@ describe("discord reaction notification gating", () => {
           messageAuthorId: "user-1",
           userId: "123",
           userName: "steipete",
-          allowlist: ["123", "other"] as string[],
+          guildInfo: { users: ["123", "other"] },
         },
         expected: true,
       },
@@ -762,7 +804,7 @@ describe("discord reaction notification gating", () => {
           messageAuthorId: "user-1",
           userId: "999",
           userName: "trusted-user",
-          allowlist: ["trusted-user"] as string[],
+          guildInfo: { users: ["trusted-user"] },
         },
         expected: false,
       },
@@ -774,8 +816,20 @@ describe("discord reaction notification gating", () => {
           messageAuthorId: "user-1",
           userId: "999",
           userName: "trusted-user",
-          allowlist: ["trusted-user"] as string[],
+          guildInfo: { users: ["trusted-user"] },
           allowNameMatching: true,
+        },
+        expected: true,
+      },
+      {
+        name: "allowlist mode matches allowed role",
+        input: {
+          mode: "allowlist" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "999",
+          guildInfo: { roles: ["role:trusted-role"] },
+          memberRoleIds: ["trusted-role"],
         },
         expected: true,
       },
@@ -785,10 +839,6 @@ describe("discord reaction notification gating", () => {
       expect(
         shouldEmitDiscordReactionNotification({
           ...testCase.input,
-          allowlist:
-            "allowlist" in testCase.input && testCase.input.allowlist
-              ? [...testCase.input.allowlist]
-              : undefined,
         }),
         testCase.name,
       ).toBe(testCase.expected);
@@ -844,6 +894,7 @@ function makeReactionEvent(overrides?: {
   messageAuthorId?: string;
   messageFetch?: ReturnType<typeof vi.fn>;
   guild?: { name?: string; id?: string };
+  memberRoleIds?: string[];
 }) {
   const userId = overrides?.userId ?? "user-1";
   const messageId = overrides?.messageId ?? "msg-1";
@@ -863,6 +914,7 @@ function makeReactionEvent(overrides?: {
     message_id: messageId,
     emoji: { name: overrides?.emojiName ?? "👍", id: null },
     guild: overrides?.guild,
+    rawMember: overrides?.memberRoleIds ? { roles: overrides.memberRoleIds } : undefined,
     user: {
       id: userId,
       bot: false,
@@ -899,6 +951,12 @@ function makeReactionClient(options?: {
 
 function makeReactionListenerParams(overrides?: {
   botUserId?: string;
+  dmEnabled?: boolean;
+  groupDmEnabled?: boolean;
+  groupDmChannels?: string[];
+  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom?: string[];
+  groupPolicy?: "open" | "allowlist" | "disabled";
   allowNameMatching?: boolean;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
@@ -907,6 +965,12 @@ function makeReactionListenerParams(overrides?: {
     accountId: "acc-1",
     runtime: {} as import("../runtime.js").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
+    dmEnabled: overrides?.dmEnabled ?? true,
+    groupDmEnabled: overrides?.groupDmEnabled ?? true,
+    groupDmChannels: overrides?.groupDmChannels ?? [],
+    dmPolicy: overrides?.dmPolicy ?? "open",
+    allowFrom: overrides?.allowFrom ?? [],
+    groupPolicy: overrides?.groupPolicy ?? "open",
     allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,
     logger: {
@@ -919,6 +983,12 @@ function makeReactionListenerParams(overrides?: {
 }
 
 describe("discord DM reaction handling", () => {
+  beforeEach(() => {
+    enqueueSystemEventSpy.mockClear();
+    resolveAgentRouteMock.mockClear();
+    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  });
+
   it("processes DM reactions with or without guild allowlists", async () => {
     const cases = [
       { name: "no guild allowlist", guildEntries: undefined },
@@ -952,9 +1022,101 @@ describe("discord DM reaction handling", () => {
     }
   });
 
-  it("still processes guild reactions (no regression)", async () => {
-    enqueueSystemEventSpy.mockClear();
-    resolveAgentRouteMock.mockClear();
+  it("blocks DM reactions when dmPolicy is disabled", async () => {
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({ dmPolicy: "disabled" }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks DM reactions for unauthorized sender in allowlist mode", async () => {
+    const data = makeReactionEvent({ botAsAuthor: true, userId: "user-1" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        dmPolicy: "allowlist",
+        allowFrom: ["user:user-2"],
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows DM reactions for authorized sender in allowlist mode", async () => {
+    const data = makeReactionEvent({ botAsAuthor: true, userId: "user-1" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        dmPolicy: "allowlist",
+        allowFrom: ["user:user-1"],
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+  });
+
+  it("blocks group DM reactions when group DMs are disabled", async () => {
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.GroupDM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({ groupDmEnabled: false }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks guild reactions when groupPolicy is disabled", async () => {
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      botAsAuthor: true,
+      guild: { id: "guild-123", name: "Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({ groupPolicy: "disabled" }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("blocks guild reactions for sender outside users allowlist", async () => {
+    const data = makeReactionEvent({
+      guildId: "guild-123",
+      userId: "attacker-user",
+      botAsAuthor: true,
+      guild: { id: "guild-123", name: "Test Guild" },
+    });
+    const client = makeReactionClient({ channelType: ChannelType.GuildText });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            users: ["user:trusted-user"],
+          },
+        }),
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    expect(resolveAgentRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("allows guild reactions for sender in channel role allowlist override", async () => {
     resolveAgentRouteMock.mockReturnValueOnce({
       agentId: "default",
       channel: "discord",
@@ -964,11 +1126,27 @@ describe("discord DM reaction handling", () => {
 
     const data = makeReactionEvent({
       guildId: "guild-123",
+      userId: "member-user",
       botAsAuthor: true,
-      guild: { name: "Test Guild" },
+      guild: { id: "guild-123", name: "Test Guild" },
+      memberRoleIds: ["trusted-role"],
     });
     const client = makeReactionClient({ channelType: ChannelType.GuildText });
-    const listener = new DiscordReactionListener(makeReactionListenerParams());
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        guildEntries: makeEntries({
+          "guild-123": {
+            roles: ["role:blocked-role"],
+            channels: {
+              "channel-1": {
+                allow: true,
+                roles: ["role:trusted-role"],
+              },
+            },
+          },
+        }),
+      }),
+    );
 
     await listener.handle(data, client);
 

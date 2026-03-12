@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import {
+  mockedContextEngine,
+  mockedContextEngineCompact,
+} from "./run.overflow-compaction.mocks.shared.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import {
   sessionLikelyHasOversizedToolResults,
@@ -7,13 +10,14 @@ import {
 } from "./tool-result-truncation.js";
 
 export const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
-export const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);
+export const mockedCompactDirect = mockedContextEngineCompact;
 export const mockedSessionLikelyHasOversizedToolResults = vi.mocked(
   sessionLikelyHasOversizedToolResults,
 );
 export const mockedTruncateOversizedToolResultsInSession = vi.mocked(
   truncateOversizedToolResultsInSession,
 );
+export { mockedContextEngine };
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",

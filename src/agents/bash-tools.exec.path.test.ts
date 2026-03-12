@@ -95,6 +95,20 @@ describe("exec PATH login shell merge", () => {
     expect(shellPathMock).toHaveBeenCalledTimes(1);
   });
 
+  it("sets OPENCLAW_SHELL for host=gateway commands", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-openclaw-shell", {
+      command: 'printf "%s" "${OPENCLAW_SHELL:-}"',
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("exec");
+  });
+
   it("throws security violation when env.PATH is provided", async () => {
     if (isWin) {
       return;
@@ -164,6 +178,29 @@ describe("exec host env validation", () => {
         env: { LD_DEBUG: "1" },
       }),
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
+  });
+
+  it("strips dangerous inherited env vars from host execution", async () => {
+    if (isWin) {
+      return;
+    }
+    const original = process.env.SSLKEYLOGFILE;
+    process.env.SSLKEYLOGFILE = "/tmp/openclaw-ssl-keys.log";
+    try {
+      const { createExecTool } = await import("./bash-tools.exec.js");
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call1", {
+        command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",
+      });
+      const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
+      expect(output).not.toContain("/tmp/openclaw-ssl-keys.log");
+    } finally {
+      if (original === undefined) {
+        delete process.env.SSLKEYLOGFILE;
+      } else {
+        process.env.SSLKEYLOGFILE = original;
+      }
+    }
   });
 
   it("defaults to sandbox when sandbox runtime is unavailable", async () => {
