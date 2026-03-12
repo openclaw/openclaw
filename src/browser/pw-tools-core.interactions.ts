@@ -9,6 +9,8 @@ import {
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+// 安全修复：导入安全的函数解析器
+import { safeEval } from "../security/safe-function-eval.js";
 
 type TargetOpts = {
   cdpUrl: string;
@@ -306,7 +308,8 @@ export async function evaluateViaPlaywright(opts: {
         "use strict";
         var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
+          // 安全修复：使用安全的表达式求值替代eval
+          var candidate = safeEval(fnBody);
           var result = typeof candidate === "function" ? candidate(el) : candidate;
           if (result && typeof result.then === "function") {
             return Promise.race([
@@ -336,7 +339,8 @@ export async function evaluateViaPlaywright(opts: {
         "use strict";
         var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
         try {
-          var candidate = eval("(" + fnBody + ")");
+          // 安全修复：使用安全的表达式求值替代eval
+          var candidate = safeEval(fnBody);
           var result = typeof candidate === "function" ? candidate() : candidate;
           if (result && typeof result.then === "function") {
             return Promise.race([
