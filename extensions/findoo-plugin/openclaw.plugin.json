@@ -1,0 +1,33 @@
+{
+  "id": "findoo-plugin",
+  "name": "Findoo",
+  "description": "Bridge to LangGraph strategy-agent via A2A protocol — financial analysis, strategy design, risk assessment, portfolio management.",
+  "kind": "financial",
+  "version": "2026.3.12",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "strategyAgentUrl": {
+        "type": "string",
+        "description": "Strategy Agent service URL (LangGraph A2A). Default: http://43.128.100.43:5085"
+      },
+      "strategyAssistantId": {
+        "type": "string",
+        "description": "LangGraph assistant UUID to route A2A calls to."
+      }
+    }
+  },
+  "uiHints": {
+    "strategyAgentUrl": {
+      "label": "Strategy Agent URL",
+      "help": "LangGraph A2A 策略分析服务地址",
+      "placeholder": "http://43.128.100.43:5085"
+    },
+    "strategyAssistantId": {
+      "label": "Assistant ID",
+      "help": "LangGraph assistant UUID",
+      "placeholder": "d2310a07-b552-453c-a8bb-7b9b86de6b23"
+    }
+  }
+}

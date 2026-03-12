@@ -1,0 +1,28 @@
+{
+  "name": "@openfinclaw/findoo-plugin",
+  "version": "2026.3.12",
+  "description": "Strategy Agent bridge — A2A protocol integration for LangGraph strategy-agent (37 financial analysis skills)",
+  "keywords": [
+    "a2a",
+    "agent",
+    "finance",
+    "langgraph",
+    "strategy"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "type": "module",
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openfinclaw/findoo-plugin"
+    }
+  }
+}
