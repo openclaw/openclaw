@@ -8,22 +8,22 @@ title: "Features"
 ## Highlights
 
 <Columns>
-  <Card title="Channels" icon="message-square">
+  <Card title="Channels" icon="message-square" href="/channels">
     WhatsApp, Telegram, Discord, and iMessage with a single Gateway.
   </Card>
-  <Card title="Plugins" icon="plug">
+  <Card title="Plugins" icon="plug" href="/tools/plugin">
     Add Mattermost and more with extensions.
   </Card>
-  <Card title="Routing" icon="route">
+  <Card title="Routing" icon="route" href="/concepts/multi-agent">
     Multi-agent routing with isolated sessions.
   </Card>
-  <Card title="Media" icon="image">
+  <Card title="Media" icon="image" href="/nodes/images">
     Images, audio, and documents in and out.
   </Card>
-  <Card title="Apps and UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor" href="/web/control-ui">
     Web Control UI and macOS companion app.
   </Card>
-  <Card title="Mobile nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone" href="/nodes">
     iOS and Android nodes with pairing, voice/chat, and rich device commands.
   </Card>
 </Columns>
