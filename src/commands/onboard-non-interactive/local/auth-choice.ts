@@ -862,6 +862,23 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyVeniceConfig(nextConfig);
   }
 
+  // Legacy aliases: these choice values were removed; fail with an actionable message so
+  // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
+  const REMOVED_MINIMAX_CHOICES: Record<string, string> = {
+    "minimax-api": "minimax-global-api",
+    "minimax-cloud": "minimax-global-api",
+    "minimax-api-lightning": "minimax-global-api",
+    "minimax-api-key-cn": "minimax-cn-api",
+  };
+  if (Object.prototype.hasOwnProperty.call(REMOVED_MINIMAX_CHOICES, authChoice as string)) {
+    const replacement = REMOVED_MINIMAX_CHOICES[authChoice as string];
+    runtime.error(
+      `"${authChoice as string}" is no longer supported. Use --auth-choice ${replacement} instead.`,
+    );
+    runtime.exit(1);
+    return null;
+  }
+
   if (authChoice === "minimax-global-api" || authChoice === "minimax-cn-api") {
     const isCn = authChoice === "minimax-cn-api";
     const profileId = isCn ? "minimax:cn" : "minimax:global";
@@ -872,6 +889,9 @@ export async function applyNonInteractiveAuthChoice(params: {
       flagName: "--minimax-api-key",
       envVar: "MINIMAX_API_KEY",
       runtime,
+      // Disable profile fallback: both regions share provider "minimax", so an existing
+      // Global profile key must not be silently reused when configuring CN (and vice versa).
+      allowProfile: false,
     });
     if (!resolved) {
       return null;
