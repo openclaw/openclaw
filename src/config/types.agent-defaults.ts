@@ -189,6 +189,8 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
+  /** Default reasoning display level when no /reasoning directive is present. Overrides model-capability auto-detection. */
+  reasoningDefault?: "off" | "on" | "stream";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**
