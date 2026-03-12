@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { t } from "../i18n/index.ts";
+import { i18n, isSupportedLocale, SUPPORTED_LOCALES, t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -489,6 +489,34 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
 
 const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
 
+export function renderLocaleSwitcher(state: AppViewState) {
+  const currentLocale = i18n.getLocale();
+
+  return html`
+    <label class="topbar-locale">
+      <span class="topbar-locale__label">${t("common.language")}</span>
+      <select
+        class="topbar-locale__select"
+        .value=${currentLocale}
+        @change=${(event: Event) => {
+          const value = (event.target as HTMLSelectElement).value;
+          if (!isSupportedLocale(value)) {
+            return;
+          }
+          void i18n.setLocale(value);
+          state.applySettings({ ...state.settings, locale: value });
+        }}
+        aria-label=${t("common.language")}
+      >
+        ${SUPPORTED_LOCALES.map((loc) => {
+          const key = loc.replace(/-([a-zA-Z])/g, (_, c: string) => c.toUpperCase());
+          return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+        })}
+      </select>
+    </label>
+  `;
+}
+
 export function renderThemeToggle(state: AppViewState) {
   const index = Math.max(0, THEME_ORDER.indexOf(state.theme));
   const applyTheme = (next: ThemeMode) => (event: MouseEvent) => {
@@ -503,14 +531,14 @@ export function renderThemeToggle(state: AppViewState) {
 
   return html`
     <div class="theme-toggle" style="--theme-index: ${index};">
-      <div class="theme-toggle__track" role="group" aria-label="Theme">
+      <div class="theme-toggle__track" role="group" aria-label=${t("theme.label")}>
         <span class="theme-toggle__indicator"></span>
         <button
           class="theme-toggle__button ${state.theme === "system" ? "active" : ""}"
           @click=${applyTheme("system")}
           aria-pressed=${state.theme === "system"}
-          aria-label="System theme"
-          title="System"
+          aria-label=${t("theme.systemAria")}
+          title=${t("theme.system")}
         >
           ${renderMonitorIcon()}
         </button>
@@ -518,8 +546,8 @@ export function renderThemeToggle(state: AppViewState) {
           class="theme-toggle__button ${state.theme === "light" ? "active" : ""}"
           @click=${applyTheme("light")}
           aria-pressed=${state.theme === "light"}
-          aria-label="Light theme"
-          title="Light"
+          aria-label=${t("theme.lightAria")}
+          title=${t("theme.light")}
         >
           ${renderSunIcon()}
         </button>
@@ -527,8 +555,8 @@ export function renderThemeToggle(state: AppViewState) {
           class="theme-toggle__button ${state.theme === "dark" ? "active" : ""}"
           @click=${applyTheme("dark")}
           aria-pressed=${state.theme === "dark"}
-          aria-label="Dark theme"
-          title="Dark"
+          aria-label=${t("theme.darkAria")}
+          title=${t("theme.dark")}
         >
           ${renderMoonIcon()}
         </button>
