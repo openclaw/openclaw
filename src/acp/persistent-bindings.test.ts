@@ -601,6 +601,95 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
   });
 });
 
+describe("acp.defaultChannels implicit binding", () => {
+  it("synthesizes an ACP binding when channel is in defaultChannels and no explicit binding exists", () => {
+    const cfg = {
+      ...baseCfg,
+      acp: { defaultChannels: ["feishu"] },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_abc123",
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.spec.channel).toBe("feishu");
+    expect(resolved?.spec.conversationId).toBe("ou_abc123");
+    expect(resolved?.spec.agentId).toBe("codex");
+    expect(resolved?.spec.mode).toBe("persistent");
+  });
+
+  it("explicit binding takes priority over defaultChannels", () => {
+    const cfg = {
+      ...baseCfg,
+      acp: { defaultChannels: ["feishu"] },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "claude",
+          match: { channel: "feishu", accountId: "*" },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "main",
+      conversationId: "ou_abc123",
+    });
+
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
+  it("does not synthesize binding for channels not in defaultChannels", () => {
+    const cfg = {
+      ...baseCfg,
+      acp: { defaultChannels: ["feishu"] },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "qqbot",
+      accountId: "main",
+      conversationId: "group123",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("uses agent runtime ACP defaults when synthesizing binding", () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            runtime: {
+              type: "acp",
+              acp: { agent: "claude", backend: "acpx", mode: "persistent" },
+            },
+          },
+        ],
+      },
+      acp: { defaultChannels: ["qqbot"] },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "qqbot",
+      accountId: "default",
+      conversationId: "group456",
+    });
+
+    expect(resolved?.spec.acpAgentId).toBe("claude");
+    expect(resolved?.spec.backend).toBe("acpx");
+  });
+});
+
 describe("buildConfiguredAcpSessionKey", () => {
   it("is deterministic for the same conversation binding", () => {
     const sessionKeyA = buildConfiguredAcpSessionKey({

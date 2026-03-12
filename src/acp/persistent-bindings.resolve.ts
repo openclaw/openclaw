@@ -296,7 +296,7 @@ export function resolveConfiguredAcpBindingRecord(params: {
         return inheritedMatch;
       }
     }
-    return null;
+    // No explicit binding matched; fall through to defaultChannels check.
   }
 
   if (channel === "telegram") {
@@ -361,7 +361,7 @@ export function resolveConfiguredAcpBindingRecord(params: {
         record: toConfiguredAcpBindingRecord(spec),
       };
     }
-    return null;
+    // No explicit binding matched; fall through to defaultChannels check.
   }
 
   // Feishu and QQ use direct conversationId matching.
@@ -410,7 +410,40 @@ export function resolveConfiguredAcpBindingRecord(params: {
         record: toConfiguredAcpBindingRecord(spec),
       };
     }
-    return null;
+    // No explicit binding matched; fall through to defaultChannels check.
+  }
+
+  // Implicit ACP binding via acp.defaultChannels — when no explicit binding
+  // matched but the channel is listed in defaultChannels, synthesize a
+  // catch-all binding spec on the fly. This lets users enable ACP for entire
+  // channels with a single config line instead of writing bindings[] entries.
+  const defaultChannels = (params.cfg.acp?.defaultChannels ?? []).map((c) =>
+    c.trim().toLowerCase(),
+  );
+  if (defaultChannels.includes(channel)) {
+    const bindingChannel = normalizeBindingChannel(channel);
+    if (bindingChannel) {
+      const agentId = pickFirstExistingAgentId(params.cfg, "main");
+      const runtimeDefaults = resolveAgentRuntimeAcpDefaults({
+        cfg: params.cfg,
+        ownerAgentId: agentId,
+      });
+      const spec: ConfiguredAcpBindingSpec = {
+        channel: bindingChannel,
+        accountId,
+        conversationId,
+        parentConversationId,
+        agentId,
+        acpAgentId: normalizeText(runtimeDefaults.acpAgentId),
+        mode: normalizeMode(runtimeDefaults.mode),
+        cwd: runtimeDefaults.cwd,
+        backend: runtimeDefaults.backend,
+      };
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
   }
 
   return null;

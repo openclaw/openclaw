@@ -42,6 +42,12 @@ export type AcpConfig = {
   backend?: string;
   defaultAgent?: string;
   allowedAgents?: string[];
+  /**
+   * Channels that implicitly use ACP for all conversations when no explicit
+   * binding matches. Supported values: "discord", "telegram", "feishu", "qqbot".
+   * Each conversation gets its own ACP session using the defaultAgent.
+   */
+  defaultChannels?: string[];
   maxConcurrentSessions?: number;
   stream?: AcpStreamConfig;
   runtime?: AcpRuntimeConfig;
