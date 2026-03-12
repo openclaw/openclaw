@@ -337,7 +337,7 @@ async function waitForFirecrawlAuth(
 // Firecrawl OAuth flow
 // ---------------------------------------------------------------------------
 
-async function runFirecrawlOAuth(
+export async function runFirecrawlOAuth(
   config: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,

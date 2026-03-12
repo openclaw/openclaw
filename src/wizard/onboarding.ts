@@ -521,6 +521,12 @@ export async function runOnboardingWizard(
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
+  // Scrape provider first — Firecrawl OAuth here sets key for both scrape and search.
+  {
+    const { setupFetch } = await import("../commands/onboard-fetch.js");
+    nextConfig = await setupFetch(nextConfig, runtime, prompter);
+  }
+
   if (opts.skipSearch) {
     await prompter.note("Skipping search setup.", "Search");
   } else {
@@ -529,13 +535,6 @@ export async function runOnboardingWizard(
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
     });
-  }
-
-  // Web scraping provider setup (runs after search so Firecrawl auth state is known,
-  // but always runs — even when search is skipped the user can still pick a scrape provider).
-  {
-    const { setupFetch } = await import("../commands/onboard-fetch.js");
-    nextConfig = await setupFetch(nextConfig, prompter);
   }
 
   if (opts.skipSkills) {

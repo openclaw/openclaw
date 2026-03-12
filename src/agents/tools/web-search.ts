@@ -957,7 +957,9 @@ type FirecrawlSearchResultItem = {
 
 type FirecrawlSearchResponse = {
   success?: boolean;
-  data?: FirecrawlSearchResultItem[];
+  data?: {
+    web?: FirecrawlSearchResultItem[];
+  };
   warning?: string;
   error?: string;
 };
@@ -1694,7 +1696,13 @@ async function runFirecrawlSearch(params: {
         throw new Error(`Firecrawl Search API error: ${data.error || "unknown error"}`);
       }
 
-      const items = Array.isArray(data.data) ? data.data : [];
+      const webResults =
+        data.data && typeof data.data === "object" && "web" in data.data
+          ? data.data.web
+          : Array.isArray(data.data)
+            ? data.data
+            : [];
+      const items = Array.isArray(webResults) ? webResults : [];
       return {
         results: items.map((item) => ({
           url: item.url ?? "",

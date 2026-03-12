@@ -1,7 +1,8 @@
 import type { FetchProvider } from "../agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { isFirecrawlAuthenticated } from "./onboard-search.js";
+import { isFirecrawlAuthenticated, runFirecrawlOAuth } from "./onboard-search.js";
 
 type FetchProviderEntry = {
   value: FetchProvider;
@@ -15,7 +16,9 @@ function buildFetchProviderOptions(config: OpenClawConfig): FetchProviderEntry[]
     {
       value: "firecrawl",
       label: "\uD83D\uDD25 Firecrawl",
-      hint: firecrawlReady ? "Already authenticated · recommended" : "Requires Firecrawl API key",
+      hint: firecrawlReady
+        ? "Already authenticated · recommended"
+        : "Recommended · free 10,000 credits · search + scrape",
     },
     {
       value: "scrapingbee",
@@ -48,6 +51,7 @@ function applyFetchProvider(config: OpenClawConfig, provider: FetchProvider): Op
 
 export async function setupFetch(
   config: OpenClawConfig,
+  runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   const firecrawlReady = isFirecrawlAuthenticated(config);
@@ -64,15 +68,13 @@ export async function setupFetch(
 
   const options = buildFetchProviderOptions(config);
 
-  // Default to Firecrawl if already authenticated, otherwise readability.
+  // Default to Firecrawl if already authenticated, otherwise firecrawl (top pick).
   const defaultProvider: FetchProvider =
     existingProvider === "firecrawl" ||
     existingProvider === "scrapingbee" ||
     existingProvider === "readability"
       ? existingProvider
-      : firecrawlReady
-        ? "firecrawl"
-        : "readability";
+      : "firecrawl";
 
   type PickerValue = FetchProvider | "__skip__";
   const choice = await prompter.select<PickerValue>({
@@ -92,17 +94,9 @@ export async function setupFetch(
     return config;
   }
 
-  // Firecrawl selected but not authenticated — warn and fall back.
+  // Firecrawl selected but not authenticated — run OAuth to authenticate.
   if (choice === "firecrawl" && !firecrawlReady) {
-    await prompter.note(
-      [
-        "Firecrawl requires an API key. Select Firecrawl as your search provider first",
-        "to authenticate, or set FIRECRAWL_API_KEY in your environment.",
-        "Falling back to Readability for now.",
-      ].join("\n"),
-      "Web scraping",
-    );
-    return applyFetchProvider(config, "readability");
+    return runFirecrawlOAuth(config, runtime, prompter);
   }
 
   // ScrapingBee selected — check env var or prompt for API key.

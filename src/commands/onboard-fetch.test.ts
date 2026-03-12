@@ -1,7 +1,38 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { setupFetch } from "./onboard-fetch.js";
+
+vi.mock("./onboard-search.js", async (importOriginal) => {
+  const actual: object = await importOriginal();
+  return {
+    ...actual,
+    runFirecrawlOAuth: vi.fn(async (config: OpenClawConfig) => ({
+      ...config,
+      tools: {
+        ...config.tools,
+        web: {
+          ...config.tools?.web,
+          search: {
+            ...config.tools?.web?.search,
+            provider: "firecrawl",
+            firecrawl: { apiKey: "fc-oauth-key" },
+          },
+          fetch: {
+            ...config.tools?.web?.fetch,
+            provider: "firecrawl",
+            firecrawl: { enabled: true, apiKey: "fc-oauth-key" },
+          },
+        },
+      },
+    })),
+  };
+});
+
+function createRuntime(): RuntimeEnv {
+  return { log: vi.fn() } as unknown as RuntimeEnv;
+}
 
 function createPrompter(params: { selectValue?: string; textValue?: string }): {
   prompter: WizardPrompter;
@@ -31,9 +62,11 @@ afterEach(() => {
 });
 
 describe("setupFetch", () => {
+  const runtime = createRuntime();
+
   it("selects readability provider", async () => {
     const { prompter } = createPrompter({ selectValue: "readability" });
-    const result = await setupFetch({}, prompter);
+    const result = await setupFetch({}, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("readability");
   });
 
@@ -48,15 +81,17 @@ describe("setupFetch", () => {
       },
     };
     const { prompter } = createPrompter({ selectValue: "firecrawl" });
-    const result = await setupFetch(config, prompter);
+    const result = await setupFetch(config, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("firecrawl");
   });
 
-  it("falls back to readability when firecrawl selected but not authenticated", async () => {
-    const { prompter, notes } = createPrompter({ selectValue: "firecrawl" });
-    const result = await setupFetch({}, prompter);
-    expect(result.tools?.web?.fetch?.provider).toBe("readability");
-    expect(notes.some((n) => n.message.includes("Firecrawl requires an API key"))).toBe(true);
+  it("runs OAuth when firecrawl selected but not authenticated", async () => {
+    const { prompter } = createPrompter({ selectValue: "firecrawl" });
+    const result = await setupFetch({}, runtime, prompter);
+    // runFirecrawlOAuth mock sets both search and fetch providers
+    expect(result.tools?.web?.fetch?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.fetch?.firecrawl?.apiKey).toBe("fc-oauth-key");
   });
 
   it("prompts for scrapingbee API key and stores it", async () => {
@@ -64,7 +99,7 @@ describe("setupFetch", () => {
       selectValue: "scrapingbee",
       textValue: "sb-test-key-123",
     });
-    const result = await setupFetch({}, prompter);
+    const result = await setupFetch({}, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("scrapingbee");
     expect(result.tools?.web?.fetch?.scrapingbee?.apiKey).toBe("sb-test-key-123");
   });
@@ -74,7 +109,7 @@ describe("setupFetch", () => {
       selectValue: "scrapingbee",
       textValue: "",
     });
-    const result = await setupFetch({}, prompter);
+    const result = await setupFetch({}, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("readability");
     expect(notes.some((n) => n.message.includes("No API key provided"))).toBe(true);
   });
@@ -82,9 +117,8 @@ describe("setupFetch", () => {
   it("skips scrapingbee key prompt when env var is set", async () => {
     vi.stubEnv("SCRAPINGBEE_API_KEY", "sb-env-key");
     const { prompter } = createPrompter({ selectValue: "scrapingbee" });
-    const result = await setupFetch({}, prompter);
+    const result = await setupFetch({}, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("scrapingbee");
-    // Should not have prompted for key
     expect(prompter.text).not.toHaveBeenCalled();
   });
 
@@ -99,7 +133,7 @@ describe("setupFetch", () => {
       },
     };
     const { prompter } = createPrompter({ selectValue: "scrapingbee" });
-    const result = await setupFetch(config, prompter);
+    const result = await setupFetch(config, runtime, prompter);
     expect(result.tools?.web?.fetch?.provider).toBe("scrapingbee");
     expect(prompter.text).not.toHaveBeenCalled();
   });
@@ -107,11 +141,11 @@ describe("setupFetch", () => {
   it("returns config unchanged when user skips", async () => {
     const config: OpenClawConfig = { tools: { web: { fetch: { maxChars: 5000 } } } };
     const { prompter } = createPrompter({ selectValue: "__skip__" });
-    const result = await setupFetch(config, prompter);
+    const result = await setupFetch(config, runtime, prompter);
     expect(result).toEqual(config);
   });
 
-  it("quickstart shows picker and defaults to firecrawl when authenticated", async () => {
+  it("defaults to firecrawl when authenticated", async () => {
     const config: OpenClawConfig = {
       tools: {
         web: {
@@ -122,24 +156,20 @@ describe("setupFetch", () => {
       },
     };
     const { prompter } = createPrompter({ selectValue: "firecrawl" });
-    const result = await setupFetch(config, prompter);
-    expect(result.tools?.web?.fetch?.provider).toBe("firecrawl");
-    expect(prompter.select).toHaveBeenCalled();
+    await setupFetch(config, runtime, prompter);
     const selectCall = (prompter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
       | { initialValue?: string }
       | undefined;
     expect(selectCall?.initialValue).toBe("firecrawl");
   });
 
-  it("defaults to readability when not authenticated", async () => {
-    const { prompter } = createPrompter({ selectValue: "readability" });
-    const result = await setupFetch({}, prompter);
-    expect(result.tools?.web?.fetch?.provider).toBe("readability");
-    expect(prompter.select).toHaveBeenCalled();
+  it("defaults to firecrawl even when not authenticated", async () => {
+    const { prompter } = createPrompter({ selectValue: "firecrawl" });
+    await setupFetch({}, runtime, prompter);
     const selectCall = (prompter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
       | { initialValue?: string }
       | undefined;
-    expect(selectCall?.initialValue).toBe("readability");
+    expect(selectCall?.initialValue).toBe("firecrawl");
   });
 
   it("defaults to existing provider in picker", async () => {
@@ -151,9 +181,7 @@ describe("setupFetch", () => {
       },
     };
     const { prompter } = createPrompter({ selectValue: "scrapingbee" });
-    await setupFetch(config, prompter);
-
-    // Verify initialValue was the existing provider
+    await setupFetch(config, runtime, prompter);
     const selectCall = (prompter.select as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
       | { initialValue?: string }
       | undefined;
