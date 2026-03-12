@@ -545,6 +545,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (this.isRetryableEmbeddingNetworkError(message)) {
+          if (attempt < EMBEDDING_RETRY_MAX_ATTEMPTS) {
+            const waitMs = Math.min(
+              EMBEDDING_RETRY_MAX_DELAY_MS,
+              Math.round(delayMs * (1 + Math.random() * 0.2)),
+            );
+            log.warn(`memory embeddings network error; retrying in ${waitMs}ms`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            delayMs *= 2;
+            attempt += 1;
+            continue;
+          }
+          if (texts.length > 1) {
+            const splitAt = Math.ceil(texts.length / 2);
+            log.warn(
+              `memory embeddings: network failure on batch of ${texts.length}; splitting into ${splitAt} + ${texts.length - splitAt}`,
+            );
+            const left = await this.embedBatchWithRetry(texts.slice(0, splitAt));
+            const right = await this.embedBatchWithRetry(texts.slice(splitAt));
+            return [...left, ...right];
+          }
+        }
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
@@ -597,6 +619,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         attempt += 1;
       }
     }
+  }
+
+  private isRetryableEmbeddingNetworkError(message: string): boolean {
+    return /(fetch failed|network error|econnreset|econnrefused|connection reset|socket hang up|other side closed|socket terminated)/i.test(
+      message,
+    );
   }
 
   private isRetryableEmbeddingError(message: string): boolean {
