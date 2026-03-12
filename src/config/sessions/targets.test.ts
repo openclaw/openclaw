@@ -11,8 +11,8 @@ import {
 } from "./targets.js";
 
 async function resolveRealStorePath(sessionsDir: string): Promise<string> {
-  // Match the sync production discovery path so Windows path spelling stays consistent.
-  return fsSync.realpathSync(path.join(sessionsDir, "sessions.json"));
+  // Match the native realpath behavior used by both discovery paths.
+  return fsSync.realpathSync.native(path.join(sessionsDir, "sessions.json"));
 }
 
 describe("resolveSessionStoreTargets", () => {
