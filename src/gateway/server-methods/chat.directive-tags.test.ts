@@ -656,6 +656,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send does not inherit external delivery context for UI clients on main sessions when deliver is enabled", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-ui-deliver-no-route-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:200482621",
+        accountId: "default",
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:200482621",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-main-ui-deliver-no-route",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: "openclaw-tui",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:main",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
+        AccountId: undefined,
+      }),
+    );
+  });
+
   it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-cli-routes-");
     mockState.mainSessionKey = "work";
