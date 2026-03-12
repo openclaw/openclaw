@@ -522,6 +522,19 @@ describe("isFailoverErrorMessage", () => {
     }
   });
 
+  it("matches sensitive stop reason as timeout (#43607)", () => {
+    const samples = [
+      "Unhandled stop reason: sensitive",
+      "stop reason: sensitive",
+      "reason: sensitive",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
   it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
     const samples = [
       "Unhandled stop reason: MALFORMED_RESPONSE",

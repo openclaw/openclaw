@@ -85,7 +85,9 @@ Format/invalid‑request errors (for example Cloud Code Assist tool call ID
 validation failures) are treated as failover‑worthy and use the same cooldowns.
 OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
 `stop reason: error`, and `reason: error` are classified as timeout/failover
-signals.
+signals. The `sensitive` stop reason (content policy rejection) is handled
+separately: the run completes with a user-facing message and does not trigger
+failover or cooldown.
 
 Cooldowns use exponential backoff:
 
