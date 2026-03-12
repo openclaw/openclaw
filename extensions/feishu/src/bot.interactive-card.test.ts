@@ -46,6 +46,37 @@ describe("parseFeishuMessageEvent – interactive cards", () => {
     expect(ctx.contentType).toBe("interactive_card");
   });
 
+  it("extracts schema 2.0 body.elements", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        schema: "2.0",
+        body: {
+          elements: [{ tag: "markdown", content: "Hello from body" }],
+        },
+      }) as any,
+    );
+
+    expect(ctx.content).toBe("Hello from body");
+  });
+
+  it("falls back to raw JSON when no readable text is extracted", () => {
+    const raw = JSON.stringify({ schema: "2.0", body: { elements: [{ tag: "button" }] } });
+    const event = {
+      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+      message: {
+        message_id: "msg_1",
+        chat_id: "oc_chat1",
+        chat_type: "p2p",
+        message_type: "interactive",
+        content: raw,
+        mentions: [],
+      },
+    };
+
+    const ctx = parseFeishuMessageEvent(event as any);
+    expect(ctx.content).toBe(raw);
+  });
+
   it("falls back to placeholder when card is malformed", () => {
     const ctx = parseFeishuMessageEvent(makeInteractiveEvent("not-an-object") as any);
     expect(ctx.content).toBe("[Interactive Card]");
