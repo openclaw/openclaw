@@ -139,7 +139,11 @@ export async function startWebLoginWithQr(
   // Clear stale on-disk credentials before creating a new socket,
   // otherwise Baileys loads old creds.json and gets stuck at "logging in".
   if (opts.force && hasWeb) {
-    await logoutWeb({ authDir: account.authDir, isLegacyAuthDir: account.isLegacyAuthDir });
+    await logoutWeb({
+      authDir: account.authDir,
+      isLegacyAuthDir: account.isLegacyAuthDir,
+      runtime,
+    });
   }
 
   let resolveQr: ((qr: string) => void) | null = null;
