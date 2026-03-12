@@ -34,6 +34,22 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("normalizes llama.cpp completion timings", () => {
+    const usage = normalizeUsage({
+      timings: {
+        prompt_n: 30_834,
+        predicted_n: 34,
+      },
+    });
+    expect(usage).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

@@ -24,6 +24,13 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
+  // llama.cpp-style streamed completion metadata.
+  prompt_n?: number;
+  predicted_n?: number;
+  timings?: {
+    prompt_n?: number;
+    predicted_n?: number;
+  };
 };
 
 export type NormalizedUsage = {
@@ -94,7 +101,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
   // negative, which is nonsensical.  Clamp to 0.
   const rawInput = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+    raw.input ??
+      raw.inputTokens ??
+      raw.input_tokens ??
+      raw.promptTokens ??
+      raw.prompt_tokens ??
+      raw.prompt_n ??
+      raw.timings?.prompt_n,
   );
   const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
@@ -102,7 +115,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens,
+      raw.completion_tokens ??
+      raw.predicted_n ??
+      raw.timings?.predicted_n,
   );
   const cacheRead = asFiniteNumber(
     raw.cacheRead ??

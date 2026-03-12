@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
@@ -10,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
@@ -104,9 +106,78 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   }
 
+  it("captures usage from completions timings on done events", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        timings: {
+          prompt_n: 30_834,
+          predicted_n: 34,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 30_834,
+      output: 34,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 30_868,
+    });
+  });
+
+  it("does not double-count usage when done and message_end carry the same snapshot", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "done",
+        message: {
+          role: "assistant",
+          usage,
+        },
+      },
+    });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage,
+      },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 120,
+    });
+  });
+
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onReasoningStream = vi.fn();
       const onBlockReply = vi.fn();
 
@@ -132,6 +203,7 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await Promise.resolve();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
@@ -149,7 +221,7 @@ describe("subscribeEmbeddedPiSession", () => {
   );
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       const onBlockReply = vi.fn();
 
       const { emit } = createSubscribedHarness({
@@ -174,6 +246,7 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await Promise.resolve();
 
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
