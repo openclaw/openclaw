@@ -29,6 +29,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
@@ -337,7 +338,15 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" && ctx.CommandSource !== "native";
+    // Tool summaries are normally suppressed in group and native flows to reduce noise.
+    // However, when the user has explicitly enabled verbose mode (/verbose on or /verbose full),
+    // we honour their intent and send tool results regardless of chat type.
+    const resolvedVerboseLevel = normalizeVerboseLevel(
+      String(sessionStoreEntry.entry?.verboseLevel ?? ""),
+    );
+    const verboseToolsEnabled = resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full";
+    const shouldSendToolSummaries =
+      (ctx.ChatType !== "group" && ctx.CommandSource !== "native") || verboseToolsEnabled;
     const acpDispatch = await tryDispatchAcpReply({
       ctx,
       cfg,
