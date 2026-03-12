@@ -43,6 +43,11 @@ function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function trimToUndefined(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
@@ -383,6 +388,14 @@ export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
+export function resolveOpenAITtsInstructions(
+  model: string,
+  instructions?: string,
+): string | undefined {
+  const next = trimToUndefined(instructions);
+  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
+}
+
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
   // Allow any voice when using custom endpoint (e.g., Kokoro Chinese voices)
   if (isCustomOpenAIEndpoint(baseUrl)) {
@@ -619,10 +632,14 @@ export async function openaiTTS(params: {
   baseUrl: string;
   model: string;
   voice: string;
+  speed?: number;
+  instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
+    params;
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -646,6 +663,8 @@ export async function openaiTTS(params: {
         input: text,
         voice,
         response_format: responseFormat,
+        ...(speed != null && { speed }),
+        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
       }),
       signal: controller.signal,
     });

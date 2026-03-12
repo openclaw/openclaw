@@ -21,6 +21,8 @@ const resolveAuthStorePathForDisplay = vi
 const resolveProfileUnusableUntilForDisplay = vi.fn().mockReturnValue(null);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
+const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const resolveUsableCustomProviderApiKey = vi.fn().mockReturnValue(null);
 const getCustomProviderApiKey = vi.fn().mockReturnValue(undefined);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
@@ -57,6 +59,8 @@ vi.mock("../agents/auth-profiles.js", () => ({
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
   resolveAwsSdkEnvVarName,
+  hasUsableCustomProviderApiKey,
+  resolveUsableCustomProviderApiKey,
   getCustomProviderApiKey,
 }));
 
@@ -267,6 +271,29 @@ describe("models list/status", () => {
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+  });
+
+  it("models list plain keeps canonical OpenRouter native ids", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { model: "openrouter/hunter-alpha" } },
+    });
+    const runtime = makeRuntime();
+
+    modelRegistryState.models = [
+      {
+        provider: "openrouter",
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        input: ["text"],
+        baseUrl: "https://openrouter.ai/api/v1",
+        contextWindow: 1048576,
+      },
+    ];
+    modelRegistryState.available = modelRegistryState.models;
+    await modelsListCommand({ plain: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log.mock.calls[0]?.[0]).toBe("openrouter/hunter-alpha");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(

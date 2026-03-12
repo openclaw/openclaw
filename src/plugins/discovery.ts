@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { resolveUserPath } from "../utils.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -11,6 +10,7 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -69,18 +69,18 @@ function buildDiscoveryCacheKey(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
 }): string {
-  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
-  const configExtensionsRoot = path.join(resolveConfigDir(), "extensions");
-  const bundledRoot = resolveBundledPluginsDir() ?? "";
-  const normalizedExtraPaths = (params.extraPaths ?? [])
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => resolveUserPath(entry))
-    .toSorted();
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: params.extraPaths,
+    env: params.env,
+  });
+  const workspaceKey = roots.workspace ?? "";
+  const configExtensionsRoot = roots.global ?? "";
+  const bundledRoot = roots.stock ?? "";
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {
@@ -153,7 +153,7 @@ function checkPathStatAndPermissions(params: {
       continue;
     }
     seen.add(normalized);
-    const stat = safeStatSync(targetPath);
+    let stat = safeStatSync(targetPath);
     if (!stat) {
       return {
         reason: "path_stat_failed",
@@ -162,7 +162,28 @@ function checkPathStatAndPermissions(params: {
         targetPath,
       };
     }
-    const modeBits = stat.mode & 0o777;
+    let modeBits = stat.mode & 0o777;
+    if ((modeBits & 0o002) !== 0 && params.origin === "bundled") {
+      // npm/global installs can create package-managed extension dirs without
+      // directory entries in the tarball, which may widen them to 0777.
+      // Tighten bundled dirs in place before applying the normal safety gate.
+      try {
+        fs.chmodSync(targetPath, modeBits & ~0o022);
+        const repairedStat = safeStatSync(targetPath);
+        if (!repairedStat) {
+          return {
+            reason: "path_stat_failed",
+            sourcePath: params.source,
+            rootPath: params.rootDir,
+            targetPath,
+          };
+        }
+        stat = repairedStat;
+        modeBits = repairedStat.mode & 0o777;
+      } catch {
+        // Fall through to the normal block path below when repair is not possible.
+      }
+    }
     if ((modeBits & 0o002) !== 0) {
       return {
         reason: "path_world_writable",
@@ -504,11 +525,12 @@ function discoverFromPath(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
-  const resolved = resolveUserPath(params.rawPath);
+  const resolved = resolveUserPath(params.rawPath, params.env);
   if (!fs.existsSync(resolved)) {
     params.diagnostics.push({
       level: "error",
@@ -628,6 +650,7 @@ export function discoverOpenClawPlugins(params: {
     workspaceDir: params.workspaceDir,
     extraPaths: params.extraPaths,
     ownershipUid: params.ownershipUid,
+    env,
   });
   if (cacheEnabled) {
     const cached = discoveryCache.get(cacheKey);
@@ -640,6 +663,8 @@ export function discoverOpenClawPlugins(params: {
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
   const workspaceDir = params.workspaceDir?.trim();
+  const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
 
   const extra = params.extraPaths ?? [];
   for (const extraPath of extra) {
@@ -655,31 +680,27 @@ export function discoverOpenClawPlugins(params: {
       origin: "config",
       ownershipUid: params.ownershipUid,
       workspaceDir: workspaceDir?.trim() || undefined,
+      env,
       candidates,
       diagnostics,
       seen,
     });
   }
-  if (workspaceDir) {
-    const workspaceRoot = resolveUserPath(workspaceDir);
-    const workspaceExtDirs = [path.join(workspaceRoot, ".openclaw", "extensions")];
-    for (const dir of workspaceExtDirs) {
-      discoverInDirectory({
-        dir,
-        origin: "workspace",
-        ownershipUid: params.ownershipUid,
-        workspaceDir: workspaceRoot,
-        candidates,
-        diagnostics,
-        seen,
-      });
-    }
+  if (roots.workspace && workspaceRoot) {
+    discoverInDirectory({
+      dir: roots.workspace,
+      origin: "workspace",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: workspaceRoot,
+      candidates,
+      diagnostics,
+      seen,
+    });
   }
 
-  const bundledDir = resolveBundledPluginsDir();
-  if (bundledDir) {
+  if (roots.stock) {
     discoverInDirectory({
-      dir: bundledDir,
+      dir: roots.stock,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
       candidates,
@@ -690,9 +711,8 @@ export function discoverOpenClawPlugins(params: {
 
   // Keep auto-discovered global extensions behind bundled plugins.
   // Users can still intentionally override via plugins.load.paths (origin=config).
-  const globalDir = path.join(resolveConfigDir(), "extensions");
   discoverInDirectory({
-    dir: globalDir,
+    dir: roots.global,
     origin: "global",
     ownershipUid: params.ownershipUid,
     candidates,
