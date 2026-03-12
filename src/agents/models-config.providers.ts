@@ -311,7 +311,8 @@ export function normalizeGoogleBaseUrl(baseUrl: string): string {
     return baseUrl;
   }
   if (!/\/v\d/.test(parsed.pathname)) {
-    return `${trimmed}/v1beta`;
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") + "/v1beta";
+    return parsed.toString();
   }
   return trimmed;
 }

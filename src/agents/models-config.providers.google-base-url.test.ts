@@ -25,6 +25,11 @@ describe("normalizeGoogleBaseUrl", () => {
       "https://generativelanguage.googleapis.com///",
       "https://generativelanguage.googleapis.com/v1beta",
     ],
+    // query string preserved correctly via pathname mutation
+    [
+      "https://generativelanguage.googleapis.com?key=abc",
+      "https://generativelanguage.googleapis.com/v1beta?key=abc",
+    ],
   ])("appends /v1beta to bare googleapis.com host: %s", (input, expected) => {
     expect(normalizeGoogleBaseUrl(input)).toBe(expected);
   });
