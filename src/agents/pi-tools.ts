@@ -37,6 +37,7 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolMemoryFlushAppendOnlyWrite,
+  wrapToolMutationLock,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
@@ -567,16 +568,21 @@ export function createOpenClawCodingTools(options?: {
             return [];
           }
           if (tool.name === "write") {
+            const memoryFlushWriteTool = wrapToolMemoryFlushAppendOnlyWrite(tool, {
+              root: sandboxRoot ?? workspaceRoot,
+              relativePath: memoryFlushWritePath,
+              containerWorkdir: sandbox?.containerWorkdir,
+              sandbox:
+                sandboxRoot && sandboxFsBridge
+                  ? { root: sandboxRoot, bridge: sandboxFsBridge }
+                  : undefined,
+            });
             return [
-              wrapToolMemoryFlushAppendOnlyWrite(tool, {
-                root: sandboxRoot ?? workspaceRoot,
-                relativePath: memoryFlushWritePath,
-                containerWorkdir: sandbox?.containerWorkdir,
-                sandbox:
-                  sandboxRoot && sandboxFsBridge
-                    ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                    : undefined,
-              }),
+              mutationLockingEnabled
+                ? wrapToolMutationLock(memoryFlushWriteTool, sandboxRoot ?? workspaceRoot, {
+                    containerWorkdir: sandbox?.containerWorkdir,
+                  })
+                : memoryFlushWriteTool,
             ];
           }
           return [tool];

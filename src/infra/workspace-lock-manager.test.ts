@@ -320,6 +320,22 @@ describe("workspace lock manager", () => {
     }
   });
 
+  it("does not create missing target parent directories for file locks", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "missing", "nested", "notes.txt");
+    const missingParent = path.dirname(target);
+
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      pollIntervalMs: 5,
+      ttlMs: 5_000,
+    });
+
+    await expect(fs.stat(missingParent)).rejects.toThrow();
+    await lock.release();
+  });
+
   it("backs off when stale lock deletion fails", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "busy.txt");

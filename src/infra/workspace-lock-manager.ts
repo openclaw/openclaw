@@ -46,16 +46,34 @@ function lockMapKey(kind: WorkspaceLockKind, normalizedTarget: string): string {
   return `${kind}:${normalizedTarget}`;
 }
 
+async function findNearestExistingDirectory(startDir: string): Promise<string> {
+  let current = path.resolve(startDir);
+  while (true) {
+    try {
+      const stat = await fs.stat(current);
+      if (stat.isDirectory()) {
+        return await fs.realpath(current).catch(() => current);
+      }
+    } catch {
+      // continue walking upwards
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
 async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind): Promise<string> {
   const resolved = path.resolve(targetPath);
   if (kind === "file") {
-    const parentDir = path.dirname(resolved);
-    await fs.mkdir(parentDir, { recursive: true });
-    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
     const canonicalFile = await fs.realpath(resolved).catch(() => null);
     if (canonicalFile) {
       return canonicalFile;
     }
+    const parentDir = path.dirname(resolved);
+    const canonicalParent = await fs.realpath(parentDir).catch(() => parentDir);
     return path.join(canonicalParent, path.basename(resolved));
   }
   await fs.mkdir(resolved, { recursive: true });
@@ -66,8 +84,11 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
   }
 }
 
-function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): string {
-  const lockBaseDir = kind === "dir" ? normalizedTarget : path.dirname(normalizedTarget);
+async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): Promise<string> {
+  const lockBaseDir =
+    kind === "dir"
+      ? normalizedTarget
+      : await findNearestExistingDirectory(path.dirname(normalizedTarget));
   const lockDir = path.join(lockBaseDir, ".openclaw.workspace-locks");
   const digest = createHash("sha256")
     .update(`${kind}:${normalizedTarget}`)
@@ -192,7 +213,7 @@ export async function acquireWorkspaceLock(
   const ttlMs = Math.max(1, options.ttlMs ?? DEFAULT_TTL_MS);
 
   const normalizedTarget = await normalizeTargetPath(targetPath, kind);
-  const lockPath = resolveLockPath(normalizedTarget, kind);
+  const lockPath = await resolveLockPath(normalizedTarget, kind);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   const mapKey = lockMapKey(kind, normalizedTarget);
 
