@@ -230,6 +230,85 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list[].heartbeat.lightContext":
+    "Per-agent override for heartbeat lightweight context mode; set true to keep only HEARTBEAT.md in the bootstrap context for that agent's heartbeat runs.",
+  "agents.list[].heartbeat.includeReasoning":
+    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent.",
+  "agents.list[].heartbeat.every":
+    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, remove its heartbeat config block.",
+  "agents.list[].heartbeat.activeHours":
+    "Per-agent override for the active-hours window restricting when heartbeats run.",
+  "agents.list[].heartbeat.activeHours.start":
+    "Per-agent override for the heartbeat active-hours start time (HH:MM, inclusive).",
+  "agents.list[].heartbeat.activeHours.end":
+    "Per-agent override for the heartbeat active-hours end time (HH:MM, exclusive).",
+  "agents.list[].heartbeat.activeHours.timezone":
+    "Per-agent override for the heartbeat active-hours timezone.",
+  "agents.list[].heartbeat.model":
+    "Per-agent override for the heartbeat model; set a different provider/model for this agent's heartbeat runs.",
+  "agents.list[].heartbeat.session":
+    "Per-agent override for the heartbeat session key; use a separate key to isolate this agent's heartbeat runs from its main conversation history.",
+  "agents.list[].heartbeat.to":
+    "Per-agent delivery override specifying the recipient address for heartbeat output.",
+  "agents.list[].heartbeat.accountId":
+    "Per-agent override for the channel account used to route heartbeat output.",
+  "agents.list[].heartbeat.prompt":
+    "Per-agent override for the heartbeat prompt body sent to the model.",
+  "agents.list[].heartbeat.ackMaxChars":
+    "Per-agent override for maximum characters allowed after HEARTBEAT_OK before delivery.",
+  "agents.defaults.heartbeat.lightContext":
+    "When true, run heartbeat turns with lightweight bootstrap context that keeps only HEARTBEAT.md from workspace bootstrap files. Use this to avoid injecting the full agent context (AGENTS.md, SOUL.md, TOOLS.md, etc.) on every heartbeat tick, which prevents unbounded token growth and reduces API credit consumption. Default: false (full context).",
+  "agents.list.*.heartbeat.lightContext":
+    "Per-agent override for heartbeat lightweight context mode; set true to keep only HEARTBEAT.md in the bootstrap context for that agent's heartbeat runs.",
+  "agents.defaults.heartbeat.includeReasoning":
+    'When true, deliver the model\'s reasoning payload for heartbeat runs (when available) as a separate message prefixed with "Reasoning:". Use this for debugging or auditing heartbeat decision-making. Default: false (only the final heartbeat payload is delivered).',
+  "agents.list.*.heartbeat.includeReasoning":
+    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent.",
+  "agents.defaults.heartbeat.every":
+    'Heartbeat interval as a duration string (e.g. "5m", "1h", "30s"). The default unit is minutes. To disable heartbeats, remove the heartbeat config block from the agent rather than setting this field. Default: "30m".',
+  "agents.list.*.heartbeat.every":
+    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, remove its heartbeat config block.",
+  "agents.defaults.heartbeat.activeHours":
+    "Optional active-hours window restricting when heartbeats run. Use this to avoid unnecessary API calls and notifications outside working hours.",
+  "agents.list.*.heartbeat.activeHours":
+    "Per-agent override for the active-hours window restricting when heartbeats run.",
+  "agents.defaults.heartbeat.activeHours.start":
+    "Start time for the heartbeat active-hours window in 24h format (HH:MM, inclusive). Use this with activeHours.end to define the daily window when heartbeats are allowed to fire.",
+  "agents.list.*.heartbeat.activeHours.start":
+    "Per-agent override for the heartbeat active-hours start time (HH:MM, inclusive).",
+  "agents.defaults.heartbeat.activeHours.end":
+    'End time for the heartbeat active-hours window in 24h format (HH:MM, exclusive). Use "24:00" for end-of-day. Heartbeats outside this window are silently skipped.',
+  "agents.list.*.heartbeat.activeHours.end":
+    "Per-agent override for the heartbeat active-hours end time (HH:MM, exclusive).",
+  "agents.defaults.heartbeat.activeHours.timezone":
+    'Timezone for the active-hours window: "user" (default) uses the configured user timezone, "local" uses the server\'s local timezone, or provide an IANA TZ identifier (e.g. "America/New_York").',
+  "agents.list.*.heartbeat.activeHours.timezone":
+    "Per-agent override for the heartbeat active-hours timezone.",
+  "agents.defaults.heartbeat.model":
+    'Model override for heartbeat runs in provider/model format (e.g. "anthropic/claude-sonnet-4-6"). Use a lighter model for heartbeat checks to reduce cost when the primary agent model is expensive.',
+  "agents.list.*.heartbeat.model":
+    "Per-agent override for the heartbeat model; set a different provider/model for this agent's heartbeat runs.",
+  "agents.defaults.heartbeat.session":
+    'Session key for heartbeat runs. Default: "main" (appends to the main conversation session). Use a dedicated key (e.g. "heartbeat") to isolate heartbeat history from the main conversation and prevent unbounded session growth.',
+  "agents.list.*.heartbeat.session":
+    "Per-agent override for the heartbeat session key; use a separate key to isolate this agent's heartbeat runs from its main conversation history.",
+
+  "agents.defaults.heartbeat.to":
+    "Optional delivery override specifying the recipient address (E.164 phone number for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. Use this when heartbeat output must reach a specific contact or group.",
+  "agents.list.*.heartbeat.to":
+    "Per-agent delivery override specifying the recipient address for heartbeat output.",
+  "agents.defaults.heartbeat.accountId":
+    "Optional account id for multi-account channel setups. Use this when the heartbeat must route through a specific channel account rather than the default.",
+  "agents.list.*.heartbeat.accountId":
+    "Per-agent override for the channel account used to route heartbeat output.",
+  "agents.defaults.heartbeat.prompt":
+    'Override the heartbeat prompt body sent to the model. Default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK." Use a custom prompt when your heartbeat workflow differs from the standard check-and-report pattern.',
+  "agents.list.*.heartbeat.prompt":
+    "Per-agent override for the heartbeat prompt body sent to the model.",
+  "agents.defaults.heartbeat.ackMaxChars":
+    "Maximum characters allowed after HEARTBEAT_OK before the heartbeat result is delivered to the channel. Default: 300. Keep low to suppress noisy OK responses while still allowing brief status notes.",
+  "agents.list.*.heartbeat.ackMaxChars":
+    "Per-agent override for maximum characters allowed after HEARTBEAT_OK before delivery.",
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
