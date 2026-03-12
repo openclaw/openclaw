@@ -213,7 +213,10 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     serviceNoun: "Gateway",
     service,
     renderStartHints: renderGatewayServiceStartHints,
-    onNotLoaded: async () => await repairLaunchAgentIfInstalled({ kickstart: false }),
+    onNotLoaded:
+      process.platform === "darwin"
+        ? async () => await repairLaunchAgentIfInstalled({ kickstart: false })
+        : undefined,
     opts,
   });
 }
@@ -254,7 +257,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     checkTokenDrift: true,
     onNotLoaded: async () => {
       if (await repairLaunchAgentIfInstalled()) {
-        return { result: "restarted" as const };
+        return { result: "restarted" as const, loaded: true };
       }
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {

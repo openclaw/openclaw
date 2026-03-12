@@ -173,9 +173,38 @@ describe("runServiceRestart token drift", () => {
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    };
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
+    expect(payload.service?.loaded).toBe(false);
+  });
+
+  it("emits loaded service state after managed restart recovery", async () => {
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        loaded: true,
+      }),
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as {
+      result?: string;
+      service?: { loaded?: boolean };
+    };
+    expect(payload.result).toBe("restarted");
+    expect(payload.service?.loaded).toBe(true);
   });
 
   it("skips restart health checks when restart is only scheduled", async () => {

@@ -252,9 +252,7 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonStart({ json: true });
 
     const params = runServiceStart.mock.calls[0]?.[0] as StartParams | undefined;
-    const recovered = await params?.onNotLoaded?.();
-
-    expect(recovered).toBe(false);
+    expect(params?.onNotLoaded).toBeUndefined();
     expect(launchAgentPlistExists).not.toHaveBeenCalled();
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(runServiceStart).toHaveBeenCalledTimes(1);
@@ -285,7 +283,7 @@ describe("runDaemonRestart health checks", () => {
     const params = runServiceRestart.mock.calls[0]?.[0] as RestartParams | undefined;
     const recovered = await params?.onNotLoaded?.();
 
-    expect(recovered).toEqual({ result: "restarted" });
+    expect(recovered).toEqual({ result: "restarted", loaded: true });
     expect(launchAgentPlistExists).toHaveBeenCalledWith(process.env);
     expect(repairLaunchAgentBootstrap).toHaveBeenCalledWith({ env: process.env });
     expect(runServiceRestart).toHaveBeenCalledTimes(1);

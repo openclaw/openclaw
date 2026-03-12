@@ -35,6 +35,7 @@ type NotLoadedActionResult = {
   result: "stopped" | "restarted";
   message?: string;
   warnings?: string[];
+  loaded?: boolean;
 };
 
 type NotLoadedActionContext = {
@@ -359,6 +360,7 @@ export async function runServiceRestart(params: {
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
+  let recoveredLoadedState: boolean | null = null;
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -402,6 +404,7 @@ export async function runServiceRestart(params: {
     if (handledNotLoaded.warnings?.length) {
       warnings.push(...handledNotLoaded.warnings);
     }
+    recoveredLoadedState = handledNotLoaded.loaded ?? null;
   }
 
   if (loaded && params.checkTokenDrift) {
@@ -447,7 +450,7 @@ export async function runServiceRestart(params: {
         ok: true,
         result: restartStatus.daemonActionResult,
         message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, loaded),
+        service: buildDaemonServiceSnapshot(params.service, recoveredLoadedState ?? loaded),
         warnings: warnings.length ? warnings : undefined,
       });
       if (!json) {
@@ -464,7 +467,7 @@ export async function runServiceRestart(params: {
             ok: true,
             result: restartStatus.daemonActionResult,
             message: restartStatus.message,
-            service: buildDaemonServiceSnapshot(params.service, loaded),
+            service: buildDaemonServiceSnapshot(params.service, recoveredLoadedState ?? loaded),
             warnings: warnings.length ? warnings : undefined,
           });
           if (!json) {
@@ -481,6 +484,9 @@ export async function runServiceRestart(params: {
       } catch {
         restarted = true;
       }
+    }
+    if (recoveredLoadedState !== null) {
+      restarted = recoveredLoadedState;
     }
     emit({
       ok: true,
