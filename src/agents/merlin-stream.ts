@@ -100,9 +100,12 @@ interface ParsedToolCall {
 }
 
 function tryParseToolCalls(text: string): ParsedToolCall[] | undefined {
-  // Look for JSON blocks that contain tool_calls.
+  // Only accept tool calls inside an explicit ```json fence, as instructed.
   const jsonBlockMatch = /```json\s*\n?([\s\S]*?)\n?\s*```/.exec(text);
-  const jsonText = jsonBlockMatch ? jsonBlockMatch[1] : text.trim();
+  if (!jsonBlockMatch) {
+    return undefined;
+  }
+  const jsonText = jsonBlockMatch[1];
 
   try {
     const parsed = JSON.parse(jsonText) as { tool_calls?: ParsedToolCall[] };
@@ -169,14 +172,28 @@ function buildMerlinContent(
   // Include conversation history so the model has context.
   for (const msg of messages) {
     const text = extractTextContent(msg.content);
-    if (!text) {
-      continue;
-    }
 
     if (msg.role === "user") {
-      parts.push(`User: ${text}`);
+      if (text) {
+        parts.push(`User: ${text}`);
+      }
     } else if (msg.role === "assistant") {
-      parts.push(`Assistant: ${text}`);
+      if (text) {
+        parts.push(`Assistant: ${text}`);
+      } else if (Array.isArray(msg.content)) {
+        // Serialize tool-call turns so the model sees its own tool invocations.
+        const toolCallSummaries = (msg.content as InputContentPart[])
+          .filter((p) => p.type === "toolCall" || p.type === "tool_use")
+          .map((p) => {
+            const tc = p as { name: string; arguments?: unknown; input?: unknown };
+            const args = JSON.stringify(tc.arguments ?? tc.input ?? {});
+            return `[TOOL_CALL: ${tc.name}(${args})]`;
+          })
+          .join(", ");
+        if (toolCallSummaries) {
+          parts.push(`Assistant: ${toolCallSummaries}`);
+        }
+      }
     } else if (msg.role === "tool" || msg.role === "toolResult") {
       const toolName =
         typeof (msg as { toolName?: unknown }).toolName === "string"
@@ -390,8 +407,12 @@ export function createMerlinStreamFn(): StreamFn {
           }
         }
 
-        if (hadError && !accumulatedText && !accumulatedReasoning) {
-          throw new Error(`Merlin API error: ${errorMessage}`);
+        if (hadError) {
+          if (!accumulatedText && !accumulatedReasoning) {
+            throw new Error(`Merlin API error: ${errorMessage}`);
+          } else {
+            log.warn(`Merlin API reported an error after partial response: ${errorMessage}`);
+          }
         }
 
         // Use text content, falling back to reasoning if text is empty.

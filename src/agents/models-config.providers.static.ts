@@ -631,7 +631,7 @@ export function buildMerlinProvider(): ProviderConfig {
       {
         id: "kimi-k2.5-thinking",
         name: "Kimi K2.5 Thinking",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost: MERLIN_DEFAULT_COST,
         contextWindow: MERLIN_DEFAULT_CONTEXT_WINDOW,
