@@ -127,27 +127,18 @@ export function registerControlUiAndPairingSuite(): void {
     return { server, ws, port, prevToken, identityPath, identity, client };
   };
 
-  const getRequiredPairedMetadata = (
-    paired: Record<string, Record<string, unknown>>,
-    deviceId: string,
-  ) => {
-    const metadata = paired[deviceId];
-    expect(metadata).toBeTruthy();
-    if (!metadata) {
+  const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
+    const { getPairedDeviceFromDb, upsertPairedDeviceInDb } =
+      await import("../infra/state-db/device-pairing-sqlite.js");
+    const device = getPairedDeviceFromDb(deviceId);
+    expect(device).toBeTruthy();
+    if (!device) {
       throw new Error(`Expected paired metadata for deviceId=${deviceId}`);
     }
-    return metadata;
-  };
-
-  const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
-    const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
-    const { writeJsonAtomic } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
-    const legacy = getRequiredPairedMetadata(paired, deviceId);
-    delete legacy.roles;
-    delete legacy.scopes;
-    await writeJsonAtomic(pairedPath, paired);
+    const stripped = { ...device };
+    delete stripped.roles;
+    delete stripped.scopes;
+    upsertPairedDeviceInDb(stripped);
   };
 
   const seedApprovedOperatorReadPairing = async (params: {
