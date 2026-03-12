@@ -4,6 +4,9 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Security
+- Security/exec approvals: escape invisible Unicode format characters in approval prompts so zero-width command text renders as visible `\u{...}` escapes instead of spoofing the reviewed command. (#43687) Thanks @EkiXu and @vincentkoc.
+
 ### Changes
 
 ### Fixes
