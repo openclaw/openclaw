@@ -200,7 +200,7 @@ func TestExecBridge_ForwardCommand(t *testing.T) {
 	// Verify envd received the correct StartRequest
 	startReq := envdMock.getStartReq()
 	require.NotNil(t, startReq)
-	assert.Equal(t, "echo hello", startReq.GetCommand())
+	assert.Equal(t, "'echo' 'hello'", startReq.GetCommand())
 	assert.Equal(t, "/workspace", startReq.GetWorkdir())
 	assert.Equal(t, map[string]string{"FOO": "bar"}, startReq.GetEnv())
 	assert.Equal(t, uint32(5), startReq.GetTimeoutSec())
@@ -242,7 +242,7 @@ func TestExecBridge_JoinsCommand(t *testing.T) {
 
 	startReq := envdMock.getStartReq()
 	require.NotNil(t, startReq)
-	assert.Equal(t, "ls -la /tmp", startReq.GetCommand())
+	assert.Equal(t, "'ls' '-la' '/tmp'", startReq.GetCommand())
 }
 
 func TestExecBridge_ConvertsTimeoutMsToSec(t *testing.T) {

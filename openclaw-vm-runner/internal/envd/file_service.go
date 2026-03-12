@@ -21,9 +21,30 @@ const fileChunkSize = 65536 // 64KB
 // workspaceRoot is the only directory tree that clients may access.
 const workspaceRoot = "/workspace"
 
-// resolvePath validates a user-supplied path and resolves it under workspaceRoot.
+// FileServer implements the FileService gRPC server.
+type FileServer struct {
+	pb.UnimplementedFileServiceServer
+	root string
+}
+
+// NewFileServer creates a new FileServer with the default workspace root.
+func NewFileServer() *FileServer {
+	return &FileServer{root: workspaceRoot}
+}
+
+// NewFileServerWithRoot creates a new FileServer with a custom workspace root.
+// Intended for testing where /workspace does not exist.
+func NewFileServerWithRoot(root string) *FileServer {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err == nil {
+		root = resolved
+	}
+	return &FileServer{root: root}
+}
+
+// resolvePath validates a user-supplied path and resolves it under the workspace root.
 // It rejects empty paths, absolute paths, and any traversal outside the workspace.
-func resolvePath(userPath string) (string, error) {
+func (s *FileServer) resolvePath(userPath string) (string, error) {
 	if userPath == "" {
 		return "", fmt.Errorf("path must not be empty")
 	}
@@ -31,27 +52,17 @@ func resolvePath(userPath string) (string, error) {
 		return "", fmt.Errorf("absolute paths are not allowed: %s", userPath)
 	}
 	cleaned := filepath.Clean(userPath)
-	full := filepath.Join(workspaceRoot, cleaned)
-	// Ensure the resolved path is still under workspaceRoot.
-	if !strings.HasPrefix(full, workspaceRoot+"/") && full != workspaceRoot {
+	full := filepath.Join(s.root, cleaned)
+	// Ensure the resolved path is still under the workspace root.
+	if !strings.HasPrefix(full, s.root+"/") && full != s.root {
 		return "", fmt.Errorf("path escapes workspace: %s", userPath)
 	}
 	return full, nil
 }
 
-// FileServer implements the FileService gRPC server.
-type FileServer struct {
-	pb.UnimplementedFileServiceServer
-}
-
-// NewFileServer creates a new FileServer.
-func NewFileServer() *FileServer {
-	return &FileServer{}
-}
-
 // Stat returns metadata for a file or directory.
 func (s *FileServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.StatResponse, error) {
-	safePath, err := resolvePath(req.GetPath())
+	safePath, err := s.resolvePath(req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -75,7 +86,7 @@ func (s *FileServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.StatRes
 
 // ReadFile reads a file and streams its content in 64KB chunks.
 func (s *FileServer) ReadFile(req *pb.ReadFileRequest, stream grpc.ServerStreamingServer[pb.ReadFileResponse]) error {
-	safePath, err := resolvePath(req.GetPath())
+	safePath, err := s.resolvePath(req.GetPath())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -149,7 +160,7 @@ func (s *FileServer) WriteFile(stream grpc.ClientStreamingServer[pb.WriteFileReq
 				return status.Error(codes.InvalidArgument, "path must be set in the first chunk")
 			}
 
-			safePath, resolveErr := resolvePath(filePath)
+			safePath, resolveErr := s.resolvePath(filePath)
 			if resolveErr != nil {
 				return status.Errorf(codes.InvalidArgument, "%v", resolveErr)
 			}
@@ -188,7 +199,7 @@ func (s *FileServer) WriteFile(stream grpc.ClientStreamingServer[pb.WriteFileReq
 
 // ListDir returns directory entries with metadata.
 func (s *FileServer) ListDir(ctx context.Context, req *pb.ListDirRequest) (*pb.ListDirResponse, error) {
-	safePath, err := resolvePath(req.GetPath())
+	safePath, err := s.resolvePath(req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -229,7 +240,7 @@ func (s *FileServer) ListDir(ctx context.Context, req *pb.ListDirRequest) (*pb.L
 
 // MakeDir creates directories recursively.
 func (s *FileServer) MakeDir(ctx context.Context, req *pb.MakeDirRequest) (*pb.MakeDirResponse, error) {
-	safePath, err := resolvePath(req.GetPath())
+	safePath, err := s.resolvePath(req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -248,7 +259,7 @@ func (s *FileServer) MakeDir(ctx context.Context, req *pb.MakeDirRequest) (*pb.M
 
 // Remove deletes files or directories.
 func (s *FileServer) Remove(ctx context.Context, req *pb.RemoveRequest) (*pb.RemoveResponse, error) {
-	safePath, err := resolvePath(req.GetPath())
+	safePath, err := s.resolvePath(req.GetPath())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}

@@ -189,5 +189,5 @@ func TestVNCProxy_BearerTokenAuth(t *testing.T) {
 
 func TestVNCProxy_ReadLimit(t *testing.T) {
 	// Verify the read limit constant is 1 MiB
-	assert.Equal(t, int64(1<<20), vncReadLimit)
+	assert.Equal(t, 1<<20, vncReadLimit)
 }

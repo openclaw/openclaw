@@ -22,12 +22,12 @@ import (
 )
 
 // setupMockEnvdFileService creates a bufconn-based mock envd FileService server
-// using the real envd FileServer (which works with a temp directory).
-func setupMockEnvdFileService(t *testing.T) *bufconn.Listener {
+// using the real envd FileServer with a configurable root directory.
+func setupMockEnvdFileService(t *testing.T, root string) *bufconn.Listener {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	s := grpc.NewServer()
-	envdpb.RegisterFileServiceServer(s, envd.NewFileServer())
+	envdpb.RegisterFileServiceServer(s, envd.NewFileServerWithRoot(root))
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			t.Logf("mock envd file server exited: %v", err)
@@ -91,18 +91,16 @@ func setupFileTestServer(t *testing.T, mgr VMManager, envdLis *bufconn.Listener)
 }
 
 func TestFileService_ReadFile(t *testing.T) {
-	// Create a temp file to be read via envd.
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "hello.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("hello world"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte("hello world"), 0644))
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	stream, err := client.ReadFile(context.Background(), &pb.ReadFileRequest{
 		SandboxId: "sb-1",
-		Path:      testFile,
+		Path:      "hello.txt",
 	})
 	require.NoError(t, err)
 
@@ -124,9 +122,8 @@ func TestFileService_ReadFile(t *testing.T) {
 
 func TestFileService_WriteFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "output.txt")
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
@@ -136,7 +133,7 @@ func TestFileService_WriteFile(t *testing.T) {
 	// Send first chunk with path and data.
 	err = stream.Send(&pb.WriteFileRequest{
 		SandboxId: "sb-1",
-		Path:      testFile,
+		Path:      "output.txt",
 		Mode:      0644,
 		Data:      []byte("written data"),
 	})
@@ -147,7 +144,7 @@ func TestFileService_WriteFile(t *testing.T) {
 	assert.Equal(t, int64(12), resp.GetBytesWritten())
 
 	// Verify file was written.
-	content, err := os.ReadFile(testFile)
+	content, err := os.ReadFile(filepath.Join(tmpDir, "output.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("written data"), content)
 }
@@ -157,13 +154,13 @@ func TestFileService_ListDir(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("a"), 0644))
 	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755))
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	resp, err := client.ListDir(context.Background(), &pb.ListDirRequest{
 		SandboxId: "sb-1",
-		Path:      tmpDir,
+		Path:      ".",
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.GetEntries(), 2)
@@ -178,73 +175,71 @@ func TestFileService_ListDir(t *testing.T) {
 
 func TestFileService_Stat(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "stat-test.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("12345"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "stat-test.txt"), []byte("12345"), 0644))
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	resp, err := client.Stat(context.Background(), &pb.StatRequest{
 		SandboxId: "sb-1",
-		Path:      testFile,
+		Path:      "stat-test.txt",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, testFile, resp.GetPath())
+	assert.Equal(t, "stat-test.txt", resp.GetPath())
 	assert.Equal(t, int64(5), resp.GetSize())
 	assert.False(t, resp.GetIsDir())
 }
 
 func TestFileService_MakeDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	newDir := filepath.Join(tmpDir, "new", "nested", "dir")
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	_, err := client.MakeDir(context.Background(), &pb.MakeDirRequest{
 		SandboxId: "sb-1",
-		Path:      newDir,
+		Path:      "new/nested/dir",
 		Mode:      0755,
 	})
 	require.NoError(t, err)
 
 	// Verify directory was created.
-	info, err := os.Stat(newDir)
+	info, err := os.Stat(filepath.Join(tmpDir, "new", "nested", "dir"))
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 }
 
 func TestFileService_Remove(t *testing.T) {
 	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "to-remove.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("delete me"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "to-remove.txt"), []byte("delete me"), 0644))
 
-	envdLis := setupMockEnvdFileService(t)
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManagerWithVM("sb-1")
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	_, err := client.Remove(context.Background(), &pb.RemoveRequest{
 		SandboxId: "sb-1",
-		Path:      testFile,
+		Path:      "to-remove.txt",
 	})
 	require.NoError(t, err)
 
 	// Verify file was removed.
-	_, err = os.Stat(testFile)
+	_, err = os.Stat(filepath.Join(tmpDir, "to-remove.txt"))
 	assert.True(t, os.IsNotExist(err))
 }
 
 func TestFileService_NotFound_Sandbox(t *testing.T) {
-	envdLis := setupMockEnvdFileService(t)
+	tmpDir := t.TempDir()
+	envdLis := setupMockEnvdFileService(t, tmpDir)
 	mgr := newMockManager() // empty manager, no sandboxes
 	client := setupFileTestServer(t, mgr, envdLis)
 
 	// Stat with unknown sandbox_id should return NotFound.
 	_, err := client.Stat(context.Background(), &pb.StatRequest{
 		SandboxId: "nonexistent",
-		Path:      "/tmp/foo",
+		Path:      "foo.txt",
 	})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -303,7 +298,7 @@ func TestFileService_Unavailable_EnvdUnreachable(t *testing.T) {
 	// Stat should fail because envd is not reachable (connection will fail on RPC).
 	_, err = client.Stat(context.Background(), &pb.StatRequest{
 		SandboxId: "sb-1",
-		Path:      "/tmp/foo",
+		Path:      "foo.txt",
 	})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
