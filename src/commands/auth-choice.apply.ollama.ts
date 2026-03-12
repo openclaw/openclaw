@@ -12,7 +12,6 @@ export async function applyAuthChoiceOllama(
   const { config, defaultModelId } = await promptAndConfigureOllama({
     cfg: params.config,
     prompter: params.prompter,
-    agentDir: params.agentDir,
   });
 
   // Set an Ollama default so the model picker pre-selects an Ollama model.
