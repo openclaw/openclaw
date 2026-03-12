@@ -32,8 +32,13 @@ describe("resolveAutoImageModel", () => {
 
   it("falls back to provider default image model when active model is text-only", async () => {
     loadModelCatalogMock.mockResolvedValue([
-      { provider: "minimax-portal", id: "MiniMax-M2.5", input: ["text"] },
-      { provider: "minimax-portal", id: "MiniMax-VL-01", input: ["text", "image"] },
+      { provider: "minimax-portal", id: "MiniMax-M2.5", name: "MiniMax-M2.5", input: ["text"] },
+      {
+        provider: "minimax-portal",
+        id: "MiniMax-VL-01",
+        name: "MiniMax-VL-01",
+        input: ["text", "image"],
+      },
     ]);
 
     const { resolveAutoImageModel } = await import("./runner.js");
@@ -47,7 +52,12 @@ describe("resolveAutoImageModel", () => {
 
   it("keeps active model when catalog confirms it supports vision", async () => {
     loadModelCatalogMock.mockResolvedValue([
-      { provider: "minimax-portal", id: "MiniMax-VL-01", input: ["text", "image"] },
+      {
+        provider: "minimax-portal",
+        id: "MiniMax-VL-01",
+        name: "MiniMax-VL-01",
+        input: ["text", "image"],
+      },
     ]);
 
     const { resolveAutoImageModel } = await import("./runner.js");
@@ -72,7 +82,9 @@ describe("resolveAutoImageModel", () => {
   });
 
   it("keeps active model when catalog entry exists but input capability metadata is missing", async () => {
-    loadModelCatalogMock.mockResolvedValue([{ provider: "minimax-portal", id: "MiniMax-M2.5" }]);
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "minimax-portal", id: "MiniMax-M2.5", name: "MiniMax-M2.5" },
+    ]);
 
     const { resolveAutoImageModel } = await import("./runner.js");
     const resolved = await resolveAutoImageModel({
