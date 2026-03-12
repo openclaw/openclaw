@@ -475,9 +475,10 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
 
   it("rejects enabling reuseSession on a main-session job", () => {
     const job = createMainJob();
-    expect(() => applyJobPatch(job, { reuseSession: true } as CronJobPatch)).toThrow(
-      'cron reuseSession is only supported for sessionTarget="isolated"',
-    );
+    expect(() =>
+      applyJobPatch(job, { name: "changed-name", reuseSession: true } as CronJobPatch),
+    ).toThrow('cron reuseSession is only supported for sessionTarget="isolated"');
+    expect(job.name).toBe("main-agent-check");
     expect(job.reuseSession).toBeUndefined();
   });
 });
