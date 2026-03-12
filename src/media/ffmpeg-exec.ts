@@ -23,22 +23,58 @@ function resolveExecOptions(
   };
 }
 
-export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "ffprobe",
-    args,
-    resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+function isMissingBinaryError(err: unknown, binary: string): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const anyErr = err as { code?: unknown; path?: unknown; message?: unknown };
+  const code = typeof anyErr.code === "string" ? anyErr.code : "";
+  const errPath = typeof anyErr.path === "string" ? anyErr.path : "";
+  const message = typeof anyErr.message === "string" ? anyErr.message : "";
+  if (code !== "ENOENT") {
+    return false;
+  }
+  return errPath === binary || message.includes(binary);
+}
+
+function missingBinaryMessage(binary: string): string {
+  return (
+    `Required media binary "${binary}" was not found in PATH (ENOENT). ` +
+    `Install FFmpeg (includes ${binary}) and try again. ` +
+    `macOS: \`brew install ffmpeg\`. Ubuntu/Debian: \`sudo apt-get install ffmpeg\`.`
   );
-  return stdout.toString();
+}
+
+export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      args,
+      resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+    );
+    return stdout.toString();
+  } catch (err) {
+    if (isMissingBinaryError(err, "ffprobe")) {
+      throw new Error(missingBinaryMessage("ffprobe"), { cause: err });
+    }
+    throw err;
+  }
 }
 
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "ffmpeg",
-    args,
-    resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
-  );
-  return stdout.toString();
+  try {
+    const { stdout } = await execFileAsync(
+      "ffmpeg",
+      args,
+      resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
+    );
+    return stdout.toString();
+  } catch (err) {
+    if (isMissingBinaryError(err, "ffmpeg")) {
+      throw new Error(missingBinaryMessage("ffmpeg"), { cause: err });
+    }
+    throw err;
+  }
 }
 
 export function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
