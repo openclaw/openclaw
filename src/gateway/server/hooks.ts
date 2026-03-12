@@ -72,7 +72,7 @@ export function createGatewayHooksRequestHandler(params: {
     });
     if (!jobCreate) {
       logHooks.warn("hook agent: normalizeCronJobCreate returned null");
-      return randomUUID();
+      return { ok: false as const, error: "internal: failed to normalize hook payload" };
     }
 
     const job: CronJob = {
