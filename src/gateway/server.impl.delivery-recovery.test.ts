@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => ({
   normalizeChannelId: vi.fn<(raw?: string | null) => string | null>(),
@@ -18,6 +19,46 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 }));
 
 import { __testing } from "./server.impl.js";
+
+type RuntimeAccount = {
+  enabled?: boolean;
+  configured?: boolean;
+  running?: boolean;
+  connected?: boolean;
+};
+
+type RuntimeSnapshot = {
+  channels: Record<string, unknown>;
+  channelAccounts: Record<string, Record<string, RuntimeAccount>>;
+};
+
+function createSnapshot(params: {
+  channel: string;
+  accountId: string;
+  account: RuntimeAccount;
+}): RuntimeSnapshot {
+  return {
+    channels: {},
+    channelAccounts: {
+      [params.channel]: {
+        [params.accountId]: params.account,
+      },
+    },
+  };
+}
+
+function createChannelManager(snapshots: RuntimeSnapshot[]): ChannelManager {
+  let index = 0;
+  const getRuntimeSnapshot = vi.fn(() => snapshots[Math.min(index++, snapshots.length - 1)]);
+  return { getRuntimeSnapshot } as unknown as ChannelManager;
+}
+
+function createTestLog(): { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+  };
+}
 
 beforeEach(() => {
   hoisted.normalizeChannelId.mockReset();
@@ -105,5 +146,126 @@ describe("delivery recovery preflight skip mode", () => {
         OPENCLAW_SKIP_PROVIDERS: "false",
       }),
     ).toBe(false);
+  });
+});
+
+describe("waitForPendingDeliveryChannelReadiness", () => {
+  it("waits until WhatsApp is both running and connected", async () => {
+    const channelManager = createChannelManager([
+      createSnapshot({
+        channel: "whatsapp",
+        accountId: "default",
+        account: { enabled: true, configured: true, running: true, connected: false },
+      }),
+      createSnapshot({
+        channel: "whatsapp",
+        accountId: "default",
+        account: { enabled: true, configured: true, running: true, connected: true },
+      }),
+    ]);
+    const log = createTestLog();
+
+    await __testing.waitForPendingDeliveryChannelReadiness({
+      channelManager,
+      targets: [{ channel: "whatsapp", accountId: "default" }],
+      log,
+      timeoutMs: 500,
+      pollMs: 50,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Recovery preflight complete: runtime ready"),
+    );
+  });
+
+  it("times out and continues when readiness does not arrive", async () => {
+    const channelManager = createChannelManager([
+      createSnapshot({
+        channel: "whatsapp",
+        accountId: "default",
+        account: { enabled: true, configured: true, running: false, connected: false },
+      }),
+    ]);
+    const log = createTestLog();
+
+    await __testing.waitForPendingDeliveryChannelReadiness({
+      channelManager,
+      targets: [{ channel: "whatsapp", accountId: "default" }],
+      log,
+      timeoutMs: 60,
+      pollMs: 50,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Recovery preflight timeout"));
+  });
+
+  it("aborts promptly when shutdown signal is triggered", async () => {
+    const channelManager = createChannelManager([
+      createSnapshot({
+        channel: "whatsapp",
+        accountId: "default",
+        account: { enabled: true, configured: true, running: false, connected: false },
+      }),
+    ]);
+    const log = createTestLog();
+    const abortController = new AbortController();
+    setTimeout(() => abortController.abort(), 15);
+
+    await expect(
+      __testing.waitForPendingDeliveryChannelReadiness({
+        channelManager,
+        targets: [{ channel: "whatsapp", accountId: "default" }],
+        log,
+        timeoutMs: 5_000,
+        pollMs: 50,
+        signal: abortController.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("treats disabled/unconfigured accounts as non-blocking", async () => {
+    const channelManager = createChannelManager([
+      createSnapshot({
+        channel: "whatsapp",
+        accountId: "default",
+        account: { enabled: false, configured: false, running: false, connected: false },
+      }),
+    ]);
+    const log = createTestLog();
+
+    await __testing.waitForPendingDeliveryChannelReadiness({
+      channelManager,
+      targets: [{ channel: "whatsapp", accountId: "default" }],
+      log,
+      timeoutMs: 500,
+      pollMs: 50,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not require connected=true for non-WhatsApp channels", async () => {
+    const channelManager = createChannelManager([
+      createSnapshot({
+        channel: "discord",
+        accountId: "default",
+        account: { enabled: true, configured: true, running: true, connected: false },
+      }),
+    ]);
+    const log = createTestLog();
+
+    await __testing.waitForPendingDeliveryChannelReadiness({
+      channelManager,
+      targets: [{ channel: "discord", accountId: "default" }],
+      log,
+      timeoutMs: 500,
+      pollMs: 50,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Recovery preflight complete: runtime ready"),
+    );
   });
 });

@@ -344,13 +344,11 @@ async function waitForPendingDeliveryChannelReadiness(params: {
   pollMs?: number;
   signal?: AbortSignal;
 }): Promise<void> {
-  const targets = [...params.targets].filter(
-    (target, index, arr) =>
-      index ===
-      arr.findIndex(
-        (item) => item.channel === target.channel && item.accountId === target.accountId,
-      ),
-  );
+  const targetsByKey = new Map<string, PendingDeliveryRecoveryTarget>();
+  for (const target of params.targets) {
+    targetsByKey.set(`${target.channel}:${target.accountId}`, target);
+  }
+  const targets = [...targetsByKey.values()];
   if (targets.length === 0) {
     return;
   }
@@ -409,6 +407,7 @@ async function waitForPendingDeliveryChannelReadiness(params: {
 export const __testing = {
   resolvePendingDeliveryRecoveryTargets,
   shouldSkipDeliveryRecoveryReadinessPreflight,
+  waitForPendingDeliveryChannelReadiness,
 };
 
 export type GatewayServer = {
@@ -1145,17 +1144,19 @@ export async function startGatewayServer(
 
       const targets = resolvePendingDeliveryRecoveryTargets({ pending, cfg: cfgAtStart });
       const skipRecoveryReadinessPreflight = shouldSkipDeliveryRecoveryReadinessPreflight();
-      if (targets.length > 0 && !skipRecoveryReadinessPreflight) {
+      if (skipRecoveryReadinessPreflight) {
+        logRecovery.info(
+          "Delivery recovery skipped: channel startup disabled via OPENCLAW_SKIP_CHANNELS/OPENCLAW_SKIP_PROVIDERS.",
+        );
+        return;
+      }
+      if (targets.length > 0) {
         await waitForPendingDeliveryChannelReadiness({
           channelManager,
           targets,
           log: logRecovery,
           signal: deliveryRecoveryAbort.signal,
         });
-      } else if (targets.length > 0 && skipRecoveryReadinessPreflight) {
-        logRecovery.info(
-          "Recovery preflight skipped: channel startup disabled via OPENCLAW_SKIP_CHANNELS/OPENCLAW_SKIP_PROVIDERS.",
-        );
       }
       if (deliveryRecoveryAbort.signal.aborted) {
         logRecovery.info("Delivery recovery skipped: gateway shutdown in progress.");
@@ -1166,6 +1167,7 @@ export async function startGatewayServer(
         deliver: deliverOutboundPayloads,
         log: logRecovery,
         cfg: cfgAtStart,
+        pending,
       });
     })().catch((err) => {
       if (err instanceof Error && err.name === "AbortError") {
