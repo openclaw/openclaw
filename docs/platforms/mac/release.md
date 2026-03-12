@@ -39,7 +39,7 @@ Notes:
 # Default is auto-derived from APP_VERSION when omitted.
 SKIP_NOTARIZE=1 \
 BUNDLE_ID=ai.openclaw.mac \
-APP_VERSION=2026.3.8 \
+APP_VERSION=2026.3.11 \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
@@ -47,10 +47,10 @@ scripts/package-mac-dist.sh
 # `package-mac-dist.sh` already creates the zip + DMG.
 # If you used `package-mac-app.sh` directly instead, create them manually:
 # If you want notarization/stapling in this step, use the NOTARIZE command below.
-ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.8.zip
+ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.3.11.zip
 
 # Optional: build a styled DMG for humans (drag to /Applications)
-scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.3.8.dmg
+scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.3.11.dmg
 
 # Recommended: build + notarize/staple zip + DMG
 # First, create a keychain profile once:
@@ -58,13 +58,13 @@ scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.3.8.dmg
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
 NOTARIZE=1 NOTARYTOOL_PROFILE=openclaw-notary \
 BUNDLE_ID=ai.openclaw.mac \
-APP_VERSION=2026.3.8 \
+APP_VERSION=2026.3.11 \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
 # Optional: ship dSYM alongside the release
-ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.3.8.dSYM.zip
+ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.3.11.dSYM.zip
 ```
 
 ## Appcast entry
@@ -72,7 +72,7 @@ ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenCl
 Use the release note generator so Sparkle renders formatted HTML notes:
 
 ```bash
-SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.3.8.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
+SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.3.11.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
 Generates HTML release notes from `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) and embeds them in the appcast entry.
@@ -80,7 +80,7 @@ Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when 
 
 ## Publish & verify
 
-- Upload `OpenClaw-2026.3.8.zip` (and `OpenClaw-2026.3.8.dSYM.zip`) to the GitHub release for tag `v2026.3.8`.
+- Upload `OpenClaw-2026.3.11.zip` (and `OpenClaw-2026.3.11.dSYM.zip`) to the GitHub release for tag `v2026.3.11`.
 - Ensure the raw appcast URL matches the baked feed: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
 - Sanity checks:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` returns 200.

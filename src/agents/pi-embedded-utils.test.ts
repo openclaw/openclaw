@@ -134,6 +134,20 @@ describe("extractAssistantText", () => {
     );
   });
 
+  it("preserves response when errorMessage set from background failure (#13935)", () => {
+    const responseText = "Handle payment required errors in your API.";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      errorMessage: "insufficient credits for embedding model",
+      stopReason: "stop",
+      content: [{ type: "text", text: responseText }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(responseText);
+  });
+
   it("strips Minimax tool invocations with extra attributes", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

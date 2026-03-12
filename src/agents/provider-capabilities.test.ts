@@ -31,8 +31,8 @@ describe("resolveProviderCapabilities", () => {
       resolveProviderCapabilities("kimi-code"),
     );
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
-      anthropicToolSchemaMode: "openai-functions",
-      anthropicToolChoiceMode: "openai-string-modes",
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -47,6 +47,7 @@ describe("resolveProviderCapabilities", () => {
   it("flags providers that opt out of OpenAI-compatible turn validation", () => {
     expect(supportsOpenAiCompatTurnValidation("openrouter")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("opencode")).toBe(false);
+    expect(supportsOpenAiCompatTurnValidation("opencode-go")).toBe(false);
     expect(supportsOpenAiCompatTurnValidation("moonshot")).toBe(true);
   });
 
@@ -63,12 +64,18 @@ describe("resolveProviderCapabilities", () => {
         modelId: "gemini-2.0-flash",
       }),
     ).toBe(true);
+    expect(
+      shouldSanitizeGeminiThoughtSignaturesForModel({
+        provider: "opencode-go",
+        modelId: "google/gemini-2.5-pro-preview",
+      }),
+    ).toBe(true);
     expect(resolveTranscriptToolCallIdMode("mistral", "mistral-large-latest")).toBe("strict9");
   });
 
-  it("treats kimi aliases as anthropic tool payload compatibility providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(true);
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(true);
+  it("treats kimi aliases as native anthropic tool payload providers", () => {
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });
 

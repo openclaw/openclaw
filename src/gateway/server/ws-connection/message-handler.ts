@@ -114,7 +114,7 @@ function resolveHandshakeBrowserSecurityContext(params: {
   );
   return {
     hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient: hasBrowserOriginHeader && !params.hasProxyHeaders,
+    enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
     rateLimitClientIp:
       hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
         ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
@@ -562,6 +562,31 @@ export function attachGatewayWsMessageHandler(params: {
           clientIp: browserRateLimitClientIp,
         });
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
+          const canRetryWithDeviceToken =
+            failedAuth.reason === "token_mismatch" &&
+            Boolean(device) &&
+            hasSharedAuth &&
+            !connectParams.auth?.deviceToken;
+          const recommendedNextStep = (() => {
+            if (canRetryWithDeviceToken) {
+              return "retry_with_device_token";
+            }
+            switch (failedAuth.reason) {
+              case "token_missing":
+              case "token_missing_config":
+              case "password_missing":
+              case "password_missing_config":
+                return "update_auth_configuration";
+              case "token_mismatch":
+              case "password_mismatch":
+              case "device_token_mismatch":
+                return "update_auth_credentials";
+              case "rate_limited":
+                return "wait_then_retry";
+              default:
+                return "review_auth_configuration";
+            }
+          })();
           markHandshakeFailure("unauthorized", {
             authMode: resolvedAuth.mode,
             authProvided: connectParams.auth?.password
@@ -594,6 +619,8 @@ export function attachGatewayWsMessageHandler(params: {
             details: {
               code: resolveAuthConnectErrorDetailCode(failedAuth.reason),
               authReason: failedAuth.reason,
+              canRetryWithDeviceToken,
+              recommendedNextStep,
             },
           });
           close(1008, truncateCloseReason(authMessage));
