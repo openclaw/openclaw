@@ -15,6 +15,62 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips leaked internal tool markers", () => {
+    const input = [
+      "<|tool_call_result_begin|>",
+      "<function_calls>",
+      "</function_calls>",
+      "<|tool_call_result_end|>",
+      "Visible reply",
+      "<|tool_list_end|>",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible reply");
+  });
+
+  it("does not strip unrelated pipe tags", () => {
+    const text = "Explain what <|assistant|> means in this transcript format.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("preserves inline mentions of tool markers and wrappers", () => {
+    const text = "Explain <function_calls> and <|tool_call_result_begin|> tags.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("preserves standalone function call wrapper lines without tool pipe tags", () => {
+    const text = ["These wrappers are literal:", "<function_calls>", "</function_calls>"].join(
+      "\n",
+    );
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("preserves standalone function call wrapper lines when tool tags appear in another block", () => {
+    const input = [
+      "These wrappers are literal:",
+      "<function_calls>",
+      "</function_calls>",
+      "",
+      "Visible reply",
+      "<|tool_list_end|>",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(
+      [
+        "These wrappers are literal:",
+        "<function_calls>",
+        "</function_calls>",
+        "",
+        "Visible reply",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves trailing newlines after removing marker-only lines", () => {
+    const input = ["Hello", "<|tool_list_end|>", "", "World", ""].join("\n");
+    expect(sanitizeUserFacingText(input)).toBe("Hello\n\nWorld\n");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {

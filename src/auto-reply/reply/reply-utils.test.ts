@@ -150,6 +150,51 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
+
+  it("suppresses payloads that only contain leaked internal tool markers", () => {
+    const result = normalizeReplyPayload({
+      text: "<|tool_call_result_begin|>\n<function_calls>\n</function_calls>\n<|tool_list_end|>",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("keeps standalone function call wrapper lines when no tool pipe tags are present", () => {
+    const text = "These wrappers are literal:\n<function_calls>\n</function_calls>";
+    const result = normalizeReplyPayload({ text });
+
+    expect(result).toEqual({ text });
+  });
+
+  it("keeps standalone function call wrapper lines when tool tags are in another block", () => {
+    const input = [
+      "These wrappers are literal:",
+      "<function_calls>",
+      "</function_calls>",
+      "",
+      "Visible reply",
+      "<|tool_list_end|>",
+    ].join("\n");
+    const result = normalizeReplyPayload({ text: input });
+
+    expect(result).toEqual({
+      text: [
+        "These wrappers are literal:",
+        "<function_calls>",
+        "</function_calls>",
+        "",
+        "Visible reply",
+      ].join("\n"),
+    });
+  });
+
+  it("preserves trailing newlines after removing leaked internal tool markers", () => {
+    const result = normalizeReplyPayload({
+      text: "Hello\n<|tool_list_end|>\n\nWorld\n",
+    });
+
+    expect(result).toEqual({ text: "Hello\n\nWorld\n" });
+  });
 });
 
 describe("typing controller", () => {

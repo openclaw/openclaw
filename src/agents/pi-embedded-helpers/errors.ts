@@ -214,6 +214,8 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const INTERNAL_TOOL_PIPE_TAG_RE = /<\|\s*tool_[a-z0-9_:-]+\s*\|>/gi;
+const FUNCTION_CALLS_TAG_RE = /<\s*\/?\s*function_calls\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -447,6 +449,66 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+type ToolMarkerLineType = "pipe" | "wrapper" | null;
+
+function getToolMarkerLineType(line: string): ToolMarkerLineType {
+  const withoutPipeTags = line.replace(INTERNAL_TOOL_PIPE_TAG_RE, "");
+  if (withoutPipeTags.trim().length === 0 && withoutPipeTags !== line) {
+    return "pipe";
+  }
+  const withoutWrappers = line.replace(FUNCTION_CALLS_TAG_RE, "");
+  return withoutWrappers.trim().length === 0 && withoutWrappers !== line ? "wrapper" : null;
+}
+
+function getWrapperLinesInPipeMarkerBlocks(lineTypes: ToolMarkerLineType[]): Set<number> {
+  const wrapperLines = new Set<number>();
+  for (let index = 0; index < lineTypes.length; ) {
+    if (lineTypes[index] === null) {
+      index++;
+      continue;
+    }
+    let hasPipe = false;
+    let blockEnd = index;
+    while (blockEnd < lineTypes.length && lineTypes[blockEnd] !== null) {
+      hasPipe ||= lineTypes[blockEnd] === "pipe";
+      blockEnd++;
+    }
+    if (hasPipe) {
+      for (let blockIndex = index; blockIndex < blockEnd; blockIndex++) {
+        if (lineTypes[blockIndex] === "wrapper") {
+          wrapperLines.add(blockIndex);
+        }
+      }
+    }
+    index = blockEnd;
+  }
+  return wrapperLines;
+}
+
+function stripInternalToolMarkersFromText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const lines = text.split("\n");
+  const lineTypes = lines.map(getToolMarkerLineType);
+  const wrapperLinesInPipeBlocks = getWrapperLinesInPipeMarkerBlocks(lineTypes);
+  let removedAny = false;
+  const keptLines = lines.filter((line, index) => {
+    const lineType = lineTypes[index];
+    const shouldDrop =
+      lineType === "pipe" || (lineType === "wrapper" && wrapperLinesInPipeBlocks.has(index));
+    if (shouldDrop) {
+      removedAny = true;
+      return false;
+    }
+    return true;
+  });
+  if (!removedAny) {
+    return text;
+  }
+  return keptLines.join("\n");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -766,7 +828,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripped = stripInternalToolMarkersFromText(stripFinalTagsFromText(text));
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
