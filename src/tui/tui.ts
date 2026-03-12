@@ -940,6 +940,7 @@ export async function runTui(opts: TuiOptions) {
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
+    setActivityStatus("idle");
     void (async () => {
       await refreshAgents();
       updateHeader();
@@ -965,7 +966,7 @@ export async function runTui(opts: TuiOptions) {
     if (disconnectState.pairingHint && !pairingHintShown) {
       pairingHintShown = true;
       chatLog.addSystem(disconnectState.pairingHint);
-    } else if (!disconnectHintShown) {
+    } else if (!disconnectHintShown && !disconnectState.pairingHint) {
       disconnectHintShown = true;
       chatLog.addSystem(
         "Gateway disconnected. Auto-reconnecting… press ctrl+r to retry immediately.\n" +
