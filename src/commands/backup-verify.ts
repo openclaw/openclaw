@@ -2,6 +2,7 @@ import path from "node:path";
 import * as tar from "tar";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { listArchiveEntries, type BackupManifestBase } from "./backup-shared.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
@@ -18,7 +19,8 @@ type BackupManifestExcludedEntry = {
   bytes: number;
 };
 
-type BackupManifest = {
+// P2-012: Tolerant reader manifest extends shared base with optional/permissive types.
+type BackupManifest = Partial<BackupManifestBase> & {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -194,18 +196,6 @@ function parseManifest(raw: string): BackupManifest {
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
     excluded,
   };
-}
-
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-    },
-  });
-  return entries;
 }
 
 async function extractManifest(params: {

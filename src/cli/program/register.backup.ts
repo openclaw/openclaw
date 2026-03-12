@@ -45,6 +45,11 @@ export function registerBackupCommand(program: Command) {
       "Allow excluding protected paths (credentials/, extensions/, cron/)",
       false,
     )
+    .option(
+      "--non-interactive",
+      "Fail with an error instead of warning when a protected path is excluded",
+      false,
+    )
     .addHelpText(
       "after",
       () =>
@@ -99,6 +104,7 @@ export function registerBackupCommand(program: Command) {
           excludeFile: opts.excludeFile as string | undefined,
           includeAll: Boolean(opts.includeAll),
           allowExcludeProtected: Boolean(opts.allowExcludeProtected),
+          nonInteractive: Boolean(opts.nonInteractive),
         });
       });
     });

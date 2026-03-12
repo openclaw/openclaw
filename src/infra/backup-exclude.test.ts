@@ -1,3 +1,4 @@
+import { symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,37 +34,40 @@ describe("resolveExcludePatterns", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("returns empty array when --include-all is set", () => {
-    const { patterns } = resolveExcludePatterns(
+  it("returns empty array when --include-all is set", async () => {
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ includeAll: true, smartExclude: true, exclude: ["*.log"] }),
       tempDir,
     );
     expect(patterns).toEqual([]);
   });
 
-  it("returns empty when no flags and no --smart-exclude", () => {
-    const { patterns } = resolveExcludePatterns(makeSpec(), tempDir);
+  it("returns empty when no flags and no --smart-exclude", async () => {
+    const { patterns } = await resolveExcludePatterns(makeSpec(), tempDir);
     expect(patterns).toEqual([]);
   });
 
-  it("returns SMART_EXCLUDE_DEFAULTS when --smart-exclude is set", () => {
-    const { patterns, sources } = resolveExcludePatterns(makeSpec({ smartExclude: true }), tempDir);
+  it("returns SMART_EXCLUDE_DEFAULTS when --smart-exclude is set", async () => {
+    const { patterns, sources } = await resolveExcludePatterns(
+      makeSpec({ smartExclude: true }),
+      tempDir,
+    );
     expect(patterns).toEqual([...SMART_EXCLUDE_DEFAULTS]);
     for (const p of SMART_EXCLUDE_DEFAULTS) {
       expect(sources.get(p)).toBe("default");
     }
   });
 
-  it("--include-all overrides --smart-exclude + --exclude", () => {
-    const { patterns } = resolveExcludePatterns(
+  it("--include-all overrides --smart-exclude + --exclude", async () => {
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ includeAll: true, smartExclude: true, exclude: ["*.tmp"] }),
       tempDir,
     );
     expect(patterns).toEqual([]);
   });
 
-  it("--exclude adds patterns on top of smart-exclude defaults", () => {
-    const { patterns } = resolveExcludePatterns(
+  it("--exclude adds patterns on top of smart-exclude defaults", async () => {
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ smartExclude: true, exclude: ["*.log"] }),
       tempDir,
     );
@@ -77,7 +81,7 @@ describe("resolveExcludePatterns", () => {
     const excludeFilePath = path.join(tempDir, "ignore.txt");
     await fs.writeFile(excludeFilePath, "*.tmp\n# comment\n\n*.bak\n", "utf8");
 
-    const { patterns, sources } = resolveExcludePatterns(
+    const { patterns, sources } = await resolveExcludePatterns(
       makeSpec({ exclude: ["*.log"], excludeFile: excludeFilePath }),
       tempDir,
     );
@@ -88,8 +92,8 @@ describe("resolveExcludePatterns", () => {
     expect(sources.get("*.log")).toBe("cli");
   });
 
-  it("duplicate patterns are deduplicated", () => {
-    const { patterns } = resolveExcludePatterns(
+  it("duplicate patterns are deduplicated", async () => {
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ smartExclude: true, exclude: ["venvs/", "*.log", "*.log"] }),
       tempDir,
     );
@@ -104,7 +108,7 @@ describe("resolveExcludePatterns", () => {
     const excludeFilePath = path.join(tempDir, "ignore.txt");
     await fs.writeFile(excludeFilePath, "# this is a comment\nkeep.txt\n", "utf8");
 
-    const { patterns } = resolveExcludePatterns(
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ excludeFile: excludeFilePath }),
       tempDir,
     );
@@ -115,7 +119,7 @@ describe("resolveExcludePatterns", () => {
     const excludeFilePath = path.join(tempDir, "ignore.txt");
     await fs.writeFile(excludeFilePath, "\n\npattern1\n\npattern2\n\n", "utf8");
 
-    const { patterns } = resolveExcludePatterns(
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ excludeFile: excludeFilePath }),
       tempDir,
     );
@@ -123,22 +127,22 @@ describe("resolveExcludePatterns", () => {
   });
 
   // --exclude-file validation
-  it("throws ExcludeFileError when --exclude-file does not exist", () => {
-    expect(() =>
+  it("throws ExcludeFileError when --exclude-file does not exist", async () => {
+    await expect(
       resolveExcludePatterns(
         makeSpec({ excludeFile: path.join(tempDir, "nonexistent.txt") }),
         tempDir,
       ),
-    ).toThrow(ExcludeFileError);
+    ).rejects.toThrow(ExcludeFileError);
   });
 
   it("throws ExcludeFileError when --exclude-file is a directory", async () => {
     const dirPath = path.join(tempDir, "somedir");
     await fs.mkdir(dirPath);
 
-    expect(() => resolveExcludePatterns(makeSpec({ excludeFile: dirPath }), tempDir)).toThrow(
-      ExcludeFileError,
-    );
+    await expect(
+      resolveExcludePatterns(makeSpec({ excludeFile: dirPath }), tempDir),
+    ).rejects.toThrow(ExcludeFileError);
   });
 
   it("throws ExcludeFileError when --exclude-file exceeds 1MB", async () => {
@@ -146,31 +150,50 @@ describe("resolveExcludePatterns", () => {
     // Write just over 1MB
     await fs.writeFile(bigFile, "x".repeat(1024 * 1024 + 1), "utf8");
 
-    expect(() => resolveExcludePatterns(makeSpec({ excludeFile: bigFile }), tempDir)).toThrow(
-      ExcludeFileError,
-    );
+    await expect(
+      resolveExcludePatterns(makeSpec({ excludeFile: bigFile }), tempDir),
+    ).rejects.toThrow(ExcludeFileError);
+  });
+
+  // P2-011: symlink rejection for --exclude-file
+  it("throws ExcludeFileError when --exclude-file is a symlink", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const realFile = path.join(tempDir, "real-patterns.txt");
+    await fs.writeFile(realFile, "*.log\n", "utf8");
+    const symlinkFile = path.join(tempDir, "symlink-patterns.txt");
+    symlinkSync(realFile, symlinkFile);
+
+    await expect(
+      resolveExcludePatterns(makeSpec({ excludeFile: symlinkFile }), tempDir),
+    ).rejects.toThrow(ExcludeFileError);
+    await expect(
+      resolveExcludePatterns(makeSpec({ excludeFile: symlinkFile }), tempDir),
+    ).rejects.toThrow(/symb/i);
   });
 
   // Protected path checks
-  it("warns when --exclude matches credentials/", () => {
+  it("warns when --exclude matches credentials/", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    resolveExcludePatterns(makeSpec({ exclude: ["credentials/"] }), tempDir);
+    await resolveExcludePatterns(makeSpec({ exclude: ["credentials/"] }), tempDir);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
     warnSpy.mockRestore();
   });
 
-  it("throws in --non-interactive mode when --exclude matches protected path without --allow-exclude-protected", () => {
-    expect(() =>
+  it("throws in --non-interactive mode when --exclude matches protected path without --allow-exclude-protected", async () => {
+    await expect(
       resolveExcludePatterns(
         makeSpec({ exclude: ["credentials/"], nonInteractive: true }),
         tempDir,
       ),
-    ).toThrow(ProtectedPathError);
+    ).rejects.toThrow(ProtectedPathError);
   });
 
-  it("passes when --allow-exclude-protected is set for protected path", () => {
+  it("passes when --allow-exclude-protected is set for protected path", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { patterns } = resolveExcludePatterns(
+    const { patterns } = await resolveExcludePatterns(
       makeSpec({ exclude: ["credentials/"], allowExcludeProtected: true }),
       tempDir,
     );
@@ -180,24 +203,49 @@ describe("resolveExcludePatterns", () => {
     warnSpy.mockRestore();
   });
 
+  // P2-010: glob bypass protection for protected paths
+  it("warns when glob pattern matches protected path (cred*)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await resolveExcludePatterns(makeSpec({ exclude: ["cred*"] }), tempDir);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    warnSpy.mockRestore();
+  });
+
+  it("throws in --non-interactive mode when glob matches protected path", async () => {
+    await expect(
+      resolveExcludePatterns(makeSpec({ exclude: ["cred*"], nonInteractive: true }), tempDir),
+    ).rejects.toThrow(ProtectedPathError);
+  });
+
+  it("--allow-exclude-protected overrides glob match check", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["cred*"], allowExcludeProtected: true }),
+      tempDir,
+    );
+    expect(patterns).toContain("cred*");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   // ReDoS protection
-  it("throws for pattern longer than 256 chars", () => {
+  it("throws for pattern longer than 256 chars", async () => {
     const longPattern = "*".repeat(257);
-    expect(() => resolveExcludePatterns(makeSpec({ exclude: [longPattern] }), tempDir)).toThrow(
-      /too long/i,
-    );
+    await expect(
+      resolveExcludePatterns(makeSpec({ exclude: [longPattern] }), tempDir),
+    ).rejects.toThrow(/too long/i);
   });
 
-  it("throws for more than 500 patterns", () => {
+  it("throws for more than 500 patterns", async () => {
     const manyPatterns = Array.from({ length: 501 }, (_, i) => `pattern${i}`);
-    expect(() => resolveExcludePatterns(makeSpec({ exclude: manyPatterns }), tempDir)).toThrow(
-      /too many/i,
-    );
+    await expect(
+      resolveExcludePatterns(makeSpec({ exclude: manyPatterns }), tempDir),
+    ).rejects.toThrow(/too many/i);
   });
 
-  it("throws for pattern with more than 5 consecutive globstars", () => {
+  it("throws for pattern with more than 5 consecutive globstars", async () => {
     const pattern = "**/**/**/**/**/**/foo";
-    expect(() => resolveExcludePatterns(makeSpec({ exclude: [pattern] }), tempDir)).toThrow(
+    await expect(resolveExcludePatterns(makeSpec({ exclude: [pattern] }), tempDir)).rejects.toThrow(
       /globstars/i,
     );
   });
@@ -208,7 +256,7 @@ describe("resolveExcludePatterns", () => {
     await fs.writeFile(backupignore, "auto-pattern\n", "utf8");
     await fs.chmod(backupignore, 0o644);
 
-    const { patterns, sources } = resolveExcludePatterns(makeSpec(), tempDir);
+    const { patterns, sources } = await resolveExcludePatterns(makeSpec(), tempDir);
     expect(patterns).toContain("auto-pattern");
     expect(sources.get("auto-pattern")).toBe("auto-file");
   });
@@ -223,7 +271,7 @@ describe("resolveExcludePatterns", () => {
     await fs.chmod(backupignore, 0o664); // group writable
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { patterns } = resolveExcludePatterns(makeSpec(), tempDir);
+    const { patterns } = await resolveExcludePatterns(makeSpec(), tempDir);
     expect(patterns).not.toContain("should-skip");
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("group/world writable"));
     warnSpy.mockRestore();
@@ -239,7 +287,7 @@ describe("resolveExcludePatterns", () => {
     await fs.chmod(backupignore, 0o666); // world writable
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { patterns } = resolveExcludePatterns(makeSpec(), tempDir);
+    const { patterns } = await resolveExcludePatterns(makeSpec(), tempDir);
     expect(patterns).not.toContain("should-skip");
     warnSpy.mockRestore();
   });
@@ -248,7 +296,7 @@ describe("resolveExcludePatterns", () => {
     const backupignore = path.join(tempDir, ".backupignore");
     await fs.writeFile(backupignore, "auto-pattern\n", "utf8");
 
-    const { patterns } = resolveExcludePatterns(makeSpec({ includeAll: true }), tempDir);
+    const { patterns } = await resolveExcludePatterns(makeSpec({ includeAll: true }), tempDir);
     expect(patterns).toEqual([]);
   });
 });
@@ -363,10 +411,6 @@ describe("buildExcludeFilter", () => {
   it("filter returns false (exclude) and warns when an error occurs (fail-closed)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    // Create a filter with an invalid pattern that might throw internally
-    // The fail-closed behavior is best tested by verifying the try/catch wraps the whole logic.
-    // Since `ignore` is robust, we test the wrapper by passing a path with invalid encoding
-    // We'll just verify the filter is callable and handles edge cases.
     const sources = new Map([["venvs/", "default" as const]]);
     const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
 

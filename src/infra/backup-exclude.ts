@@ -1,11 +1,10 @@
-import { readFileSync, statSync, existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
-import picomatch from "picomatch";
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-import type { ExcludedEntry } from "./backup-shared.js";
+import type { ExcludedEntry } from "../commands/backup-shared.js";
 
 export type { ExcludedEntry };
 
@@ -79,15 +78,78 @@ function validatePattern(pattern: string): void {
   }
 }
 
-function parseLinesFromFile(filePath: string): string[] {
-  return readFileSync(filePath, "utf-8")
+function parseLinesFromContent(content: string): string[] {
+  return content
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l !== "" && !l.startsWith("#"));
 }
 
 // ---------------------------------------------------------------------------
-// Pattern resolution
+// Shared file reading helper (P2-013 + P3-014: async with fs.promises)
+// ---------------------------------------------------------------------------
+
+interface ReadPatternFileOpts {
+  /** Check group/world-writable permission bits. */
+  permissionCheck?: boolean;
+  /** If true, throw ExcludeFileError on failure; otherwise return []. */
+  throwOnError?: boolean;
+  /** If true, reject symlinks via lstat. */
+  symLinkCheck?: boolean;
+  /** Max file size in bytes (defaults to MAX_EXCLUDE_FILE_BYTES). */
+  maxBytes?: number;
+}
+
+async function readPatternFile(filePath: string, opts: ReadPatternFileOpts): Promise<string[]> {
+  try {
+    // P2-011: Check for symlinks before following the path
+    if (opts.symLinkCheck) {
+      const lstat = await fs.lstat(filePath);
+      if (lstat.isSymbolicLink()) {
+        throw new ExcludeFileError(filePath, "must not be a symbolic link");
+      }
+    }
+
+    const fileStat = await fs.stat(filePath);
+
+    if (!fileStat.isFile()) {
+      throw new ExcludeFileError(filePath, "must be a regular file (not a device or directory)");
+    }
+
+    const maxBytes = opts.maxBytes ?? MAX_EXCLUDE_FILE_BYTES;
+    if (fileStat.size > maxBytes) {
+      throw new ExcludeFileError(
+        filePath,
+        `too large: ${fileStat.size} bytes (max ${maxBytes / 1024 / 1024}MB)`,
+      );
+    }
+
+    if (opts.permissionCheck) {
+      const isGroupOrWorldWritable = (fileStat.mode & 0o022) !== 0;
+      if (isGroupOrWorldWritable) {
+        throw new ExcludeFileError(filePath, "group/world writable — skipping for security");
+      }
+    }
+
+    const content = await fs.readFile(filePath, "utf-8");
+    return parseLinesFromContent(content);
+  } catch (err) {
+    if (err instanceof ExcludeFileError) {
+      if (opts.throwOnError) {
+        throw err;
+      }
+      console.warn(`⚠️  ${err.message}`);
+      return [];
+    }
+    if (opts.throwOnError) {
+      throw new ExcludeFileError(filePath, "file not found");
+    }
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pattern resolution (P3-014: async)
 // ---------------------------------------------------------------------------
 
 /**
@@ -95,10 +157,10 @@ function parseLinesFromFile(filePath: string): string[] {
  * smart-exclude defaults). Validates patterns and checks for protected path
  * conflicts **before** tar starts — fail fast.
  */
-export function resolveExcludePatterns(
+export async function resolveExcludePatterns(
   spec: ExcludeSpec,
   stateDir: string,
-): { patterns: readonly string[]; sources: ReadonlyMap<string, PatternSource> } {
+): Promise<{ patterns: readonly string[]; sources: ReadonlyMap<string, PatternSource> }> {
   if (spec.includeAll) {
     return { patterns: [], sources: new Map() };
   }
@@ -114,47 +176,31 @@ export function resolveExcludePatterns(
     }
   }
 
-  // Layer 2: auto-detect .backupignore in stateDir
+  // Layer 2: auto-detect .backupignore in stateDir (P2-013: uses shared helper)
   const autoIgnoreFile = resolve(stateDir, ".backupignore");
-  if (existsSync(autoIgnoreFile)) {
-    try {
-      const fileStat = statSync(autoIgnoreFile);
-      const isGroupOrWorldWritable = (fileStat.mode & 0o022) !== 0;
-      if (isGroupOrWorldWritable) {
-        console.warn("⚠️  .backupignore is group/world writable — skipping for security");
-      } else if (fileStat.isFile() && fileStat.size <= MAX_EXCLUDE_FILE_BYTES) {
-        const lines = parseLinesFromFile(autoIgnoreFile);
-        for (const l of lines) {
-          patterns.push(l);
-          if (!sources.has(l)) {
-            sources.set(l, "auto-file");
-          }
-        }
+  try {
+    await fs.access(autoIgnoreFile);
+    const lines = await readPatternFile(autoIgnoreFile, {
+      permissionCheck: true,
+      throwOnError: false,
+    });
+    for (const l of lines) {
+      patterns.push(l);
+      if (!sources.has(l)) {
+        sources.set(l, "auto-file");
       }
-    } catch {
-      // Ignore read errors for auto-detected file — it's optional.
     }
+  } catch {
+    // Auto-detected file doesn't exist — that's fine.
   }
 
-  // Layer 3: --exclude-file (pre-validated — fail fast before tar starts)
+  // Layer 3: --exclude-file (P2-011: symlink check, P2-013: shared helper)
   if (spec.excludeFile) {
     const filePath = resolve(spec.excludeFile);
-    let fileStat: ReturnType<typeof statSync>;
-    try {
-      fileStat = statSync(filePath);
-    } catch {
-      throw new ExcludeFileError(filePath, "file not found");
-    }
-    if (!fileStat.isFile()) {
-      throw new ExcludeFileError(filePath, "must be a regular file (not a device or directory)");
-    }
-    if (fileStat.size > MAX_EXCLUDE_FILE_BYTES) {
-      throw new ExcludeFileError(
-        filePath,
-        `too large: ${fileStat.size} bytes (max ${MAX_EXCLUDE_FILE_BYTES / 1024 / 1024}MB)`,
-      );
-    }
-    const lines = parseLinesFromFile(filePath);
+    const lines = await readPatternFile(filePath, {
+      throwOnError: true,
+      symLinkCheck: true,
+    });
     for (const l of lines) {
       patterns.push(l);
       if (!sources.has(l)) {
@@ -189,20 +235,21 @@ export function resolveExcludePatterns(
     validatePattern(p);
   }
 
-  // Protected path checks
+  // Protected path checks (P2-010: glob bypass protection)
   for (const pattern of deduplicated) {
     const normalized = pattern.replace(/\/$/, "");
     for (const protectedPath of PROTECTED_PATHS) {
       const protectedNormalized = protectedPath.replace(/\/$/, "");
-      if (normalized === protectedNormalized) {
-        if (!spec.allowExcludeProtected) {
-          if (spec.nonInteractive) {
-            throw new ProtectedPathError(pattern);
-          }
-          console.warn(
-            `⚠️  Pattern "${pattern}" matches protected path "${protectedPath}". Use --allow-exclude-protected to override.`,
-          );
+      // Check exact match AND glob match via ignore
+      const wouldMatch =
+        normalized === protectedNormalized || ignore().add(pattern).ignores(protectedNormalized);
+      if (wouldMatch && !spec.allowExcludeProtected) {
+        if (spec.nonInteractive) {
+          throw new ProtectedPathError(pattern);
         }
+        console.warn(
+          `⚠️  Pattern "${pattern}" matches protected path "${protectedPath}". Use --allow-exclude-protected to override.`,
+        );
       }
     }
   }
@@ -211,7 +258,7 @@ export function resolveExcludePatterns(
 }
 
 // ---------------------------------------------------------------------------
-// Filter factory
+// Filter factory (P2-006: pre-built matchers, P2-009: no picomatch)
 // ---------------------------------------------------------------------------
 
 /**
@@ -257,10 +304,11 @@ export function buildExcludeFilter(
     }
   }
 
-  // Pre-compile picomatch matchers for glob patterns (CLI --exclude).
-  // These run only when `ignore` doesn't match — belt-and-suspenders.
-  const globPatterns = patterns.filter((p) => /[*?{[]/.test(p));
-  const picoMatcher = globPatterns.length > 0 ? picomatch(globPatterns, { dot: true }) : undefined;
+  // P2-006: Pre-build per-pattern matchers for O(P) attribution instead of O(P × compile).
+  const patternMatchers = (patterns as string[]).map((p) => ({
+    pattern: p,
+    matcher: ignore().add(p),
+  }));
 
   const excluded: ExcludedEntry[] = [];
 
@@ -296,8 +344,8 @@ export function buildExcludeFilter(
 
       // Glob path: use `ignore` package for gitignore-compliant matching.
       if (ig.ignores(rel)) {
-        // `ignore` doesn't expose which rule matched; find best match.
-        const matchedPattern = findMatchingPattern(rel, patterns) ?? "(pattern)";
+        // P2-006: Use pre-built matchers for attribution.
+        const matchedPattern = findMatchingPattern(rel, patternMatchers) ?? "(pattern)";
         excluded.push({
           path: rel,
           pattern: matchedPattern,
@@ -307,17 +355,7 @@ export function buildExcludeFilter(
         return false;
       }
 
-      // Fallback: picomatch for bash-style globs that `ignore` might not cover.
-      if (picoMatcher?.(rel)) {
-        const matchedPattern = findMatchingGlobPattern(rel, globPatterns) ?? "(glob)";
-        excluded.push({
-          path: rel,
-          pattern: matchedPattern,
-          source: sources.get(matchedPattern) ?? "cli",
-          bytes: stat.size ?? 0,
-        });
-        return false;
-      }
+      // P2-009: picomatch fallback removed — `ignore` handles all gitignore patterns.
 
       return true; // include
     } catch (err) {
@@ -342,28 +380,17 @@ export function buildExcludeFilter(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function findMatchingPattern(relPath: string, patterns: readonly string[]): string | undefined {
-  // Try each pattern individually with `ignore` to find which one matched.
-  for (const p of patterns) {
-    try {
-      if (ignore().add(p).ignores(relPath)) {
-        return p;
-      }
-    } catch {
-      // skip broken pattern
-    }
-  }
-  return undefined;
-}
-
-function findMatchingGlobPattern(
+/**
+ * P2-006: Uses pre-built matchers instead of creating new ignore() per call.
+ */
+function findMatchingPattern(
   relPath: string,
-  globPatterns: readonly string[],
+  matchers: ReadonlyArray<{ pattern: string; matcher: ReturnType<typeof ignore> }>,
 ): string | undefined {
-  for (const p of globPatterns) {
+  for (const { pattern, matcher } of matchers) {
     try {
-      if (picomatch.isMatch(relPath, p, { dot: true })) {
-        return p;
+      if (matcher.ignores(relPath)) {
+        return pattern;
       }
     } catch {
       // skip broken pattern

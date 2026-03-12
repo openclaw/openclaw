@@ -7,15 +7,12 @@ import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import * as tar from "tar";
 import {
-  buildExcludeFilter,
-  resolveExcludePatterns,
-  type ExcludeSpec,
-} from "../commands/backup-exclude.js";
-import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
+  listArchiveEntries,
   type BackupAsset,
+  type BackupManifestBase,
   type ExcludedEntry,
   type ExcludedStats,
   resolveBackupPlanFromDisk,
@@ -23,6 +20,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { buildExcludeFilter, resolveExcludePatterns, type ExcludeSpec } from "./backup-exclude.js";
 
 export type BackupCreateOptions = {
   output?: string;
@@ -38,6 +36,7 @@ export type BackupCreateOptions = {
   excludeFile?: string;
   includeAll?: boolean;
   allowExcludeProtected?: boolean;
+  nonInteractive?: boolean;
 };
 
 type BackupManifestAsset = {
@@ -46,13 +45,10 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
-type BackupManifest = {
+// P2-012: Writer manifest extends shared base with strict types.
+type BackupManifest = BackupManifestBase & {
   schemaVersion: 1;
-  createdAt: string;
-  archiveRoot: string;
-  runtimeVersion: string;
   platform: NodeJS.Platform;
-  nodeVersion: string;
   options: {
     includeWorkspace: boolean;
     onlyConfig?: boolean;
@@ -71,7 +67,6 @@ type BackupManifest = {
     reason: string;
     coveredBy?: string;
   }>;
-  excluded?: ExcludedEntry[];
   excludedStats?: ExcludedStats;
 };
 
@@ -317,7 +312,19 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
-function buildExcludedStats(excluded: readonly ExcludedEntry[]): ExcludedStats {
+// P3-017: byPattern computation is lazy — only built when jsonOutput is true.
+function buildExcludedStats(
+  excluded: readonly ExcludedEntry[],
+  opts?: { jsonOutput?: boolean },
+): ExcludedStats {
+  const totalFiles = excluded.length;
+  const totalBytes = excluded.reduce((sum, e) => sum + e.bytes, 0);
+
+  if (!opts?.jsonOutput) {
+    // Non-JSON output only displays totals — skip per-pattern aggregation.
+    return { totalFiles, totalBytes, byPattern: [] };
+  }
+
   const byPatternMap = new Map<string, { files: number; bytes: number; source: string }>();
   for (const entry of excluded) {
     const existing = byPatternMap.get(entry.pattern);
@@ -333,8 +340,8 @@ function buildExcludedStats(excluded: readonly ExcludedEntry[]): ExcludedStats {
     }
   }
   return {
-    totalFiles: excluded.length,
-    totalBytes: excluded.reduce((sum, e) => sum + e.bytes, 0),
+    totalFiles,
+    totalBytes,
     byPattern: [...byPatternMap.entries()].map(([pattern, stats]) => ({
       pattern,
       ...stats,
@@ -383,9 +390,9 @@ export async function createBackupArchive(
     includeAll: Boolean(opts.includeAll),
     smartExclude,
     allowExcludeProtected: Boolean(opts.allowExcludeProtected),
-    nonInteractive: false,
+    nonInteractive: Boolean(opts.nonInteractive),
   };
-  const { patterns: excludePatterns, sources: patternSources } = resolveExcludePatterns(
+  const { patterns: excludePatterns, sources: patternSources } = await resolveExcludePatterns(
     excludeSpec,
     plan.stateDir,
   );
@@ -482,7 +489,7 @@ export async function createBackupArchive(
       const excluded = getExcluded();
       if (excluded.length > 0) {
         result.excluded = [...excluded];
-        result.excludedStats = buildExcludedStats(excluded);
+        result.excludedStats = buildExcludedStats(excluded, { jsonOutput: Boolean(opts.json) });
       }
 
       // Write final manifest WITH excluded data.
@@ -534,6 +541,29 @@ export async function createBackupArchive(
         },
         [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
       );
+    }
+
+    // P3-016: Post-tar cross-check — verify archive contains expected assets.
+    {
+      const archiveEntries = await listArchiveEntries(tempArchivePath);
+      const entrySet = new Set(archiveEntries);
+      const excludedPaths = new Set((result.excluded ?? []).map((e) => e.path));
+      for (const asset of result.assets) {
+        const expectedPath = buildBackupArchivePath(archiveRoot, asset.sourcePath);
+        // Skip assets that were excluded — their absence is intentional.
+        if (excludedPaths.has(asset.sourcePath) || excludedPaths.has(asset.archivePath)) {
+          continue;
+        }
+        // Check for exact match or nested entries under this path.
+        const found =
+          entrySet.has(expectedPath) ||
+          archiveEntries.some((e) => e.startsWith(`${expectedPath}/`));
+        if (!found) {
+          throw new Error(
+            `Archive integrity check failed: missing payload for asset "${asset.sourcePath}" (expected "${expectedPath}")`,
+          );
+        }
+      }
     }
 
     await publishTempArchive({ tempArchivePath, outputPath });

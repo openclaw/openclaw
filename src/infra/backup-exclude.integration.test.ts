@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { backupCreateCommand } from "../commands/backup.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { backupCreateCommand } from "./backup.js";
 
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./backup-verify.js", () => ({
+vi.mock("../commands/backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
 }));
 
@@ -337,7 +337,9 @@ describe("backup verify — tolerant manifest reader", () => {
     // Import the REAL backupVerifyCommand — the module-scope vi.mock above
     // replaces it with a mock for the create tests. We need the real implementation
     // to actually verify archive integrity.
-    const real = await vi.importActual<typeof import("./backup-verify.js")>("./backup-verify.js");
+    const real = await vi.importActual<typeof import("../commands/backup-verify.js")>(
+      "../commands/backup-verify.js",
+    );
     realBackupVerifyCommand = real.backupVerifyCommand;
   });
 
