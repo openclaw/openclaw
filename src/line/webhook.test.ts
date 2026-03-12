@@ -98,6 +98,15 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
+  it("accepts signed verification-shaped requests without dispatching events", async () => {
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [] }),
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
   it("rejects missing signature when events are non-empty", async () => {
     const { res, onEvents } = await invokeWebhook({
       body: JSON.stringify({ events: [{ type: "message" }] }),

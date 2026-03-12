@@ -75,9 +75,6 @@ export function createLineNodeWebhookHandler(params: {
         : Math.min(maxBodyBytes, LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES);
       const rawBody = await readBody(req, bodyLimit, LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS);
 
-      // Parse once for signature-verified event processing.
-      const body = parseLineWebhookBody(rawBody);
-
       if (!hasSignature) {
         logVerbose("line: webhook missing X-Line-Signature header");
         res.statusCode = 400;
@@ -93,6 +90,8 @@ export function createLineNodeWebhookHandler(params: {
         res.end(JSON.stringify({ error: "Invalid signature" }));
         return;
       }
+
+      const body = parseLineWebhookBody(rawBody);
 
       if (!body) {
         res.statusCode = 400;

@@ -99,6 +99,19 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
+  it("accepts signed verification-shaped requests without dispatching events", async () => {
+    const rawBody = JSON.stringify({ events: [] });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
+
+    const { res, headers } = createRes();
+    await runSignedPost({ handler, rawBody, secret, res });
+
+    expect(res.statusCode).toBe(200);
+    expect(headers["content-type"]).toBe("application/json");
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
   it("returns 405 for non-GET/HEAD/POST methods", async () => {
     const { bot, handler } = createPostWebhookTestHarness(JSON.stringify({ events: [] }));
 
