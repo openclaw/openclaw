@@ -184,6 +184,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       shouldFlushDirectTextInbound({
         text: entry.message.text,
         cfg,
+        requiresDirectFlush: Boolean(entry.message.attachments && entry.message.attachments.length),
       }),
     onFlush: async (entries) => {
       const last = entries.at(-1);

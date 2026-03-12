@@ -24,10 +24,11 @@ describe("shouldDebounceTextInbound", () => {
 });
 
 describe("shouldFlushDirectTextInbound", () => {
-  it("marks control commands as priority even when debounce is otherwise disabled", () => {
+  it("marks control commands and structured payloads as priority", () => {
     const cfg = {} as Parameters<typeof shouldFlushDirectTextInbound>[0]["cfg"];
 
     expect(shouldFlushDirectTextInbound({ text: "/stop", cfg })).toBe(true);
+    expect(shouldFlushDirectTextInbound({ text: "", cfg, requiresDirectFlush: true })).toBe(true);
     expect(shouldFlushDirectTextInbound({ text: "hello there", cfg })).toBe(false);
     expect(shouldFlushDirectTextInbound({ text: "   ", cfg })).toBe(false);
   });

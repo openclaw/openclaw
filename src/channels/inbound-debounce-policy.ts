@@ -31,7 +31,11 @@ export function shouldFlushDirectTextInbound(params: {
   text: string | null | undefined;
   cfg: OpenClawConfig;
   commandOptions?: CommandNormalizeOptions;
+  requiresDirectFlush?: boolean;
 }): boolean {
+  if (params.requiresDirectFlush) {
+    return true;
+  }
   const text = params.text?.trim() ?? "";
   if (!text) {
     return false;

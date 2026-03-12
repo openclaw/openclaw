@@ -634,7 +634,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
       return !core.channel.text.hasControlCommand(entry.text, cfg);
     },
-    shouldFlushDirectWhenPending: (entry) => core.channel.text.hasControlCommand(entry.text, cfg),
+    shouldFlushDirectWhenPending: (entry) =>
+      entry.attachments.length > 0 || core.channel.text.hasControlCommand(entry.text, cfg),
     onFlush: async (entries) => {
       const last = entries.at(-1);
       if (!last) {

@@ -344,6 +344,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       shouldFlushDirectTextInbound({
         text: entry.bodyText,
         cfg: deps.cfg,
+        requiresDirectFlush: Boolean(
+          entry.mediaPath ||
+          entry.mediaType ||
+          entry.mediaPaths?.length ||
+          entry.mediaTypes?.length,
+        ),
       }),
     onFlush: async (entries) => {
       const last = entries.at(-1);

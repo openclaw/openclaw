@@ -107,6 +107,7 @@ export function createSlackMessageHandler(params: {
       shouldFlushDirectTextInbound({
         text: stripSlackMentionsForCommandDetection(entry.message.text ?? ""),
         cfg: ctx.cfg,
+        requiresDirectFlush: Boolean(entry.message.files && entry.message.files.length > 0),
       }),
     onFlush: async (entries) => {
       const last = entries.at(-1);

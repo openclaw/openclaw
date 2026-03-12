@@ -191,7 +191,15 @@ export async function monitorWebChannel(
       }
       return !hasControlCommand(msg.body, cfg);
     };
-    const shouldFlushDirectWhenPending = (msg: WebInboundMsg) => hasControlCommand(msg.body, cfg);
+    const shouldFlushDirectWhenPending = (msg: WebInboundMsg) =>
+      Boolean(
+        msg.mediaPath ||
+        msg.mediaType ||
+        msg.location ||
+        msg.replyToId ||
+        msg.replyToBody ||
+        hasControlCommand(msg.body, cfg),
+      );
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,

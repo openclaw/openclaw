@@ -1900,6 +1900,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return !core.channel.text.hasControlCommand(text, cfg);
     },
     shouldFlushDirectWhenPending: (entry) =>
+      Boolean(entry.post.file_ids?.length) ||
       core.channel.text.hasControlCommand(entry.post.message?.trim() ?? "", cfg),
     onFlush: async (entries) => {
       const last = entries.at(-1);

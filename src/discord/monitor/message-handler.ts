@@ -95,6 +95,10 @@ export function createDiscordMessageHandler(
       return shouldFlushDirectTextInbound({
         text: resolveDiscordMessageText(message, { includeForwarded: false }),
         cfg: params.cfg,
+        requiresDirectFlush: Boolean(
+          (message.attachments && message.attachments.length > 0) ||
+          hasDiscordMessageStickers(message),
+        ),
       });
     },
     onFlush: async (entries) => {
