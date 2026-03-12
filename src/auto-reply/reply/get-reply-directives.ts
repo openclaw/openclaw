@@ -26,6 +26,10 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
+function stripLeadingMentionPunctuationBeforeCommand(text: string): string {
+  return text.replace(/^[\s,.;:!?，。！？、:：'"()[\]{}-]+(?=\/)/u, "").trimStart();
+}
+
 export type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
@@ -249,11 +253,14 @@ export async function resolveReplyDirectives(params: {
         const oneShotCandidateNoMentions = isGroup
           ? stripMentions(oneShotCandidate, ctx, cfg, agentId)
           : oneShotCandidate;
+        const normalizedOneShotCandidate = stripLeadingMentionPunctuationBeforeCommand(
+          oneShotCandidateNoMentions,
+        );
         // Check the mention-stripped command text so group messages like "@bot /think high ..."
         // still preserve the one-shot level, while mid-text "/think" mentions remain plain text.
         const oneShotThinkLevel =
           parsedDirectives.hasThinkDirective &&
-          isOneShotThinkMessage(oneShotCandidateNoMentions, {
+          isOneShotThinkMessage(normalizedOneShotCandidate, {
             botUsername: ctx.BotUsername,
           })
             ? parsedDirectives.thinkLevel

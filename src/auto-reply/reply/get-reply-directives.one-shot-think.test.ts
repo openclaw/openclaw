@@ -116,6 +116,17 @@ describe("resolveReplyDirectives one-shot think", () => {
     expect(result.result.directives.hasThinkDirective).toBe(false);
   });
 
+  it("preserves one-shot think level when mention stripping leaves punctuation", async () => {
+    const result = await resolveReplyDirectives(baseParams("@bot, /think high explain this"));
+
+    expect(result.kind).toBe("continue");
+    if (result.kind !== "continue") {
+      throw new Error("expected continue result");
+    }
+    expect(result.result.directives.oneShotThinkLevel).toBe("high");
+    expect(result.result.directives.hasThinkDirective).toBe(false);
+  });
+
   it("does not treat mid-text think mentions as one-shot", async () => {
     const result = await resolveReplyDirectives(
       baseParams("@bot compare /think high vs /think low"),
