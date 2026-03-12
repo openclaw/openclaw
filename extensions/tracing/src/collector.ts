@@ -362,7 +362,7 @@ export class TraceCollector {
     const requesterKey = ctx.requesterSessionKey;
     if (!requesterKey) return;
 
-    const session = this.ensureSession({ sessionKey: requesterKey }, ctx);
+    const session = this.ensureSession({ sessionKey: requesterKey }, { sessionKey: requesterKey });
 
     const spanId = genId();
     const start = nowMs();
