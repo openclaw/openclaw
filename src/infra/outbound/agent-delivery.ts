@@ -88,9 +88,10 @@ export function resolveAgentDeliveryPlan(params: {
   });
 
   const resolvedChannel = (() => {
-    // Hard-reject internal sentinel channels. INTER_SESSION_CHANNEL is excluded
-    // from listGatewayMessageChannels() so external callers are already blocked,
-    // but defend here too in case the channel reaches delivery via another path.
+    // Internal sentinels must never resolve to a deliverable channel. Keep
+    // them on the internal/webchat path here so non-delivery flows stay
+    // internal; callers that request real delivery must reject sentinels
+    // before reaching this planner.
     if (
       requestedChannel &&
       RESERVED_CHANNEL_IDS.has(requestedChannel.toLowerCase()) &&

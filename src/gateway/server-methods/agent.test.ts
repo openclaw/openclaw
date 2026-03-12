@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import * as channelSelection from "../../infra/outbound/channel-selection.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -475,6 +476,55 @@ describe("gateway agent handler", () => {
       | undefined;
     expect(callArgs?.messageChannel).toBe("inter_session");
     expect(callArgs?.runContext?.messageChannel).toBe("inter_session");
+  });
+
+  it("rejects deliver=true when backend callers use the inter_session sentinel", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const selectionSpy = vi.spyOn(channelSelection, "resolveMessageChannelSelection");
+    selectionSpy.mockResolvedValue({
+      channel: "telegram",
+      configured: ["telegram"],
+      source: "single-configured",
+    });
+
+    const respond = await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        channel: "inter_session",
+        deliver: true,
+        idempotencyKey: "test-inter-session-backend-deliver",
+      },
+      {
+        reqId: "inter-session-backend-deliver-1",
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: {
+              id: "gateway-client",
+              mode: "backend",
+              version: "1.0.0",
+              platform: "node",
+            },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    selectionSpy.mockRestore();
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("inter_session"),
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("only forwards workspaceDir for spawned subagent runs", async () => {

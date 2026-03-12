@@ -481,6 +481,20 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const wantsDelivery = request.deliver === true;
+    const requestedInterSessionForDelivery = [request.channel, request.replyChannel].some((value) =>
+      isInterSessionChannel(normalizeMessageChannel(value)),
+    );
+    if (wantsDelivery && requestedInterSessionForDelivery) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "delivery channel cannot use the inter_session sentinel",
+        ),
+      );
+      return;
+    }
     const explicitTo =
       typeof request.replyTo === "string" && request.replyTo.trim()
         ? request.replyTo.trim()
