@@ -572,6 +572,8 @@ export function applyJobPatch(
   patch: CronJobPatch,
   opts?: { defaultAgentId?: string },
 ) {
+  const nextReuseSession =
+    "reuseSession" in patch ? (patch.reuseSession === true ? true : undefined) : job.reuseSession;
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -649,14 +651,17 @@ export function applyJobPatch(
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
-  if ("reuseSession" in patch) {
-    job.reuseSession = patch.reuseSession === true ? true : undefined;
-  }
   assertSupportedJobSpec(job);
-  assertSessionReuseSupport(job);
+  assertSessionReuseSupport({
+    sessionTarget: job.sessionTarget,
+    reuseSession: nextReuseSession,
+  });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  if ("reuseSession" in patch) {
+    job.reuseSession = nextReuseSession;
+  }
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {

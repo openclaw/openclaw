@@ -478,6 +478,7 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     expect(() => applyJobPatch(job, { reuseSession: true } as CronJobPatch)).toThrow(
       'cron reuseSession is only supported for sessionTarget="isolated"',
     );
+    expect(job.reuseSession).toBeUndefined();
   });
 });
 
