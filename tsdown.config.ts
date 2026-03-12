@@ -173,6 +173,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "line/template-messages": "src/line/template-messages.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    "gateway/server": "src/gateway/server.ts",
   };
 }
 

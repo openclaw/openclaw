@@ -434,7 +434,11 @@
       "types": "./dist/plugin-sdk/tool-send.d.ts",
       "default": "./dist/plugin-sdk/tool-send.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./openclaw.mjs",
+    "./gateway/server": {
+      "types": "./dist/gateway/server.d.ts",
+      "default": "./dist/gateway/server.js"
+    }
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
