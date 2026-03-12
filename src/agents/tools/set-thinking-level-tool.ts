@@ -78,6 +78,12 @@ export function createSetThinkingLevelTool(opts?: {
       const cfg = options.config ?? loadConfig();
       const priorRequestedLevel = options.getRequestedThinkingLevel?.();
       const levelRaw = readStringParam(params, "level", { required: true });
+      if (
+        scope === "turn" &&
+        (!options.setRequestedThinkingLevelForScope || !options.applyEffectiveThinkingLevel)
+      ) {
+        throw new ToolInputError("turn scope requires an active run thinking state");
+      }
       if (scope === "session" && !options.agentSessionKey) {
         throw new ToolInputError("session scope requires an active agent session");
       }

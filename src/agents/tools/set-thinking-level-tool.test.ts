@@ -191,6 +191,21 @@ describe("set_thinking_level tool", () => {
     ).rejects.toThrow(/session scope requires an active agent session/i);
   });
 
+  it("rejects turn scope when no live run thinking hooks are available", async () => {
+    const tool = createSetThinkingLevelTool({
+      provider: "openai",
+      modelId: "gpt-5",
+      reasoningSupported: true,
+    });
+
+    await expect(
+      tool.execute("call-turn-no-hooks", {
+        level: "high",
+        scope: "turn",
+      }),
+    ).rejects.toThrow(/turn scope requires an active run thinking state/i);
+  });
+
   it("persists the requested level but applies effective off when reasoning is unsupported", async () => {
     const fixture = await createSessionFixture();
     tempRoots.push(fixture.root);
