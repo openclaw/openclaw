@@ -58,6 +58,9 @@ export function createGatewayHooksRequestHandler(params: {
       agentId: value.agentId,
       name: value.name,
       schedule: { kind: "at", at: new Date(now).toISOString() },
+      // Hook sessions may be reused across runs (explicit or default sessionKey),
+      // so never auto-delete the session after delivery (#43866).
+      deleteAfterRun: false,
       wakeMode: value.wakeMode,
       payload: {
         kind: "agentTurn",
