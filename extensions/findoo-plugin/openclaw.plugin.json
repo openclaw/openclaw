@@ -10,7 +10,6 @@
     "properties": {
       "apiKey": {
         "type": "string",
-        "format": "password",
         "description": "Findoo license key (required). Also accepted via FINDOO_API_KEY env var."
       },
       "strategyAgentUrl": {

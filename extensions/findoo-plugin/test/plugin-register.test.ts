@@ -18,7 +18,12 @@ describe("findoo-plugin registration", () => {
       logs,
       pluginConfig: { apiKey: "test-license-key" },
       resolvePath: (p: string) => `/tmp/test/${p}`,
-      log: (level: string, msg: string) => logs.push({ level, msg }),
+      logger: {
+        info: (msg: string) => logs.push({ level: "info", msg }),
+        warn: (msg: string) => logs.push({ level: "warn", msg }),
+        error: (msg: string) => logs.push({ level: "error", msg }),
+        debug: (msg: string) => logs.push({ level: "debug", msg }),
+      },
       registerTool: (tool: { name: string }) => {
         tools.set(tool.name, tool);
       },

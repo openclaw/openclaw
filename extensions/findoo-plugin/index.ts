@@ -14,19 +14,19 @@ const findooPlugin = {
 
   register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
+    const log = api.logger;
 
     // ── License Gate: no key → skip all registration ──
     if (!config.apiKey) {
-      api.log?.(
-        "warn",
+      log.warn(
         "Findoo: license key not configured — plugin inactive. " +
           "Set FINDOO_API_KEY env var or configure in Control UI → Plugins → Findoo.",
       );
       return;
     }
 
-    api.log?.("info", `findoo-plugin: connecting to ${config.strategyAgentUrl}`);
-    api.log?.("info", `findoo-plugin: assistant ${config.strategyAssistantId}`);
+    log.info(`findoo-plugin: connecting to ${config.strategyAgentUrl}`);
+    log.info(`findoo-plugin: assistant ${config.strategyAssistantId}`);
 
     // Shared A2AClient instance (used by both tools and tracker)
     const a2a = new A2AClient(config.strategyAgentUrl, config.strategyAssistantId);
@@ -37,14 +37,13 @@ const findooPlugin = {
     })
       .then((r) => {
         if (r.ok) {
-          api.log?.("info", "findoo-plugin: strategy-agent is reachable ✓");
+          log.info("findoo-plugin: strategy-agent is reachable ✓");
         } else {
-          api.log?.("warn", `findoo-plugin: strategy-agent returned ${r.status}`);
+          log.warn(`findoo-plugin: strategy-agent returned ${r.status}`);
         }
       })
       .catch((err) => {
-        api.log?.(
-          "warn",
+        log.warn(
           `findoo-plugin: strategy-agent unreachable (${err instanceof Error ? err.message : err}). Tools will retry on use.`,
         );
       });
@@ -62,14 +61,17 @@ const findooPlugin = {
     const runtime = api.runtime as unknown as RuntimeServices | undefined;
     const enqueueSystemEvent = runtime?.system?.enqueueSystemEvent;
 
-    // ── PendingTaskTracker (background poller) ──
+    // ── PendingTaskTracker (background stream consumer) ──
     let tracker: PendingTaskTracker | undefined;
 
     if (enqueueSystemEvent) {
       tracker = new PendingTaskTracker({
         a2aClient: a2a,
         timeoutMs: config.taskTimeoutMs,
-        log: api.log ? (level, msg) => api.log!(level, msg) : undefined,
+        log: (level, msg) => {
+          if (level === "warn" || level === "error") log.warn(msg);
+          else log.info(msg);
+        },
 
         onTaskCompleted(task, result) {
           const summary = extractSummary(result);
@@ -87,13 +89,11 @@ const findooPlugin = {
         },
       });
 
-      api.log?.(
-        "info",
+      log.info(
         `findoo-plugin: task tracker ready (timeout=${config.taskTimeoutMs}ms, stream-based)`,
       );
     } else {
-      api.log?.(
-        "info",
+      log.info(
         "findoo-plugin: enqueueSystemEvent not available, tracker disabled (async results won't be pushed)",
       );
     }
