@@ -1,5 +1,5 @@
+import type { GatewayAuthResult } from "../../auth.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { GatewayAuthResult } from "../../protocol/index.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
