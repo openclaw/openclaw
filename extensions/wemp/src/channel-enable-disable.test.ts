@@ -1,10 +1,18 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { wempPlugin } from "../src/channel.js";
-import { registerWempWebhook, resolveRegisteredWebhook, unregisterWempWebhookByAccountId } from "../src/webhook.js";
 import type { ResolvedWempAccount } from "../src/types.js";
+import {
+  registerWempWebhook,
+  resolveRegisteredWebhook,
+  unregisterWempWebhookByAccountId,
+} from "../src/webhook.js";
 
-function accountFixture(params: { accountId: string; enabled: boolean; webhookPath: string }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  enabled: boolean;
+  webhookPath: string;
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: params.enabled,
@@ -26,7 +34,10 @@ function accountFixture(params: { accountId: string; enabled: boolean; webhookPa
   };
 }
 
-function createStartAccountContext(account: ResolvedWempAccount): { ctx: any; controller: AbortController } {
+function createStartAccountContext(account: ResolvedWempAccount): {
+  ctx: any;
+  controller: AbortController;
+} {
   const controller = new AbortController();
   let status: Record<string, unknown> = {};
   const ctx = {
@@ -59,11 +70,13 @@ test("startAccount skips webhook registration for disabled account and cleans st
   const stalePath = `/wemp-stale-${uid}`;
   const disabledPath = `/wemp-disabled-${uid}`;
 
-  registerWempWebhook(accountFixture({
-    accountId,
-    enabled: true,
-    webhookPath: stalePath,
-  }));
+  registerWempWebhook(
+    accountFixture({
+      accountId,
+      enabled: true,
+      webhookPath: stalePath,
+    }),
+  );
   assert.ok(resolveRegisteredWebhook(stalePath));
 
   const disabledAccount = accountFixture({

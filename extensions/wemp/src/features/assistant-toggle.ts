@@ -1,7 +1,11 @@
-import { readJsonFile, writeJsonFile, getWempDataRoot } from "../storage.js";
-import { encodePathSegment, registerBeforeExitFlusher, resolvePersistDebounceMs } from "./feature-persist.js";
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
+import { readJsonFile, writeJsonFile, getWempDataRoot } from "../storage.js";
+import {
+  encodePathSegment,
+  registerBeforeExitFlusher,
+  resolvePersistDebounceMs,
+} from "./feature-persist.js";
 
 const ACCOUNT_DIR = "assistant-toggle";
 const ACCOUNT_ROOT = path.join(getWempDataRoot(), ACCOUNT_DIR);
@@ -14,7 +18,10 @@ const PERSIST_DEBOUNCE_MS = resolvePersistDebounceMs(
 
 const stateByOpenId = new Map<string, boolean>();
 const MAX_TOGGLE_CACHE_ENTRIES = 10_000;
-const pendingPersistByOpenId = new Map<string, { accountId: string; openId: string; enabled: boolean }>();
+const pendingPersistByOpenId = new Map<
+  string,
+  { accountId: string; openId: string; enabled: boolean }
+>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 function ensureOpenIdDir(accountId: string): void {

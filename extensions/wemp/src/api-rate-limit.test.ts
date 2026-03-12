@@ -1,7 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import test from "node:test";
 import { getAccessToken, sendCustomTextMessage } from "../src/api.js";
 import { getWempDataRoot } from "../src/storage.js";
 import type { ResolvedWempAccount } from "../src/types.js";
@@ -57,15 +57,21 @@ test("sendCustomTextMessage enters local cooldown after WeChat rate limit respon
     fetchCount += 1;
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
-    return new Response(JSON.stringify({
-      errcode: 45009,
-      errmsg: "api freq out of limit",
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        errcode: 45009,
+        errmsg: "api freq out of limit",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
 
   t.after(() => {
@@ -107,10 +113,13 @@ test("getAccessToken loads persisted cache after module reload", async (t) => {
     fetchCount += 1;
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${seed}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${seed}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -118,7 +127,10 @@ test("getAccessToken loads persisted cache after module reload", async (t) => {
   const tokenA = await getAccessToken(account);
   assert.equal(tokenA, `token-${seed}`);
   assert.equal(fetchCount, 1);
-  const persisted = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, { token?: string }>;
+  const persisted = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<
+    string,
+    { token?: string }
+  >;
   assert.equal(persisted[account.accountId]?.token, `token-${seed}`);
 
   globalThis.fetch = (async () => {
@@ -149,10 +161,13 @@ test("getAccessToken deduplicates concurrent refresh requests", async (t) => {
     }
     tokenFetchCount += 1;
     await new Promise((resolve) => setTimeout(resolve, 30));
-    return new Response(JSON.stringify({
-      access_token: `token-concurrency-${seed}`,
-      expires_in: 7200,
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(
+      JSON.stringify({
+        access_token: `token-concurrency-${seed}`,
+        expires_in: 7200,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   }) as typeof fetch;
 
   const [tokenA, tokenB] = await Promise.all([

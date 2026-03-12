@@ -1,5 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { getAccessToken, recordUserInteraction } from "../src/api.js";
 import {
   sendFileByMediaId,
@@ -49,10 +49,13 @@ test("outbound serializes concurrent sends for the same target", async (t) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
       tokenCalls += 1;
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendCalls += 1;
@@ -62,10 +65,13 @@ test("outbound serializes concurrent sends for the same target", async (t) => {
         await new Promise((resolve) => setTimeout(resolve, 1));
       }
       inFlightSend -= 1;
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -100,23 +106,32 @@ test("outbound retries once and succeeds after token-expired failure", async (t)
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
       tokenCalls += 1;
-      return new Response(JSON.stringify({
-        access_token: `token-${tokenCalls}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${tokenCalls}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendCalls += 1;
       if (sendCalls === 1) {
-        return new Response(JSON.stringify({
-          errcode: 40001,
-          errmsg: "invalid credential",
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            errcode: 40001,
+            errmsg: "invalid credential",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -144,18 +159,24 @@ test("sendVoiceByMediaId sends voice msgtype with media_id", async (t) => {
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       assert.equal(typeof init?.body, "string");
       capturedPayloads.push(JSON.parse(init?.body as string) as Record<string, unknown>);
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -185,18 +206,24 @@ test("sendVideoByMediaId sends video msgtype with media_id", async (t) => {
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       assert.equal(typeof init?.body, "string");
       capturedPayloads.push(JSON.parse(init?.body as string) as Record<string, unknown>);
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -226,18 +253,24 @@ test("sendFileByMediaId sends file msgtype with media_id", async (t) => {
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       assert.equal(typeof init?.body, "string");
       capturedPayloads.push(JSON.parse(init?.body as string) as Record<string, unknown>);
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -273,23 +306,32 @@ test("outbound falls back to legacy outbound.retryCount/retryDelay", async (t) =
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendCalls += 1;
       if (sendCalls < 3) {
-        return new Response(JSON.stringify({
-          errcode: 45009,
-          errmsg: "api_freq_out_of_limit",
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            errcode: 45009,
+            errmsg: "api_freq_out_of_limit",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -320,17 +362,23 @@ test("outbound prefers canonical retries over legacy retryCount", async (t) => {
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendCalls += 1;
-      return new Response(JSON.stringify({
-        errcode: 45009,
-        errmsg: "api_freq_out_of_limit",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 45009,
+          errmsg: "api_freq_out_of_limit",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -357,23 +405,32 @@ test("outbound falls back to legacy top-level outboundRetryTimes/outboundRetryDe
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${account.accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${account.accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendCalls += 1;
       if (sendCalls === 1) {
-        return new Response(JSON.stringify({
-          errcode: 45009,
-          errmsg: "api_freq_out_of_limit",
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            errcode: 45009,
+            errmsg: "api_freq_out_of_limit",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;

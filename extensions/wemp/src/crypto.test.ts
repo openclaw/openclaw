@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildEncryptedReply, decryptWechatMessage, encryptWechatMessage, verifyMessageSignature, verifySignature } from "./crypto.js";
+import {
+  buildEncryptedReply,
+  decryptWechatMessage,
+  encryptWechatMessage,
+  verifyMessageSignature,
+  verifySignature,
+} from "./crypto.js";
 
 describe("wemp crypto", () => {
   it("verifySignature works with sorted token/timestamp/nonce", () => {
@@ -14,7 +20,8 @@ describe("wemp crypto", () => {
   it("encryptWechatMessage and decryptWechatMessage roundtrip", () => {
     const aesKey = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
     const appId = "wx_test_app_id";
-    const xml = "<xml><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content></xml>";
+    const xml =
+      "<xml><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[hello]]></Content></xml>";
     const encrypted = encryptWechatMessage(xml, aesKey, appId);
     const decrypted = decryptWechatMessage(encrypted, aesKey, appId);
     expect(decrypted).toBe(xml);
@@ -28,7 +35,14 @@ describe("wemp crypto", () => {
     const nonce = "abcdef";
     const xml = "<xml><Content><![CDATA[test]]></Content></xml>";
 
-    const reply = buildEncryptedReply({ xml, token, encodingAESKey: aesKey, appId, timestamp, nonce });
+    const reply = buildEncryptedReply({
+      xml,
+      token,
+      encodingAESKey: aesKey,
+      appId,
+      timestamp,
+      nonce,
+    });
     const encrypted = /<Encrypt><!\[CDATA\[(.*?)\]\]><\/Encrypt>/s.exec(reply)?.[1] || "";
     const signature = /<MsgSignature><!\[CDATA\[(.*?)\]\]><\/MsgSignature>/s.exec(reply)?.[1] || "";
     expect(encrypted.length).toBeGreaterThan(0);

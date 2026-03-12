@@ -1,6 +1,6 @@
+import { parsePositiveInt, resolveEnvString, postWebhookWithRetry } from "../notify-utils.js";
 import { readJsonFile, writeJsonFile } from "../storage.js";
 import type { WempHandoffTicketWebhookConfig } from "../types.js";
-import { parsePositiveInt, resolveEnvString, postWebhookWithRetry } from "../notify-utils.js";
 
 const HANDOFF_NOTIFY_FILE = "handoff-notify.json";
 const DEFAULT_NOTIFY_TIMEOUT_MS = 3_000;
@@ -43,7 +43,11 @@ function persistNotifyQueue(): void {
 }
 
 function notifyEndpoint(): string {
-  return resolveEnvString("WEMP_HANDOFF_NOTIFY_ENDPOINT", "WEMP_HANDOFF_WEBHOOK", "WEMP_HANDOFF_ENDPOINT");
+  return resolveEnvString(
+    "WEMP_HANDOFF_NOTIFY_ENDPOINT",
+    "WEMP_HANDOFF_WEBHOOK",
+    "WEMP_HANDOFF_ENDPOINT",
+  );
 }
 
 function notifyAuthToken(): string {
@@ -55,7 +59,9 @@ function parseTicketEvents(raw: string | undefined): Array<"activated" | "resume
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-  const events = normalized.filter((event): event is "activated" | "resumed" => event === "activated" || event === "resumed");
+  const events = normalized.filter(
+    (event): event is "activated" | "resumed" => event === "activated" || event === "resumed",
+  );
   return events.length ? Array.from(new Set(events)) : ["activated"];
 }
 
@@ -130,7 +136,9 @@ export function consumeHandoffNotifications(limit = 20): HandoffNotification[] {
   return picked;
 }
 
-export async function flushHandoffNotificationsToExternal(limit = DEFAULT_NOTIFY_BATCH_SIZE): Promise<HandoffNotifyFlushResult> {
+export async function flushHandoffNotificationsToExternal(
+  limit = DEFAULT_NOTIFY_BATCH_SIZE,
+): Promise<HandoffNotifyFlushResult> {
   const endpoint = notifyEndpoint();
   const authToken = notifyAuthToken();
   if (!endpoint && notifyQueue.every((item) => !item.deliveries?.ticket) && !ticketEndpoint()) {
@@ -143,8 +151,16 @@ export async function flushHandoffNotificationsToExternal(limit = DEFAULT_NOTIFY
     };
   }
 
-  const timeoutMs = parsePositiveInt(process.env.WEMP_HANDOFF_NOTIFY_TIMEOUT_MS, DEFAULT_NOTIFY_TIMEOUT_MS, 500);
-  const retries = parsePositiveInt(process.env.WEMP_HANDOFF_NOTIFY_RETRIES, DEFAULT_NOTIFY_RETRIES, 0);
+  const timeoutMs = parsePositiveInt(
+    process.env.WEMP_HANDOFF_NOTIFY_TIMEOUT_MS,
+    DEFAULT_NOTIFY_TIMEOUT_MS,
+    500,
+  );
+  const retries = parsePositiveInt(
+    process.env.WEMP_HANDOFF_NOTIFY_RETRIES,
+    DEFAULT_NOTIFY_RETRIES,
+    0,
+  );
   const maxBatch = Math.max(1, Math.floor(limit || DEFAULT_NOTIFY_BATCH_SIZE));
 
   let attempted = 0;
@@ -162,7 +178,8 @@ export async function flushHandoffNotificationsToExternal(limit = DEFAULT_NOTIFY
         ...(authToken ? { token: authToken } : {}),
       });
     }
-    const ticketDelivery = notification.deliveries?.ticket || resolveHandoffTicketDelivery(notification.type, null);
+    const ticketDelivery =
+      notification.deliveries?.ticket || resolveHandoffTicketDelivery(notification.type, null);
     if (ticketDelivery?.endpoint) {
       destinations.push({
         endpoint: ticketDelivery.endpoint,

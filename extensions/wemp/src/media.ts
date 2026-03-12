@@ -1,11 +1,14 @@
 import { downloadMedia, type WechatDownloadedMedia } from "./api.js";
 import type { ParsedWechatMessage } from "./inbound.js";
 import { logWarn } from "./log.js";
-import type { ResolvedWempAccount } from "./types.js";
 import { withTimeout, withTimeoutStatus } from "./timeout.js";
+import type { ResolvedWempAccount } from "./types.js";
 
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 1_500;
-const VOICE_TRANSCRIBE_TIMEOUT_MS = Math.max(100, Number(process.env.WEMP_VOICE_TRANSCRIBE_TIMEOUT_MS || 1_500));
+const VOICE_TRANSCRIBE_TIMEOUT_MS = Math.max(
+  100,
+  Number(process.env.WEMP_VOICE_TRANSCRIBE_TIMEOUT_MS || 1_500),
+);
 const MAX_SUMMARY_LENGTH = 300;
 const MAX_TRANSCRIPT_LENGTH = 120;
 
@@ -51,7 +54,9 @@ function readTranscribeEndpointFromConfig(account: ResolvedWempAccount): string 
 function resolveVoiceTranscribeEndpoint(account: ResolvedWempAccount): string {
   const endpointFromConfig = readTranscribeEndpointFromConfig(account);
   if (endpointFromConfig) return endpointFromConfig;
-  return String(process.env.WEMP_VOICE_TRANSCRIBE_ENDPOINT || process.env.VOICE_TRANSCRIBE_ENDPOINT || "").trim();
+  return String(
+    process.env.WEMP_VOICE_TRANSCRIBE_ENDPOINT || process.env.VOICE_TRANSCRIBE_ENDPOINT || "",
+  ).trim();
 }
 
 function hasVoiceRecognition(message: ParsedWechatMessage): boolean {
@@ -106,7 +111,9 @@ async function transcribeVoiceMedia(params: {
     format: params.message.format,
     contentType: params.media.contentType,
     filename,
-    audioBase64: params.media.bytes ? Buffer.from(params.media.bytes).toString("base64") : undefined,
+    audioBase64: params.media.bytes
+      ? Buffer.from(params.media.bytes).toString("base64")
+      : undefined,
   };
   try {
     const response = await fetch(params.endpoint, {
@@ -149,7 +156,11 @@ async function transcribeVoiceMedia(params: {
   }
 }
 
-function buildMediaSummary(message: ParsedWechatMessage, media: WechatDownloadedMedia, transcript?: string): string {
+function buildMediaSummary(
+  message: ParsedWechatMessage,
+  media: WechatDownloadedMedia,
+  transcript?: string,
+): string {
   const label = message.msgType === "voice" ? "语音" : "图片";
   const parts = [`${label}媒体下载成功`];
   if (message.mediaId) parts.push(`mediaId=${message.mediaId}`);
@@ -165,7 +176,10 @@ function buildMediaSummary(message: ParsedWechatMessage, media: WechatDownloaded
   return truncate(`[media-summary] ${parts.join(", ")}`, MAX_SUMMARY_LENGTH);
 }
 
-export async function buildInboundMediaSummary(account: ResolvedWempAccount, message: ParsedWechatMessage): Promise<string> {
+export async function buildInboundMediaSummary(
+  account: ResolvedWempAccount,
+  message: ParsedWechatMessage,
+): Promise<string> {
   const msgType = (message.msgType || "").toLowerCase();
   if ((msgType !== "image" && msgType !== "voice") || !message.mediaId) return "";
   const mediaId = String(message.mediaId || "").trim();

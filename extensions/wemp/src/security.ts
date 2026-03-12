@@ -1,12 +1,14 @@
-import type { ResolvedWempAccount } from "./types.js";
 import { formatPairingApproveHint } from "openclaw/plugin-sdk";
+import type { ResolvedWempAccount } from "./types.js";
 
 function normalizeAllowFrom(policy: string, allowFrom: string[]): string[] {
-  const normalized = Array.from(new Set(
-    (Array.isArray(allowFrom) ? allowFrom : [])
-      .map((entry) => String(entry || "").trim())
-      .filter(Boolean),
-  ));
+  const normalized = Array.from(
+    new Set(
+      (Array.isArray(allowFrom) ? allowFrom : [])
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean),
+    ),
+  );
   if (policy === "disabled") return [];
   if (policy === "open") {
     return normalized.includes("*") ? normalized : ["*", ...normalized];

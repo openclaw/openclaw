@@ -1,12 +1,21 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { estimateUsageTokens, handleEventAction, handleInboundMessage, handleSubscribeEvent, normalizeInboundText, parseWechatMessage, resolveInboundAgent, sanitizeInboundUserText } from "../src/inbound.js";
+import test from "node:test";
 import { isAssistantEnabled } from "../src/features/assistant-toggle.js";
 import { consumeHandoffNotifications } from "../src/features/handoff-notify.js";
-import { getWempDataRoot } from "../src/storage.js";
+import {
+  estimateUsageTokens,
+  handleEventAction,
+  handleInboundMessage,
+  handleSubscribeEvent,
+  normalizeInboundText,
+  parseWechatMessage,
+  resolveInboundAgent,
+  sanitizeInboundUserText,
+} from "../src/inbound.js";
 import type { ParsedWechatMessage } from "../src/inbound.js";
+import { getWempDataRoot } from "../src/storage.js";
 import type { ResolvedWempAccount } from "../src/types.js";
 
 const DATA_DIR = getWempDataRoot();
@@ -191,9 +200,25 @@ test("parseWechatMessage parses location/link/video/file xml fields", () => {
 });
 
 test("normalizeInboundText handles image voice and event", () => {
-  const image: ParsedWechatMessage = { toUserName: "to", fromUserName: "from", msgType: "image", picUrl: "https://x/y.jpg" };
-  const voice: ParsedWechatMessage = { toUserName: "to", fromUserName: "from", msgType: "voice", recognition: "语音识别文本" };
-  const event: ParsedWechatMessage = { toUserName: "to", fromUserName: "from", msgType: "event", event: "CLICK", eventKey: "assistant_on" };
+  const image: ParsedWechatMessage = {
+    toUserName: "to",
+    fromUserName: "from",
+    msgType: "image",
+    picUrl: "https://x/y.jpg",
+  };
+  const voice: ParsedWechatMessage = {
+    toUserName: "to",
+    fromUserName: "from",
+    msgType: "voice",
+    recognition: "语音识别文本",
+  };
+  const event: ParsedWechatMessage = {
+    toUserName: "to",
+    fromUserName: "from",
+    msgType: "event",
+    event: "CLICK",
+    eventKey: "assistant_on",
+  };
   assert.equal(normalizeInboundText(image), "[image] https://x/y.jpg");
   assert.equal(normalizeInboundText(voice), "语音识别文本");
   assert.equal(normalizeInboundText(event), "[event] click assistant_on");
@@ -236,10 +261,22 @@ test("normalizeInboundText handles location link video and file", () => {
     url: "https://example.com/file.pdf",
   };
 
-  assert.equal(normalizeInboundText(location), "[location] label=广东省广州市海珠区 | poi=客村 | coords=23.134521,113.358803 | scale=20");
-  assert.equal(normalizeInboundText(link), "[link] title=OpenClaw 文档 | desc=快速入门 | url=https://example.com/doc");
-  assert.equal(normalizeInboundText(video), "[video] title=产品演示 | desc=一分钟看完 | media=media-123 | thumb=thumb-456");
-  assert.equal(normalizeInboundText(file), "[file] name=报价单.pdf | media=file-media-1 | url=https://example.com/file.pdf");
+  assert.equal(
+    normalizeInboundText(location),
+    "[location] label=广东省广州市海珠区 | poi=客村 | coords=23.134521,113.358803 | scale=20",
+  );
+  assert.equal(
+    normalizeInboundText(link),
+    "[link] title=OpenClaw 文档 | desc=快速入门 | url=https://example.com/doc",
+  );
+  assert.equal(
+    normalizeInboundText(video),
+    "[video] title=产品演示 | desc=一分钟看完 | media=media-123 | thumb=thumb-456",
+  );
+  assert.equal(
+    normalizeInboundText(file),
+    "[file] name=报价单.pdf | media=file-media-1 | url=https://example.com/file.pdf",
+  );
 });
 
 test("handleEventAction supports assistant_status and usage_status", () => {
@@ -306,11 +343,22 @@ test("handleEventAction supports handoff mode status and resume", () => {
     const statusAfterResume = handleEventAction(account, statusMsg);
     assert.equal(statusAfterResume.handled, true);
     assert.match(String(statusAfterResume.replyText || ""), /AI 自动回复中/);
-    const notifications = JSON.parse(readFileSync(notifyFile, "utf8")) as Array<{ type?: string; openId?: string; reason?: string; deliveries?: { ticket?: { endpoint?: string } } }>;
+    const notifications = JSON.parse(readFileSync(notifyFile, "utf8")) as Array<{
+      type?: string;
+      openId?: string;
+      reason?: string;
+      deliveries?: { ticket?: { endpoint?: string } };
+    }>;
     const recent = notifications.slice(-2);
-    assert.deepEqual(recent.map((item) => item.type), ["activated", "resumed"]);
+    assert.deepEqual(
+      recent.map((item) => item.type),
+      ["activated", "resumed"],
+    );
     assert.ok(recent.every((item) => item.openId === openId));
-    assert.deepEqual(recent.map((item) => item.reason), ["click", "click"]);
+    assert.deepEqual(
+      recent.map((item) => item.reason),
+      ["click", "click"],
+    );
     assert.equal(recent[0]?.deliveries?.ticket?.endpoint, "https://tickets.example.com/handoff");
     assert.equal(recent[1]?.deliveries?.ticket, undefined);
   } finally {
@@ -392,4 +440,3 @@ test("handleInboundMessage applies dm policy semantics", async () => {
   });
   assert.equal(disabledResult.paired, false);
 });
-

@@ -1,5 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 function configFixture(): OpenClawConfig {
@@ -22,12 +22,12 @@ function accountId(prefix: string): string {
 
 let cachedSendMedia:
   | ((input: {
-    cfg: OpenClawConfig;
-    to: string;
-    text: string;
-    mediaUrl?: string;
-    accountId?: string | null;
-  }) => Promise<{ channel: string; messageId: string }>)
+      cfg: OpenClawConfig;
+      to: string;
+      text: string;
+      mediaUrl?: string;
+      accountId?: string | null;
+    }) => Promise<{ channel: string; messageId: string }>)
   | null = null;
 
 async function resolveSendMedia() {
@@ -74,10 +74,13 @@ test("channel outbound sendMedia 文本发送成功", async (t) => {
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: "token-text",
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: "token-text",
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendTextCalls += 1;
@@ -85,11 +88,14 @@ test("channel outbound sendMedia 文本发送成功", async (t) => {
       const payload = JSON.parse(init.body as string) as Record<string, unknown>;
       assert.equal(payload.msgtype, "text");
       assert.equal((payload.text as { content?: unknown } | undefined)?.content, "hello-text");
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-        msgid: "wx-msg-text-1",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+          msgid: "wx-msg-text-1",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -132,30 +138,39 @@ test("channel outbound sendMedia 媒体发送成功", async (t) => {
       });
     }
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: "token-media",
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: "token-media",
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/upload")) {
       uploadCalls += 1;
       uploadType = extractUploadType(value) || "";
-      return new Response(JSON.stringify({
-        type: "image",
-        media_id: "media-id-success",
-        created_at: 123456,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          type: "image",
+          media_id: "media-id-success",
+          created_at: 123456,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendImageCalls += 1;
       assert.equal(typeof init?.body, "string");
       const payload = JSON.parse(init!.body as string) as Record<string, unknown>;
       assert.equal(payload.msgtype, "image");
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-        msgid: "wx-msg-media-1",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+          msgid: "wx-msg-media-1",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -192,13 +207,14 @@ test("channel outbound sendMedia 拒绝不安全协议", async () => {
   }) as typeof fetch;
   try {
     await assert.rejects(
-      () => sendMedia({
-        cfg,
-        to: "open-id-protocol-reject",
-        text: "",
-        mediaUrl: "http://cdn.example.com/not-https.jpg",
-        accountId: accountId("acc-protocol-reject"),
-      }),
+      () =>
+        sendMedia({
+          cfg,
+          to: "open-id-protocol-reject",
+          text: "",
+          mediaUrl: "http://cdn.example.com/not-https.jpg",
+          accountId: accountId("acc-protocol-reject"),
+        }),
       /wemp_media_url_rejected:unsupported_protocol:http:/,
     );
     assert.equal(fetchCalls, 0);
@@ -218,13 +234,14 @@ test("channel outbound sendMedia 拒绝本地回环地址", async () => {
   }) as typeof fetch;
   try {
     await assert.rejects(
-      () => sendMedia({
-        cfg,
-        to: "open-id-host-reject",
-        text: "",
-        mediaUrl: "https://127.0.0.1/loopback.jpg",
-        accountId: accountId("acc-host-reject"),
-      }),
+      () =>
+        sendMedia({
+          cfg,
+          to: "open-id-host-reject",
+          text: "",
+          mediaUrl: "https://127.0.0.1/loopback.jpg",
+          accountId: accountId("acc-host-reject"),
+        }),
       /wemp_media_url_rejected:blocked_ipv4:127\.0\.0\.1/,
     );
     assert.equal(fetchCalls, 0);
@@ -274,28 +291,37 @@ test("channel outbound sendMedia 可路由 voice/video/file", async (t) => {
           });
         }
         if (value.includes("/cgi-bin/token")) {
-          return new Response(JSON.stringify({
-            access_token: `token-${item.name}`,
-            expires_in: 7200,
-          }), { status: 200, headers: { "content-type": "application/json" } });
+          return new Response(
+            JSON.stringify({
+              access_token: `token-${item.name}`,
+              expires_in: 7200,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
         }
         if (value.includes("/cgi-bin/media/upload")) {
           uploadType = extractUploadType(value) || "";
-          return new Response(JSON.stringify({
-            type: item.expectedUploadType,
-            media_id: `media-id-${item.name}`,
-            created_at: 123456,
-          }), { status: 200, headers: { "content-type": "application/json" } });
+          return new Response(
+            JSON.stringify({
+              type: item.expectedUploadType,
+              media_id: `media-id-${item.name}`,
+              created_at: 123456,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
         }
         if (value.includes("/cgi-bin/message/custom/send")) {
           assert.equal(typeof init?.body, "string");
           const payload = JSON.parse(init!.body as string) as Record<string, unknown>;
           messageType = String(payload.msgtype || "");
-          return new Response(JSON.stringify({
-            errcode: 0,
-            errmsg: "ok",
-            msgid: `wx-msg-${item.name}`,
-          }), { status: 200, headers: { "content-type": "application/json" } });
+          return new Response(
+            JSON.stringify({
+              errcode: 0,
+              errmsg: "ok",
+              msgid: `wx-msg-${item.name}`,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
         }
         throw new Error(`unexpected url: ${value}`);
       }) as typeof fetch;
@@ -331,16 +357,22 @@ test("channel outbound sendMedia 文本发送失败时不返回成功回执", as
   globalThis.fetch = (async (url: string | URL) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: "token-text-fail",
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: "token-text-fail",
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
-      return new Response(JSON.stringify({
-        errcode: 40003,
-        errmsg: "invalid openid",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 40003,
+          errmsg: "invalid openid",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -350,12 +382,13 @@ test("channel outbound sendMedia 文本发送失败时不返回成功回执", as
   });
 
   await assert.rejects(
-    () => sendMedia({
-      cfg,
-      to: "open-id-text-fail",
-      text: "hello-text-fail",
-      accountId: accountId("acc-text-fail"),
-    }),
+    () =>
+      sendMedia({
+        cfg,
+        to: "open-id-text-fail",
+        text: "hello-text-fail",
+        accountId: accountId("acc-text-fail"),
+      }),
     /wemp_outbound_text_failed:40003:invalid openid/,
   );
 });
@@ -380,13 +413,14 @@ test("channel outbound sendMedia mediaUrl 下载失败时抛错", async (t) => {
   });
 
   await assert.rejects(
-    () => sendMedia({
-      cfg,
-      to: "open-id-download-fail",
-      text: "",
-      mediaUrl,
-      accountId: accountId("acc-download-fail"),
-    }),
+    () =>
+      sendMedia({
+        cfg,
+        to: "open-id-download-fail",
+        text: "",
+        mediaUrl,
+        accountId: accountId("acc-download-fail"),
+      }),
     /wemp_media_download_failed:http_404/,
   );
 });
@@ -408,23 +442,32 @@ test("channel outbound sendMedia 上传失败时抛错", async (t) => {
       });
     }
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: "token-upload-fail",
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: "token-upload-fail",
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/upload")) {
-      return new Response(JSON.stringify({
-        errcode: 45009,
-        errmsg: "reach max api daily quota",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 45009,
+          errmsg: "reach max api daily quota",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
       sendImageCalls += 1;
-      return new Response(JSON.stringify({
-        errcode: 0,
-        errmsg: "ok",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          errmsg: "ok",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -434,13 +477,14 @@ test("channel outbound sendMedia 上传失败时抛错", async (t) => {
   });
 
   await assert.rejects(
-    () => sendMedia({
-      cfg,
-      to: "open-id-upload-fail",
-      text: "",
-      mediaUrl,
-      accountId: accountId("acc-upload-fail"),
-    }),
+    () =>
+      sendMedia({
+        cfg,
+        to: "open-id-upload-fail",
+        text: "",
+        mediaUrl,
+        accountId: accountId("acc-upload-fail"),
+      }),
     /wemp_media_upload_failed:45009:reach max api daily quota/,
   );
   assert.equal(sendImageCalls, 0);
@@ -462,23 +506,32 @@ test("channel outbound sendMedia 发送失败时抛错", async (t) => {
       });
     }
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: "token-send-fail",
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: "token-send-fail",
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/upload")) {
-      return new Response(JSON.stringify({
-        type: "image",
-        media_id: "media-id-send-fail",
-        created_at: 123456,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          type: "image",
+          media_id: "media-id-send-fail",
+          created_at: 123456,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/message/custom/send")) {
-      return new Response(JSON.stringify({
-        errcode: 40003,
-        errmsg: "invalid openid",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 40003,
+          errmsg: "invalid openid",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     throw new Error(`unexpected url: ${value}`);
   }) as typeof fetch;
@@ -488,13 +541,14 @@ test("channel outbound sendMedia 发送失败时抛错", async (t) => {
   });
 
   await assert.rejects(
-    () => sendMedia({
-      cfg,
-      to: "open-id-send-fail",
-      text: "",
-      mediaUrl,
-      accountId: accountId("acc-send-fail"),
-    }),
+    () =>
+      sendMedia({
+        cfg,
+        to: "open-id-send-fail",
+        text: "",
+        mediaUrl,
+        accountId: accountId("acc-send-fail"),
+      }),
     /wemp_media_send_failed:40003:invalid openid/,
   );
 });

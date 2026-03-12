@@ -1,10 +1,14 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { wempPlugin } from "../src/channel.js";
-import { resolveRegisteredWebhook, unregisterWempWebhookByAccountId } from "../src/webhook.js";
 import type { ResolvedWempAccount } from "../src/types.js";
+import { resolveRegisteredWebhook, unregisterWempWebhookByAccountId } from "../src/webhook.js";
 
-function accountFixture(params: { accountId: string; webhookPath: string; enabled?: boolean }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  webhookPath: string;
+  enabled?: boolean;
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: params.enabled ?? true,
@@ -66,28 +70,34 @@ test("reloadAccount updates webhook registration and supports disable cleanup", 
     unregisterWempWebhookByAccountId(accountId);
   });
 
-  const firstCtx = createReloadContext(accountFixture({
-    accountId,
-    webhookPath: firstPath,
-    enabled: true,
-  }));
+  const firstCtx = createReloadContext(
+    accountFixture({
+      accountId,
+      webhookPath: firstPath,
+      enabled: true,
+    }),
+  );
   await reloadAccount(firstCtx);
   assert.equal(resolveRegisteredWebhook(firstPath)?.accountId, accountId);
 
-  const secondCtx = createReloadContext(accountFixture({
-    accountId,
-    webhookPath: secondPath,
-    enabled: true,
-  }));
+  const secondCtx = createReloadContext(
+    accountFixture({
+      accountId,
+      webhookPath: secondPath,
+      enabled: true,
+    }),
+  );
   await reloadAccount(secondCtx);
   assert.equal(resolveRegisteredWebhook(firstPath), null);
   assert.equal(resolveRegisteredWebhook(secondPath)?.accountId, accountId);
 
-  const disabledCtx = createReloadContext(accountFixture({
-    accountId,
-    webhookPath: secondPath,
-    enabled: false,
-  }));
+  const disabledCtx = createReloadContext(
+    accountFixture({
+      accountId,
+      webhookPath: secondPath,
+      enabled: false,
+    }),
+  );
   await reloadAccount(disabledCtx);
   assert.equal(resolveRegisteredWebhook(secondPath), null);
   assert.equal(disabledCtx.getStatus().running, false);
@@ -129,5 +139,8 @@ test("reloadAccount rolls back to previous webhook when new config is invalid", 
   assert.equal(resolveRegisteredWebhook(invalidPath), null);
   assert.equal(invalidCtx.getStatus().running, true);
   assert.equal(invalidCtx.getStatus().connected, true);
-  assert.match(String(invalidCtx.getStatus().lastError || ""), /reload_rolled_back:invalid_account_config/);
+  assert.match(
+    String(invalidCtx.getStatus().lastError || ""),
+    /reload_rolled_back:invalid_account_config/,
+  );
 });

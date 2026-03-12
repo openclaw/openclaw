@@ -43,11 +43,7 @@ function templateConversationFlow(a: WempScaffoldAnswers): string[] {
       "3) 引导用户继续提问或收藏内容",
     ];
   }
-  return [
-    "1) 直接回答核心问题",
-    "2) 补充必要背景与边界说明",
-    "3) 提供下一步建议或转人工路径",
-  ];
+  return ["1) 直接回答核心问题", "2) 补充必要背景与边界说明", "3) 提供下一步建议或转人工路径"];
 }
 
 function baseIdentity(a: WempScaffoldAnswers) {
@@ -55,11 +51,21 @@ function baseIdentity(a: WempScaffoldAnswers) {
 }
 
 function baseSoul(a: WempScaffoldAnswers) {
-  return `# SOUL.md\n\n你是 ${a.brandName} 的微信公众号客服助手。${templateIntro(a)}\n\n核心原则：\n- 回复简洁、专业、友好\n- 不虚构事实，不乱承诺\n- 超出权限或涉及报价/交付/投诉时转人工\n- 在微信中优先短段落和短列表\n\n模板重点：\n${templateFocus(a).map((item) => `- ${item}`).join("\n")}\n`;
+  return `# SOUL.md\n\n你是 ${a.brandName} 的微信公众号客服助手。${templateIntro(a)}\n\n核心原则：\n- 回复简洁、专业、友好\n- 不虚构事实，不乱承诺\n- 超出权限或涉及报价/交付/投诉时转人工\n- 在微信中优先短段落和短列表\n\n模板重点：\n${templateFocus(
+    a,
+  )
+    .map((item) => `- ${item}`)
+    .join("\n")}\n`;
 }
 
 function baseAgents(a: WempScaffoldAnswers) {
-  return `# AGENTS.md\n\n## 工作目标\n- 接待未配对公众号用户\n- 回答基础问题\n- 推荐内容或服务\n- 在需要时引导人工联系\n\n## 服务对象\n${a.audience}\n\n## 核心服务\n${a.services}\n\n## 转人工规则\n${a.escalationRules}\n\n## 对话流程\n${templateConversationFlow(a).map((item) => `- ${item}`).join("\n")}\n\n## 回复要求\n- 以 50-200 字为主\n- 优先直接回答，不要长篇铺垫\n- 复杂内容用 3-5 条短列表\n- 对不确定内容明确说明不确定\n- 禁止承诺未确认的价格、交付时间或政策\n\n## 意向识别（适用于咨询场景）\n- 是否有明确目标（想解决什么问题）\n- 是否有时间预期（何时上线/交付）\n- 是否有资源约束（预算/团队/已有系统）\n- 满足转人工条件时主动给联系方式\n\n## 工具边界\n### 允许\n- 网页获取（web_fetch）\n- 网页搜索（web_search）\n- 知识库/记忆查询类工具\n- 基础内容解释与推荐\n\n### 禁止\n- exec / process\n- read / write / edit\n- browser / nodes / canvas\n- message（跨渠道主动发消息）\n- sessions_*\n- gateway / 系统配置修改\n- 任何高权限或跨系统操作\n`;
+  return `# AGENTS.md\n\n## 工作目标\n- 接待未配对公众号用户\n- 回答基础问题\n- 推荐内容或服务\n- 在需要时引导人工联系\n\n## 服务对象\n${a.audience}\n\n## 核心服务\n${a.services}\n\n## 转人工规则\n${a.escalationRules}\n\n## 对话流程\n${templateConversationFlow(
+    a,
+  )
+    .map((item) => `- ${item}`)
+    .join(
+      "\n",
+    )}\n\n## 回复要求\n- 以 50-200 字为主\n- 优先直接回答，不要长篇铺垫\n- 复杂内容用 3-5 条短列表\n- 对不确定内容明确说明不确定\n- 禁止承诺未确认的价格、交付时间或政策\n\n## 意向识别（适用于咨询场景）\n- 是否有明确目标（想解决什么问题）\n- 是否有时间预期（何时上线/交付）\n- 是否有资源约束（预算/团队/已有系统）\n- 满足转人工条件时主动给联系方式\n\n## 工具边界\n### 允许\n- 网页获取（web_fetch）\n- 网页搜索（web_search）\n- 知识库/记忆查询类工具\n- 基础内容解释与推荐\n\n### 禁止\n- exec / process\n- read / write / edit\n- browser / nodes / canvas\n- message（跨渠道主动发消息）\n- sessions_*\n- gateway / 系统配置修改\n- 任何高权限或跨系统操作\n`;
 }
 
 function baseUser(a: WempScaffoldAnswers) {
@@ -81,11 +87,12 @@ export function renderAgentFiles(a: WempScaffoldAnswers) {
 }
 
 export function renderKnowledgeFiles(a: WempScaffoldAnswers) {
-  const extra = a.template === "enterprise"
-    ? "- 强调业务能力、案例、合作路径\n"
-    : a.template === "content"
-      ? "- 强调内容推荐、文章导读、持续关注\n"
-      : "- 先覆盖基础问答与联系路径\n";
+  const extra =
+    a.template === "enterprise"
+      ? "- 强调业务能力、案例、合作路径\n"
+      : a.template === "content"
+        ? "- 强调内容推荐、文章导读、持续关注\n"
+        : "- 先覆盖基础问答与联系路径\n";
 
   return {
     "company.md": `# 公司/品牌介绍\n\n## 基础信息\n- 名称：${a.brandName}\n- 对外定位：\n- 一句话介绍：\n\n## 能力说明\n- 核心优势 1：\n- 核心优势 2：\n- 典型适用场景：\n\n## 禁止表述\n- 未确认的合作方背书\n- 无依据的效果承诺\n\n## 备注\n${extra}`,

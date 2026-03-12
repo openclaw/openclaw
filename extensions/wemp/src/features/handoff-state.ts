@@ -92,7 +92,12 @@ function normalizeTtlMs(ttlMs?: number): number {
   return Math.max(60_000, Math.floor(ttlMs!));
 }
 
-function clearExpired(record: HandoffPersistedRecord, accountId: string, openId: string, now: number): HandoffPersistedRecord {
+function clearExpired(
+  record: HandoffPersistedRecord,
+  accountId: string,
+  openId: string,
+  now: number,
+): HandoffPersistedRecord {
   if (!record.active || record.expireAt > now) return record;
   const next: HandoffPersistedRecord = {
     active: false,
@@ -112,7 +117,11 @@ function toSnapshot(record: HandoffPersistedRecord): HandoffStateSnapshot {
   };
 }
 
-export function activateHandoffState(accountId: string, openId: string, ttlMs?: number): HandoffStateSnapshot {
+export function activateHandoffState(
+  accountId: string,
+  openId: string,
+  ttlMs?: number,
+): HandoffStateSnapshot {
   const now = Date.now();
   evictStaleEntries(now);
   const next: HandoffPersistedRecord = {
@@ -137,7 +146,11 @@ export function clearHandoffState(accountId: string, openId: string): HandoffSta
   return toSnapshot(next);
 }
 
-export function getHandoffState(accountId: string, openId: string, now = Date.now()): HandoffStateSnapshot {
+export function getHandoffState(
+  accountId: string,
+  openId: string,
+  now = Date.now(),
+): HandoffStateSnapshot {
   const record = clearExpired(load(accountId, openId), accountId, openId, now);
   return toSnapshot(record);
 }

@@ -1,6 +1,14 @@
 export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null>;
-export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T>;
-export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback?: T): Promise<T | null> {
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T>;
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback?: T,
+): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
@@ -14,7 +22,10 @@ export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fal
   }
 }
 
-export async function withTimeoutStatus<T>(promise: Promise<T>, timeoutMs: number): Promise<{ value: T | null; timedOut: boolean }> {
+export async function withTimeoutStatus<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<{ value: T | null; timedOut: boolean }> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([

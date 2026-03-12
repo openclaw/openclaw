@@ -1,16 +1,20 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { ResolvedWempAccount } from "../src/types.js";
+import test from "node:test";
 import { sendText } from "../src/http.js";
 import { approvePairingCode, revokePairing } from "../src/pairing.js";
 import { clearWempRuntime, setWempRuntime } from "../src/runtime.js";
 import { getWempDataRoot } from "../src/storage.js";
-import { handleRegisteredWebhookRequest, registerWempWebhook, unregisterWempWebhook } from "../src/webhook.js";
+import type { ResolvedWempAccount } from "../src/types.js";
+import {
+  handleRegisteredWebhookRequest,
+  registerWempWebhook,
+  unregisterWempWebhook,
+} from "../src/webhook.js";
 
 const DATA_DIR = getWempDataRoot();
 
@@ -32,7 +36,11 @@ function restoreFile(file: string, snapshot: FileSnapshot): void {
   rmSync(file, { force: true });
 }
 
-function accountFixture(params: { accountId: string; webhookPath: string; allowFrom?: string[] }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  webhookPath: string;
+  allowFrom?: string[];
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: true,
@@ -47,7 +55,11 @@ function accountFixture(params: { accountId: string; webhookPath: string; allowF
       menu: { enabled: false, items: [] },
       assistantToggle: { enabled: true, defaultEnabled: false },
       usageLimit: { enabled: false, dailyMessages: 0, dailyTokens: 0, exemptPaired: true },
-      handoff: { enabled: true, contact: "客服微信: abc", message: "如需人工支持，请联系：{{contact}}" },
+      handoff: {
+        enabled: true,
+        contact: "客服微信: abc",
+        message: "如需人工支持，请联系：{{contact}}",
+      },
       welcome: { enabled: true, subscribeText: "欢迎关注" },
     },
     config: {},
@@ -107,7 +119,13 @@ async function postWebhook(params: {
   };
 }
 
-function buildTextMessageXml(params: { toUser: string; fromUser: string; createTime: string; msgId: string; content: string }): string {
+function buildTextMessageXml(params: {
+  toUser: string;
+  fromUser: string;
+  createTime: string;
+  msgId: string;
+  content: string;
+}): string {
   return `<xml>
 <ToUserName><![CDATA[${params.toUser}]]></ToUserName>
 <FromUserName><![CDATA[${params.fromUser}]]></FromUserName>
@@ -140,7 +158,10 @@ test("local e2e: unpaired inbound -> pairing prompt -> approve -> next inbound d
     restoreFile(pendingFile, pendingSnapshot);
     restoreFile(approvedFile, approvedSnapshot);
     restoreFile(notifyFile, notifySnapshot);
-    rmSync(path.join(DATA_DIR, "usage-limit", encodeURIComponent(accountId)), { recursive: true, force: true });
+    rmSync(path.join(DATA_DIR, "usage-limit", encodeURIComponent(accountId)), {
+      recursive: true,
+      force: true,
+    });
   });
 
   const server = await startWebhookServer();

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import * as path from "node:path";
-import { tmpdir } from "node:os";
 import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 interface FileSnapshot {

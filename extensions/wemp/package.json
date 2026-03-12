@@ -3,11 +3,11 @@
   "version": "2026.2.4",
   "description": "OpenClaw WeChat Official Account channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "dependencies": {
     "ajv": "^8.17.1"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
   },
   "openclaw": {
     "extensions": [
@@ -20,7 +20,9 @@
       "docsPath": "/channels/wemp",
       "docsLabel": "wemp",
       "blurb": "WeChat Official Account channel with paired/unpaired routing.",
-      "aliases": ["wechat"],
+      "aliases": [
+        "wechat"
+      ],
       "order": 86,
       "quickstartAllowFrom": true
     },

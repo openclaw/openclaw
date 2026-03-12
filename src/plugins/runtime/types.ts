@@ -69,7 +69,13 @@ export type PluginChannelDispatchInboundParams = {
 
 export type PluginChannelDispatchInbound = (
   params: PluginChannelDispatchInboundParams,
-) => Promise<Awaited<ReturnType<typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig>>>;
+) => Promise<
+  Awaited<
+    ReturnType<
+      typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig
+    >
+  >
+>;
 
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {

@@ -64,12 +64,22 @@ test("pairing reuses existing code and allows after approval", async (t) => {
   assert.equal(pairing.isPairingAllowed([], accountId, openId), true);
 
   const notifications = pairing.consumePairingNotifications(10);
-  assert.ok(notifications.some((item: { type?: string; subject?: string }) => item.type === "approved" && item.subject === first.subject));
+  assert.ok(
+    notifications.some(
+      (item: { type?: string; subject?: string }) =>
+        item.type === "approved" && item.subject === first.subject,
+    ),
+  );
 
   const revoked = pairing.revokePairing(accountId, openId);
   assert.equal(revoked.revoked, true);
   const revokeNotifications = pairing.consumePairingNotifications(10);
-  assert.ok(revokeNotifications.some((item: { type?: string; subject?: string }) => item.type === "revoked" && item.subject === first.subject));
+  assert.ok(
+    revokeNotifications.some(
+      (item: { type?: string; subject?: string }) =>
+        item.type === "revoked" && item.subject === first.subject,
+    ),
+  );
 });
 
 test("flushPairingNotificationsToExternal delivers requested/approved/revoked notifications", async (t) => {
@@ -104,12 +114,15 @@ test("flushPairingNotificationsToExternal delivers requested/approved/revoked no
 
   const events: Array<{ type?: string; subject?: string }> = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const payload = typeof init?.body === "string" ? JSON.parse(init.body) as any : {};
+    const payload = typeof init?.body === "string" ? (JSON.parse(init.body) as any) : {};
     events.push({
       type: payload?.data?.type,
       subject: payload?.data?.subject,
     });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   }) as typeof fetch;
 
   process.env.WEMP_PAIRING_NOTIFY_ENDPOINT = "https://pairing.example.com/notify";

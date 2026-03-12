@@ -72,8 +72,22 @@ function cleanup(now: number, ttlMs: number): void {
   if (changed) schedulePersist();
 }
 
-export function buildDedupKey(params: { accountId: string; openId?: string; msgId?: string; event?: string; eventKey?: string; createTime?: string }): string {
-  return [params.accountId, params.openId || "-", params.msgId || "-", params.event || "-", params.eventKey || "-", params.createTime || "-"].join(":");
+export function buildDedupKey(params: {
+  accountId: string;
+  openId?: string;
+  msgId?: string;
+  event?: string;
+  eventKey?: string;
+  createTime?: string;
+}): string {
+  return [
+    params.accountId,
+    params.openId || "-",
+    params.msgId || "-",
+    params.event || "-",
+    params.eventKey || "-",
+    params.createTime || "-",
+  ].join(":");
 }
 
 export function markIfNew(key: string, ttlMs = DEFAULT_TTL_MS): boolean {

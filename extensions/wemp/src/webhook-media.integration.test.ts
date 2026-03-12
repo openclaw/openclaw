@@ -1,14 +1,23 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ResolvedWempAccount } from "../src/types.js";
+import test from "node:test";
 import { sendText } from "../src/http.js";
 import { clearWempRuntime, setWempRuntime } from "../src/runtime.js";
-import { handleRegisteredWebhookRequest, registerWempWebhook, unregisterWempWebhook } from "../src/webhook.js";
+import type { ResolvedWempAccount } from "../src/types.js";
+import {
+  handleRegisteredWebhookRequest,
+  registerWempWebhook,
+  unregisterWempWebhook,
+} from "../src/webhook.js";
 
-function accountFixture(params: { accountId: string; webhookPath: string; allowFrom?: string[]; voiceTranscribeEndpoint?: string }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  webhookPath: string;
+  allowFrom?: string[];
+  voiceTranscribeEndpoint?: string;
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: true,
@@ -23,7 +32,11 @@ function accountFixture(params: { accountId: string; webhookPath: string; allowF
       menu: { enabled: false, items: [] },
       assistantToggle: { enabled: true, defaultEnabled: true },
       usageLimit: { enabled: false, dailyMessages: 0, dailyTokens: 0, exemptPaired: true },
-      handoff: { enabled: true, contact: "客服微信: abc", message: "如需人工支持，请联系：{{contact}}" },
+      handoff: {
+        enabled: true,
+        contact: "客服微信: abc",
+        message: "如需人工支持，请联系：{{contact}}",
+      },
       welcome: { enabled: true, subscribeText: "欢迎关注" },
     },
     config: params.voiceTranscribeEndpoint
@@ -80,7 +93,14 @@ async function postWebhook(params: {
   };
 }
 
-function buildImageMessageXml(params: { toUser: string; fromUser: string; createTime: string; msgId: string; picUrl: string; mediaId: string }): string {
+function buildImageMessageXml(params: {
+  toUser: string;
+  fromUser: string;
+  createTime: string;
+  msgId: string;
+  picUrl: string;
+  mediaId: string;
+}): string {
   return `<xml>
 <ToUserName><![CDATA[${params.toUser}]]></ToUserName>
 <FromUserName><![CDATA[${params.fromUser}]]></FromUserName>
@@ -92,7 +112,13 @@ function buildImageMessageXml(params: { toUser: string; fromUser: string; create
 </xml>`;
 }
 
-function buildVoiceMessageXml(params: { toUser: string; fromUser: string; createTime: string; msgId: string; mediaId: string }): string {
+function buildVoiceMessageXml(params: {
+  toUser: string;
+  fromUser: string;
+  createTime: string;
+  msgId: string;
+  mediaId: string;
+}): string {
   return `<xml>
 <ToUserName><![CDATA[${params.toUser}]]></ToUserName>
 <FromUserName><![CDATA[${params.fromUser}]]></FromUserName>
@@ -138,17 +164,20 @@ test("image inbound message appends media summary after successful download", as
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${uid}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${uid}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/get")) {
       return new Response(new Uint8Array([1, 2, 3, 4]), {
         status: 200,
         headers: {
           "content-type": "image/jpeg",
-          "content-disposition": "attachment; filename=\"photo.jpg\"",
+          "content-disposition": 'attachment; filename="photo.jpg"',
         },
       });
     }
@@ -217,16 +246,22 @@ test("voice inbound message degrades gracefully when media download fails", asyn
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${uid}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${uid}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/get")) {
-      return new Response(JSON.stringify({
-        errcode: 40007,
-        errmsg: "invalid media_id",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 40007,
+          errmsg: "invalid media_id",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     return originalFetch(url, init);
   }) as typeof fetch;
@@ -294,17 +329,20 @@ test("voice inbound message appends transcript summary when independent transcri
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${uid}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${uid}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/get")) {
       return new Response(new Uint8Array([8, 7, 6, 5]), {
         status: 200,
         headers: {
           "content-type": "audio/amr",
-          "content-disposition": "attachment; filename=\"voice.amr\"",
+          "content-disposition": 'attachment; filename="voice.amr"',
         },
       });
     }
@@ -315,9 +353,12 @@ test("voice inbound message appends transcript summary when independent transcri
       assert.equal(payload["mediaId"], mediaId);
       assert.equal(payload["contentType"], "audio/amr");
       assert.equal(typeof payload["audioBase64"], "string");
-      return new Response(JSON.stringify({
-        transcript: "这是独立转写摘要",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          transcript: "这是独立转写摘要",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     return originalFetch(url, init);
   }) as typeof fetch;
@@ -395,24 +436,30 @@ test("voice inbound message keeps media summary when transcribe endpoint fails v
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${uid}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${uid}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/get")) {
       return new Response(new Uint8Array([1, 2, 3, 4, 5]), {
         status: 200,
         headers: {
           "content-type": "audio/amr",
-          "content-disposition": "attachment; filename=\"voice-env.amr\"",
+          "content-disposition": 'attachment; filename="voice-env.amr"',
         },
       });
     }
     if (value === transcribeEndpoint) {
       transcribeCalls += 1;
       assert.equal(init?.method, "POST");
-      return new Response("upstream error", { status: 503, headers: { "content-type": "text/plain" } });
+      return new Response("upstream error", {
+        status: 503,
+        headers: { "content-type": "text/plain" },
+      });
     }
     return originalFetch(url, init);
   }) as typeof fetch;

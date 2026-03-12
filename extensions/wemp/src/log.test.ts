@@ -1,7 +1,14 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { wempPlugin } from "../src/channel.js";
-import { attachOpenClawLogBridge, detachOpenClawLogBridge, getLogLevel, logError, logInfo, setLogLevel } from "../src/log.js";
+import {
+  attachOpenClawLogBridge,
+  detachOpenClawLogBridge,
+  getLogLevel,
+  logError,
+  logInfo,
+  setLogLevel,
+} from "../src/log.js";
 import type { ResolvedWempAccount } from "../src/types.js";
 
 function accountFixture(accountId: string, webhookPath: string): ResolvedWempAccount {
@@ -19,7 +26,11 @@ function accountFixture(accountId: string, webhookPath: string): ResolvedWempAcc
       menu: { enabled: false, items: [] },
       assistantToggle: { enabled: true, defaultEnabled: true },
       usageLimit: { enabled: false, dailyMessages: 0, dailyTokens: 0, exemptPaired: true },
-      handoff: { enabled: true, contact: "客服微信: abc", message: "如需人工支持，请联系：{{contact}}" },
+      handoff: {
+        enabled: true,
+        contact: "客服微信: abc",
+        message: "如需人工支持，请联系：{{contact}}",
+      },
       welcome: { enabled: true, subscribeText: "欢迎关注" },
     },
     config: {},

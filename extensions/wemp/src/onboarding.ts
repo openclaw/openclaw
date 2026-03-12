@@ -8,10 +8,10 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
+import { listWempAccountIds, resolveDefaultWempAccountId, resolveWempAccount } from "./config.js";
+import { scaffoldWempKf } from "./scaffold.js";
 import type { WempScaffoldAnswers } from "./types.js";
 import { toRecord } from "./utils.js";
-import { scaffoldWempKf } from "./scaffold.js";
-import { listWempAccountIds, resolveDefaultWempAccountId, resolveWempAccount } from "./config.js";
 
 type WempDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
@@ -125,7 +125,15 @@ export const wempOnboardingInputSpec: WempOnboardingInputSpec = {
     unpairedAgentId: DEFAULT_UNPAIRED_AGENT_ID,
     answers: { ...DEFAULT_ANSWERS },
   },
-  requiredPatch: ["brandName", "audience", "services", "contact", "escalationRules", "tone", "template"],
+  requiredPatch: [
+    "brandName",
+    "audience",
+    "services",
+    "contact",
+    "escalationRules",
+    "tone",
+    "template",
+  ],
   optionalPatch: ["createSupportAgent", "supportAgentId", "pairedAgentId", "unpairedAgentId"],
   notes: [
     "输入缺失时会回退默认值，不会阻断 scaffold 执行。",
@@ -140,11 +148,41 @@ export const wempOnboardingStages: WempOnboardingStage[] = [
     description: "先完成公众号接入参数，保证 webhook 可用。",
     questions: [
       { id: "appId", label: "公众号 AppID", required: true, type: "text", placeholder: "wx_xxx" },
-      { id: "appSecret", label: "公众号 AppSecret", required: true, type: "text", placeholder: "secret" },
-      { id: "token", label: "校验 Token", required: true, type: "text", placeholder: "verify_token" },
-      { id: "encodingAESKey", label: "EncodingAESKey", required: false, type: "text", placeholder: "43 chars, optional" },
-      { id: "webhookPath", label: "Webhook Path", required: true, type: "text", placeholder: "/wemp" },
-      { id: "dmPolicy", label: "DM Policy", required: true, type: "select", options: ["pairing", "allowlist", "open", "disabled"] },
+      {
+        id: "appSecret",
+        label: "公众号 AppSecret",
+        required: true,
+        type: "text",
+        placeholder: "secret",
+      },
+      {
+        id: "token",
+        label: "校验 Token",
+        required: true,
+        type: "text",
+        placeholder: "verify_token",
+      },
+      {
+        id: "encodingAESKey",
+        label: "EncodingAESKey",
+        required: false,
+        type: "text",
+        placeholder: "43 chars, optional",
+      },
+      {
+        id: "webhookPath",
+        label: "Webhook Path",
+        required: true,
+        type: "text",
+        placeholder: "/wemp",
+      },
+      {
+        id: "dmPolicy",
+        label: "DM Policy",
+        required: true,
+        type: "select",
+        options: ["pairing", "allowlist", "open", "disabled"],
+      },
     ],
   },
   {
@@ -152,10 +190,33 @@ export const wempOnboardingStages: WempOnboardingStage[] = [
     title: "阶段 2：路由配置",
     description: "配置配对前后路由与客服 agent。",
     questions: [
-      { id: "pairedAgentId", label: "已配对路由 Agent", required: true, type: "text", placeholder: "main" },
-      { id: "createSupportAgent", label: "是否自动创建客服 Agent", required: true, type: "boolean" },
-      { id: "supportAgentId", label: "客服 Agent ID", required: true, type: "text", placeholder: "wemp-kf" },
-      { id: "unpairedAgentId", label: "未配对路由 Agent", required: true, type: "text", placeholder: "wemp-kf" },
+      {
+        id: "pairedAgentId",
+        label: "已配对路由 Agent",
+        required: true,
+        type: "text",
+        placeholder: "main",
+      },
+      {
+        id: "createSupportAgent",
+        label: "是否自动创建客服 Agent",
+        required: true,
+        type: "boolean",
+      },
+      {
+        id: "supportAgentId",
+        label: "客服 Agent ID",
+        required: true,
+        type: "text",
+        placeholder: "wemp-kf",
+      },
+      {
+        id: "unpairedAgentId",
+        label: "未配对路由 Agent",
+        required: true,
+        type: "text",
+        placeholder: "wemp-kf",
+      },
     ],
   },
   {
@@ -163,7 +224,13 @@ export const wempOnboardingStages: WempOnboardingStage[] = [
     title: "阶段 3：脚手架生成",
     description: "生成客服基础文件，不覆盖已有文件。",
     questions: [
-      { id: "template", label: "初始化模板", required: true, type: "select", options: ["enterprise", "content", "general"] },
+      {
+        id: "template",
+        label: "初始化模板",
+        required: true,
+        type: "select",
+        options: ["enterprise", "content", "general"],
+      },
     ],
   },
   {
@@ -193,7 +260,10 @@ export function buildDefaultOnboardingPlan(): WempOnboardingPlan {
   };
 }
 
-export function applyOnboardingAnswers(plan: WempOnboardingPlan, patch: Partial<WempScaffoldAnswers>): WempOnboardingPlan {
+export function applyOnboardingAnswers(
+  plan: WempOnboardingPlan,
+  patch: Partial<WempScaffoldAnswers>,
+): WempOnboardingPlan {
   const answers = plan.answers;
   return {
     ...plan,
@@ -211,7 +281,10 @@ export function applyOnboardingAnswers(plan: WempOnboardingPlan, patch: Partial<
 
 export function buildOnboardingPlan(input?: WempOnboardingInput): WempOnboardingPlan {
   const seed = buildDefaultOnboardingPlan();
-  const createSupportAgent = typeof input?.createSupportAgent === "boolean" ? input.createSupportAgent : seed.createSupportAgent;
+  const createSupportAgent =
+    typeof input?.createSupportAgent === "boolean"
+      ? input.createSupportAgent
+      : seed.createSupportAgent;
   const supportAgentId = normalizeAgentId(input?.supportAgentId, seed.supportAgentId);
   const pairedAgentId = normalizeAgentId(input?.pairedAgentId, seed.pairedAgentId);
   const unpairedFallback = createSupportAgent ? supportAgentId : seed.unpairedAgentId;
@@ -228,7 +301,10 @@ export function buildOnboardingPlan(input?: WempOnboardingInput): WempOnboarding
   return applyOnboardingAnswers(withRoute, extractAnswersPatch(input));
 }
 
-export function runOnboardingScaffold(workspaceRoot: string, plan: WempOnboardingPlan): WempOnboardingScaffoldResult {
+export function runOnboardingScaffold(
+  workspaceRoot: string,
+  plan: WempOnboardingPlan,
+): WempOnboardingScaffoldResult {
   if (!plan.createSupportAgent) {
     return {
       supportAgentId: plan.supportAgentId,
@@ -239,7 +315,10 @@ export function runOnboardingScaffold(workspaceRoot: string, plan: WempOnboardin
   }
   const root = normalizeWorkspaceRoot(workspaceRoot);
   const result = scaffoldWempKf(root, plan.answers, plan.supportAgentId);
-  const summary = [`已初始化客服 agent: ${plan.supportAgentId}`, `新增文件: ${result.created.length}，已存在跳过: ${result.skipped.length}`];
+  const summary = [
+    `已初始化客服 agent: ${plan.supportAgentId}`,
+    `新增文件: ${result.created.length}，已存在跳过: ${result.skipped.length}`,
+  ];
   return {
     agentRoot: result.agentRoot,
     supportAgentId: plan.supportAgentId,
@@ -249,7 +328,10 @@ export function runOnboardingScaffold(workspaceRoot: string, plan: WempOnboardin
   };
 }
 
-export function executeWempOnboarding(workspaceRoot: string, input?: WempOnboardingInput): WempOnboardingExecutionResult {
+export function executeWempOnboarding(
+  workspaceRoot: string,
+  input?: WempOnboardingInput,
+): WempOnboardingExecutionResult {
   const plan = buildOnboardingPlan(input);
   const scaffold = runOnboardingScaffold(workspaceRoot, plan);
   return {
@@ -258,7 +340,9 @@ export function executeWempOnboarding(workspaceRoot: string, input?: WempOnboard
   };
 }
 
-export function createWempScaffoldHandler(options?: { workspaceRoot?: string }): WempOnboardingHandler {
+export function createWempScaffoldHandler(options?: {
+  workspaceRoot?: string;
+}): WempOnboardingHandler {
   const fallbackRoot = normalizeWorkspaceRoot(options?.workspaceRoot);
   return {
     id: "wemp",
@@ -281,21 +365,20 @@ function parseWempDmPolicy(value: unknown): WempDmPolicy {
 }
 
 function normalizeAllowFromEntries(raw: string[]): string[] {
-  return Array.from(new Set(
-    raw
-      .map((entry) => String(entry || "").trim())
-      .filter(Boolean),
-  ));
+  return Array.from(new Set(raw.map((entry) => String(entry || "").trim()).filter(Boolean)));
 }
 
 function setWempDmPolicy(cfg: OpenClawConfig, dmPolicy: WempDmPolicy): OpenClawConfig {
   const channels = toRecord(cfg.channels);
   const wemp = toRecord(channels.wemp);
   const dm = toRecord(wemp.dm);
-  const existingAllowFrom = normalizeAllowFromEntries(Array.isArray(dm.allowFrom) ? dm.allowFrom as string[] : []);
-  const allowFrom = dmPolicy === "open"
-    ? normalizeAllowFromEntries(addWildcardAllowFrom(existingAllowFrom) as string[])
-    : existingAllowFrom;
+  const existingAllowFrom = normalizeAllowFromEntries(
+    Array.isArray(dm.allowFrom) ? (dm.allowFrom as string[]) : [],
+  );
+  const allowFrom =
+    dmPolicy === "open"
+      ? normalizeAllowFromEntries(addWildcardAllowFrom(existingAllowFrom) as string[])
+      : existingAllowFrom;
 
   return {
     ...cfg,
@@ -357,7 +440,11 @@ function applyWempAccountConfig(
   } as OpenClawConfig;
 }
 
-function setWempAllowFrom(cfg: OpenClawConfig, accountId: string, allowFrom: string[]): OpenClawConfig {
+function setWempAllowFrom(
+  cfg: OpenClawConfig,
+  accountId: string,
+  allowFrom: string[],
+): OpenClawConfig {
   const normalizedAllowFrom = normalizeAllowFromEntries(allowFrom);
   const channels = toRecord(cfg.channels);
   const wemp = toRecord(channels.wemp);
@@ -529,7 +616,9 @@ export function createWempOnboarding(): ChannelOnboardingAdapter {
     }) => {
       const override = accountOverrides.wemp?.trim();
       const defaultAccountId = resolveDefaultWempAccountId(cfg);
-      let accountId = override ? (normalizeAccountId(override) ?? DEFAULT_ACCOUNT_ID) : defaultAccountId;
+      let accountId = override
+        ? (normalizeAccountId(override) ?? DEFAULT_ACCOUNT_ID)
+        : defaultAccountId;
       if (shouldPromptAccountIds && !override) {
         accountId = await promptAccountId({
           cfg,
@@ -600,7 +689,10 @@ export function createWempOnboarding(): ChannelOnboardingAdapter {
 
 export const buildWempOnboarding = createWempScaffoldHandler;
 
-function normalizeRunArgs(args: unknown[], fallbackRoot: string): { workspaceRoot: string; input?: WempOnboardingInput } {
+function normalizeRunArgs(
+  args: unknown[],
+  fallbackRoot: string,
+): { workspaceRoot: string; input?: WempOnboardingInput } {
   if (args.length === 0) {
     return { workspaceRoot: fallbackRoot };
   }
@@ -623,7 +715,10 @@ function normalizeRunArgs(args: unknown[], fallbackRoot: string): { workspaceRoo
   }
 
   const inputFromFirst = first?.input;
-  if (asRecord(inputFromFirst) && looksLikeOnboardingInput(inputFromFirst as Record<string, unknown>)) {
+  if (
+    asRecord(inputFromFirst) &&
+    looksLikeOnboardingInput(inputFromFirst as Record<string, unknown>)
+  ) {
     return { workspaceRoot, input: inputFromFirst as WempOnboardingInput };
   }
 
@@ -656,7 +751,10 @@ function extractAnswersPatch(input?: WempOnboardingInput): Partial<WempScaffoldA
   return patch;
 }
 
-function normalizeTemplate(template: unknown, fallback: WempScaffoldAnswers["template"]): WempScaffoldAnswers["template"] {
+function normalizeTemplate(
+  template: unknown,
+  fallback: WempScaffoldAnswers["template"],
+): WempScaffoldAnswers["template"] {
   if (template === "enterprise" || template === "content" || template === "general") {
     return template;
   }

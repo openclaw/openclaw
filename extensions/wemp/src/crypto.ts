@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 
 function sha1Hex(parts: string[]): string {
   return createHash("sha1").update(parts.sort().join("")).digest("hex");
@@ -13,11 +19,22 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-export function verifySignature(signature: string, timestamp: string, nonce: string, token: string): boolean {
+export function verifySignature(
+  signature: string,
+  timestamp: string,
+  nonce: string,
+  token: string,
+): boolean {
   return safeEqual(sha1Hex([token, timestamp, nonce]), signature);
 }
 
-export function verifyMessageSignature(signature: string, timestamp: string, nonce: string, encrypted: string, token: string): boolean {
+export function verifyMessageSignature(
+  signature: string,
+  timestamp: string,
+  nonce: string,
+  encrypted: string,
+  token: string,
+): boolean {
   return safeEqual(sha1Hex([token, timestamp, nonce, encrypted]), signature);
 }
 
@@ -40,12 +57,19 @@ function pkcs7Pad(buf: Buffer, blockSize = 32): Buffer {
   return Buffer.concat([buf, Buffer.alloc(amount, amount)]);
 }
 
-export function decryptWechatMessage(encrypted: string, encodingAESKey: string, appId?: string): string {
+export function decryptWechatMessage(
+  encrypted: string,
+  encodingAESKey: string,
+  appId?: string,
+): string {
   const key = decodeAesKey(encodingAESKey);
   const iv = key.subarray(0, 16);
   const decipher = createDecipheriv("aes-256-cbc", key, iv);
   decipher.setAutoPadding(false);
-  const decrypted = Buffer.concat([decipher.update(Buffer.from(encrypted, "base64")), decipher.final()]);
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(encrypted, "base64")),
+    decipher.final(),
+  ]);
   const plain = pkcs7Unpad(decrypted);
   const msgLength = plain.readUInt32BE(16);
   const xmlStart = 20;

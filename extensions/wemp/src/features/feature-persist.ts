@@ -22,7 +22,9 @@ export function resolvePersistDebounceMs(...candidates: Array<unknown>): number 
 }
 
 function getBeforeExitFlushRegistry(): BeforeExitFlushRegistry {
-  const scopedGlobal = globalThis as typeof globalThis & { [BEFORE_EXIT_FLUSHERS_KEY]?: BeforeExitFlushRegistry };
+  const scopedGlobal = globalThis as typeof globalThis & {
+    [BEFORE_EXIT_FLUSHERS_KEY]?: BeforeExitFlushRegistry;
+  };
   const existing = scopedGlobal[BEFORE_EXIT_FLUSHERS_KEY];
   if (existing) return existing;
   const created: BeforeExitFlushRegistry = { installed: false, flushers: new Map() };

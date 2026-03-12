@@ -19,9 +19,18 @@ export interface ReadRequestBodyOptions {
   timeoutMs?: number;
 }
 
-export async function readRequestBody(req: IncomingMessage, options: ReadRequestBodyOptions = {}): Promise<string> {
-  const maxBytes = Number.isFinite(options.maxBytes) && Number(options.maxBytes) > 0 ? Math.floor(Number(options.maxBytes)) : MAX_BODY_SIZE;
-  const timeoutMs = Number.isFinite(options.timeoutMs) && Number(options.timeoutMs) > 0 ? Math.floor(Number(options.timeoutMs)) : 0;
+export async function readRequestBody(
+  req: IncomingMessage,
+  options: ReadRequestBodyOptions = {},
+): Promise<string> {
+  const maxBytes =
+    Number.isFinite(options.maxBytes) && Number(options.maxBytes) > 0
+      ? Math.floor(Number(options.maxBytes))
+      : MAX_BODY_SIZE;
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && Number(options.timeoutMs) > 0
+      ? Math.floor(Number(options.timeoutMs))
+      : 0;
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let totalBytes = 0;
@@ -91,7 +100,12 @@ export function getSearchParams(url: string | undefined): URLSearchParams {
   return new URL(url || "/", "http://localhost").searchParams;
 }
 
-export function sendText(res: ServerResponse, statusCode: number, body: string, contentType = "text/plain; charset=utf-8"): void {
+export function sendText(
+  res: ServerResponse,
+  statusCode: number,
+  body: string,
+  contentType = "text/plain; charset=utf-8",
+): void {
   res.statusCode = statusCode;
   res.setHeader("content-type", contentType);
   res.end(body);
@@ -110,7 +124,12 @@ function escapeCdata(value: string): string {
   return String(value || "").replace(/\]\]>/g, "]]]]><![CDATA[>");
 }
 
-export function buildPassiveTextReply(toUser: string, fromUser: string, content: string, createTime = Math.floor(Date.now() / 1000)): string {
+export function buildPassiveTextReply(
+  toUser: string,
+  fromUser: string,
+  content: string,
+  createTime = Math.floor(Date.now() / 1000),
+): string {
   return `<xml>\n<ToUserName><![CDATA[${escapeCdata(toUser)}]]></ToUserName>\n<FromUserName><![CDATA[${escapeCdata(fromUser)}]]></FromUserName>\n<CreateTime>${createTime}</CreateTime>\n<MsgType><![CDATA[text]]></MsgType>\n<Content><![CDATA[${escapeCdata(content)}]]></Content>\n</xml>`;
 }
 
@@ -121,9 +140,18 @@ export interface PassiveNewsItem {
   url: string;
 }
 
-export function buildPassiveNewsReply(toUser: string, fromUser: string, articles: PassiveNewsItem[], createTime = Math.floor(Date.now() / 1000)): string {
-  const items = articles.slice(0, 8).map((article) =>
-    `<item>\n<Title><![CDATA[${escapeCdata(article.title)}]]></Title>\n<Description><![CDATA[${escapeCdata(article.description)}]]></Description>\n<PicUrl><![CDATA[${escapeCdata(article.picUrl)}]]></PicUrl>\n<Url><![CDATA[${escapeCdata(article.url)}]]></Url>\n</item>`
-  ).join("\n");
+export function buildPassiveNewsReply(
+  toUser: string,
+  fromUser: string,
+  articles: PassiveNewsItem[],
+  createTime = Math.floor(Date.now() / 1000),
+): string {
+  const items = articles
+    .slice(0, 8)
+    .map(
+      (article) =>
+        `<item>\n<Title><![CDATA[${escapeCdata(article.title)}]]></Title>\n<Description><![CDATA[${escapeCdata(article.description)}]]></Description>\n<PicUrl><![CDATA[${escapeCdata(article.picUrl)}]]></PicUrl>\n<Url><![CDATA[${escapeCdata(article.url)}]]></Url>\n</item>`,
+    )
+    .join("\n");
   return `<xml>\n<ToUserName><![CDATA[${escapeCdata(toUser)}]]></ToUserName>\n<FromUserName><![CDATA[${escapeCdata(fromUser)}]]></FromUserName>\n<CreateTime>${createTime}</CreateTime>\n<MsgType><![CDATA[news]]></MsgType>\n<ArticleCount>${articles.slice(0, 8).length}</ArticleCount>\n<Articles>\n${items}\n</Articles>\n</xml>`;
 }

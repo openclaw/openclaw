@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function loadWempPlugin() {
   vi.resetModules();
@@ -108,7 +108,9 @@ describe("wemp channel setup", () => {
       enabled: false,
     });
     expect((defaultDisabled.channels as Record<string, any>).wemp.enabled).toBe(false);
-    expect((defaultDisabled.channels as Record<string, any>).wemp.accounts.branda.enabled).toBe(true);
+    expect((defaultDisabled.channels as Record<string, any>).wemp.accounts.branda.enabled).toBe(
+      true,
+    );
 
     const namedDisabled = wempPlugin.config.setAccountEnabled({
       cfg,
@@ -116,7 +118,9 @@ describe("wemp channel setup", () => {
       enabled: false,
     });
     expect((namedDisabled.channels as Record<string, any>).wemp.enabled).toBe(true);
-    expect((namedDisabled.channels as Record<string, any>).wemp.accounts.branda.enabled).toBe(false);
+    expect((namedDisabled.channels as Record<string, any>).wemp.accounts.branda.enabled).toBe(
+      false,
+    );
   });
 
   it("deleteAccount 覆盖 default 与 named 分支", async () => {

@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
-import { readJsonFile, writeJsonFile } from "./storage.js";
 import { parsePositiveInt, resolveEnvString, postWebhookWithRetry } from "./notify-utils.js";
+import { readJsonFile, writeJsonFile } from "./storage.js";
 import type { WempDmPolicy } from "./types.js";
 
 const PENDING_FILE = "pairing-pending.json";
@@ -71,7 +71,9 @@ const pendingByCode = new Map<string, PairingPendingRecord>(
   Object.entries(readJsonFile<Record<string, PairingPendingRecord>>(PENDING_FILE, {})),
 );
 const approvedBySubject = new Map<string, PairingApprovedRecord>(
-  Object.entries(readJsonFile<Record<string, PairingApprovedRecord>>(APPROVED_FILE, {})).map(([, item]) => [item.subject, item]),
+  Object.entries(readJsonFile<Record<string, PairingApprovedRecord>>(APPROVED_FILE, {})).map(
+    ([, item]) => [item.subject, item],
+  ),
 );
 const notifyQueue = readJsonFile<PairingNotification[]>(NOTIFY_FILE, []);
 
@@ -100,7 +102,11 @@ function emitPairingNotification(notification: PairingNotification): void {
 }
 
 function notifyEndpoint(): string {
-  return resolveEnvString("WEMP_PAIRING_NOTIFY_ENDPOINT", "WEMP_PAIRING_WEBHOOK", "WEMP_PAIRING_ENDPOINT");
+  return resolveEnvString(
+    "WEMP_PAIRING_NOTIFY_ENDPOINT",
+    "WEMP_PAIRING_WEBHOOK",
+    "WEMP_PAIRING_ENDPOINT",
+  );
 }
 
 function notifyAuthToken(): string {
@@ -174,7 +180,11 @@ export function buildPairingSubject(accountId: string, openId: string): string {
   return `${accountId}:${openId}`;
 }
 
-export function requestPairing(accountId: string, openId: string, ttlMs = DEFAULT_TTL_MS): PairingRequestResult {
+export function requestPairing(
+  accountId: string,
+  openId: string,
+  ttlMs = DEFAULT_TTL_MS,
+): PairingRequestResult {
   const subject = buildPairingSubject(accountId, openId);
   const existing = findPendingBySubject(subject);
   if (existing) {
@@ -272,7 +282,10 @@ export function queryPairingSubject(accountId: string, openId: string): PairingS
   };
 }
 
-export function revokePairing(accountId: string, openId: string): { revoked: boolean; subject: string; removedPendingCodes: string[] } {
+export function revokePairing(
+  accountId: string,
+  openId: string,
+): { revoked: boolean; subject: string; removedPendingCodes: string[] } {
   const subject = buildPairingSubject(accountId, openId);
   const removedApproved = approvedBySubject.delete(subject);
   const removedPendingCodes = removePendingBySubject(subject);
@@ -301,7 +314,9 @@ export function consumePairingNotifications(limit = 20): PairingNotification[] {
   return picked;
 }
 
-export async function flushPairingNotificationsToExternal(limit = DEFAULT_NOTIFY_BATCH_SIZE): Promise<PairingNotifyFlushResult> {
+export async function flushPairingNotificationsToExternal(
+  limit = DEFAULT_NOTIFY_BATCH_SIZE,
+): Promise<PairingNotifyFlushResult> {
   const endpoint = notifyEndpoint();
   if (!endpoint) {
     return {
@@ -313,8 +328,16 @@ export async function flushPairingNotificationsToExternal(limit = DEFAULT_NOTIFY
     };
   }
 
-  const timeoutMs = parsePositiveInt(process.env.WEMP_PAIRING_NOTIFY_TIMEOUT_MS, DEFAULT_NOTIFY_TIMEOUT_MS, 500);
-  const retries = parsePositiveInt(process.env.WEMP_PAIRING_NOTIFY_RETRIES, DEFAULT_NOTIFY_RETRIES, 0);
+  const timeoutMs = parsePositiveInt(
+    process.env.WEMP_PAIRING_NOTIFY_TIMEOUT_MS,
+    DEFAULT_NOTIFY_TIMEOUT_MS,
+    500,
+  );
+  const retries = parsePositiveInt(
+    process.env.WEMP_PAIRING_NOTIFY_RETRIES,
+    DEFAULT_NOTIFY_RETRIES,
+    0,
+  );
   const maxBatch = Math.max(1, Math.floor(limit || DEFAULT_NOTIFY_BATCH_SIZE));
 
   let attempted = 0;
@@ -374,17 +397,26 @@ function normalizeAllowSet(allowFrom: string[]): Set<string> {
 }
 
 export function isPairingAllowed(allowFrom: string[], accountId: string, openId: string): boolean;
-export function isPairingAllowed(policy: WempDmPolicy | undefined, allowFrom: string[], accountId: string, openId: string): boolean;
+export function isPairingAllowed(
+  policy: WempDmPolicy | undefined,
+  allowFrom: string[],
+  accountId: string,
+  openId: string,
+): boolean;
 export function isPairingAllowed(
   policyOrAllowFrom: WempDmPolicy | string[] | undefined,
   allowFromOrAccountId: string[] | string,
   accountIdOrOpenId: string,
   maybeOpenId?: string,
 ): boolean {
-  const policy = Array.isArray(policyOrAllowFrom) ? "pairing" : normalizeDmPolicy(policyOrAllowFrom);
+  const policy = Array.isArray(policyOrAllowFrom)
+    ? "pairing"
+    : normalizeDmPolicy(policyOrAllowFrom);
   const allowFrom = Array.isArray(policyOrAllowFrom)
     ? policyOrAllowFrom
-    : (Array.isArray(allowFromOrAccountId) ? allowFromOrAccountId : []);
+    : Array.isArray(allowFromOrAccountId)
+      ? allowFromOrAccountId
+      : [];
   const accountId = Array.isArray(policyOrAllowFrom)
     ? String(allowFromOrAccountId || "")
     : String(accountIdOrOpenId || "");

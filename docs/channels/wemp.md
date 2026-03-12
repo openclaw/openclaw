@@ -125,7 +125,7 @@ Example:
           contact: "Support Team",
           message: "For manual support, contact: {{contact}}",
           autoResumeMinutes: 30,
-          activeReply: "Manual handoff is active. Send \"恢复AI\" to resume.",
+          activeReply: 'Manual handoff is active. Send "恢复AI" to resume.',
           ticketWebhook: {
             enabled: true,
             endpoint: "https://gateway-host/wemp/handoff-ticket",

@@ -1,7 +1,7 @@
-import * as path from "node:path";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import type { WempScaffoldAnswers } from "./types.js";
+import * as path from "node:path";
 import { renderAgentFiles, renderKnowledgeFiles } from "./templates.js";
+import type { WempScaffoldAnswers } from "./types.js";
 
 export interface ScaffoldResult {
   agentRoot: string;
@@ -18,7 +18,11 @@ function writeIfMissing(filePath: string, content: string, created: string[], sk
   created.push(filePath);
 }
 
-export function scaffoldWempKf(workspaceRoot: string, answers: WempScaffoldAnswers, agentId = "wemp-kf"): ScaffoldResult {
+export function scaffoldWempKf(
+  workspaceRoot: string,
+  answers: WempScaffoldAnswers,
+  agentId = "wemp-kf",
+): ScaffoldResult {
   const agentRoot = path.join(workspaceRoot, agentId);
   const knowledgeRoot = path.join(agentRoot, "knowledge");
   mkdirSync(knowledgeRoot, { recursive: true });

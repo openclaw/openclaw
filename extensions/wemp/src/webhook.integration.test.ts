@@ -1,19 +1,21 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
-import type { ResolvedWempAccount } from "../src/types.js";
+import test from "node:test";
 import { encryptWechatMessage } from "../src/crypto.js";
 import { sendText } from "../src/http.js";
 import { getWempDataRoot } from "../src/storage.js";
+import type { ResolvedWempAccount } from "../src/types.js";
 
 const DATA_DIR = getWempDataRoot();
 const TEST_ENCODING_AES_KEY = Buffer.alloc(32, 7).toString("base64").slice(0, 43);
-process.env.WEMP_ASSISTANT_TOGGLE_PERSIST_DEBOUNCE_MS = process.env.WEMP_ASSISTANT_TOGGLE_PERSIST_DEBOUNCE_MS || "250";
-process.env.WEMP_USAGE_LIMIT_PERSIST_DEBOUNCE_MS = process.env.WEMP_USAGE_LIMIT_PERSIST_DEBOUNCE_MS || "250";
+process.env.WEMP_ASSISTANT_TOGGLE_PERSIST_DEBOUNCE_MS =
+  process.env.WEMP_ASSISTANT_TOGGLE_PERSIST_DEBOUNCE_MS || "250";
+process.env.WEMP_USAGE_LIMIT_PERSIST_DEBOUNCE_MS =
+  process.env.WEMP_USAGE_LIMIT_PERSIST_DEBOUNCE_MS || "250";
 const numberPrototype = Number.prototype as Number & { trim?: () => string };
 if (typeof numberPrototype.trim !== "function") {
   numberPrototype.trim = function trim(this: number): string {
@@ -22,7 +24,8 @@ if (typeof numberPrototype.trim !== "function") {
 }
 const { consumeHandoffNotifications } = await import("../src/features/handoff-notify.js");
 const { clearWempRuntime, setWempRuntime } = await import("../src/runtime.js");
-const { handleRegisteredWebhookRequest, registerWempWebhook, unregisterWempWebhook } = await import("../src/webhook.js");
+const { handleRegisteredWebhookRequest, registerWempWebhook, unregisterWempWebhook } =
+  await import("../src/webhook.js");
 
 interface FileSnapshot {
   existed: boolean;
@@ -42,7 +45,12 @@ function restoreFile(file: string, snapshot: FileSnapshot): void {
   rmSync(file, { force: true });
 }
 
-function accountFixture(params: { accountId: string; webhookPath: string; allowFrom?: string[]; requireHttps?: boolean }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  webhookPath: string;
+  allowFrom?: string[];
+  requireHttps?: boolean;
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: true,
@@ -79,7 +87,9 @@ function sign(token: string, timestamp: string, nonce: string): string {
 }
 
 function signMessage(token: string, timestamp: string, nonce: string, encrypted: string): string {
-  return createHash("sha1").update([token, timestamp, nonce, encrypted].sort().join("")).digest("hex");
+  return createHash("sha1")
+    .update([token, timestamp, nonce, encrypted].sort().join(""))
+    .digest("hex");
 }
 
 async function startWebhookServer(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
@@ -118,7 +128,7 @@ async function postWebhook(params: {
   const parsedTimestamp = Number(requestedTimestamp);
   const timestamp = params.allowStaleTimestamp
     ? requestedTimestamp
-    : (!Number.isFinite(parsedTimestamp) || Math.abs(nowSeconds - Math.floor(parsedTimestamp)) > 300)
+    : !Number.isFinite(parsedTimestamp) || Math.abs(nowSeconds - Math.floor(parsedTimestamp)) > 300
       ? String(nowSeconds)
       : String(Math.floor(parsedTimestamp));
   const nonce = params.nonce || "nonce-test";
@@ -192,23 +202,29 @@ async function postWebhookWithOpenBody(params: {
   url.searchParams.set("nonce", nonce);
 
   return await new Promise((resolve, reject) => {
-    const request = httpRequest(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/xml; charset=utf-8",
-        ...(params.headers || {}),
+    const request = httpRequest(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/xml; charset=utf-8",
+          ...(params.headers || {}),
+        },
       },
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      response.on("end", () => {
-        request.destroy();
-        resolve({
-          status: response.statusCode || 0,
-          body: Buffer.concat(chunks).toString("utf8"),
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+        );
+        response.on("end", () => {
+          request.destroy();
+          resolve({
+            status: response.statusCode || 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
         });
-      });
-    });
+      },
+    );
 
     request.on("error", reject);
     request.setTimeout(5_000, () => {
@@ -225,14 +241,23 @@ function buildEncryptedWebhookPayload(params: {
   nonce: string;
 }): { body: string; msgSignature: string } {
   assert.ok(params.account.encodingAESKey);
-  const encrypted = encryptWechatMessage(params.plainXml, params.account.encodingAESKey, params.account.appId);
+  const encrypted = encryptWechatMessage(
+    params.plainXml,
+    params.account.encodingAESKey,
+    params.account.appId,
+  );
   return {
     body: `<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`,
     msgSignature: signMessage(params.account.token, params.timestamp, params.nonce, encrypted),
   };
 }
 
-function buildSubscribeEventXml(params: { toUser: string; fromUser: string; createTime: string; msgId: string }): string {
+function buildSubscribeEventXml(params: {
+  toUser: string;
+  fromUser: string;
+  createTime: string;
+  msgId: string;
+}): string {
   return `<xml>
 <ToUserName><![CDATA[${params.toUser}]]></ToUserName>
 <FromUserName><![CDATA[${params.fromUser}]]></FromUserName>
@@ -243,7 +268,13 @@ function buildSubscribeEventXml(params: { toUser: string; fromUser: string; crea
 </xml>`;
 }
 
-function buildTextMessageXml(params: { toUser: string; fromUser: string; createTime: string; msgId: string; content: string }): string {
+function buildTextMessageXml(params: {
+  toUser: string;
+  fromUser: string;
+  createTime: string;
+  msgId: string;
+  content: string;
+}): string {
   return `<xml>
 <ToUserName><![CDATA[${params.toUser}]]></ToUserName>
 <FromUserName><![CDATA[${params.fromUser}]]></FromUserName>
@@ -1128,9 +1159,15 @@ test("webhook handoff mode blocks AI dispatch until resume command", async (t) =
   assert.equal(dispatchCalls, 1);
   assert.equal(lastPayload?.["userId"], openId);
   assert.equal(lastPayload?.["text"], "hello after resume");
-  const notifications = JSON.parse(readFileSync(notifyFile, "utf8")) as Array<{ type?: string; deliveries?: { ticket?: { endpoint?: string } } }>;
+  const notifications = JSON.parse(readFileSync(notifyFile, "utf8")) as Array<{
+    type?: string;
+    deliveries?: { ticket?: { endpoint?: string } };
+  }>;
   const recent = notifications.slice(-2);
-  assert.deepEqual(recent.map((item) => item.type), ["activated", "resumed"]);
+  assert.deepEqual(
+    recent.map((item) => item.type),
+    ["activated", "resumed"],
+  );
   assert.equal(recent[0]?.deliveries?.ticket?.endpoint, "https://tickets.example.com/handoff");
   assert.equal(recent[1]?.deliveries?.ticket?.endpoint, "https://tickets.example.com/handoff");
 });
@@ -1147,7 +1184,12 @@ test("webhook usage_status returns usage lines with limits", async (t) => {
     accountId: `acc-usage-${uid}`,
     webhookPath: `/wemp-usage-${uid}`,
   });
-  account.features.usageLimit = { enabled: true, dailyMessages: 5, dailyTokens: 500, exemptPaired: false };
+  account.features.usageLimit = {
+    enabled: true,
+    dailyMessages: 5,
+    dailyTokens: 500,
+    exemptPaired: false,
+  };
   registerWempWebhook(account);
   t.after(() => {
     unregisterWempWebhook(account);

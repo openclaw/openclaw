@@ -1,9 +1,14 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { buildOnboardingPlan, createWempOnboarding, executeWempOnboarding, wempOnboardingStages } from "./onboarding.js";
+import { describe, expect, it } from "vitest";
+import {
+  buildOnboardingPlan,
+  createWempOnboarding,
+  executeWempOnboarding,
+  wempOnboardingStages,
+} from "./onboarding.js";
 
 describe("wemp onboarding", () => {
   it("buildOnboardingPlan applies patches and defaults", () => {

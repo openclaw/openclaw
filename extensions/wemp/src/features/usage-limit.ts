@@ -1,7 +1,11 @@
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { getWempDataRoot, readJsonFile, writeJsonFile } from "../storage.js";
-import { encodePathSegment, registerBeforeExitFlusher, resolvePersistDebounceMs } from "./feature-persist.js";
+import {
+  encodePathSegment,
+  registerBeforeExitFlusher,
+  resolvePersistDebounceMs,
+} from "./feature-persist.js";
 
 const ACCOUNT_DIR = "usage-limit";
 const DATA_ROOT = getWempDataRoot();
@@ -17,7 +21,10 @@ type UsageRecord = { messages: number; tokens: number; day: string };
 
 const usageByAccount = new Map<string, Map<string, UsageRecord>>();
 const MAX_USAGE_ENTRIES_PER_ACCOUNT = 5_000;
-const pendingUsageByKey = new Map<string, { accountId: string; openId: string; record: UsageRecord }>();
+const pendingUsageByKey = new Map<
+  string,
+  { accountId: string; openId: string; record: UsageRecord }
+>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 function usageFile(accountId: string, openId: string): string {
@@ -35,7 +42,11 @@ function ensureAccountDir(accountId: string): void {
 function isUsageRecord(value: unknown): value is UsageRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<UsageRecord>;
-  return Number.isFinite(record.messages) && Number.isFinite(record.tokens) && typeof record.day === "string";
+  return (
+    Number.isFinite(record.messages) &&
+    Number.isFinite(record.tokens) &&
+    typeof record.day === "string"
+  );
 }
 
 function getAccountUsage(accountId: string): Map<string, UsageRecord> {
@@ -130,9 +141,14 @@ export function getUsage(accountId: string, openId: string): UsageRecord {
   return normalizeRecord(loadUsage(accountId, openId));
 }
 
-export function isUsageExceeded(accountId: string, openId: string, limits: { dailyMessages?: number; dailyTokens?: number }): boolean {
+export function isUsageExceeded(
+  accountId: string,
+  openId: string,
+  limits: { dailyMessages?: number; dailyTokens?: number },
+): boolean {
   const current = getUsage(accountId, openId);
-  if ((limits.dailyMessages || 0) > 0 && current.messages >= (limits.dailyMessages || 0)) return true;
+  if ((limits.dailyMessages || 0) > 0 && current.messages >= (limits.dailyMessages || 0))
+    return true;
   if ((limits.dailyTokens || 0) > 0 && current.tokens >= (limits.dailyTokens || 0)) return true;
   return false;
 }

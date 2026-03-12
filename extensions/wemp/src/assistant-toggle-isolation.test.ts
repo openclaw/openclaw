@@ -1,7 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import test from "node:test";
 import { getWempDataRoot } from "../src/storage.js";
 
 const DATA_DIR = getWempDataRoot();
@@ -65,7 +65,10 @@ test("assistant-toggle migrates legacy account file into account/openId isolated
   feature.setAssistantEnabled(accountId, openId, false);
   assert.equal(JSON.parse(readFileSync(isolatedOpenFile, "utf8")), false);
 
-  const legacyAccountState = JSON.parse(readFileSync(legacyAccountFile, "utf8")) as Record<string, boolean>;
+  const legacyAccountState = JSON.parse(readFileSync(legacyAccountFile, "utf8")) as Record<
+    string,
+    boolean
+  >;
   assert.equal(legacyAccountState[openId], false);
 });
 
@@ -106,6 +109,9 @@ test("assistant-toggle migrates legacy aggregated file into account/openId isola
   assert.equal(feature.isAssistantEnabled(accountId, openId), true);
   assert.equal(JSON.parse(readFileSync(isolatedOpenFile, "utf8")), true);
 
-  const migratedLegacyAccountState = JSON.parse(readFileSync(legacyAccountFile, "utf8")) as Record<string, boolean>;
+  const migratedLegacyAccountState = JSON.parse(readFileSync(legacyAccountFile, "utf8")) as Record<
+    string,
+    boolean
+  >;
   assert.equal(migratedLegacyAccountState[openId], true);
 });

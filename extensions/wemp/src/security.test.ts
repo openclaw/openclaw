@@ -40,32 +40,38 @@ function createAccount(overrides?: Partial<ResolvedWempAccount>): ResolvedWempAc
 
 describe("wemp security warnings", () => {
   it("dm.policy=open 时给出开放策略告警", () => {
-    const warnings = collectWarnings(createAccount({
-      dm: { policy: "open", allowFrom: [] },
-    }));
+    const warnings = collectWarnings(
+      createAccount({
+        dm: { policy: "open", allowFrom: [] },
+      }),
+    );
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('dm.policy="open"');
   });
 
   it("缺凭证时给出凭证缺失告警", () => {
-    const warnings = collectWarnings(createAccount({
-      appId: "",
-      appSecret: "",
-      token: "",
-    }));
+    const warnings = collectWarnings(
+      createAccount({
+        appId: "",
+        appSecret: "",
+        token: "",
+      }),
+    );
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("missing required credentials");
   });
 
   it("开放策略且缺凭证时返回双告警", () => {
-    const warnings = collectWarnings(createAccount({
-      dm: { policy: "open", allowFrom: [] },
-      appId: "",
-      appSecret: "",
-      token: "",
-    }));
+    const warnings = collectWarnings(
+      createAccount({
+        dm: { policy: "open", allowFrom: [] },
+        appId: "",
+        appSecret: "",
+        token: "",
+      }),
+    );
 
     expect(warnings).toHaveLength(2);
     expect(warnings[0]).toContain('dm.policy="open"');
@@ -73,17 +79,21 @@ describe("wemp security warnings", () => {
   });
 
   it("resolveDmPolicy 在 open 策略下补齐 allowFrom 通配符", () => {
-    const resolved = resolveDmPolicy(createAccount({
-      dm: { policy: "open", allowFrom: ["openid-1"] },
-    }));
+    const resolved = resolveDmPolicy(
+      createAccount({
+        dm: { policy: "open", allowFrom: ["openid-1"] },
+      }),
+    );
     expect(resolved.policy).toBe("open");
     expect(resolved.allowFrom).toEqual(["*", "openid-1"]);
   });
 
   it("resolveDmPolicy 在 disabled 策略下返回空 allowFrom", () => {
-    const resolved = resolveDmPolicy(createAccount({
-      dm: { policy: "disabled", allowFrom: ["openid-1"] },
-    }));
+    const resolved = resolveDmPolicy(
+      createAccount({
+        dm: { policy: "disabled", allowFrom: ["openid-1"] },
+      }),
+    );
     expect(resolved.policy).toBe("disabled");
     expect(resolved.allowFrom).toEqual([]);
   });

@@ -1,11 +1,11 @@
+import { createRequire } from "node:module";
+import { wempConfigSchema } from "./config-schema.js";
 import type {
   WempAccountConfig,
   WempChannelConfig,
   WempHandoffTicketWebhookConfig,
   ResolvedWempAccount,
 } from "./types.js";
-import { createRequire } from "node:module";
-import { wempConfigSchema } from "./config-schema.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 const DEFAULT_WEBHOOK_PATH = "/wemp";
@@ -47,12 +47,16 @@ function pointerToPath(pointer: string): string {
 
 function resolveSchemaField(error: SchemaValidationError): string {
   if (error.keyword === "required") {
-    const missingProperty = String((error.params as { missingProperty?: unknown }).missingProperty || "").trim();
+    const missingProperty = String(
+      (error.params as { missingProperty?: unknown }).missingProperty || "",
+    ).trim();
     const basePath = pointerToPath(error.instancePath || "");
     return missingProperty ? `${basePath}.${missingProperty}` : basePath;
   }
   if (error.keyword === "additionalProperties") {
-    const extraProperty = String((error.params as { additionalProperty?: unknown }).additionalProperty || "").trim();
+    const extraProperty = String(
+      (error.params as { additionalProperty?: unknown }).additionalProperty || "",
+    ).trim();
     const basePath = pointerToPath(error.instancePath || "");
     return extraProperty ? `${basePath}.${extraProperty}` : basePath;
   }
@@ -124,7 +128,12 @@ function validateWithFallbackSchema(
 
   if (schema.type === "array" && schema.items && Array.isArray(value)) {
     value.forEach((item, index) => {
-      validateWithFallbackSchema(item, schema.items as SimpleSchemaNode, appendPointer(instancePath, String(index)), errors);
+      validateWithFallbackSchema(
+        item,
+        schema.items as SimpleSchemaNode,
+        appendPointer(instancePath, String(index)),
+        errors,
+      );
     });
     return;
   }
@@ -143,13 +152,20 @@ function validateWithFallbackSchema(
     }
   }
 
-  const properties = isObjectRecord(schema.properties) ? schema.properties as Record<string, SimpleSchemaNode> : {};
+  const properties = isObjectRecord(schema.properties)
+    ? (schema.properties as Record<string, SimpleSchemaNode>)
+    : {};
   const additionalProperties = schema.additionalProperties;
 
   for (const [key, nextValue] of Object.entries(value)) {
     const propertySchema = properties[key];
     if (propertySchema) {
-      validateWithFallbackSchema(nextValue, propertySchema, appendPointer(instancePath, key), errors);
+      validateWithFallbackSchema(
+        nextValue,
+        propertySchema,
+        appendPointer(instancePath, key),
+        errors,
+      );
       continue;
     }
     if (additionalProperties === false) {
@@ -162,7 +178,12 @@ function validateWithFallbackSchema(
       continue;
     }
     if (isObjectRecord(additionalProperties)) {
-      validateWithFallbackSchema(nextValue, additionalProperties as SimpleSchemaNode, appendPointer(instancePath, key), errors);
+      validateWithFallbackSchema(
+        nextValue,
+        additionalProperties as SimpleSchemaNode,
+        appendPointer(instancePath, key),
+        errors,
+      );
     }
   }
 }
@@ -182,8 +203,15 @@ function buildFallbackSchemaValidator(): ValidateFunction<WempChannelConfig> {
 function getWempSchemaValidator(): ValidateFunction<WempChannelConfig> {
   if (wempSchemaValidator) return wempSchemaValidator;
   try {
-    const ajvModule = require("ajv") as { default?: new (options: { allErrors: boolean; strict: boolean }) => { compile: (schema: object) => ValidateFunction<WempChannelConfig> } };
-    const AjvCtor = (ajvModule?.default || ajvModule) as new (options: { allErrors: boolean; strict: boolean }) => { compile: (schema: object) => ValidateFunction<WempChannelConfig> };
+    const ajvModule = require("ajv") as {
+      default?: new (options: { allErrors: boolean; strict: boolean }) => {
+        compile: (schema: object) => ValidateFunction<WempChannelConfig>;
+      };
+    };
+    const AjvCtor = (ajvModule?.default || ajvModule) as new (options: {
+      allErrors: boolean;
+      strict: boolean;
+    }) => { compile: (schema: object) => ValidateFunction<WempChannelConfig> };
     const ajv = new AjvCtor({ allErrors: true, strict: false });
     wempSchemaValidator = ajv.compile(wempConfigSchema.schema as object);
   } catch {
@@ -200,7 +228,9 @@ function validateWempConfigSchema(channelCfg: WempChannelConfig): string[] {
   return errors.map((error) => {
     const field = resolveSchemaField(error);
     const fix = resolveSchemaFix(error, field);
-    const message = error.message ? `schema ${error.message}` : `schema validation failed (${error.keyword})`;
+    const message = error.message
+      ? `schema ${error.message}`
+      : `schema validation failed (${error.keyword})`;
     return formatConfigIssue(message, { field, fix });
   });
 }
@@ -221,14 +251,31 @@ function normalizeRouting(routing?: WempAccountConfig["routing"]) {
 
 function normalizeFeatures(features?: WempChannelConfig["features"]) {
   const unpairedAllowedAgents = Array.isArray(features?.routeGuard?.unpairedAllowedAgents)
-    ? Array.from(new Set(features.routeGuard.unpairedAllowedAgents.map((agent) => String(agent || "").trim()).filter(Boolean)))
+    ? Array.from(
+        new Set(
+          features.routeGuard.unpairedAllowedAgents
+            .map((agent) => String(agent || "").trim())
+            .filter(Boolean),
+        ),
+      )
     : ["wemp-kf"];
-  const handoffTicketEvents: Array<"activated" | "resumed"> = Array.isArray(features?.handoff?.ticketWebhook?.events)
-    ? Array.from(new Set<Array<"activated" | "resumed">[number]>(
-      features.handoff.ticketWebhook.events
-        .map((event) => String(event || "").trim().toLowerCase())
-        .filter((event): event is "activated" | "resumed" => event === "activated" || event === "resumed"),
-    ))
+  const handoffTicketEvents: Array<"activated" | "resumed"> = Array.isArray(
+    features?.handoff?.ticketWebhook?.events,
+  )
+    ? Array.from(
+        new Set<Array<"activated" | "resumed">[number]>(
+          features.handoff.ticketWebhook.events
+            .map((event) =>
+              String(event || "")
+                .trim()
+                .toLowerCase(),
+            )
+            .filter(
+              (event): event is "activated" | "resumed" =>
+                event === "activated" || event === "resumed",
+            ),
+        ),
+      )
     : ["activated"];
   const handoffTicketWebhook: WempHandoffTicketWebhookConfig = {
     enabled: features?.handoff?.ticketWebhook?.enabled ?? false,
@@ -268,7 +315,9 @@ function normalizeFeatures(features?: WempChannelConfig["features"]) {
     },
     welcome: {
       enabled: features?.welcome?.enabled ?? false,
-      subscribeText: features?.welcome?.subscribeText ?? "欢迎关注，AI 助手已开启。你可以直接发送问题，或先完成配对后接入主助手。",
+      subscribeText:
+        features?.welcome?.subscribeText ??
+        "欢迎关注，AI 助手已开启。你可以直接发送问题，或先完成配对后接入主助手。",
     },
   } as const;
 }
@@ -282,7 +331,9 @@ export function listWempAccountIds(cfg: { channels?: { wemp?: WempChannelConfig 
   return ids.size ? Array.from(ids) : [DEFAULT_ACCOUNT_ID];
 }
 
-export function resolveDefaultWempAccountId(cfg: { channels?: { wemp?: WempChannelConfig } }): string {
+export function resolveDefaultWempAccountId(cfg: {
+  channels?: { wemp?: WempChannelConfig };
+}): string {
   return cfg.channels?.wemp?.defaultAccount || DEFAULT_ACCOUNT_ID;
 }
 
@@ -295,7 +346,9 @@ function isDefaultAccountId(accountId: string): boolean {
 }
 
 function accountFieldPath(accountId: string, field: string): string {
-  return isDefaultAccountId(accountId) ? `channels.wemp.${field}` : `channels.wemp.accounts.${accountId}.${field}`;
+  return isDefaultAccountId(accountId)
+    ? `channels.wemp.${field}`
+    : `channels.wemp.accounts.${accountId}.${field}`;
 }
 
 function sharedFieldPath(accountId: string, field: string): string | null {
@@ -313,7 +366,9 @@ function buildFieldFix(accountId: string, field: string, extraHint?: string): st
 }
 
 function formatConfigIssue(message: string, details: Record<string, string | number>): string {
-  const suffix = Object.entries(details).map(([key, value]) => `${key}=${value}`).join("; ");
+  const suffix = Object.entries(details)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("; ");
   return suffix ? `${message}; ${suffix}` : message;
 }
 
@@ -321,46 +376,58 @@ export function validateResolvedWempAccount(account: ResolvedWempAccount): strin
   const issues: string[] = [];
   const accountId = account.accountId || DEFAULT_ACCOUNT_ID;
   if (!hasValue(account.appId)) {
-    issues.push(formatConfigIssue("appId missing", {
-      accountId,
-      field: "appId",
-      fix: buildFieldFix(accountId, "appId"),
-    }));
+    issues.push(
+      formatConfigIssue("appId missing", {
+        accountId,
+        field: "appId",
+        fix: buildFieldFix(accountId, "appId"),
+      }),
+    );
   }
   if (!hasValue(account.appSecret)) {
-    issues.push(formatConfigIssue("appSecret missing", {
-      accountId,
-      field: "appSecret",
-      fix: buildFieldFix(accountId, "appSecret"),
-    }));
+    issues.push(
+      formatConfigIssue("appSecret missing", {
+        accountId,
+        field: "appSecret",
+        fix: buildFieldFix(accountId, "appSecret"),
+      }),
+    );
   }
   if (!hasValue(account.token)) {
-    issues.push(formatConfigIssue("token missing", {
-      accountId,
-      field: "token",
-      fix: buildFieldFix(accountId, "token"),
-    }));
+    issues.push(
+      formatConfigIssue("token missing", {
+        accountId,
+        field: "token",
+        fix: buildFieldFix(accountId, "token"),
+      }),
+    );
   }
   if (!hasValue(account.webhookPath) || !account.webhookPath.startsWith("/")) {
-    issues.push(formatConfigIssue("webhookPath must start with '/'", {
-      accountId,
-      field: "webhookPath",
-      current: hasValue(account.webhookPath) ? account.webhookPath.trim() : "<empty>",
-      fix: buildFieldFix(accountId, "webhookPath", "to start with '/' (example: '/wemp')"),
-    }));
+    issues.push(
+      formatConfigIssue("webhookPath must start with '/'", {
+        accountId,
+        field: "webhookPath",
+        current: hasValue(account.webhookPath) ? account.webhookPath.trim() : "<empty>",
+        fix: buildFieldFix(accountId, "webhookPath", "to start with '/' (example: '/wemp')"),
+      }),
+    );
   }
   if (account.encodingAESKey && account.encodingAESKey.trim().length !== 43) {
-    issues.push(formatConfigIssue("encodingAESKey should be 43 chars", {
-      accountId,
-      field: "encodingAESKey",
-      currentLength: account.encodingAESKey.trim().length,
-      fix: buildFieldFix(accountId, "encodingAESKey", "to the 43-char key from WeChat"),
-    }));
+    issues.push(
+      formatConfigIssue("encodingAESKey should be 43 chars", {
+        accountId,
+        field: "encodingAESKey",
+        currentLength: account.encodingAESKey.trim().length,
+        fix: buildFieldFix(accountId, "encodingAESKey", "to the 43-char key from WeChat"),
+      }),
+    );
   }
   return issues;
 }
 
-export function validateWempChannelConfig(cfg: { channels?: { wemp?: WempChannelConfig } }): string[] {
+export function validateWempChannelConfig(cfg: {
+  channels?: { wemp?: WempChannelConfig };
+}): string[] {
   const issues: string[] = [];
   const channelCfg = cfg.channels?.wemp;
   if (!channelCfg) return issues;
@@ -372,11 +439,13 @@ export function validateWempChannelConfig(cfg: { channels?: { wemp?: WempChannel
     const path = account.webhookPath;
     const prev = pathToAccount.get(path);
     if (prev && prev !== id) {
-      issues.push(formatConfigIssue(`webhookPath conflict: '${path}' used by '${prev}' and '${id}'`, {
-        accountIds: `${prev},${id}`,
-        field: "webhookPath",
-        fix: `use different values in ${accountFieldPath(prev, "webhookPath")} and ${accountFieldPath(id, "webhookPath")}`,
-      }));
+      issues.push(
+        formatConfigIssue(`webhookPath conflict: '${path}' used by '${prev}' and '${id}'`, {
+          accountIds: `${prev},${id}`,
+          field: "webhookPath",
+          fix: `use different values in ${accountFieldPath(prev, "webhookPath")} and ${accountFieldPath(id, "webhookPath")}`,
+        }),
+      );
     } else {
       pathToAccount.set(path, id);
     }
@@ -384,7 +453,10 @@ export function validateWempChannelConfig(cfg: { channels?: { wemp?: WempChannel
   return issues;
 }
 
-export function resolveWempAccount(cfg: { channels?: { wemp?: WempChannelConfig } }, accountId?: string): ResolvedWempAccount {
+export function resolveWempAccount(
+  cfg: { channels?: { wemp?: WempChannelConfig } },
+  accountId?: string,
+): ResolvedWempAccount {
   const channelCfg = cfg.channels?.wemp ?? {};
   const id = accountId || resolveDefaultWempAccountId(cfg);
   const isDefault = id === DEFAULT_ACCOUNT_ID;

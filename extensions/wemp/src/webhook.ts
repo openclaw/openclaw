@@ -1,18 +1,41 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ResolvedWempAccount } from "./types.js";
+import { recordUserInteraction } from "./api.js";
+import {
+  buildEncryptedReply,
+  decryptWechatMessage,
+  verifyMessageSignature,
+  verifySignature,
+} from "./crypto.js";
 import { buildDedupKey, markIfNew } from "./dedup.js";
-import { buildEncryptedReply, decryptWechatMessage, verifyMessageSignature, verifySignature } from "./crypto.js";
-import { buildPassiveTextReply, getPathname, getSearchParams, readRequestBody, RequestBodyReadError, sendText } from "./http.js";
-import { handleEventAction, handleInboundMessage, handleSubscribeEvent, handleUnsubscribeEvent, normalizeInboundText, parseWechatMessage, sanitizeInboundUserText } from "./inbound.js";
+import {
+  emitHandoffNotification,
+  resolveHandoffTicketDelivery,
+} from "./features/handoff-notify.js";
+import { clearHandoffState, getHandoffState } from "./features/handoff-state.js";
+import {
+  buildPassiveTextReply,
+  getPathname,
+  getSearchParams,
+  readRequestBody,
+  RequestBodyReadError,
+  sendText,
+} from "./http.js";
+import {
+  handleEventAction,
+  handleInboundMessage,
+  handleSubscribeEvent,
+  handleUnsubscribeEvent,
+  normalizeInboundText,
+  parseWechatMessage,
+  sanitizeInboundUserText,
+} from "./inbound.js";
 import { logError, logInfo, logWarn } from "./log.js";
 import { buildInboundMediaSummary } from "./media.js";
-import { clearHandoffState, getHandoffState } from "./features/handoff-state.js";
-import { emitHandoffNotification, resolveHandoffTicketDelivery } from "./features/handoff-notify.js";
 import { requestPairing } from "./pairing.js";
 import { dispatchToAgent } from "./runtime.js";
 import { markRuntimeError, markRuntimeInbound } from "./status.js";
 import { withTimeout } from "./timeout.js";
-import { recordUserInteraction } from "./api.js";
+import type { ResolvedWempAccount } from "./types.js";
 
 export interface RegisteredWebhook {
   path: string;
@@ -38,11 +61,18 @@ const replaySignatureState = new Map<string, number>();
 const HANDOFF_RESUME_COMMANDS = new Set(["恢复ai", "恢复助手", "结束人工", "切回ai", "转回ai"]);
 
 function isTruthyEnv(value: string | undefined): boolean {
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function readNumberEnv(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+function readNumberEnv(
+  value: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.floor(parsed)));
@@ -53,23 +83,48 @@ function isTrustedProxyEnabled(): boolean {
 }
 
 function getTimestampWindowSec(): number {
-  return readNumberEnv(process.env.WEMP_WEBHOOK_TIMESTAMP_WINDOW_SEC, WEBHOOK_TIMESTAMP_WINDOW_SEC_DEFAULT, 30, 3_600);
+  return readNumberEnv(
+    process.env.WEMP_WEBHOOK_TIMESTAMP_WINDOW_SEC,
+    WEBHOOK_TIMESTAMP_WINDOW_SEC_DEFAULT,
+    30,
+    3_600,
+  );
 }
 
 function getReplayWindowSec(): number {
-  return readNumberEnv(process.env.WEMP_WEBHOOK_REPLAY_WINDOW_SEC, WEBHOOK_REPLAY_WINDOW_SEC_DEFAULT, 30, 3_600);
+  return readNumberEnv(
+    process.env.WEMP_WEBHOOK_REPLAY_WINDOW_SEC,
+    WEBHOOK_REPLAY_WINDOW_SEC_DEFAULT,
+    30,
+    3_600,
+  );
 }
 
 function getReplayCacheMax(): number {
-  return readNumberEnv(process.env.WEMP_WEBHOOK_REPLAY_CACHE_MAX, WEBHOOK_REPLAY_CACHE_MAX_DEFAULT, 500, 100_000);
+  return readNumberEnv(
+    process.env.WEMP_WEBHOOK_REPLAY_CACHE_MAX,
+    WEBHOOK_REPLAY_CACHE_MAX_DEFAULT,
+    500,
+    100_000,
+  );
 }
 
 function getWebhookMaxBodyBytes(): number {
-  return readNumberEnv(process.env.WEMP_WEBHOOK_MAX_BODY_BYTES, WEBHOOK_MAX_BODY_BYTES_DEFAULT, 1_024, 8 * 1_024 * 1_024);
+  return readNumberEnv(
+    process.env.WEMP_WEBHOOK_MAX_BODY_BYTES,
+    WEBHOOK_MAX_BODY_BYTES_DEFAULT,
+    1_024,
+    8 * 1_024 * 1_024,
+  );
 }
 
 function getWebhookBodyReadTimeoutMs(): number {
-  return readNumberEnv(process.env.WEMP_WEBHOOK_BODY_READ_TIMEOUT_MS, WEBHOOK_BODY_READ_TIMEOUT_MS_DEFAULT, 200, 30_000);
+  return readNumberEnv(
+    process.env.WEMP_WEBHOOK_BODY_READ_TIMEOUT_MS,
+    WEBHOOK_BODY_READ_TIMEOUT_MS_DEFAULT,
+    200,
+    30_000,
+  );
 }
 
 function parseTimestampSeconds(timestamp: string): number | null {
@@ -80,7 +135,10 @@ function parseTimestampSeconds(timestamp: string): number | null {
   return normalized;
 }
 
-function checkTimestampWindow(timestamp: string, nowMs = Date.now()): { valid: boolean; nowSeconds: number; requestSeconds: number | null; windowSeconds: number } {
+function checkTimestampWindow(
+  timestamp: string,
+  nowMs = Date.now(),
+): { valid: boolean; nowSeconds: number; requestSeconds: number | null; windowSeconds: number } {
   const windowSeconds = getTimestampWindowSec();
   const nowSeconds = Math.floor(nowMs / 1_000);
   const requestSeconds = parseTimestampSeconds(timestamp);
@@ -109,7 +167,12 @@ function cleanupReplayState(map: Map<string, number>, nowMs: number, cacheMax: n
   }
 }
 
-function markReplayGuard(accountId: string, nonce: string, signatures: string[], nowMs = Date.now()): { ok: boolean; reason?: "nonce" | "signature" } {
+function markReplayGuard(
+  accountId: string,
+  nonce: string,
+  signatures: string[],
+  nowMs = Date.now(),
+): { ok: boolean; reason?: "nonce" | "signature" } {
   const windowMs = getReplayWindowSec() * 1_000;
   const expireAt = nowMs + windowMs;
   const cacheMax = getReplayCacheMax();
@@ -121,7 +184,9 @@ function markReplayGuard(accountId: string, nonce: string, signatures: string[],
     return { ok: false, reason: "nonce" };
   }
 
-  const uniqueSignatures = Array.from(new Set(signatures.map((item) => String(item || "").trim()).filter(Boolean)));
+  const uniqueSignatures = Array.from(
+    new Set(signatures.map((item) => String(item || "").trim()).filter(Boolean)),
+  );
   for (const value of uniqueSignatures) {
     const signatureKey = `${accountId}:signature:${value}`;
     if ((replaySignatureState.get(signatureKey) || 0) > nowMs) {
@@ -158,14 +223,23 @@ function isHttpsRequest(req: IncomingMessage, trustProxy: boolean): boolean {
   if (socket.encrypted) return true;
   if (!trustProxy) return false;
   const forwardedProto = req.headers["x-forwarded-proto"];
-  const firstProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)?.split(",")[0]?.trim().toLowerCase();
+  const firstProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)
+    ?.split(",")[0]
+    ?.trim()
+    .toLowerCase();
   return firstProto === "https";
 }
 
 function isOverRequestRateLimit(accountId: string, openId: string, now = Date.now()): boolean {
   const key = `${accountId}:${openId}`;
-  const windowMs = Math.max(1_000, Number.isFinite(REQUEST_RATE_LIMIT_WINDOW_MS) ? REQUEST_RATE_LIMIT_WINDOW_MS : 10_000);
-  const maxCount = Math.max(1, Number.isFinite(REQUEST_RATE_LIMIT_MAX) ? REQUEST_RATE_LIMIT_MAX : 20);
+  const windowMs = Math.max(
+    1_000,
+    Number.isFinite(REQUEST_RATE_LIMIT_WINDOW_MS) ? REQUEST_RATE_LIMIT_WINDOW_MS : 10_000,
+  );
+  const maxCount = Math.max(
+    1,
+    Number.isFinite(REQUEST_RATE_LIMIT_MAX) ? REQUEST_RATE_LIMIT_MAX : 20,
+  );
   const current = requestRateState.get(key);
   if (!current || now - current.windowStart >= windowMs) {
     requestRateState.set(key, { windowStart: now, count: 1 });
@@ -182,7 +256,9 @@ function isOverRequestRateLimit(accountId: string, openId: string, now = Date.no
 }
 
 function normalizeCommandText(text: string): string {
-  return String(text || "").toLowerCase().replace(/\s+/g, "");
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
 }
 
 function isHandoffResumeCommand(text: string): boolean {
@@ -233,7 +309,10 @@ export function resolveRegisteredWebhook(pathname: string): ResolvedWempAccount 
   return registeredByPath.get(pathname) || null;
 }
 
-export async function handleRegisteredWebhookRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleRegisteredWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
   const pathname = getPathname(req.url);
   const account = resolveRegisteredWebhook(pathname);
   if (!account) return false;
@@ -292,9 +371,27 @@ function extractEncrypted(xml: string): string {
   return matched || "";
 }
 
-function respondWechat(account: ResolvedWempAccount, res: ServerResponse, replyXml: string, timestamp: string, nonce: string): void {
+function respondWechat(
+  account: ResolvedWempAccount,
+  res: ServerResponse,
+  replyXml: string,
+  timestamp: string,
+  nonce: string,
+): void {
   if (account.encodingAESKey) {
-    sendText(res, 200, buildEncryptedReply({ xml: replyXml, token: account.token, encodingAESKey: account.encodingAESKey, appId: account.appId, timestamp, nonce }), "application/xml; charset=utf-8");
+    sendText(
+      res,
+      200,
+      buildEncryptedReply({
+        xml: replyXml,
+        token: account.token,
+        encodingAESKey: account.encodingAESKey,
+        appId: account.appId,
+        timestamp,
+        nonce,
+      }),
+      "application/xml; charset=utf-8",
+    );
     return;
   }
   sendText(res, 200, replyXml, "application/xml; charset=utf-8");
@@ -311,7 +408,11 @@ function buildPairingGuideText(accountId: string, openId: string): string {
   ].join("\n");
 }
 
-export async function handleWebhookRequest(account: ResolvedWempAccount, req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleWebhookRequest(
+  account: ResolvedWempAccount,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
   const pathname = getPathname(req.url);
   if (pathname !== account.webhookPath) {
     sendText(res, 404, "Not Found");
@@ -346,7 +447,10 @@ export async function handleWebhookRequest(account: ResolvedWempAccount, req: In
 
   if (method === "GET") {
     const signatureForVerify = signature || msgSignature;
-    if (!signatureForVerify || !verifySignature(signatureForVerify, timestamp, nonce, account.token)) {
+    if (
+      !signatureForVerify ||
+      !verifySignature(signatureForVerify, timestamp, nonce, account.token)
+    ) {
       rejectInvalidSignature(res, account, "invalid_signature", {
         path: pathname,
         method: "GET",
@@ -435,7 +539,18 @@ export async function handleWebhookRequest(account: ResolvedWempAccount, req: In
   (globalTimer as any)?.unref?.();
 
   try {
-    await handlePostMessageBody(account, req, res, pathname, method, timestamp, nonce, maxBodyBytes, globalAbort.signal, globalDeadline);
+    await handlePostMessageBody(
+      account,
+      req,
+      res,
+      pathname,
+      method,
+      timestamp,
+      nonce,
+      maxBodyBytes,
+      globalAbort.signal,
+      globalDeadline,
+    );
   } finally {
     clearTimeout(globalTimer);
   }
@@ -576,7 +691,11 @@ async function handlePostMessageBody(
       windowMs: REQUEST_RATE_LIMIT_WINDOW_MS,
       maxCount: REQUEST_RATE_LIMIT_MAX,
     });
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "请求过于频繁，请稍后再试。");
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      "请求过于频繁，请稍后再试。",
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }
@@ -597,7 +716,11 @@ async function handlePostMessageBody(
     }
     const action = handleEventAction(account, parsed);
     if (action.handled) {
-      const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, action.replyText || "操作已处理。");
+      const replyXml = buildPassiveTextReply(
+        parsed.fromUserName,
+        parsed.toUserName,
+        action.replyText || "操作已处理。",
+      );
       respondWechat(account, res, replyXml, timestamp, nonce);
       return;
     }
@@ -608,7 +731,10 @@ async function handlePostMessageBody(
     if (state.active) {
       clearHandoffState(account.accountId, parsed.fromUserName);
       const now = Date.now();
-      const ticketDelivery = resolveHandoffTicketDelivery("resumed", account.features.handoff.ticketWebhook);
+      const ticketDelivery = resolveHandoffTicketDelivery(
+        "resumed",
+        account.features.handoff.ticketWebhook,
+      );
       emitHandoffNotification({
         id: `resumed:${account.accountId}:${parsed.fromUserName}:${now}`,
         type: "resumed",
@@ -618,7 +744,11 @@ async function handlePostMessageBody(
         reason: "command",
         ...(ticketDelivery ? { deliveries: { ticket: ticketDelivery } } : {}),
       });
-      const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "已恢复 AI 助手服务。");
+      const replyXml = buildPassiveTextReply(
+        parsed.fromUserName,
+        parsed.toUserName,
+        "已恢复 AI 助手服务。",
+      );
       respondWechat(account, res, replyXml, timestamp, nonce);
       return;
     }
@@ -626,7 +756,10 @@ async function handlePostMessageBody(
 
   const handoffState = getHandoffState(account.accountId, parsed.fromUserName);
   if (handoffState.active) {
-    const remainMinutes = Math.max(1, Math.ceil(Math.max(0, (handoffState.expireAt || Date.now()) - Date.now()) / 60_000));
+    const remainMinutes = Math.max(
+      1,
+      Math.ceil(Math.max(0, (handoffState.expireAt || Date.now()) - Date.now()) / 60_000),
+    );
     const handoffReply = account.features.handoff.activeReply || "当前会话已转人工处理，请稍候。";
     const replyXml = buildPassiveTextReply(
       parsed.fromUserName,
@@ -645,29 +778,46 @@ async function handlePostMessageBody(
     return;
   }
 
-  const normalizedText = sanitizeInboundUserText(mediaSummary ? `${baseInboundText}\n${mediaSummary}` : baseInboundText);
-  const result = await withTimeout(handleInboundMessage(account, {
-    openId: parsed.fromUserName,
-    text: normalizedText,
-  }), INBOUND_TIMEOUT_MS);
+  const normalizedText = sanitizeInboundUserText(
+    mediaSummary ? `${baseInboundText}\n${mediaSummary}` : baseInboundText,
+  );
+  const result = await withTimeout(
+    handleInboundMessage(account, {
+      openId: parsed.fromUserName,
+      text: normalizedText,
+    }),
+    INBOUND_TIMEOUT_MS,
+  );
   if (!result) {
     logWarn("webhook_inbound_timeout", {
       accountId: account.accountId,
       timeoutMs: INBOUND_TIMEOUT_MS,
     });
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "消息已收到，系统正在处理，请稍后重试。");
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      "消息已收到，系统正在处理，请稍后重试。",
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }
 
   if (result.usageExceeded) {
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "今日使用次数已达上限，请稍后再试或完成配对后继续使用。");
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      "今日使用次数已达上限，请稍后再试或完成配对后继续使用。",
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }
 
   if (!result.assistantEnabled && !result.paired) {
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, buildPairingGuideText(account.accountId, parsed.fromUserName));
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      buildPairingGuideText(account.accountId, parsed.fromUserName),
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }
@@ -677,27 +827,38 @@ async function handlePostMessageBody(
     return;
   }
 
-  const dispatched = await withTimeout(dispatchToAgent({
-    channel: "wemp",
-    accountId: account.accountId,
-    openId: parsed.fromUserName,
-    agentId: result.agentId,
-    text: result.text,
-    messageId: parsed.msgId,
-  }), DISPATCH_TIMEOUT_MS);
+  const dispatched = await withTimeout(
+    dispatchToAgent({
+      channel: "wemp",
+      accountId: account.accountId,
+      openId: parsed.fromUserName,
+      agentId: result.agentId,
+      text: result.text,
+      messageId: parsed.msgId,
+    }),
+    DISPATCH_TIMEOUT_MS,
+  );
   if (!dispatched) {
     logWarn("webhook_dispatch_timeout", {
       accountId: account.accountId,
       timeoutMs: DISPATCH_TIMEOUT_MS,
     });
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "消息已收到，系统正在处理，请稍后重试。");
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      "消息已收到，系统正在处理，请稍后重试。",
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }
 
   if (!dispatched.accepted) {
     markRuntimeError(account.accountId, dispatched.note || "dispatch_inbound_rejected");
-    const replyXml = buildPassiveTextReply(parsed.fromUserName, parsed.toUserName, "消息已收到，系统正在处理，请稍后重试。");
+    const replyXml = buildPassiveTextReply(
+      parsed.fromUserName,
+      parsed.toUserName,
+      "消息已收到，系统正在处理，请稍后重试。",
+    );
     respondWechat(account, res, replyXml, timestamp, nonce);
     return;
   }

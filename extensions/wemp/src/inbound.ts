@@ -1,10 +1,17 @@
-import type { ResolvedWempAccount } from "./types.js";
-import { resolvePairedAgent, resolveUnpairedAgent } from "./routing.js";
-import { isPairingAllowed } from "./pairing.js";
 import { isAssistantEnabled, setAssistantEnabled } from "./features/assistant-toggle.js";
-import { activateHandoffState, clearHandoffState, getHandoffState } from "./features/handoff-state.js";
-import { emitHandoffNotification, resolveHandoffTicketDelivery } from "./features/handoff-notify.js";
+import {
+  emitHandoffNotification,
+  resolveHandoffTicketDelivery,
+} from "./features/handoff-notify.js";
+import {
+  activateHandoffState,
+  clearHandoffState,
+  getHandoffState,
+} from "./features/handoff-state.js";
 import { getUsage, isUsageExceeded, recordUsage } from "./features/usage-limit.js";
+import { isPairingAllowed } from "./pairing.js";
+import { resolvePairedAgent, resolveUnpairedAgent } from "./routing.js";
+import type { ResolvedWempAccount } from "./types.js";
 
 export interface MinimalInboundEvent {
   openId: string;
@@ -76,7 +83,10 @@ function normalizeDetail(value?: string): string | undefined {
   return normalized || undefined;
 }
 
-function formatNormalizedMessage(type: string, fields: Array<[string, string | undefined]>): string {
+function formatNormalizedMessage(
+  type: string,
+  fields: Array<[string, string | undefined]>,
+): string {
   const details = fields.flatMap(([key, value]) => {
     const normalized = normalizeDetail(value);
     return normalized ? [`${key}=${normalized}`] : [];
@@ -86,8 +96,10 @@ function formatNormalizedMessage(type: string, fields: Array<[string, string | u
 
 export function normalizeInboundText(message: ParsedWechatMessage): string {
   if (message.msgType === "text") return message.content || "";
-  if (message.msgType === "image") return `[image] ${message.picUrl || message.mediaId || ""}`.trim();
-  if (message.msgType === "voice") return message.recognition || `[voice] ${message.mediaId || ""}`.trim();
+  if (message.msgType === "image")
+    return `[image] ${message.picUrl || message.mediaId || ""}`.trim();
+  if (message.msgType === "voice")
+    return message.recognition || `[voice] ${message.mediaId || ""}`.trim();
   if (message.msgType === "location") {
     const locationX = normalizeDetail(message.locationX);
     const locationY = normalizeDetail(message.locationY);
@@ -122,7 +134,8 @@ export function normalizeInboundText(message: ParsedWechatMessage): string {
       ["url", message.url],
     ]);
   }
-  if (message.msgType === "event") return `[event] ${(message.event || "unknown").toLowerCase()} ${message.eventKey || ""}`.trim();
+  if (message.msgType === "event")
+    return `[event] ${(message.event || "unknown").toLowerCase()} ${message.eventKey || ""}`.trim();
   return `[${message.msgType || "unknown"}]`;
 }
 
@@ -148,7 +161,10 @@ export function estimateUsageTokens(text: string): number {
   return Math.max(1, byteTokens + cjkBonus);
 }
 
-export function resolveInboundAgent(account: ResolvedWempAccount, event: MinimalInboundEvent): string {
+export function resolveInboundAgent(
+  account: ResolvedWempAccount,
+  event: MinimalInboundEvent,
+): string {
   if (event.paired) return resolvePairedAgent(account);
   const resolved = resolveUnpairedAgent(account);
   const routeGuardEnabled = account.features.routeGuard?.enabled ?? true;
@@ -156,23 +172,37 @@ export function resolveInboundAgent(account: ResolvedWempAccount, event: Minimal
 
   const allowed = Array.isArray(account.features.routeGuard?.unpairedAllowedAgents)
     ? account.features.routeGuard.unpairedAllowedAgents
-      .map((agent) => String(agent || "").trim())
-      .filter(Boolean)
+        .map((agent) => String(agent || "").trim())
+        .filter(Boolean)
     : ["wemp-kf"];
   if (allowed.includes(resolved)) return resolved;
   return allowed[0] || "wemp-kf";
 }
 
-export async function handleInboundMessage(account: ResolvedWempAccount, event: MinimalInboundEvent): Promise<{ agentId: string; text: string; paired: boolean; assistantEnabled: boolean; usageExceeded: boolean; usage: { messages: number; tokens: number; day: string } }> {
+export async function handleInboundMessage(
+  account: ResolvedWempAccount,
+  event: MinimalInboundEvent,
+): Promise<{
+  agentId: string;
+  text: string;
+  paired: boolean;
+  assistantEnabled: boolean;
+  usageExceeded: boolean;
+  usage: { messages: number; tokens: number; day: string };
+}> {
   const inboundText = sanitizeInboundUserText(event.text);
-  const paired = event.paired ?? isPairingAllowed(account.dm.policy, account.dm.allowFrom, account.accountId, event.openId);
+  const paired =
+    event.paired ??
+    isPairingAllowed(account.dm.policy, account.dm.allowFrom, account.accountId, event.openId);
   const agentId = resolveInboundAgent(account, { ...event, paired });
   const assistantEnabled = paired ? true : isAssistantEnabled(account.accountId, event.openId);
   recordUsage(account.accountId, event.openId, estimateUsageTokens(inboundText));
   const usage = getUsage(account.accountId, event.openId);
-  const usageExceeded = !paired || !account.features.usageLimit.exemptPaired
-    ? Boolean(account.features.usageLimit.enabled) && isUsageExceeded(account.accountId, event.openId, account.features.usageLimit)
-    : false;
+  const usageExceeded =
+    !paired || !account.features.usageLimit.exemptPaired
+      ? Boolean(account.features.usageLimit.enabled) &&
+        isUsageExceeded(account.accountId, event.openId, account.features.usageLimit)
+      : false;
   return {
     agentId,
     text: inboundText,
@@ -183,11 +213,19 @@ export async function handleInboundMessage(account: ResolvedWempAccount, event: 
   };
 }
 
-export function handleSubscribeEvent(account: ResolvedWempAccount, openId: string): { replyText: string } {
-  setAssistantEnabled(account.accountId, openId, account.features.assistantToggle.defaultEnabled === true);
+export function handleSubscribeEvent(
+  account: ResolvedWempAccount,
+  openId: string,
+): { replyText: string } {
+  setAssistantEnabled(
+    account.accountId,
+    openId,
+    account.features.assistantToggle.defaultEnabled === true,
+  );
   return {
     replyText: account.features.welcome.enabled
-      ? account.features.welcome.subscribeText || "欢迎关注，AI 助手已开启。你可以直接发送问题，或先完成配对后接入主助手。"
+      ? account.features.welcome.subscribeText ||
+        "欢迎关注，AI 助手已开启。你可以直接发送问题，或先完成配对后接入主助手。"
       : "",
   };
 }
@@ -197,7 +235,10 @@ export function handleUnsubscribeEvent(accountId: string, openId: string): { rep
   return { replyText: "" };
 }
 
-export function handleEventAction(account: ResolvedWempAccount, message: ParsedWechatMessage): { replyText?: string; handled: boolean } {
+export function handleEventAction(
+  account: ResolvedWempAccount,
+  message: ParsedWechatMessage,
+): { replyText?: string; handled: boolean } {
   const event = (message.event || "").toLowerCase();
   const eventKey = message.eventKey || "";
   if (event === "click" && eventKey === "handoff") {
@@ -205,11 +246,24 @@ export function handleEventAction(account: ResolvedWempAccount, message: ParsedW
       return { handled: true, replyText: "当前未开启人工接管功能。" };
     }
     const contact = account.features.handoff.contact || "人工客服";
-    const text = (account.features.handoff.message || "如需人工支持，请联系：{{contact}}").replace("{{contact}}", contact);
-    const autoResumeMinutes = Math.max(1, Math.floor(Number(account.features.handoff.autoResumeMinutes || 30)));
+    const text = (account.features.handoff.message || "如需人工支持，请联系：{{contact}}").replace(
+      "{{contact}}",
+      contact,
+    );
+    const autoResumeMinutes = Math.max(
+      1,
+      Math.floor(Number(account.features.handoff.autoResumeMinutes || 30)),
+    );
     const now = Date.now();
-    const state = activateHandoffState(account.accountId, message.fromUserName, autoResumeMinutes * 60_000);
-    const ticketDelivery = resolveHandoffTicketDelivery("activated", account.features.handoff.ticketWebhook);
+    const state = activateHandoffState(
+      account.accountId,
+      message.fromUserName,
+      autoResumeMinutes * 60_000,
+    );
+    const ticketDelivery = resolveHandoffTicketDelivery(
+      "activated",
+      account.features.handoff.ticketWebhook,
+    );
     emitHandoffNotification({
       id: `activated:${account.accountId}:${message.fromUserName}:${now}`,
       type: "activated",
@@ -221,7 +275,10 @@ export function handleEventAction(account: ResolvedWempAccount, message: ParsedW
       reason: "click",
       ...(ticketDelivery ? { deliveries: { ticket: ticketDelivery } } : {}),
     });
-    const remainMinutes = Math.max(1, Math.ceil(Math.max(0, (state.expireAt || Date.now()) - Date.now()) / 60_000));
+    const remainMinutes = Math.max(
+      1,
+      Math.ceil(Math.max(0, (state.expireAt || Date.now()) - Date.now()) / 60_000),
+    );
     return {
       handled: true,
       replyText: `${text}\n已进入人工接管模式（约 ${remainMinutes} 分钟后自动恢复 AI，可发送“恢复AI”立即恢复）。`,
@@ -232,15 +289,24 @@ export function handleEventAction(account: ResolvedWempAccount, message: ParsedW
     if (!state.active) {
       return { handled: true, replyText: "当前状态：AI 自动回复中。" };
     }
-    const remainMinutes = Math.max(1, Math.ceil(Math.max(0, (state.expireAt || Date.now()) - Date.now()) / 60_000));
-    return { handled: true, replyText: `当前状态：人工接管中（预计 ${remainMinutes} 分钟后自动恢复 AI）。` };
+    const remainMinutes = Math.max(
+      1,
+      Math.ceil(Math.max(0, (state.expireAt || Date.now()) - Date.now()) / 60_000),
+    );
+    return {
+      handled: true,
+      replyText: `当前状态：人工接管中（预计 ${remainMinutes} 分钟后自动恢复 AI）。`,
+    };
   }
   if (event === "click" && eventKey === "handoff_resume") {
     const state = getHandoffState(account.accountId, message.fromUserName);
     clearHandoffState(account.accountId, message.fromUserName);
     if (state.active) {
       const now = Date.now();
-      const ticketDelivery = resolveHandoffTicketDelivery("resumed", account.features.handoff.ticketWebhook);
+      const ticketDelivery = resolveHandoffTicketDelivery(
+        "resumed",
+        account.features.handoff.ticketWebhook,
+      );
       emitHandoffNotification({
         id: `resumed:${account.accountId}:${message.fromUserName}:${now}`,
         type: "resumed",
@@ -263,7 +329,10 @@ export function handleEventAction(account: ResolvedWempAccount, message: ParsedW
   }
   if (event === "click" && eventKey === "assistant_status") {
     const enabled = isAssistantEnabled(account.accountId, message.fromUserName);
-    return { handled: true, replyText: enabled ? "AI 助手当前状态：已开启。" : "AI 助手当前状态：已关闭。" };
+    return {
+      handled: true,
+      replyText: enabled ? "AI 助手当前状态：已开启。" : "AI 助手当前状态：已关闭。",
+    };
   }
   if (event === "click" && eventKey === "usage_status") {
     const usage = getUsage(account.accountId, message.fromUserName);

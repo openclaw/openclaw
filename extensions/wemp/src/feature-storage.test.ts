@@ -1,7 +1,7 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { getWempDataRoot } from "../src/storage.js";
 
@@ -27,7 +27,11 @@ function restoreFile(file: string, snapshot: FileSnapshot): void {
   rmSync(file, { force: true });
 }
 
-function useEnvWithRestore(t: { after: (callback: () => void) => void }, key: string, value: string): void {
+function useEnvWithRestore(
+  t: { after: (callback: () => void) => void },
+  key: string,
+  value: string,
+): void {
   const prev = process.env[key];
   process.env[key] = value;
   t.after(() => {
@@ -44,7 +48,12 @@ function today(): string {
 }
 
 function usageLimitOpenIdFile(accountId: string, openId: string): string {
-  return path.join(DATA_DIR, "usage-limit", encodeURIComponent(accountId), `${encodeURIComponent(openId)}.json`);
+  return path.join(
+    DATA_DIR,
+    "usage-limit",
+    encodeURIComponent(accountId),
+    `${encodeURIComponent(openId)}.json`,
+  );
 }
 
 function yesterday(): string {
@@ -62,7 +71,11 @@ test("assistant-toggle supports legacy fallback and persists per-account file", 
   const accountId = `acct/assistant/${seed}`;
   const openId = `open-${seed}`;
   const legacyFile = path.join(DATA_DIR, "assistant-toggle.json");
-  const accountFile = path.join(DATA_DIR, "assistant-toggle", `${encodeURIComponent(accountId)}.json`);
+  const accountFile = path.join(
+    DATA_DIR,
+    "assistant-toggle",
+    `${encodeURIComponent(accountId)}.json`,
+  );
   const legacySnapshot = snapshotFile(legacyFile);
   const accountSnapshot = snapshotFile(accountFile);
 
@@ -99,7 +112,11 @@ test("usage-limit migrates legacy account aggregate file into per-openId storage
   const accountId = `acct/usage/${seed}`;
   const openId = `open-${seed}`;
   const legacyFile = path.join(DATA_DIR, "usage-limit.json");
-  const legacyAccountFile = path.join(DATA_DIR, "usage-limit", `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`);
+  const legacyAccountFile = path.join(
+    DATA_DIR,
+    "usage-limit",
+    `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`,
+  );
   const openIdFile = usageLimitOpenIdFile(accountId, openId);
   const legacySnapshot = snapshotFile(legacyFile);
   const legacyAccountSnapshot = snapshotFile(legacyAccountFile);
@@ -131,12 +148,20 @@ test("usage-limit migrates legacy account aggregate file into per-openId storage
   assert.equal(after.messages, 3);
   assert.equal(after.tokens, 14);
 
-  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(immediate.messages, 2);
   assert.equal(immediate.tokens, 9);
 
   await delay(PERSIST_WAIT_MS);
-  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(persisted.messages, 3);
   assert.equal(persisted.tokens, 14);
 });
@@ -150,7 +175,11 @@ test("usage-limit migrates legacy global aggregate file into per-openId storage"
   const accountId = `acct/global/${seed}`;
   const openId = `open-${seed}`;
   const legacyFile = path.join(DATA_DIR, "usage-limit.json");
-  const legacyAccountFile = path.join(DATA_DIR, "usage-limit", `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`);
+  const legacyAccountFile = path.join(
+    DATA_DIR,
+    "usage-limit",
+    `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`,
+  );
   const openIdFile = usageLimitOpenIdFile(accountId, openId);
   const legacySnapshot = snapshotFile(legacyFile);
   const legacyAccountSnapshot = snapshotFile(legacyAccountFile);
@@ -183,12 +212,20 @@ test("usage-limit migrates legacy global aggregate file into per-openId storage"
   assert.equal(after.messages, 2);
   assert.equal(after.tokens, 10);
 
-  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(immediate.messages, 1);
   assert.equal(immediate.tokens, 7);
 
   await delay(PERSIST_WAIT_MS);
-  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(persisted.messages, 2);
   assert.equal(persisted.tokens, 10);
 });
@@ -202,7 +239,11 @@ test("usage-limit keeps daily reset and exceeded behavior with per-openId storag
   const accountId = `acct/reset/${seed}`;
   const openId = `open-${seed}`;
   const legacyFile = path.join(DATA_DIR, "usage-limit.json");
-  const legacyAccountFile = path.join(DATA_DIR, "usage-limit", `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`);
+  const legacyAccountFile = path.join(
+    DATA_DIR,
+    "usage-limit",
+    `${accountId.replaceAll("/", "_").replaceAll("\\", "_")}.json`,
+  );
   const openIdFile = usageLimitOpenIdFile(accountId, openId);
   const legacySnapshot = snapshotFile(legacyFile);
   const legacyAccountSnapshot = snapshotFile(legacyAccountFile);
@@ -215,7 +256,11 @@ test("usage-limit keeps daily reset and exceeded behavior with per-openId storag
   });
 
   mkdirSync(path.dirname(openIdFile), { recursive: true });
-  writeFileSync(openIdFile, JSON.stringify({ messages: 3, tokens: 12, day: yesterday() }, null, 2), "utf8");
+  writeFileSync(
+    openIdFile,
+    JSON.stringify({ messages: 3, tokens: 12, day: yesterday() }, null, 2),
+    "utf8",
+  );
   writeFileSync(legacyFile, JSON.stringify({}, null, 2), "utf8");
   rmSync(legacyAccountFile, { force: true });
 
@@ -236,12 +281,20 @@ test("usage-limit keeps daily reset and exceeded behavior with per-openId storag
   assert.equal(feature.isUsageExceeded(accountId, openId, { dailyMessages: 1 }), true);
   assert.equal(feature.isUsageExceeded(accountId, openId, { dailyTokens: 3 }), false);
 
-  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const immediate = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(immediate.messages, 3);
   assert.equal(immediate.tokens, 12);
 
   await delay(PERSIST_WAIT_MS);
-  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as { messages: number; tokens: number; day: string };
+  const persisted = JSON.parse(readFileSync(openIdFile, "utf8")) as {
+    messages: number;
+    tokens: number;
+    day: string;
+  };
   assert.equal(persisted.messages, 1);
   assert.equal(persisted.tokens, 2);
 });

@@ -7,14 +7,17 @@ const levelWeight: Record<LogLevel, number> = {
   warn: 30,
   error: 40,
 };
-const SENSITIVE_FIELD_RE = /(token|secret|password|authorization|cookie|api[-_]?key|access[-_]?token|encodingaeskey|appsecret)/i;
+const SENSITIVE_FIELD_RE =
+  /(token|secret|password|authorization|cookie|api[-_]?key|access[-_]?token|encodingaeskey|appsecret)/i;
 const ACCOUNT_ID_PREFIX_RE = /^\[wemp:([^\]]+)\]/;
 const bridgeByAccountId = new Map<string, OpenClawLogBridge>();
 
 let currentLevel: LogLevel = normalizeLevel(process.env.WEMP_LOG_LEVEL) || "info";
 
 function normalizeLevel(raw: unknown): LogLevel | null {
-  const value = String(raw || "").trim().toLowerCase();
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase();
   if (value === "debug" || value === "info" || value === "warn" || value === "error") return value;
   return null;
 }
@@ -81,7 +84,12 @@ function resolveBridgeAccountId(event: string, data?: Record<string, unknown>): 
   return null;
 }
 
-function emitToOpenClawBridge(level: LogLevel, line: string, event: string, data?: Record<string, unknown>): void {
+function emitToOpenClawBridge(
+  level: LogLevel,
+  line: string,
+  event: string,
+  data?: Record<string, unknown>,
+): void {
   const accountId = resolveBridgeAccountId(event, data);
   if (!accountId) return;
   const bridge = bridgeByAccountId.get(accountId);
@@ -126,7 +134,10 @@ export function getLogLevel(): LogLevel {
   return currentLevel;
 }
 
-export function attachOpenClawLogBridge(accountId: string, bridge: OpenClawLogBridge | null | undefined): void {
+export function attachOpenClawLogBridge(
+  accountId: string,
+  bridge: OpenClawLogBridge | null | undefined,
+): void {
   const normalized = String(accountId || "").trim();
   if (!normalized) return;
   if (!bridge) {

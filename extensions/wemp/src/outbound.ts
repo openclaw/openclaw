@@ -1,4 +1,3 @@
-import type { ResolvedWempAccount } from "./types.js";
 import {
   sendCustomFileMessage,
   sendCustomImageMessage,
@@ -9,6 +8,7 @@ import {
   type WechatApiResult,
 } from "./api.js";
 import { markRuntimeError, markRuntimeOutbound } from "./status.js";
+import type { ResolvedWempAccount } from "./types.js";
 import { toRecord } from "./utils.js";
 
 export interface OutboundSendResult {
@@ -121,7 +121,11 @@ function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
-async function enqueueTargetSend<T>(accountId: string, target: string, task: () => Promise<T>): Promise<T> {
+async function enqueueTargetSend<T>(
+  accountId: string,
+  target: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const queueKey = buildQueueKey(accountId, target);
   const previousTail = outboundQueueTails.get(queueKey) ?? Promise.resolve();
   let releaseCurrentTail: (() => void) | undefined;
@@ -142,7 +146,10 @@ async function enqueueTargetSend<T>(accountId: string, target: string, task: () 
   }
 }
 
-async function sendWithRetry(sender: () => Promise<WechatApiResult>, options: OutboundRetryOptions): Promise<WechatApiResult> {
+async function sendWithRetry(
+  sender: () => Promise<WechatApiResult>,
+  options: OutboundRetryOptions,
+): Promise<WechatApiResult> {
   for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
     try {
       const result = await sender();
@@ -155,12 +162,24 @@ async function sendWithRetry(sender: () => Promise<WechatApiResult>, options: Ou
     }
     await delay(options.retryDelayMs);
   }
-  return { ok: false, errcode: -1, errmsg: "outbound_retry_exhausted", retried: options.maxRetries > 0 };
+  return {
+    ok: false,
+    errcode: -1,
+    errmsg: "outbound_retry_exhausted",
+    retried: options.maxRetries > 0,
+  };
 }
 
-export async function sendText(account: ResolvedWempAccount, target: string, text: string): Promise<OutboundSendResult> {
+export async function sendText(
+  account: ResolvedWempAccount,
+  target: string,
+  text: string,
+): Promise<OutboundSendResult> {
   if (!isCustomerServiceWindowOpen(account.accountId, target)) {
-    markRuntimeError(account.accountId, "outbound_text_failed:45015:customer_service_window_expired");
+    markRuntimeError(
+      account.accountId,
+      "outbound_text_failed:45015:customer_service_window_expired",
+    );
     return {
       accountId: account.accountId,
       target,
@@ -175,7 +194,9 @@ export async function sendText(account: ResolvedWempAccount, target: string, tex
     const retryOptions = resolveRetryOptions(account);
     try {
       for (const chunk of chunks) {
-        results.push(await sendWithRetry(() => sendCustomTextMessage(account, target, chunk), retryOptions));
+        results.push(
+          await sendWithRetry(() => sendCustomTextMessage(account, target, chunk), retryOptions),
+        );
       }
       const ok = results.every((item) => item.ok);
       markRuntimeOutbound(account.accountId);
@@ -194,7 +215,10 @@ export async function sendText(account: ResolvedWempAccount, target: string, tex
       };
     } catch (error) {
       markRuntimeOutbound(account.accountId);
-      markRuntimeError(account.accountId, `outbound_text_failed:exception:${toErrorMessage(error)}`);
+      markRuntimeError(
+        account.accountId,
+        `outbound_text_failed:exception:${toErrorMessage(error)}`,
+      );
       throw error;
     }
   });
@@ -205,7 +229,9 @@ export async function sendImageByMediaId(
   target: string,
   mediaId: string,
 ): Promise<OutboundMediaSendResult> {
-  return sendMediaByMediaId(account, target, mediaId, "image", () => sendCustomImageMessage(account, target, mediaId));
+  return sendMediaByMediaId(account, target, mediaId, "image", () =>
+    sendCustomImageMessage(account, target, mediaId),
+  );
 }
 
 export async function sendVoiceByMediaId(
@@ -213,7 +239,9 @@ export async function sendVoiceByMediaId(
   target: string,
   mediaId: string,
 ): Promise<OutboundMediaSendResult> {
-  return sendMediaByMediaId(account, target, mediaId, "voice", () => sendCustomVoiceMessage(account, target, mediaId));
+  return sendMediaByMediaId(account, target, mediaId, "voice", () =>
+    sendCustomVoiceMessage(account, target, mediaId),
+  );
 }
 
 export async function sendVideoByMediaId(
@@ -221,7 +249,9 @@ export async function sendVideoByMediaId(
   target: string,
   mediaId: string,
 ): Promise<OutboundMediaSendResult> {
-  return sendMediaByMediaId(account, target, mediaId, "video", () => sendCustomVideoMessage(account, target, mediaId));
+  return sendMediaByMediaId(account, target, mediaId, "video", () =>
+    sendCustomVideoMessage(account, target, mediaId),
+  );
 }
 
 export async function sendFileByMediaId(
@@ -229,7 +259,9 @@ export async function sendFileByMediaId(
   target: string,
   mediaId: string,
 ): Promise<OutboundMediaSendResult> {
-  return sendMediaByMediaId(account, target, mediaId, "file", () => sendCustomFileMessage(account, target, mediaId));
+  return sendMediaByMediaId(account, target, mediaId, "file", () =>
+    sendCustomFileMessage(account, target, mediaId),
+  );
 }
 
 async function sendMediaByMediaId(
@@ -240,7 +272,10 @@ async function sendMediaByMediaId(
   sender: () => Promise<WechatApiResult>,
 ): Promise<OutboundMediaSendResult> {
   if (!isCustomerServiceWindowOpen(account.accountId, target)) {
-    markRuntimeError(account.accountId, `outbound_${mediaType}_failed:45015:customer_service_window_expired`);
+    markRuntimeError(
+      account.accountId,
+      `outbound_${mediaType}_failed:45015:customer_service_window_expired`,
+    );
     return {
       accountId: account.accountId,
       target,
@@ -270,7 +305,10 @@ async function sendMediaByMediaId(
       };
     } catch (error) {
       markRuntimeOutbound(account.accountId);
-      markRuntimeError(account.accountId, `outbound_${mediaType}_failed:exception:${toErrorMessage(error)}`);
+      markRuntimeError(
+        account.accountId,
+        `outbound_${mediaType}_failed:exception:${toErrorMessage(error)}`,
+      );
       throw error;
     }
   });

@@ -44,7 +44,12 @@ export interface WempHandoffTicketWebhookConfig {
 export interface WempFeatureFlags {
   menu?: { enabled?: boolean; items?: WempMenuItem[] };
   assistantToggle?: { enabled?: boolean; defaultEnabled?: boolean };
-  usageLimit?: { enabled?: boolean; dailyMessages?: number; dailyTokens?: number; exemptPaired?: boolean };
+  usageLimit?: {
+    enabled?: boolean;
+    dailyMessages?: number;
+    dailyTokens?: number;
+    exemptPaired?: boolean;
+  };
   routeGuard?: WempRouteGuardConfig;
   handoff?: {
     enabled?: boolean;

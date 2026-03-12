@@ -1,6 +1,6 @@
-import type { ResolvedWempAccount } from "./types.js";
 import { logWarn } from "./log.js";
 import { readJsonFile, writeJsonFile } from "./storage.js";
+import type { ResolvedWempAccount } from "./types.js";
 
 interface TokenCacheEntry {
   token: string;
@@ -32,18 +32,25 @@ export function recordUserInteraction(accountId: string, openId: string, now = D
     let oldest = Infinity;
     let oldestKey = "";
     for (const [k, v] of lastInteractionByUser) {
-      if (v < oldest) { oldest = v; oldestKey = k; }
+      if (v < oldest) {
+        oldest = v;
+        oldestKey = k;
+      }
     }
     if (oldestKey) lastInteractionByUser.delete(oldestKey);
   }
 }
 
 /** Check whether the 48h customer service window is still open for a user. */
-export function isCustomerServiceWindowOpen(accountId: string, openId: string, now = Date.now()): boolean {
+export function isCustomerServiceWindowOpen(
+  accountId: string,
+  openId: string,
+  now = Date.now(),
+): boolean {
   const key = interactionKey(accountId, openId);
   const lastAt = lastInteractionByUser.get(key);
   if (!lastAt) return false;
-  return (now - lastAt) < CUSTOMER_SERVICE_WINDOW_MS;
+  return now - lastAt < CUSTOMER_SERVICE_WINDOW_MS;
 }
 
 /** errcode 45015 = user interaction window expired */
@@ -60,7 +67,10 @@ function parseExpireAt(value: unknown): number | null {
 function loadTokenCacheFromDisk(now = Date.now()): void {
   if (tokenCacheLoaded) return;
   tokenCacheLoaded = true;
-  const persisted = readJsonFile<Record<string, { token?: unknown; expireAt?: unknown }>>(ACCESS_TOKEN_CACHE_FILE, {});
+  const persisted = readJsonFile<Record<string, { token?: unknown; expireAt?: unknown }>>(
+    ACCESS_TOKEN_CACHE_FILE,
+    {},
+  );
   for (const [accountId, value] of Object.entries(persisted)) {
     if (!value || typeof value !== "object") continue;
     if (typeof value.token !== "string") continue;
@@ -141,20 +151,27 @@ function markRateLimited(accountId: string, cooldownMs = DEFAULT_RATE_LIMIT_COOL
 
 function toErrorResult<T = unknown>(error: unknown): WechatApiResult<T> {
   if (error && typeof error === "object" && "message" in error) {
-    return { ok: false, errcode: -1, errmsg: String((error as { message?: unknown }).message || "unknown_error") };
+    return {
+      ok: false,
+      errcode: -1,
+      errmsg: String((error as { message?: unknown }).message || "unknown_error"),
+    };
   }
   return { ok: false, errcode: -1, errmsg: String(error || "unknown_error") };
 }
 
 async function parseJson<T>(res: Response): Promise<T | null> {
   try {
-    return await res.json() as T;
+    return (await res.json()) as T;
   } catch {
     return null;
   }
 }
 
-export async function getAccessToken(account: ResolvedWempAccount, forceRefresh = false): Promise<string> {
+export async function getAccessToken(
+  account: ResolvedWempAccount,
+  forceRefresh = false,
+): Promise<string> {
   loadTokenCacheFromDisk();
   dropExpiredCachedToken(account.accountId);
   const cached = tokenCache.get(account.accountId);
@@ -170,7 +187,11 @@ export async function getAccessToken(account: ResolvedWempAccount, forceRefresh 
     const url = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${appId}&secret=${secret}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Failed to fetch access token: ${res.status}`);
-    const data = await res.json() as { access_token?: string; expires_in?: number; errmsg?: string };
+    const data = (await res.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      errmsg?: string;
+    };
     if (!data.access_token) throw new Error(data.errmsg || "access_token missing");
     setCachedToken(
       account.accountId,
@@ -188,7 +209,10 @@ export async function getAccessToken(account: ResolvedWempAccount, forceRefresh 
   return refreshPromise;
 }
 
-async function withTokenRetry<T>(account: ResolvedWempAccount, caller: (token: string) => Promise<WechatApiResult<T>>): Promise<WechatApiResult<T>> {
+async function withTokenRetry<T>(
+  account: ResolvedWempAccount,
+  caller: (token: string) => Promise<WechatApiResult<T>>,
+): Promise<WechatApiResult<T>> {
   if (isRateLimited(account.accountId)) {
     const until = readRateLimitUntil(account.accountId);
     return {
@@ -225,12 +249,18 @@ async function withTokenRetry<T>(account: ResolvedWempAccount, caller: (token: s
   }
 }
 
-async function callCustomSend(token: string, payload: Record<string, unknown>): Promise<WechatApiResult> {
-  const res = await fetch(`https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${encodeURIComponent(token)}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+async function callCustomSend(
+  token: string,
+  payload: Record<string, unknown>,
+): Promise<WechatApiResult> {
+  const res = await fetch(
+    `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${encodeURIComponent(token)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
   if (!res.ok) {
     return { ok: false, errcode: res.status, errmsg: `http_${res.status}` };
   }
@@ -244,44 +274,74 @@ async function callCustomSend(token: string, payload: Record<string, unknown>): 
   };
 }
 
-export async function sendCustomTextMessage(account: ResolvedWempAccount, openId: string, text: string): Promise<WechatApiResult> {
-  return withTokenRetry(account, (token) => callCustomSend(token, {
-    touser: openId,
-    msgtype: "text",
-    text: { content: text },
-  }));
+export async function sendCustomTextMessage(
+  account: ResolvedWempAccount,
+  openId: string,
+  text: string,
+): Promise<WechatApiResult> {
+  return withTokenRetry(account, (token) =>
+    callCustomSend(token, {
+      touser: openId,
+      msgtype: "text",
+      text: { content: text },
+    }),
+  );
 }
 
-export async function sendCustomImageMessage(account: ResolvedWempAccount, openId: string, mediaId: string): Promise<WechatApiResult> {
-  return withTokenRetry(account, (token) => callCustomSend(token, {
-    touser: openId,
-    msgtype: "image",
-    image: { media_id: mediaId },
-  }));
+export async function sendCustomImageMessage(
+  account: ResolvedWempAccount,
+  openId: string,
+  mediaId: string,
+): Promise<WechatApiResult> {
+  return withTokenRetry(account, (token) =>
+    callCustomSend(token, {
+      touser: openId,
+      msgtype: "image",
+      image: { media_id: mediaId },
+    }),
+  );
 }
 
-export async function sendCustomVoiceMessage(account: ResolvedWempAccount, openId: string, mediaId: string): Promise<WechatApiResult> {
-  return withTokenRetry(account, (token) => callCustomSend(token, {
-    touser: openId,
-    msgtype: "voice",
-    voice: { media_id: mediaId },
-  }));
+export async function sendCustomVoiceMessage(
+  account: ResolvedWempAccount,
+  openId: string,
+  mediaId: string,
+): Promise<WechatApiResult> {
+  return withTokenRetry(account, (token) =>
+    callCustomSend(token, {
+      touser: openId,
+      msgtype: "voice",
+      voice: { media_id: mediaId },
+    }),
+  );
 }
 
-export async function sendCustomVideoMessage(account: ResolvedWempAccount, openId: string, mediaId: string): Promise<WechatApiResult> {
-  return withTokenRetry(account, (token) => callCustomSend(token, {
-    touser: openId,
-    msgtype: "video",
-    video: { media_id: mediaId },
-  }));
+export async function sendCustomVideoMessage(
+  account: ResolvedWempAccount,
+  openId: string,
+  mediaId: string,
+): Promise<WechatApiResult> {
+  return withTokenRetry(account, (token) =>
+    callCustomSend(token, {
+      touser: openId,
+      msgtype: "video",
+      video: { media_id: mediaId },
+    }),
+  );
 }
 
-export async function sendCustomFileMessage(account: ResolvedWempAccount, openId: string, mediaId: string): Promise<WechatApiResult> {
-  return withTokenRetry(account, (token) => callCustomSend(token, {
-    touser: openId,
-    msgtype: "file",
-    file: { media_id: mediaId },
-  }));
+export async function sendCustomFileMessage(
+  account: ResolvedWempAccount,
+  openId: string,
+  mediaId: string,
+): Promise<WechatApiResult> {
+  return withTokenRetry(account, (token) =>
+    callCustomSend(token, {
+      touser: openId,
+      msgtype: "file",
+      file: { media_id: mediaId },
+    }),
+  );
 }
 
 function toBlob(content: Blob | ArrayBuffer | Uint8Array): Blob {
@@ -314,7 +374,9 @@ async function callUploadTempMedia(
       errmsg: data?.errmsg ?? `http_${res.status}`,
     };
   }
-  const data = await parseJson<WechatUploadedTempMedia & { errcode?: number; errmsg?: string }>(res);
+  const data = await parseJson<WechatUploadedTempMedia & { errcode?: number; errmsg?: string }>(
+    res,
+  );
   if (!data) return { ok: false, errcode: -1, errmsg: "invalid_json_response" };
   return {
     ok: !data.errcode,
@@ -334,7 +396,10 @@ export async function uploadTempMedia(
   return withTokenRetry(account, (token) => callUploadTempMedia(token, type, media, filename));
 }
 
-async function callDownloadMedia(token: string, mediaId: string): Promise<WechatApiResult<WechatDownloadedMedia>> {
+async function callDownloadMedia(
+  token: string,
+  mediaId: string,
+): Promise<WechatApiResult<WechatDownloadedMedia>> {
   const res = await fetch(
     `https://api.weixin.qq.com/cgi-bin/media/get?access_token=${encodeURIComponent(token)}&media_id=${encodeURIComponent(mediaId)}`,
   );
@@ -352,7 +417,9 @@ async function callDownloadMedia(token: string, mediaId: string): Promise<Wechat
   }
 
   if (contentType.includes("application/json")) {
-    const data = await parseJson<Record<string, unknown> & { errcode?: number; errmsg?: string }>(res);
+    const data = await parseJson<Record<string, unknown> & { errcode?: number; errmsg?: string }>(
+      res,
+    );
     if (!data) return { ok: false, errcode: -1, errmsg: "invalid_json_response" };
     if (data.errcode) return { ok: false, errcode: data.errcode, errmsg: data.errmsg };
     return {
@@ -376,7 +443,10 @@ async function callDownloadMedia(token: string, mediaId: string): Promise<Wechat
   };
 }
 
-export async function downloadMedia(account: ResolvedWempAccount, mediaId: string): Promise<WechatApiResult<WechatDownloadedMedia>> {
+export async function downloadMedia(
+  account: ResolvedWempAccount,
+  mediaId: string,
+): Promise<WechatApiResult<WechatDownloadedMedia>> {
   return withTokenRetry(account, (token) => callDownloadMedia(token, mediaId));
 }
 

@@ -1,16 +1,24 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ResolvedWempAccount } from "../src/types.js";
+import test from "node:test";
 import { sendText } from "../src/http.js";
 import { clearWempRuntime, setWempRuntime } from "../src/runtime.js";
-import { handleRegisteredWebhookRequest, registerWempWebhook, unregisterWempWebhook } from "../src/webhook.js";
+import type { ResolvedWempAccount } from "../src/types.js";
+import {
+  handleRegisteredWebhookRequest,
+  registerWempWebhook,
+  unregisterWempWebhook,
+} from "../src/webhook.js";
 
 type InboundMediaType = "image" | "voice";
 
-function accountFixture(params: { accountId: string; webhookPath: string; allowFrom?: string[] }): ResolvedWempAccount {
+function accountFixture(params: {
+  accountId: string;
+  webhookPath: string;
+  allowFrom?: string[];
+}): ResolvedWempAccount {
   return {
     accountId: params.accountId,
     enabled: true,
@@ -142,14 +150,20 @@ async function runInboundMediaScenario(params: {
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const value = String(url);
     if (value.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${uid}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${uid}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (value.includes("/cgi-bin/media/get")) {
       if (params.mediaDownloadOk) {
-        const bytes = params.msgType === "image" ? new Uint8Array([1, 2, 3, 4]) : new Uint8Array([5, 6, 7, 8, 9]);
+        const bytes =
+          params.msgType === "image"
+            ? new Uint8Array([1, 2, 3, 4])
+            : new Uint8Array([5, 6, 7, 8, 9]);
         return new Response(bytes, {
           status: 200,
           headers: {
@@ -158,10 +172,13 @@ async function runInboundMediaScenario(params: {
           },
         });
       }
-      return new Response(JSON.stringify({
-        errcode: 40007,
-        errmsg: "invalid media_id",
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errcode: 40007,
+          errmsg: "invalid media_id",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     return originalFetch(url, init);
   }) as typeof fetch;
@@ -172,22 +189,23 @@ async function runInboundMediaScenario(params: {
     const openId = `open-${uid}`;
     const mediaId = `media-${params.msgType}-${uid}`;
     const picUrl = `https://example.com/${uid}.jpg`;
-    const body = params.msgType === "image"
-      ? buildImageMessageXml({
-          toUser: "gh_media",
-          fromUser: openId,
-          createTime: timestamp,
-          msgId: `msg-image-${uid}`,
-          picUrl,
-          mediaId,
-        })
-      : buildVoiceMessageXml({
-          toUser: "gh_media",
-          fromUser: openId,
-          createTime: timestamp,
-          msgId: `msg-voice-${uid}`,
-          mediaId,
-        });
+    const body =
+      params.msgType === "image"
+        ? buildImageMessageXml({
+            toUser: "gh_media",
+            fromUser: openId,
+            createTime: timestamp,
+            msgId: `msg-image-${uid}`,
+            picUrl,
+            mediaId,
+          })
+        : buildVoiceMessageXml({
+            toUser: "gh_media",
+            fromUser: openId,
+            createTime: timestamp,
+            msgId: `msg-voice-${uid}`,
+            mediaId,
+          });
 
     const result = await postWebhook({
       baseUrl: server.baseUrl,
@@ -212,9 +230,15 @@ async function runInboundMediaScenario(params: {
 
     if (params.mediaDownloadOk) {
       assert.match(text, /\[media-summary\]/);
-      assert.match(text, params.msgType === "image" ? /contentType=image\/jpeg/ : /contentType=audio\/amr/);
+      assert.match(
+        text,
+        params.msgType === "image" ? /contentType=image\/jpeg/ : /contentType=audio\/amr/,
+      );
       assert.match(text, params.msgType === "image" ? /size=4B/ : /size=5B/);
-      assert.match(text, params.msgType === "image" ? /filename=image-sample\.jpg/ : /filename=voice-sample\.amr/);
+      assert.match(
+        text,
+        params.msgType === "image" ? /filename=image-sample\.jpg/ : /filename=voice-sample\.amr/,
+      );
     } else if (params.msgType === "image") {
       assert.equal(text, `[image] ${picUrl}`);
       assert.doesNotMatch(text, /\[media-summary\]/);

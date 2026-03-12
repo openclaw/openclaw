@@ -24,5 +24,4 @@ describe("wemp templates", () => {
     expect(content).toMatch(/内容推荐|相关文章/);
     expect(general).toMatch(/直接回答核心问题/);
   });
-
 });

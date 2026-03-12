@@ -48,12 +48,18 @@ export function defaultRuntime(accountId = "default"): WempRuntimeSnapshot {
 
 export function getLocalRuntimeSnapshot(accountId: string): WempRuntimeSnapshot {
   const normalizedAccountId = normalizeAccountId(accountId);
-  return { ...(localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId)) };
+  return {
+    ...(localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId)),
+  };
 }
 
-export function mergeLocalRuntimeSnapshot(accountId: string, patch: RuntimeSnapshotPatch): WempRuntimeSnapshot {
+export function mergeLocalRuntimeSnapshot(
+  accountId: string,
+  patch: RuntimeSnapshotPatch,
+): WempRuntimeSnapshot {
   const normalizedAccountId = normalizeAccountId(accountId);
-  const current = localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId);
+  const current =
+    localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId);
   const next: WempRuntimeSnapshot = {
     ...current,
     ...patch,
@@ -63,7 +69,11 @@ export function mergeLocalRuntimeSnapshot(accountId: string, patch: RuntimeSnaps
   return { ...next };
 }
 
-export function markRuntimeConnected(accountId: string, connected = true, now = Date.now()): WempRuntimeSnapshot {
+export function markRuntimeConnected(
+  accountId: string,
+  connected = true,
+  now = Date.now(),
+): WempRuntimeSnapshot {
   if (!connected) {
     return mergeLocalRuntimeSnapshot(accountId, {
       running: false,
@@ -94,7 +104,10 @@ export function markRuntimeOutbound(accountId: string, now = Date.now()): WempRu
   });
 }
 
-export function markRuntimeError(accountId: string, error: string | Error | null): WempRuntimeSnapshot {
+export function markRuntimeError(
+  accountId: string,
+  error: string | Error | null,
+): WempRuntimeSnapshot {
   return mergeLocalRuntimeSnapshot(accountId, {
     lastError: error ? toErrorMessage(error) : null,
   });
@@ -102,7 +115,8 @@ export function markRuntimeError(accountId: string, error: string | Error | null
 
 export function mergeRuntimeSnapshot(accountId: string, runtime?: unknown): WempRuntimeSnapshot {
   const normalizedAccountId = normalizeAccountId(accountId);
-  const current = localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId);
+  const current =
+    localRuntimeSnapshots.get(normalizedAccountId) ?? defaultRuntime(normalizedAccountId);
   const runtimeRecord = toRecord(runtime);
   const merged: WempRuntimeSnapshot = {
     ...current,

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ResolvedWempAccount, WempMenuItem } from "../types.js";
 import { getAccessToken, isTokenExpiredCode } from "../api.js";
+import type { ResolvedWempAccount, WempMenuItem } from "../types.js";
 
 export interface MenuFeatureConfig {
   enabled?: boolean;
@@ -109,7 +109,10 @@ async function requestWechatMenu<T extends WechatMenuApiResponse>(
 
   let res: Response;
   try {
-    res = await fetch(`https://api.weixin.qq.com/cgi-bin/menu/${action}?access_token=${encodeURIComponent(token)}`, init);
+    res = await fetch(
+      `https://api.weixin.qq.com/cgi-bin/menu/${action}?access_token=${encodeURIComponent(token)}`,
+      init,
+    );
   } catch (error) {
     return {
       ok: false,
@@ -168,7 +171,9 @@ async function requestWechatMenu<T extends WechatMenuApiResponse>(
   };
 }
 
-export async function syncWechatMenu(account: ResolvedWempAccount): Promise<WechatMenuResult<WechatMenuApiResponse>> {
+export async function syncWechatMenu(
+  account: ResolvedWempAccount,
+): Promise<WechatMenuResult<WechatMenuApiResponse>> {
   const result = await applyWechatMenuConfig(account, account.features.menu);
   return result;
 }
@@ -207,10 +212,14 @@ export async function applyWechatMenuConfig(
   };
 }
 
-export async function getWechatMenu(account: ResolvedWempAccount): Promise<WechatMenuResult<WechatMenuApiResponse>> {
+export async function getWechatMenu(
+  account: ResolvedWempAccount,
+): Promise<WechatMenuResult<WechatMenuApiResponse>> {
   return requestWechatMenu<WechatMenuApiResponse>(account, "get");
 }
 
-export async function deleteWechatMenu(account: ResolvedWempAccount): Promise<WechatMenuResult<WechatMenuApiResponse>> {
+export async function deleteWechatMenu(
+  account: ResolvedWempAccount,
+): Promise<WechatMenuResult<WechatMenuApiResponse>> {
   return requestWechatMenu<WechatMenuApiResponse>(account, "delete");
 }

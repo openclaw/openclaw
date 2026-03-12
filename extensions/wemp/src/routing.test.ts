@@ -35,6 +35,8 @@ describe("wemp routing", () => {
   it("resolveInboundAgent follows paired flag", () => {
     const account = accountFixture();
     expect(resolveInboundAgent(account, { openId: "o1", text: "hi", paired: true })).toBe("main");
-    expect(resolveInboundAgent(account, { openId: "o2", text: "hi", paired: false })).toBe("wemp-kf");
+    expect(resolveInboundAgent(account, { openId: "o2", text: "hi", paired: false })).toBe(
+      "wemp-kf",
+    );
   });
 });

@@ -1,5 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { wempPlugin } from "../src/channel.js";
 import type { ResolvedWempAccount, WempMenuItem } from "../src/types.js";
 
@@ -29,7 +29,10 @@ function buildMenuAccount(accountId: string, items: WempMenuItem[]): ResolvedWem
   };
 }
 
-function createAccountStartContext(account: ResolvedWempAccount): { ctx: any; controller: AbortController } {
+function createAccountStartContext(account: ResolvedWempAccount): {
+  ctx: any;
+  controller: AbortController;
+} {
   const controller = new AbortController();
   let status: Record<string, unknown> = {};
   const ctx = {
@@ -122,10 +125,13 @@ test("menu sync: first start performs initial menu sync successfully", async () 
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       const urlValue = toUrlString(url);
       if (urlValue.includes("/cgi-bin/token")) {
-        return new Response(JSON.stringify({
-          access_token: `token-${accountId}`,
-          expires_in: 7200,
-        }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(
+          JSON.stringify({
+            access_token: `token-${accountId}`,
+            expires_in: 7200,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
       if (urlValue.includes("/cgi-bin/menu/create")) {
         createPayloads.push(parseMenuCreatePayload(init));
@@ -159,10 +165,13 @@ test("menu sync: config changes trigger another sync with new menu payload", asy
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const urlValue = toUrlString(url);
     if (urlValue.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (urlValue.includes("/cgi-bin/menu/create")) {
       createPayloads.push(parseMenuCreatePayload(init));
@@ -206,19 +215,25 @@ test("menu sync: if changed menu sync fails, it rolls back to last successful me
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const urlValue = toUrlString(url);
     if (urlValue.includes("/cgi-bin/token")) {
-      return new Response(JSON.stringify({
-        access_token: `token-${accountId}`,
-        expires_in: 7200,
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          access_token: `token-${accountId}`,
+          expires_in: 7200,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
     if (urlValue.includes("/cgi-bin/menu/create")) {
       createCalls += 1;
       createPayloads.push(parseMenuCreatePayload(init));
       if (createCalls === 2) {
-        return new Response(JSON.stringify({ errcode: 40018, errmsg: "invalid button name size" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ errcode: 40018, errmsg: "invalid button name size" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       }
       return new Response(JSON.stringify({ errcode: 0, errmsg: "ok" }), {
         status: 200,

@@ -48,14 +48,17 @@ test("flushHandoffNotificationsToExternal delivers queued events", async (t) => 
 
   const events: Array<{ event?: string; type?: string; reason?: string; openId?: string }> = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const payload = typeof init?.body === "string" ? JSON.parse(init.body) as any : {};
+    const payload = typeof init?.body === "string" ? (JSON.parse(init.body) as any) : {};
     events.push({
       event: payload?.event,
       type: payload?.data?.type,
       reason: payload?.data?.reason,
       openId: payload?.data?.openId,
     });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   }) as typeof fetch;
 
   process.env.WEMP_HANDOFF_NOTIFY_ENDPOINT = "https://handoff.example.com/notify";
@@ -95,9 +98,18 @@ test("flushHandoffNotificationsToExternal delivers queued events", async (t) => 
   assert.equal(flushResult.failed, 0);
   assert.equal(flushResult.remaining, 0);
   assert.equal(flushResult.delivered, 2);
-  assert.deepEqual(events.map((item) => item.event), ["handoff_notification", "handoff_ticket", "handoff_notification"]);
-  assert.deepEqual(events.map((item) => item.type), ["activated", "activated", "resumed"]);
-  assert.deepEqual(events.map((item) => item.reason), ["click", "click", "command"]);
+  assert.deepEqual(
+    events.map((item) => item.event),
+    ["handoff_notification", "handoff_ticket", "handoff_notification"],
+  );
+  assert.deepEqual(
+    events.map((item) => item.type),
+    ["activated", "activated", "resumed"],
+  );
+  assert.deepEqual(
+    events.map((item) => item.reason),
+    ["click", "click", "command"],
+  );
 });
 
 test("flushHandoffNotificationsToExternal supports env ticket fallback without notify endpoint", async (t) => {
@@ -130,12 +142,15 @@ test("flushHandoffNotificationsToExternal supports env ticket fallback without n
 
   const events: Array<{ event?: string; type?: string }> = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    const payload = typeof init?.body === "string" ? JSON.parse(init.body) as any : {};
+    const payload = typeof init?.body === "string" ? (JSON.parse(init.body) as any) : {};
     events.push({
       event: payload?.event,
       type: payload?.data?.type,
     });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
   }) as typeof fetch;
 
   delete process.env.WEMP_HANDOFF_NOTIFY_ENDPOINT;

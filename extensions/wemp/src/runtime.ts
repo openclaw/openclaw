@@ -14,7 +14,10 @@ export function setWempRuntime(next: PluginRuntime): void {
 
 export function trySetWempRuntime(next: unknown): boolean {
   const candidate = next as any;
-  if (candidate?.channel?.dispatchInbound && typeof candidate.channel.dispatchInbound === "function") {
+  if (
+    candidate?.channel?.dispatchInbound &&
+    typeof candidate.channel.dispatchInbound === "function"
+  ) {
     runtime = candidate as PluginRuntime;
     return true;
   }
@@ -53,7 +56,9 @@ function resolveDispatchInbound(rt: PluginRuntime): DispatchInboundFn | null {
 }
 
 function normalizeChatType(raw: string | undefined): string {
-  const value = String(raw || "").trim().toLowerCase();
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase();
   if (value === "direct" || value === "group") return value;
   return "direct";
 }
@@ -63,7 +68,10 @@ function runtimeValidationEnabled(): boolean {
 }
 
 function resolveSessionKeyTemplate(): string {
-  return String(process.env.WEMP_RUNTIME_SESSION_KEY_TEMPLATE || DEFAULT_SESSION_KEY_TEMPLATE).trim() || DEFAULT_SESSION_KEY_TEMPLATE;
+  return (
+    String(process.env.WEMP_RUNTIME_SESSION_KEY_TEMPLATE || DEFAULT_SESSION_KEY_TEMPLATE).trim() ||
+    DEFAULT_SESSION_KEY_TEMPLATE
+  );
 }
 
 function resolveSessionKeyMaxLen(): number {
@@ -73,7 +81,9 @@ function resolveSessionKeyMaxLen(): number {
 }
 
 function validateChatType(raw: string | undefined): string | null {
-  const value = String(raw || "").trim().toLowerCase();
+  const value = String(raw || "")
+    .trim()
+    .toLowerCase();
   if (!value) return null;
   if (value === "direct" || value === "group") return null;
   return `invalid runtime chatType: ${raw}`;
@@ -89,7 +99,8 @@ function validateSessionKeyTemplate(template: string): string | null {
 
 function validateSessionKey(sessionKey: string): string | null {
   if (!sessionKey.trim()) return "invalid sessionKey: empty";
-  if (/[\u0000-\u001f\u007f]/.test(sessionKey)) return "invalid sessionKey: contains control characters";
+  if (/[\u0000-\u001f\u007f]/.test(sessionKey))
+    return "invalid sessionKey: contains control characters";
   return null;
 }
 
