@@ -57,6 +57,8 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
+const MP4_AUDIO_BRANDS = new Set(["m4a ", "m4b ", "m4p ", "m4r ", "f4a ", "f4b "]);
+
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -71,10 +73,31 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   }
   try {
     const type = await fileTypeFromBuffer(buffer);
-    return type?.mime ?? undefined;
+    const sniffed = type?.mime;
+    if (sniffed === "video/mp4") {
+      const corrected = correctAudioOnlyMp4Mime(buffer);
+      if (corrected) {
+        return corrected;
+      }
+    }
+    return sniffed ?? undefined;
   } catch {
     return undefined;
   }
+}
+
+function correctAudioOnlyMp4Mime(buffer: Buffer): string | undefined {
+  const hasFtypBox =
+    buffer.length >= 12 &&
+    buffer[4] === 0x66 &&
+    buffer[5] === 0x74 &&
+    buffer[6] === 0x79 &&
+    buffer[7] === 0x70;
+  if (!hasFtypBox) {
+    return undefined;
+  }
+  const majorBrand = buffer.toString("ascii", 8, 12).toLowerCase();
+  return MP4_AUDIO_BRANDS.has(majorBrand) ? "audio/mp4" : undefined;
 }
 
 export function getFileExtension(filePath?: string | null): string | undefined {

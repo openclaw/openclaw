@@ -68,6 +68,21 @@ describe("mime detection", () => {
     });
     expect(mime).toBe("text/javascript");
   });
+
+  it("reclassifies audio-only mp4 containers as audio/mp4", async () => {
+    const buf = Buffer.from([
+      0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x52, 0x20, 0x00, 0x00, 0x00,
+      0x00, 0x4d, 0x34, 0x52, 0x20, 0x69, 0x73, 0x6f, 0x6d,
+    ]);
+
+    const mime = await detectMime({
+      buffer: buf,
+      filePath: "/tmp/voice-note.mp4",
+    });
+
+    expect(mime).toBe("audio/mp4");
+    expect(kindFromMime(mime)).toBe("audio");
+  });
 });
 
 describe("extensionForMime", () => {
