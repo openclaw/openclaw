@@ -22,6 +22,8 @@ const webhookStats = {
 };
 const FIRST_VISIBLE_SAMPLE_LIMIT = 50;
 const FIRST_VISIBLE_TIMEOUT_MS = 4_000;
+const MIN_FIRST_VISIBLE_WARN_MS = 250;
+const MAX_FIRST_VISIBLE_WARN_MS = 10 * 60 * 1000;
 const firstVisibleSamples: number[] = [];
 let firstVisibleTimeoutCount = 0;
 
@@ -81,6 +83,18 @@ export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
   const rounded = Math.floor(raw);
   if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
     return DEFAULT_STUCK_SESSION_WARN_MS;
+  }
+  return rounded;
+}
+
+export function resolveFirstVisibleWarnMs(config?: OpenClawConfig): number {
+  const raw = config?.diagnostics?.firstVisibleWarnMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return FIRST_VISIBLE_TIMEOUT_MS;
+  }
+  const rounded = Math.floor(raw);
+  if (rounded < MIN_FIRST_VISIBLE_WARN_MS || rounded > MAX_FIRST_VISIBLE_WARN_MS) {
+    return FIRST_VISIBLE_TIMEOUT_MS;
   }
   return rounded;
 }
@@ -259,7 +273,11 @@ export function logMessageFirstVisible(params: {
 }
 
 export function getFirstVisibleWatchdogMs(): number {
-  return FIRST_VISIBLE_TIMEOUT_MS;
+  try {
+    return resolveFirstVisibleWarnMs(loadConfig());
+  } catch {
+    return FIRST_VISIBLE_TIMEOUT_MS;
+  }
 }
 
 export function logMessageFirstVisibleTimeout(params: {

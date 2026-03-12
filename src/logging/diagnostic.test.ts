@@ -13,6 +13,7 @@ import {
   logMessageFirstVisible,
   logSessionStateChange,
   resetDiagnosticStateForTest,
+  resolveFirstVisibleWarnMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
@@ -134,6 +135,10 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
   });
 
+  it("uses the configured diagnostics.firstVisibleWarnMs threshold", () => {
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: 6_000 } })).toBe(6_000);
+  });
+
   it("includes recent first-visible summary in heartbeat events", () => {
     const events: Array<{
       type: string;
@@ -198,5 +203,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: -1 } })).toBe(4_000);
+    expect(resolveFirstVisibleWarnMs({ diagnostics: { firstVisibleWarnMs: 0 } })).toBe(4_000);
+    expect(resolveFirstVisibleWarnMs()).toBe(4_000);
   });
 });
