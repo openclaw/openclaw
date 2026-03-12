@@ -26,7 +26,7 @@
     "install": {
       "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [

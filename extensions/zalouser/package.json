@@ -28,7 +28,7 @@
     "install": {
       "npmSpec": "@openclaw/zalouser",
       "localPath": "extensions/zalouser",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [

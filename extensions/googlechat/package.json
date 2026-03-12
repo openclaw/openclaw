@@ -36,7 +36,7 @@
     "install": {
       "npmSpec": "@openclaw/googlechat",
       "localPath": "extensions/googlechat",
-      "defaultChoice": "npm"
+      "defaultChoice": "local"
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
