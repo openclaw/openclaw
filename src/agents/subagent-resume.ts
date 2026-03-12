@@ -55,9 +55,10 @@ const log = createSubsystemLogger("agents/subagent-resume");
  *
  * - `resumable-announce-only`  — `endedAt` is already set; the run completed
  *   before restart, the announce delivery just needs to be retried.
- * - `resumable-replay`         — transcript exists with ≥1 assistant turn and
- *   `endedAt` is unset; the run finished but its completion was never recorded
- *   in the registry.  Capture the result from the transcript and complete.
+ * - `resumable-replay`         — transcript ends with a completed assistant
+ *   turn (no pending `tool_use` blocks) and `endedAt` is unset; the run
+ *   finished but its completion was never recorded in the registry.  Capture
+ *   the result from the transcript and complete.
  * - `resumable-fresh`          — session-store entry exists, transcript is
  *   empty / session-header only, `endedAt` is unset; the agent process was
  *   spawned but never ran.  Re-dispatch the original task.
@@ -136,6 +137,91 @@ export function transcriptHasAssistantTurn(transcriptPath: string): boolean {
         // ignore malformed lines
       }
     }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return `true` when the transcript's **last** message line is an assistant
+ * turn that contains **no** pending `tool_use` content blocks.
+ *
+ * An assistant turn qualifies as a completed final turn only when:
+ *  - It is the very last message in the transcript (nothing follows it), AND
+ *  - Its `content` array contains only non-`tool_use` blocks (e.g. `text`).
+ *
+ * Returns `false` (i.e. "not definitely complete") when:
+ *  - The transcript does not end with an assistant turn — e.g. it ends with a
+ *    user message or tool-result turn (run was interrupted mid-tool-use or
+ *    still awaiting further input).
+ *  - The last assistant turn contains `tool_use` blocks (run was cut off while
+ *    waiting for the tool result to come back).
+ *  - There are no message lines at all (session header only, or empty file).
+ *  - The file is absent or unreadable.
+ *
+ * When in doubt this function returns `false` so callers fall back to the
+ * safer `resumable-fresh` path rather than incorrectly marking a run as done.
+ */
+export function transcriptEndsWithCompletedAssistantTurn(transcriptPath: string): boolean {
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.split("\n");
+
+    // Walk from the end to find the last non-empty, parseable message line.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i]?.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Malformed line — skip it and keep looking backward.
+        continue;
+      }
+
+      if (parsed === null || typeof parsed !== "object") {
+        continue;
+      }
+
+      const record = parsed as Record<string, unknown>;
+      if (record.type !== "message") {
+        // Session header or other non-message record; keep scanning backward.
+        continue;
+      }
+
+      // Found the last message line — check if it's a completed assistant turn.
+      const msg = record.message;
+      if (msg === null || typeof msg !== "object") {
+        return false;
+      }
+      const msgRecord = msg as Record<string, unknown>;
+      if (msgRecord.role !== "assistant") {
+        // Last turn is not from the assistant (e.g. user / tool-result turn) —
+        // the run was interrupted before the assistant could reply.
+        return false;
+      }
+
+      // Check that the content array has no pending tool_use blocks.
+      const contentArr = msgRecord.content;
+      if (!Array.isArray(contentArr)) {
+        // Non-array content (e.g. plain string) — treat as a completed text turn.
+        return true;
+      }
+      const hasPendingToolUse = contentArr.some(
+        (block) =>
+          block !== null &&
+          typeof block === "object" &&
+          (block as Record<string, unknown>).type === "tool_use",
+      );
+      // If there are outstanding tool_use blocks the run is mid-tool-use, not done.
+      return !hasPendingToolUse;
+    }
+
+    // No message lines found at all.
     return false;
   } catch {
     return false;
@@ -407,13 +493,20 @@ export function resolveSubagentRunResumability(
     return "resumable-fresh";
   }
 
-  if (transcriptHasAssistantTurn(transcriptPath)) {
-    // The agent ran and produced output — we just need to capture and announce.
+  if (transcriptEndsWithCompletedAssistantTurn(transcriptPath)) {
+    // The transcript ends with a completed assistant turn (no pending tool_use
+    // blocks) — the run finished but its completion was never recorded in the
+    // registry.  Capture the result from the transcript and complete.
     return "resumable-replay";
   }
 
-  // Transcript exists but has no assistant turns → agent was spawned, wrote
-  // the session header, but never completed a turn.  Re-dispatch.
+  // Transcript exists but does not end with a completed assistant turn.
+  // This covers:
+  //   • header-only / no turns at all (agent spawned but never ran)
+  //   • last turn is a user/tool-result message (interrupted mid-tool-use)
+  //   • last assistant turn has pending tool_use blocks (cut off mid-tool-use)
+  //   • only intermediate planning / partial assistant turns present
+  // In all these cases re-dispatch is safer than falsely marking the run done.
   return "resumable-fresh";
 }
 
