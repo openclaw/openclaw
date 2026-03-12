@@ -445,9 +445,9 @@ Notes:
   - `contextWindow: 200000`
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
-- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles. An explicit `compat.supportsDeveloperRole: true` is still overridden on non-native endpoints.
 - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
-- For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
+- `compat.supportsUsageInStreaming` defaults to `false` on non-native `openai-completions` endpoints. If your backend supports usage reporting in streaming responses (vLLM, llama.cpp, TGI, Ollama, and others), set `compat.supportsUsageInStreaming: true` to enable token usage tracking in `/status` and session logs.
 
 ## CLI examples
 

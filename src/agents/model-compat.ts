@@ -52,20 +52,29 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
-  // The `developer` role and stream usage chunks are OpenAI-native behaviors.
-  // Many OpenAI-compatible backends reject `developer` and/or emit usage-only
-  // chunks that break strict parsers expecting choices[0]. For non-native
-  // openai-completions endpoints, force both compat flags off.
+  // The `developer` role is an OpenAI-native behavior. Many OpenAI-compatible
+  // backends reject the `developer` role. For non-native openai-completions
+  // endpoints, always force supportsDeveloperRole off.
+  //
+  // supportsUsageInStreaming defaults to false for non-native endpoints because
+  // some backends emit usage-only chunks that break strict parsers expecting
+  // choices[0]. However, many popular backends (vLLM, llama.cpp, TGI, Ollama)
+  // handle stream usage correctly. Users may explicitly set
+  // supportsUsageInStreaming: true in their model config to opt in.
   const compat = model.compat ?? undefined;
   // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
   // leave compat unchanged and let default native behavior apply.
-  // Note: explicit true values are intentionally overridden for non-native
-  // endpoints for safety.
   const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
   if (!needsForce) {
     return model;
   }
-  if (compat?.supportsDeveloperRole === false && compat?.supportsUsageInStreaming === false) {
+
+  const resolvedUsageInStreaming = compat?.supportsUsageInStreaming ?? false;
+
+  if (
+    compat?.supportsDeveloperRole === false &&
+    compat?.supportsUsageInStreaming === resolvedUsageInStreaming
+  ) {
     return model;
   }
 
@@ -73,7 +82,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   return {
     ...model,
     compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
+      ? {
+          ...compat,
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: resolvedUsageInStreaming,
+        }
       : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
   } as typeof model;
 }

@@ -262,7 +262,7 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
-  it("overrides explicit supportsUsageInStreaming true on non-native endpoints", () => {
+  it("preserves explicit supportsUsageInStreaming true on non-native endpoints", () => {
     const model = {
       ...baseModel(),
       provider: "custom-cpa",
@@ -270,7 +270,31 @@ describe("normalizeModelCompat", () => {
       compat: { supportsUsageInStreaming: true },
     };
     const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("defaults supportsUsageInStreaming to false when not explicitly set on non-native endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsDeveloperRole: true },
+    };
+    const normalized = normalizeModelCompat(model);
     expect(supportsUsageInStreaming(normalized)).toBe(false);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+
+  it("preserves supportsUsageInStreaming true while still forcing supportsDeveloperRole off", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-vllm",
+      baseUrl: "http://localhost:8000/v1",
+      compat: { supportsUsageInStreaming: true, supportsDeveloperRole: true },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
   });
 
   it("does not mutate caller model when forcing supportsDeveloperRole off", () => {
