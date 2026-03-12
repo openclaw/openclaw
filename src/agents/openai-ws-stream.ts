@@ -768,7 +768,7 @@ export function createOpenAIWebSocketStreamFn(
       if (streamOpts?.topP !== undefined) {
         extraParams.top_p = streamOpts.topP;
       }
-      if (streamOpts?.toolChoice !== undefined) {
+      if (streamOpts?.toolChoice !== undefined && tools.length > 0) {
         extraParams.tool_choice = streamOpts.toolChoice;
       }
       if (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary) {

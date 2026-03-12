@@ -1206,12 +1206,16 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
-  it("forwards topP and toolChoice to response.create", async () => {
+  it("forwards topP and toolChoice to response.create when tools are present", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };
+    const ctxWithTools = {
+      ...contextStub,
+      tools: [{ name: "exec", description: "run", parameters: {} }],
+    };
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
-      contextStub as Parameters<typeof streamFn>[1],
+      ctxWithTools as Parameters<typeof streamFn>[1],
       opts as unknown as Parameters<typeof streamFn>[2],
     );
     await new Promise<void>((resolve, reject) => {
@@ -1235,6 +1239,38 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.type).toBe("response.create");
     expect(sent.top_p).toBe(0.9);
     expect(sent.tool_choice).toBe("auto");
+  });
+
+  it("omits tool_choice from response.create when tools list is empty", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp-notools");
+    const opts = { toolChoice: "auto" };
+    // contextStub.tools is [] — no tools configured
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-notools", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.tools).toBeUndefined();
+    expect(sent.tool_choice).toBeUndefined();
   });
 
   it("rejects promise when WebSocket drops mid-request", async () => {
