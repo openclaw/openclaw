@@ -70,20 +70,40 @@ describe("monitorSlackProvider tool results", () => {
     return (replyMock.mock.calls[0]?.[0] ?? {}) as { WasMentioned?: boolean };
   }
 
-  function setRequireMentionChannelConfig(mentionPatterns?: string[]) {
+  function setRequireMentionChannelConfig(
+    params?:
+      | string[]
+      | {
+          mentionPatterns?: string[];
+          allowImplicitMention?: boolean;
+        },
+  ) {
+    const resolved =
+      Array.isArray(params) || params === undefined ? { mentionPatterns: params } : params;
     slackTestState.config = {
-      ...(mentionPatterns
+      ...(resolved.mentionPatterns
         ? {
             messages: {
               responsePrefix: "PFX",
-              groupChat: { mentionPatterns },
+              groupChat: { mentionPatterns: resolved.mentionPatterns },
             },
           }
         : {}),
       channels: {
         slack: {
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: true } },
+          ...(resolved.allowImplicitMention === undefined
+            ? {}
+            : { allowImplicitMention: resolved.allowImplicitMention }),
+          channels: {
+            C1: {
+              allow: true,
+              requireMention: true,
+              ...(resolved.allowImplicitMention === undefined
+                ? {}
+                : { allowImplicitMention: resolved.allowImplicitMention }),
+            },
+          },
         },
       },
     };
@@ -548,6 +568,23 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(firstReplyCtx().WasMentioned).toBe(true);
+  });
+
+  it("does not treat bot-thread replies as mentions when implicit mentions are disabled", async () => {
+    setRequireMentionChannelConfig({ allowImplicitMention: false });
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        text: "following up",
+        ts: "124",
+        thread_ts: "123",
+        parent_user_id: "bot-user",
+        channel_type: "channel",
+      }),
+    });
+
+    expect(replyMock).not.toHaveBeenCalled();
   });
 
   it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {

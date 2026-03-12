@@ -267,6 +267,115 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Slack file: file]");
   });
 
+  it("skips bot-thread replies without explicit tags when implicit mentions are disabled", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, requireMention: true, allowImplicitMention: false } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      defaultAllowImplicitMention: false,
+      channelsConfig: {
+        C123: { allowImplicitMention: false },
+      },
+    });
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ requireMention: true, allowImplicitMention: false }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        thread_ts: "1.000",
+        parent_user_id: "B1",
+        text: "follow-up",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("respects account-level implicit mention disable without a per-channel override", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, requireMention: true, allowImplicitMention: false } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      defaultAllowImplicitMention: false,
+      channelsConfig: {
+        C123: {},
+      },
+    });
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ requireMention: true, allowImplicitMention: false }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        thread_ts: "1.000",
+        parent_user_id: "B1",
+        text: "follow-up",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("skips resolved monitoring incident roots when configured", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: { requireMention: false, incidentIgnoreResolved: true },
+      },
+    });
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "Status: resolved",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("skips duplicate monitoring incident roots inside the cooldown window", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C123: { requireMention: false, incidentDedupeWindowSeconds: 300 },
+      },
+    });
+    const account = createSlackAccount({ allowBots: true });
+    const first = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "API error rate high",
+        ts: "1",
+      }),
+    );
+    const second = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "API error rate high",
+        ts: "2",
+      }),
+    );
+
+    expect(first).toBeTruthy();
+    expect(second).toBeNull();
+  });
+
   it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

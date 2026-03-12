@@ -13,6 +13,7 @@ GRAPH_DIR="${OPENCLAW_SRE_INIT_GRAPH_DIR:-${OPENCLAW_SRE_GRAPH_DIR:-${STATE_DIR}
 DOSSIERS_DIR="${OPENCLAW_SRE_INIT_DOSSIERS_DIR:-${OPENCLAW_SRE_DOSSIERS_DIR:-${STATE_DIR}/state/sre-dossiers}}"
 INDEX_DIR="${OPENCLAW_SRE_INIT_INDEX_DIR:-${OPENCLAW_SRE_INDEX_DIR:-${STATE_DIR}/state/sre-index}}"
 PLANS_DIR="${OPENCLAW_SRE_INIT_PLANS_DIR:-${OPENCLAW_SRE_PLANS_DIR:-${STATE_DIR}/state/sre-plans}}"
+SLACK_INCIDENT_CHANNELS_RAW="${OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS:-}"
 
 copy_tree() {
   local src="$1"
@@ -34,6 +35,54 @@ chmod_scripts_in_dir() {
   if [ -d "$dir" ]; then
     find "$dir" -type f -name '*.sh' -exec chmod +x {} +
   fi
+}
+
+normalize_slack_incident_channels_json() {
+  printf '%s' "$SLACK_INCIDENT_CHANNELS_RAW" \
+    | tr ',\n' '\n' \
+    | jq -Rsc '
+        split("\n")
+        | map(gsub("^\\s+|\\s+$"; ""))
+        | map(select(length > 0))
+        | map(if startswith("#") then . else "#"+. end)
+        | map(ascii_downcase)
+        | unique
+      '
+}
+
+apply_slack_incident_channel_override() {
+  [ -n "$SLACK_INCIDENT_CHANNELS_RAW" ] || return 0
+
+  local channels_json
+  channels_json="$(normalize_slack_incident_channels_json)"
+  if ! jq -e 'length > 0' >/dev/null <<<"$channels_json"; then
+    echo "seed-state:error OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS did not contain any channels" >&2
+    exit 1
+  fi
+
+  local tmp_config
+  tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
+  jq --argjson incident_channels "$channels_json" '
+    .channels.slack.channels as $channels
+    | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
+    | ($channels["#bug-report"]) as $bug_report
+    | ($channels["#platform-monitoring"]
+        // $channels["#public-api-monitoring"]) as $monitoring_template
+    | if $bug_report == null or $monitoring_template == null then
+        error("missing seeded Slack incident channel templates")
+      else
+        .channels.slack.channels = (
+          reduce $override_channels[] as $channel
+            ({ "#bug-report": $bug_report }; . + { ($channel): $monitoring_template })
+        )
+      end
+  ' "$CONFIG_PATH" >"$tmp_config"
+  jq -e '.channels.slack.channels | length > 0 and has("#bug-report")' "$tmp_config" >/dev/null || {
+    rm -f "$tmp_config"
+    echo "seed-state:error produced invalid Slack incident channel config" >&2
+    exit 1
+  }
+  mv "$tmp_config" "$CONFIG_PATH"
 }
 
 ensure_workspace_memory_scaffold() {
@@ -66,6 +115,7 @@ ensure_workspace_memory_scaffold "$WORKSPACE_DIR"
 ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
 
 copy_file "${SKILL_SOURCE_DIR}/config/openclaw.json" "$CONFIG_PATH"
+apply_slack_incident_channel_override
 chmod 600 "$CONFIG_PATH" || true
 
 rm -rf "$SKILL_DEST_DIR"

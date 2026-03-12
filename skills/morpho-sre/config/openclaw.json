@@ -367,6 +367,7 @@
       "mode": "socket",
       "webhookPath": "/slack/events",
       "enabled": true,
+      "allowImplicitMention": false,
       "commands": {
         "native": true,
         "nativeSkills": true
@@ -379,26 +380,35 @@
       "nativeStreaming": true,
       "dmPolicy": "open",
       "channels": {
+        "#bug-report": {
+          "enabled": true,
+          "requireMention": false,
+          "allowImplicitMention": false,
+          "allowBots": true,
+          "skills": ["morpho-sre"],
+          "systemPrompt": "Incident intake mode:\n- Scope: bug-report incident channels for this runtime.\n- Auto-respond for incident reports, alert messages, and alert updates in these channels, including bot-authored alerts.\n- Always reply in the incident thread under the alert/report root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+        },
         "#platform-monitoring": {
           "enabled": true,
           "requireMention": false,
+          "allowImplicitMention": false,
+          "incidentRootOnly": true,
+          "incidentIgnoreResolved": true,
+          "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
           "skills": ["morpho-sre"],
-          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+          "systemPrompt": "Monitoring incident intake mode:\n- Scope: configured monitoring incident channels for this runtime.\n- Auto-respond only to new incident root posts in these channels.\n- Ignore resolved/recovered updates and duplicate incident roots.\n- Always reply in the incident thread under the alert/report root; never post RCA in channel root.\n- Start every reply with <@U07KE3NALTX>.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Never reveal secrets or token values."
         },
         "#public-api-monitoring": {
           "enabled": true,
           "requireMention": false,
+          "allowImplicitMention": false,
+          "incidentRootOnly": true,
+          "incidentIgnoreResolved": true,
+          "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
           "skills": ["morpho-sre"],
-          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
-        },
-        "#staging-infra-monitoring": {
-          "enabled": true,
-          "requireMention": false,
-          "allowBots": true,
-          "skills": ["morpho-sre"],
-          "systemPrompt": "BetterStack incident intake mode:\n- Scope: #staging-infra-monitoring (dev), #public-api-monitoring (prod), #platform-monitoring (prod).\n- Trigger on BetterStack alert/update messages (including bot-authored messages).\n- Always reply in the incident thread under the alert root; never post RCA in channel root.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> in each incident update message so Florian is notified.\n- Never reveal secrets or token values."
+          "systemPrompt": "Monitoring incident intake mode:\n- Scope: configured monitoring incident channels for this runtime.\n- Auto-respond only to new incident root posts in these channels.\n- Ignore resolved/recovered updates and duplicate incident roots.\n- Always reply in the incident thread under the alert/report root; never post RCA in channel root.\n- Start every reply with <@U07KE3NALTX>.\n- First four lines must be: Incident, Customer impact, Affected services, Status.\n- Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.\n- Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.\n- Put unrelated warnings under Also watching.\n- After the summary, include concise evidence, likely cause, mitigation, validation checks, and next actions.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Never reveal secrets or token values."
         }
       },
       "signingSecret": "${SLACK_SIGNING_SECRET}",
@@ -408,7 +418,7 @@
         "groupEnabled": true,
         "groupChannels": ["*"]
       },
-      "requireMention": false,
+      "requireMention": true,
       "replyToModeByChatType": {
         "channel": "all"
       },

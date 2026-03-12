@@ -11,6 +11,10 @@ import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from ".
 export type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
+  allowImplicitMention: boolean;
+  incidentRootOnly: boolean;
+  incidentIgnoreResolved: boolean;
+  incidentDedupeWindowSeconds: number;
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -23,6 +27,10 @@ export type SlackChannelConfigEntry = {
   enabled?: boolean;
   allow?: boolean;
   requireMention?: boolean;
+  allowImplicitMention?: boolean;
+  incidentRootOnly?: boolean;
+  incidentIgnoreResolved?: boolean;
+  incidentDedupeWindowSeconds?: number;
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -30,6 +38,11 @@ export type SlackChannelConfigEntry = {
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
+const INCIDENT_POLICY_DEFAULTS = {
+  incidentRootOnly: false,
+  incidentIgnoreResolved: false,
+  incidentDedupeWindowSeconds: 0,
+} as const;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
@@ -91,8 +104,16 @@ export function resolveSlackChannelConfig(params: {
   channels?: SlackChannelConfigEntries;
   channelKeys?: string[];
   defaultRequireMention?: boolean;
+  defaultAllowImplicitMention?: boolean;
 }): SlackChannelConfigResolved | null {
-  const { channelId, channelName, channels, channelKeys, defaultRequireMention } = params;
+  const {
+    channelId,
+    channelName,
+    channels,
+    channelKeys,
+    defaultRequireMention,
+    defaultAllowImplicitMention,
+  } = params;
   const entries = channels ?? {};
   const keys = channelKeys ?? Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
@@ -119,11 +140,22 @@ export function resolveSlackChannelConfig(params: {
   const { entry: matched, wildcardEntry: fallback } = match;
 
   const requireMentionDefault = defaultRequireMention ?? true;
+  const allowImplicitMentionDefault = defaultAllowImplicitMention ?? true;
   if (keys.length === 0) {
-    return { allowed: true, requireMention: requireMentionDefault };
+    return {
+      allowed: true,
+      requireMention: requireMentionDefault,
+      allowImplicitMention: allowImplicitMentionDefault,
+      ...INCIDENT_POLICY_DEFAULTS,
+    };
   }
   if (!matched && !fallback) {
-    return { allowed: false, requireMention: requireMentionDefault };
+    return {
+      allowed: false,
+      requireMention: requireMentionDefault,
+      allowImplicitMention: allowImplicitMentionDefault,
+      ...INCIDENT_POLICY_DEFAULTS,
+    };
   }
 
   const resolved = matched ?? fallback ?? {};
@@ -133,6 +165,30 @@ export function resolveSlackChannelConfig(params: {
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;
+  const allowImplicitMention =
+    firstDefined(
+      resolved.allowImplicitMention,
+      fallback?.allowImplicitMention,
+      allowImplicitMentionDefault,
+    ) ?? allowImplicitMentionDefault;
+  const incidentRootOnly =
+    firstDefined(
+      resolved.incidentRootOnly,
+      fallback?.incidentRootOnly,
+      INCIDENT_POLICY_DEFAULTS.incidentRootOnly,
+    ) ?? INCIDENT_POLICY_DEFAULTS.incidentRootOnly;
+  const incidentIgnoreResolved =
+    firstDefined(
+      resolved.incidentIgnoreResolved,
+      fallback?.incidentIgnoreResolved,
+      INCIDENT_POLICY_DEFAULTS.incidentIgnoreResolved,
+    ) ?? INCIDENT_POLICY_DEFAULTS.incidentIgnoreResolved;
+  const incidentDedupeWindowSeconds =
+    firstDefined(
+      resolved.incidentDedupeWindowSeconds,
+      fallback?.incidentDedupeWindowSeconds,
+      INCIDENT_POLICY_DEFAULTS.incidentDedupeWindowSeconds,
+    ) ?? INCIDENT_POLICY_DEFAULTS.incidentDedupeWindowSeconds;
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
@@ -140,6 +196,10 @@ export function resolveSlackChannelConfig(params: {
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
+    allowImplicitMention,
+    incidentRootOnly,
+    incidentIgnoreResolved,
+    incidentDedupeWindowSeconds,
     allowBots,
     users,
     skills,

@@ -14,8 +14,16 @@ describe("resolveSlackChannelConfig", () => {
       channelId: "C1",
       channels: {},
       defaultRequireMention: false,
+      defaultAllowImplicitMention: false,
     });
-    expect(res).toEqual({ allowed: true, requireMention: false });
+    expect(res).toEqual({
+      allowed: true,
+      requireMention: false,
+      allowImplicitMention: false,
+      incidentRootOnly: false,
+      incidentIgnoreResolved: false,
+      incidentDedupeWindowSeconds: 0,
+    });
   });
 
   it("defaults defaultRequireMention to true when not provided", () => {
@@ -23,16 +31,24 @@ describe("resolveSlackChannelConfig", () => {
       channelId: "C1",
       channels: {},
     });
-    expect(res).toEqual({ allowed: true, requireMention: true });
+    expect(res).toEqual({
+      allowed: true,
+      requireMention: true,
+      allowImplicitMention: true,
+      incidentRootOnly: false,
+      incidentIgnoreResolved: false,
+      incidentDedupeWindowSeconds: 0,
+    });
   });
 
-  it("prefers explicit channel/fallback requireMention over defaultRequireMention", () => {
+  it("prefers explicit channel/fallback mention settings over defaults", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { "*": { requireMention: true } },
+      channels: { "*": { requireMention: true, allowImplicitMention: false } },
       defaultRequireMention: false,
+      defaultAllowImplicitMention: true,
     });
-    expect(res).toMatchObject({ requireMention: true });
+    expect(res).toMatchObject({ requireMention: true, allowImplicitMention: false });
   });
 
   it("uses wildcard entries when no direct channel config exists", () => {
@@ -44,6 +60,10 @@ describe("resolveSlackChannelConfig", () => {
     expect(res).toMatchObject({
       allowed: true,
       requireMention: false,
+      allowImplicitMention: true,
+      incidentRootOnly: false,
+      incidentIgnoreResolved: false,
+      incidentDedupeWindowSeconds: 0,
       matchKey: "*",
       matchSource: "wildcard",
     });
@@ -80,6 +100,39 @@ describe("resolveSlackChannelConfig", () => {
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+
+  it("can disable implicit mentions per channel", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true, requireMention: true, allowImplicitMention: false } },
+      defaultRequireMention: true,
+      defaultAllowImplicitMention: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: true,
+      allowImplicitMention: false,
+    });
+  });
+
+  it("resolves incident ingress policy from channel config", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: {
+        C1: {
+          allow: true,
+          incidentRootOnly: true,
+          incidentIgnoreResolved: true,
+          incidentDedupeWindowSeconds: 300,
+        },
+      },
+    });
+    expect(res).toMatchObject({
+      incidentRootOnly: true,
+      incidentIgnoreResolved: true,
+      incidentDedupeWindowSeconds: 300,
+    });
   });
 });
 

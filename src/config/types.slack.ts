@@ -31,6 +31,14 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** If false, thread replies do not count as implicit mentions. Default: true. */
+  allowImplicitMention?: boolean;
+  /** If true, only root incident posts trigger replies in this channel. */
+  incidentRootOnly?: boolean;
+  /** If true, resolved/recovered incident updates are ignored in this channel. */
+  incidentIgnoreResolved?: boolean;
+  /** Cooldown window for duplicate incident ingress suppression. */
+  incidentDedupeWindowSeconds?: number;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -112,6 +120,8 @@ export type SlackAccountConfig = {
   dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
+  /** If false, thread replies do not count as implicit mentions. Default: true. */
+  allowImplicitMention?: boolean;
   /**
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies

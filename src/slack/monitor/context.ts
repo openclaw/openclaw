@@ -43,6 +43,7 @@ export type SlackMonitorContext = {
   groupDmEnabled: boolean;
   groupDmChannels: string[];
   defaultRequireMention: boolean;
+  defaultAllowImplicitMention: boolean;
   channelsConfig?: SlackChannelConfigEntries;
   channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
@@ -52,6 +53,7 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
+  incidentIngressFingerprints: Map<string, number>;
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
@@ -108,6 +110,7 @@ export function createSlackMonitorContext(params: {
   groupDmEnabled: boolean;
   groupDmChannels: Array<string | number> | undefined;
   defaultRequireMention?: boolean;
+  defaultAllowImplicitMention?: boolean;
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
   useAccessGroups: boolean;
@@ -138,11 +141,13 @@ export function createSlackMonitorContext(params: {
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const threadStatusCache = new Map<string, { status: string; sentAt: number }>();
+  const incidentIngressFingerprints = new Map<string, number>();
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
   const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
   const defaultRequireMention = params.defaultRequireMention ?? true;
+  const defaultAllowImplicitMention = params.defaultAllowImplicitMention ?? true;
   const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
   const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
@@ -340,6 +345,7 @@ export function createSlackMonitorContext(params: {
         channels: params.channelsConfig,
         channelKeys: channelsConfigKeys,
         defaultRequireMention,
+        defaultAllowImplicitMention,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
       const channelAllowed = channelConfig?.allowed !== false;
@@ -420,6 +426,7 @@ export function createSlackMonitorContext(params: {
     groupDmEnabled: params.groupDmEnabled,
     groupDmChannels,
     defaultRequireMention,
+    defaultAllowImplicitMention,
     channelsConfig: params.channelsConfig,
     channelsConfigKeys,
     groupPolicy: params.groupPolicy,
@@ -429,6 +436,7 @@ export function createSlackMonitorContext(params: {
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
+    incidentIngressFingerprints,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,

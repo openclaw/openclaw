@@ -8,8 +8,19 @@ export function createInboundSlackTestContext(params: {
   cfg: OpenClawConfig;
   appClient?: App["client"];
   defaultRequireMention?: boolean;
+  defaultAllowImplicitMention?: boolean;
   replyToMode?: "off" | "all" | "first";
-  channelsConfig?: Record<string, { systemPrompt: string }>;
+  channelsConfig?: Record<
+    string,
+    {
+      systemPrompt?: string;
+      requireMention?: boolean;
+      allowImplicitMention?: boolean;
+      incidentRootOnly?: boolean;
+      incidentIgnoreResolved?: boolean;
+      incidentDedupeWindowSeconds?: number;
+    }
+  >;
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,
@@ -30,6 +41,7 @@ export function createInboundSlackTestContext(params: {
     groupDmEnabled: true,
     groupDmChannels: [],
     defaultRequireMention: params.defaultRequireMention ?? true,
+    defaultAllowImplicitMention: params.defaultAllowImplicitMention ?? true,
     channelsConfig: params.channelsConfig,
     groupPolicy: "open",
     useAccessGroups: false,

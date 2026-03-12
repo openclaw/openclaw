@@ -46,6 +46,7 @@ import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
+import { resolveSlackIncidentIngressDrop } from "../incident-ingress.js";
 import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
@@ -144,6 +145,7 @@ async function resolveSlackConversationContext(params: {
         channels: ctx.channelsConfig,
         channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
+        defaultAllowImplicitMention: ctx.defaultAllowImplicitMention,
       })
     : null;
   const allowBots =
@@ -386,7 +388,10 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  const allowImplicitMention =
+    channelConfig?.allowImplicitMention ?? ctx.defaultAllowImplicitMention;
   const implicitMention = Boolean(
+    allowImplicitMention &&
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
@@ -537,6 +542,25 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
+  const incidentIngress = resolveSlackIncidentIngressDrop({
+    accountId: account.accountId,
+    channelConfig,
+    channelId: message.channel,
+    dedupeStore: ctx.incidentIngressFingerprints,
+    message,
+    rawBody,
+  });
+  if (incidentIngress.shouldDrop) {
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        reason: incidentIngress.reason ?? "incident-filtered",
+        ts: message.ts ?? "unknown",
+      },
+      "skipping incident ingress message",
+    );
+    return null;
+  }
 
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "slack",
