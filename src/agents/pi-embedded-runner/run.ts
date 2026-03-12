@@ -37,6 +37,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { DEFAULT_COPILOT_API_BASE_URL } from "../../providers/github-copilot-token.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
@@ -481,6 +482,11 @@ export async function runEmbeddedPiAgent(
             githubToken,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          // Update baseUrl if token-derived value changed and user hasn't set custom one
+          if (copilotToken.baseUrl &&
+              (!model.baseUrl || model.baseUrl === DEFAULT_COPILOT_API_BASE_URL)) {
+            model.baseUrl = copilotToken.baseUrl;
+          }
           copilotTokenState.expiresAt = copilotToken.expiresAt;
           const remaining = copilotToken.expiresAt - Date.now();
           log.debug(
@@ -620,6 +626,13 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          // The Copilot token exchange returns the correct API base URL derived
+          // from the token's proxy-ep field (individual vs business vs enterprise).
+          // Only apply token-derived baseUrl if user hasn't set a custom one.
+          if (copilotToken.baseUrl &&
+              (!model.baseUrl || model.baseUrl === DEFAULT_COPILOT_API_BASE_URL)) {
+            model.baseUrl = copilotToken.baseUrl;
+          }
           if (copilotTokenState) {
             copilotTokenState.githubToken = apiKeyInfo.apiKey;
             copilotTokenState.expiresAt = copilotToken.expiresAt;
