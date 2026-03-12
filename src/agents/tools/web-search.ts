@@ -1855,10 +1855,25 @@ function sanitizeUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      // Strip embedded credentials (user:pass@host) to avoid leaking secrets.
+      parsed.username = "";
+      parsed.password = "";
       return parsed.href;
     }
   } catch {}
   return undefined;
+}
+
+const MAX_PLUGIN_DESCRIPTION_LENGTH = 200;
+
+/** Strip control chars and cap length so plugin descriptions stay safe for LLM tool metadata. */
+function sanitizePluginDescription(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+  if (cleaned.length <= MAX_PLUGIN_DESCRIPTION_LENGTH) {
+    return cleaned;
+  }
+  return cleaned.slice(0, MAX_PLUGIN_DESCRIPTION_LENGTH).trimEnd() + "…";
 }
 
 function createPluginSearchTool(
@@ -1868,9 +1883,8 @@ function createPluginSearchTool(
 ): AnyAgentTool {
   const cacheTtlMs = resolveCacheTtlMs(search?.cacheTtlMinutes);
   const timeoutSeconds = resolveTimeoutSeconds(search?.timeoutSeconds);
-  const description =
-    pluginProvider.description ??
-    `Search the web using ${pluginProvider.name}. Returns titles, URLs, and descriptions for research.`;
+  const fallback = `Search the web using ${pluginProvider.name}. Returns titles, URLs, and descriptions for research.`;
+  const description = sanitizePluginDescription(pluginProvider.description ?? fallback);
 
   return {
     label: "Web Search",

@@ -466,6 +466,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  // Built-in search provider IDs that plugins must not shadow.
+  const BUILTIN_SEARCH_PROVIDER_IDS = new Set(["brave", "gemini", "grok", "kimi", "perplexity"]);
+
   const registerSearchProvider = (record: PluginRecord, provider: SearchProviderPlugin) => {
     const id = typeof provider?.id === "string" ? provider.id.trim().toLowerCase() : "";
     if (!id) {
@@ -474,6 +477,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "search provider registration missing id",
+      });
+      return;
+    }
+    if (BUILTIN_SEARCH_PROVIDER_IDS.has(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `search provider id "${id}" conflicts with a built-in provider`,
       });
       return;
     }
