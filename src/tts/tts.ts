@@ -88,7 +88,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
-  cli: { format: "pcm" as const, sampleRate: 22050 },
+  cli: { format: "pcm" as const },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);

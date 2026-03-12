@@ -730,9 +730,11 @@ export async function cliTTS(params: {
   const result = await runCommandWithTimeout([config.command, ...resolvedArgs], { timeoutMs, env });
 
   if (result.code !== 0) {
-    throw new Error(
-      `CLI TTS failed with exit code ${result.code}: ${result.stderr || result.stdout}`,
-    );
+    const reason =
+      result.code === null
+        ? `killed by signal ${result.signal ?? "unknown"}`
+        : `exit code ${result.code}`;
+    throw new Error(`CLI TTS failed (${reason}): ${result.stderr || result.stdout}`);
   }
 
   if (!existsSync(outputPath)) {
