@@ -446,6 +446,51 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledWith("cap");
   });
 
+  it("keeps deferred audio text separate from later media items", async () => {
+    const msg = makeMsg();
+    (loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void })
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("aud"),
+        contentType: "audio/mpeg",
+        kind: "audio",
+      })
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("img"),
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "aaaaaa",
+        mediaUrls: ["http://example.com/a.mp3", "http://example.com/b.jpg"],
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 3,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        mimetype: "audio/mpeg",
+      }),
+    );
+    expect(msg.sendMedia).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        image: expect.any(Buffer),
+        caption: undefined,
+        mimetype: "image/jpeg",
+      }),
+    );
+    expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa");
+    expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa");
+  });
+
   it("sends video media", async () => {
     const msg = makeMsg();
     (
