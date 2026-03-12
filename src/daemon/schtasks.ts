@@ -319,13 +319,13 @@ async function waitForPortFree(
   intervalMs: number = 200,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let elapsed = 0;
 
   while (Date.now() < deadline) {
     try {
       const portUsage = await inspectPortUsage(port);
-      if (portUsage.status !== "busy" || portUsage.listeners.length === 0) {
-        // Port is free
+      // Only return when port is definitively free
+      // status === "busy" with empty listeners can occur during TIME_WAIT
+      if (portUsage.status === "free") {
         return;
       }
     } catch {
@@ -335,7 +335,6 @@ async function waitForPortFree(
 
     // Wait before next poll
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    elapsed += intervalMs;
   }
 
   // Timeout reached - port still in use

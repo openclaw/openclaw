@@ -12,11 +12,11 @@
 
 ## 本地测试步骤
 
-### 方法 1: 使用测试脚本（推荐）
+### 方法 1: 构建并安装测试版本（推荐）
 
 ```powershell
 # 1. 克隆修复分支
-cd C:\Users\jushaofei\AppData\Local\Temp
+cd %TEMP%
 git clone https://github.com/<your-username>/openclaw.git openclaw-fix
 cd openclaw-fix
 
@@ -33,15 +33,12 @@ pnpm install -g .
 openclaw gateway restart
 ```
 
-### 方法 2: 直接修改已安装版本
+### 方法 2: 使用临时脚本（等待 PR 合并期间）
 
 ```powershell
-# 1. 备份原文件
-Copy-Item C:\Users\jushaofei\AppData\Roaming\npm\node_modules\openclaw\dist\service-47UB2d5k.js `
-  C:\Users\jushaofei\AppData\Roaming\npm\node_modules\openclaw\dist\service-47UB2d5k.js.bak
-
-# 2. 运行测试脚本（需要手动应用修改）
-powershell -File C:\Users\jushaofei\.openclaw\workspace\scripts\gateway-restart-fixed.ps1
+# 下载并运行增强版重启脚本（添加端口释放等待）
+# 脚本地址：https://github.com/jsfgit/openclaw/blob/fix/windows-restart-port-wait/scripts/gateway-restart-fixed.ps1
+powershell -File gateway-restart-fixed.ps1
 ```
 
 ## 预期结果
