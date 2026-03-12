@@ -216,6 +216,22 @@ export function resolveAllowlistModelKey(raw: string, defaultProvider: string): 
   return modelKey(parsed.provider, parsed.model);
 }
 
+/**
+ * Returns both the canonical key and its hyphen-stripped variant so that
+ * providers configured as e.g. "my-provider" are also matched when the
+ * runtime resolves the same provider as "myprovider" (and vice-versa).
+ * This prevents allowlist mismatches caused by inconsistent hyphenation.
+ */
+function allowlistKeyVariants(key: string): string[] {
+  const slash = key.indexOf("/");
+  if (slash === -1) return [key];
+  const provider = key.slice(0, slash);
+  const model = key.slice(slash + 1);
+  const stripped = provider.replace(/-/g, "");
+  if (stripped === provider) return [key];
+  return [key, `${stripped}/${model}`];
+}
+
 export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
@@ -229,7 +245,9 @@ export function buildConfiguredAllowlistKeys(params: {
   for (const raw of rawAllowlist) {
     const key = resolveAllowlistModelKey(String(raw ?? ""), params.defaultProvider);
     if (key) {
-      keys.add(key);
+      for (const variant of allowlistKeyVariants(key)) {
+        keys.add(variant);
+      }
     }
   }
   return keys.size > 0 ? keys : null;
@@ -458,7 +476,11 @@ export function buildAllowedModelSet(params: {
     const key = modelKey(parsed.provider, parsed.model);
     // Explicit allowlist entries are always trusted, even when bundled catalog
     // data is stale and does not include the configured model yet.
-    allowedKeys.add(key);
+    // Also register hyphen-stripped variants to handle providers whose names
+    // may be resolved with or without hyphens (e.g. "my-provider" vs "myprovider").
+    for (const variant of allowlistKeyVariants(key)) {
+      allowedKeys.add(variant);
+    }
 
     if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       syntheticCatalogEntries.set(key, {

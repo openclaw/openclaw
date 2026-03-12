@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredAllowlistKeys,
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   buildModelAliasIndex,
@@ -308,6 +309,33 @@ describe("model-selection", () => {
     });
   });
 
+  describe("buildConfiguredAllowlistKeys", () => {
+    it("returns null when no models are configured", () => {
+      const result = buildConfiguredAllowlistKeys({
+        cfg: {} as OpenClawConfig,
+        defaultProvider: "anthropic",
+      });
+      expect(result).toBeNull();
+    });
+
+    it("includes hyphen-stripped provider variant for hyphenated provider names", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "my-provider/some-model": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildConfiguredAllowlistKeys({ cfg, defaultProvider: "anthropic" });
+      expect(result).not.toBeNull();
+      expect(result!.has("my-provider/some-model")).toBe(true);
+      expect(result!.has("myprovider/some-model")).toBe(true);
+    });
+  });
+
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
       const result = buildAllowedModelSet({
@@ -321,6 +349,28 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
       ]);
+    });
+
+    it("accepts hyphen-stripped provider variant for hyphenated provider names", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "my-provider/some-model": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "anthropic",
+      });
+
+      // Both the canonical and hyphen-stripped forms must be allowed
+      expect(result.allowedKeys.has("my-provider/some-model")).toBe(true);
+      expect(result.allowedKeys.has("myprovider/some-model")).toBe(true);
     });
   });
 
