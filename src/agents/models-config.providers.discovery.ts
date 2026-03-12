@@ -10,6 +10,12 @@ import {
 } from "./huggingface-models.js";
 import { discoverKilocodeModels } from "./kilocode-models.js";
 import {
+  discoverNexosModels,
+  NEXOS_BASE_URL,
+  NEXOS_MODEL_CATALOG,
+  buildNexosModelDefinition,
+} from "./nexos-models.js";
+import {
   enrichOllamaModelsWithContext,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
@@ -235,6 +241,19 @@ export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConf
   const models = await discoverKilocodeModels();
   return {
     baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export async function buildNexosProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
+  const resolvedSecret = discoveryApiKey?.trim() ?? "";
+  const models =
+    resolvedSecret !== ""
+      ? await discoverNexosModels(resolvedSecret)
+      : NEXOS_MODEL_CATALOG.map(buildNexosModelDefinition);
+  return {
+    baseUrl: NEXOS_BASE_URL,
     api: "openai-completions",
     models,
   };

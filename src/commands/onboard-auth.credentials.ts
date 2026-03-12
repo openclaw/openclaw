@@ -527,6 +527,18 @@ export async function setMistralApiKey(
   });
 }
 
+export async function setNexosApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "nexos:default",
+    credential: buildApiKeyCredential("nexos", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setKilocodeApiKey(
   key: SecretInput,
   agentDir?: string,

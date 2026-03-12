@@ -164,6 +164,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["huggingface-api-key"],
   },
   {
+    value: "nexos",
+    label: "Nexos AI",
+    hint: "API key",
+    choices: ["nexos-api-key"],
+  },
+  {
     value: "venice",
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",

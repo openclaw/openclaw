@@ -25,6 +25,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   modelstudio: ["MODELSTUDIO_API_KEY"],
   volcengine: ["VOLCANO_ENGINE_API_KEY"],
   byteplus: ["BYTEPLUS_API_KEY"],
+  nexos: ["NEXOS_API_KEY"],
 };
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = [

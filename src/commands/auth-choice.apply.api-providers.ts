@@ -52,6 +52,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  nexos: "nexos-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
