@@ -130,11 +130,20 @@ export function resolveSlackChannelConfig(params: {
   const { entry: matched, wildcardEntry: fallback } = match;
 
   const requireMentionDefault = defaultRequireMention ?? true;
+  const requireMentionInThreadsDefault = params.defaultRequireMentionInThreads;
   if (keys.length === 0) {
-    return { allowed: true, requireMention: requireMentionDefault };
+    return {
+      allowed: true,
+      requireMention: requireMentionDefault,
+      requireMentionInThreads: requireMentionInThreadsDefault,
+    };
   }
   if (!matched && !fallback) {
-    return { allowed: false, requireMention: requireMentionDefault };
+    return {
+      allowed: false,
+      requireMention: requireMentionDefault,
+      requireMentionInThreads: requireMentionInThreadsDefault,
+    };
   }
 
   const resolved = matched ?? fallback ?? {};

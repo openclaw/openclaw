@@ -154,6 +154,26 @@ describe("resolveSlackChannelConfig", () => {
     });
     expect(res?.requireMentionInThreads).toBeUndefined();
   });
+
+  it("honors account-level requireMentionInThreads when channels config is empty", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: {},
+      defaultRequireMention: true,
+      defaultRequireMentionInThreads: false,
+    });
+    expect(res).toMatchObject({ requireMentionInThreads: false });
+  });
+
+  it("honors account-level requireMentionInThreads when channel is unmatched", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C_OTHER",
+      channels: { C1: { allow: true } },
+      defaultRequireMention: true,
+      defaultRequireMentionInThreads: false,
+    });
+    expect(res).toMatchObject({ requireMentionInThreads: false });
+  });
 });
 
 const baseParams = () => ({
