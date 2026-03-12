@@ -13,6 +13,7 @@ import {
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
