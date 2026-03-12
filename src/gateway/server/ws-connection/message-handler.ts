@@ -990,6 +990,9 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
+          isInternalBackendClient:
+            connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+            connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND,
         };
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         setClient(nextClient);

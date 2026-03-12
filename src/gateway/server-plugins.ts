@@ -61,6 +61,7 @@ function createSyntheticOperatorClient(): GatewayRequestOptions["client"] {
       role: "operator",
       scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
     },
+    isInternalBackendClient: true,
   };
 }
 
