@@ -336,7 +336,9 @@ export async function runRescueWatchdogJob(params: {
         ? Math.min(RESTART_TIMEOUT_MS, remainingBeforeRestartMs)
         : RESTART_TIMEOUT_MS;
     const restartResult = await runBoundedStep({
-      run: (signal) => service.restart({ env, stdout: process.stdout, signal }),
+      run: async (signal) => {
+        await service.restart({ env, stdout: process.stdout, signal });
+      },
       timeoutMs: restartTimeoutMs,
       abortSignal: params.abortSignal,
       label: "service restart",
