@@ -186,6 +186,9 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+    // Tailscale identity auth skips pairing regardless of policy/sharedAuthOk
+    expect(shouldSkipControlUiPairing(strict, false, false, true)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, false, false, true)).toBe(true);   
   });
 
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
