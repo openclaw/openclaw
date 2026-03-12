@@ -11,8 +11,25 @@ import { normalizeThinkLevel } from "./thinking.js";
 
 const THINK_COMMAND_ALIASES = new Set(["think", "thinking", "t"]);
 
-function isDirectiveOnlyTail(text: string): boolean {
-  const parsed = parseInlineDirectives(text);
+function getConfiguredModelAliases(cfg?: OpenClawConfig): string[] {
+  if (!cfg) {
+    return [];
+  }
+  const reservedCommands = new Set(
+    listChatCommands().flatMap((cmd) =>
+      cmd.textAliases.map((alias) => alias.replace(/^\//, "").toLowerCase()),
+    ),
+  );
+  return Object.values(cfg.agents?.defaults?.models ?? {})
+    .map((entry) => entry.alias?.trim())
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+}
+
+function isDirectiveOnlyTail(text: string, cfg?: OpenClawConfig): boolean {
+  const parsed = parseInlineDirectives(text, {
+    modelAliases: getConfiguredModelAliases(cfg),
+  });
   if (parsed.cleaned.trim().length > 0) {
     return false;
   }
@@ -30,6 +47,7 @@ function isDirectiveOnlyTail(text: string): boolean {
 
 function parseOneShotThinkMessage(
   text?: string,
+  cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): { level: string; body: string } | null {
   if (!text) {
@@ -77,7 +95,7 @@ function parseOneShotThinkMessage(
   }
   // Keep directive-only tails on the control-command path so invalid inputs like
   // `/think high /status` do not silently persist `/think high` as a session setting.
-  if (isDirectiveOnlyTail(trimmedBody)) {
+  if (isDirectiveOnlyTail(trimmedBody, cfg)) {
     return null;
   }
   return { level: rawLevel, body };
@@ -114,7 +132,7 @@ export function hasControlCommand(
         const nextChar = normalizedBody.charAt(normalized.length);
         if (nextChar && /\s/.test(nextChar)) {
           // One-shot think: /think <level> <body> is not a control command.
-          if (isOneShotThinkMessage(trimmed, options)) {
+          if (isOneShotThinkMessage(trimmed, cfg, options)) {
             return false;
           }
           return true;
@@ -130,8 +148,14 @@ export function hasControlCommand(
  * These should NOT be treated as control commands, they carry a message body
  * that needs AI processing, with the think level applied for that single message only.
  */
-export function isOneShotThinkMessage(text?: string, options?: CommandNormalizeOptions): boolean {
-  return parseOneShotThinkMessage(text, options) !== null;
+export function isOneShotThinkMessage(
+  text?: string,
+  cfgOrOptions?: OpenClawConfig | CommandNormalizeOptions,
+  options?: CommandNormalizeOptions,
+): boolean {
+  const cfg = cfgOrOptions && "agents" in cfgOrOptions ? cfgOrOptions : undefined;
+  const normalizeOptions = cfg ? options : (cfgOrOptions as CommandNormalizeOptions | undefined);
+  return parseOneShotThinkMessage(text, cfg, normalizeOptions) !== null;
 }
 
 export function isControlCommandMessage(

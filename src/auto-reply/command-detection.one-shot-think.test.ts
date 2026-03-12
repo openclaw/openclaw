@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   hasControlCommand,
   isControlCommandMessage,
@@ -7,6 +8,16 @@ import {
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
+
+const cfgWithMiniAlias = {
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": { alias: "mini" },
+      },
+    },
+  },
+} satisfies OpenClawConfig;
 
 describe("isOneShotThinkMessage", () => {
   it("detects /think <level> <body> as one-shot", () => {
@@ -96,6 +107,10 @@ describe("hasControlCommand with one-shot think", () => {
     expect(hasControlCommand("/think high /status")).toBe(true);
     expect(hasControlCommand("/think high /exec host=sandbox")).toBe(true);
     expect(hasControlCommand("/think high /queue interrupt")).toBe(true);
+  });
+
+  it("treats model alias tails as directive-only when config defines the alias", () => {
+    expect(hasControlCommand("/think high /mini", cfgWithMiniAlias)).toBe(true);
   });
 });
 
