@@ -266,7 +266,13 @@ export async function cleanupArchivedSessionTranscripts(opts: {
       if (!stat?.isFile()) {
         continue;
       }
-      await fs.promises.rm(fullPath).catch(() => undefined);
+      const removedFromDisk = await fs.promises.rm(fullPath).then(
+        () => true,
+        () => false,
+      );
+      if (!removedFromDisk) {
+        continue;
+      }
       removed += 1;
       if (reason === "reset") {
         emitSessionTranscriptUpdate(fullPath);

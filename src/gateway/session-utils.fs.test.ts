@@ -242,6 +242,26 @@ describe("cleanupArchivedSessionTranscripts", () => {
     expect(fs.existsSync(deletedPath)).toBe(false);
     expect(emitSpy).not.toHaveBeenCalled();
   });
+
+  test("does not count or emit when reset archive removal fails", async () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const now = Date.now();
+    const resetName = `cleanup-reset-fail.jsonl.reset.${formatSessionArchiveTimestamp(now - 10_000)}`;
+    const resetPath = path.join(tmpDir, resetName);
+    fs.writeFileSync(resetPath, '{"type":"session"}\n', "utf-8");
+    vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(new Error("rm failed"));
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [tmpDir],
+      olderThanMs: 1_000,
+      reason: "reset",
+      nowMs: now,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(fs.existsSync(resetPath)).toBe(true);
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("readLastMessagePreviewFromTranscript", () => {
