@@ -5,6 +5,7 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { describeAcpErrorForLog } from "../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -640,6 +641,10 @@ export async function spawnAcpDirect(
       }
     }
   } catch (err) {
+    const diagnostic = describeAcpErrorForLog(err);
+    log.warn(
+      `ACP spawn failed: agent=${targetAgentId} mode=${runtimeMode} requester=${parentSessionKey || "<none>"} channel=${ctx.agentChannel || "<none>"} thread=${requestThreadBinding} cwd=${params.cwd || "<default>"} sessionKey=${sessionKey}${diagnostic ? ` ${diagnostic}` : ""}`,
+    );
     await cleanupFailedAcpSpawn({
       cfg,
       sessionKey,

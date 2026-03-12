@@ -7,6 +7,7 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { normalizeAcpDiagnosticText } from "../../../acp/runtime/errors.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -2231,8 +2232,30 @@ export async function runEmbeddedAttempt(
       const abortTimer = setTimeout(
         () => {
           if (!isProbeSession) {
+            const timeoutDetails: string[] = [];
+            const lastToolError = getLastToolError();
+            if (lastToolError) {
+              const normalizedLastToolError = normalizeAcpDiagnosticText(
+                describeUnknownError(lastToolError),
+                400,
+              );
+              if (normalizedLastToolError) {
+                timeoutDetails.push(`lastToolError=${JSON.stringify(normalizedLastToolError)}`);
+              }
+            }
+            const messageTargets = getMessagingToolSentTargets()
+              .map((target) =>
+                normalizeAcpDiagnosticText(
+                  typeof target === "string" ? target : JSON.stringify(target),
+                  120,
+                ),
+              )
+              .filter((target): target is string => Boolean(target));
+            if (messageTargets.length > 0) {
+              timeoutDetails.push(`messageTargets=${JSON.stringify(messageTargets)}`);
+            }
             log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}${timeoutDetails.length > 0 ? ` ${timeoutDetails.join(" ")}` : ""}`,
             );
           }
           if (
