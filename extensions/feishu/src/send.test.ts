@@ -138,6 +138,67 @@ describe("getMessageFeishu", () => {
     );
   });
 
+  it("includes rawContent for image messages to enable media download", async () => {
+    const imageContent = JSON.stringify({ image_key: "img_v3_abc" });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_img",
+            chat_id: "oc_img",
+            msg_type: "image",
+            body: { content: imageContent },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_img",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_img",
+        contentType: "image",
+        content: "[image message]",
+        rawContent: imageContent,
+      }),
+    );
+  });
+
+  it("includes rawContent for file messages", async () => {
+    const fileContent = JSON.stringify({ file_key: "file_v3_xyz", file_name: "doc.pdf" });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_file2",
+            chat_id: "oc_file2",
+            msg_type: "file",
+            body: { content: fileContent },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_file2",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        contentType: "file",
+        content: "[file message]",
+        rawContent: fileContent,
+      }),
+    );
+  });
+
   it("supports single-object response shape from Feishu API", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
