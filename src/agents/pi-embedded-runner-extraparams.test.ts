@@ -520,6 +520,32 @@ describe("applyExtraParamsToAgent", () => {
     expect((payload.messages as Array<{ content: unknown }>)[0]?.content).toBe("");
   });
 
+  it("rewrites assistant content null to empty string when legacy function_call is present", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "deepseek",
+      applyModelId: "deepseek-chat",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            function_call: {
+              name: "read",
+              arguments: '{"path":"SOUL.md"}',
+            },
+          },
+        ],
+      },
+      model: {
+        api: "openai-completions",
+        provider: "deepseek",
+        id: "deepseek-chat",
+      } as Model<"openai-completions">,
+    });
+
+    expect((payload.messages as Array<{ content: unknown }>)[0]?.content).toBe("");
+  });
+
   it("does not rewrite assistant content null without tool calls", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "deepseek",
