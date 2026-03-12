@@ -1,4 +1,5 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -267,6 +268,10 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  getRequestedThinkingLevel?: () => ThinkLevel | undefined;
+  setRequestedThinkingLevelForScope?: (scope: "turn" | "session", level: ThinkLevel) => void;
+  applyEffectiveThinkingLevel?: (level: ThinkLevel) => void;
+  reasoningSupported?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -533,6 +538,12 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
+      provider: options?.modelProvider,
+      modelId: options?.modelId,
+      reasoningSupported: options?.reasoningSupported,
+      getRequestedThinkingLevel: options?.getRequestedThinkingLevel,
+      setRequestedThinkingLevelForScope: options?.setRequestedThinkingLevelForScope,
+      applyEffectiveThinkingLevel: options?.applyEffectiveThinkingLevel,
       sessionId: options?.sessionId,
       onYield: options?.onYield,
     }),

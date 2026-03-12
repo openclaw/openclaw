@@ -220,6 +220,8 @@ export async function handleInlineActions(params: {
         agentDir,
         workspaceDir,
         config: cfg,
+        provider,
+        modelId: model,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 

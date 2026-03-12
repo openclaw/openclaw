@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+
+function extractSection(prompt: string, heading: string): string | undefined {
+  const marker = `## ${heading}`;
+  const start = prompt.indexOf(marker);
+  if (start < 0) {
+    return undefined;
+  }
+  const nextHeading = prompt.indexOf("\n## ", start + marker.length);
+  return (nextHeading < 0 ? prompt.slice(start) : prompt.slice(start, nextHeading)).trim();
+}
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -609,6 +620,60 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reasoning: off");
     expect(prompt).toContain("/reasoning");
     expect(prompt).toContain("/status shows Reasoning");
+  });
+
+  it("omits adaptive thinking guidance for native-adaptive Claude 4.6 models", () => {
+    const toolNames = createOpenClawTools({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      reasoningSupported: true,
+    }).map((tool) => tool.name);
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames,
+      runtimeInfo: {
+        model: "anthropic/claude-sonnet-4-6",
+      },
+    });
+
+    expect(extractSection(prompt, "Adaptive Thinking")).toBeUndefined();
+  });
+
+  it("includes adaptive thinking policy guidance for non-native-adaptive models", () => {
+    const toolNames = createOpenClawTools({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      reasoningSupported: true,
+    }).map((tool) => tool.name);
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames,
+      runtimeInfo: {
+        model: "anthropic/claude-sonnet-4-5",
+      },
+    });
+    const section = extractSection(prompt, "Adaptive Thinking");
+
+    expect(section).toBeDefined();
+    expect(section).toContain("## Adaptive Thinking");
+    expect(section).toContain(
+      "Keep the current thinking level unless task complexity clearly changes.",
+    );
+    expect(section).toContain(
+      '- Use `set_thinking_level` with `scope: "turn"` for one-off difficult work or current run adjustments.',
+    );
+    expect(section).toContain(
+      '- Use `scope: "session"` only for lasting or user-requested changes.',
+    );
+    expect(section).toContain(
+      "Raise thinking for harder work like complex debugging, multi-step design, subtle refactors, or other correctness-critical tasks.",
+    );
+    expect(section).toContain(
+      "Keep default or low thinking for straightforward commands, simple lookups, and other mechanical work.",
+    );
+    expect(section).toContain(
+      "Avoid repeated or thrashing thinking-level changes within the same flow.",
+    );
   });
 
   it("builds runtime line with agent and channel details", () => {

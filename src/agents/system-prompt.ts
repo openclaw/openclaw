@@ -1,5 +1,5 @@
 import { createHmac, createHash } from "node:crypto";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { type ReasoningLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -166,6 +166,22 @@ function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
     return [];
   }
   return ["## Voice (TTS)", hint, ""];
+}
+
+function buildAdaptiveThinkingSection(params: { availableTools: Set<string> }) {
+  if (!params.availableTools.has("set_thinking_level")) {
+    return [];
+  }
+  return [
+    "## Adaptive Thinking",
+    "Keep the current thinking level unless task complexity clearly changes.",
+    '- Use `set_thinking_level` with `scope: "turn"` for one-off difficult work or current run adjustments.',
+    '- Use `scope: "session"` only for lasting or user-requested changes.',
+    "Raise thinking for harder work like complex debugging, multi-step design, subtle refactors, or other correctness-critical tasks.",
+    "Keep default or low thinking for straightforward commands, simple lookups, and other mechanical work.",
+    "Avoid repeated or thrashing thinking-level changes within the same flow.",
+    "",
+  ];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
@@ -407,6 +423,7 @@ export function buildAgentSystemPrompt(params: {
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
+  const adaptiveThinkingSection = buildAdaptiveThinkingSection({ availableTools });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -478,6 +495,7 @@ export function buildAgentSystemPrompt(params: {
     "- openclaw gateway restart",
     "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
+    ...adaptiveThinkingSection,
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
