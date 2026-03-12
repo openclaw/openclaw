@@ -22,6 +22,7 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
 }
 
 export const XHIGH_MODEL_REFS = [
+  "anthropic/claude-opus-4-6",
   "openai/gpt-5.4",
   "openai/gpt-5.4-pro",
   "openai/gpt-5.2",

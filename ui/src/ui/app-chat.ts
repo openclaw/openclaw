@@ -65,7 +65,37 @@ export async function handleAbortChat(host: ChatHost) {
     return;
   }
   host.chatMessage = "";
-  await abortChatRun(host as unknown as OpenClawApp);
+  const app = host as unknown as OpenClawApp;
+  app.chatAbortPending = true;
+  app.chatAbortPendingSince = Date.now();
+
+  // Schedule a re-render after 3s so the "Force clear" button can appear
+  // (Lit won't re-render on its own since no reactive property changes at the 3s mark).
+  setTimeout(() => {
+    if (app.chatAbortPending) {
+      app.requestUpdate();
+    }
+  }, 3100);
+
+  const ok = await abortChatRun(app);
+  if (!ok) {
+    // Abort request failed or timed out — keep chatAbortPending so Force Clear shows.
+    // Trigger immediate re-render so the button appears without waiting for the timer.
+    app.requestUpdate();
+    return;
+  }
+  // Abort request succeeded — the gateway should send an aborted/final event shortly.
+  // If we don't get one within 5s, the pending flag stays and Force Clear remains available.
+}
+
+export function forceClearChat(host: ChatHost) {
+  host.chatRunId = null;
+  host.chatSending = false;
+  (host as unknown as OpenClawApp).chatStream = null;
+  (host as unknown as OpenClawApp).chatStreamStartedAt = null;
+  (host as unknown as OpenClawApp).chatAbortPending = false;
+  (host as unknown as OpenClawApp).chatAbortPendingSince = null;
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
 }
 
 function enqueueChatMessage(
