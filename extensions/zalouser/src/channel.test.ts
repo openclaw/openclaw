@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
 import { zalouserPlugin } from "./channel.js";
+import { setZalouserRuntime } from "./runtime.js";
 import { sendReactionZalouser } from "./send.js";
 
 vi.mock("./send.js", async (importOriginal) => {
@@ -13,6 +15,16 @@ vi.mock("./send.js", async (importOriginal) => {
 const mockSendReaction = vi.mocked(sendReactionZalouser);
 
 describe("zalouser outbound chunker", () => {
+  beforeEach(() => {
+    setZalouserRuntime({
+      channel: {
+        text: {
+          chunkMarkdownText,
+        },
+      },
+    } as never);
+  });
+
   it("chunks without empty strings and respects limit", () => {
     const chunker = zalouserPlugin.outbound?.chunker;
     expect(chunker).toBeTypeOf("function");
