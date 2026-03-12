@@ -39,6 +39,7 @@ import {
 } from "./bot-updates.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -67,6 +68,34 @@ export type TelegramBotOptions = {
 };
 
 export { getTelegramSequentialKey };
+
+function readRequestUrl(input: RequestInfo | URL): string | null {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (typeof input === "object" && input !== null && "url" in input) {
+    const url = (input as { url?: unknown }).url;
+    return typeof url === "string" ? url : null;
+  }
+  return null;
+}
+
+function extractTelegramApiMethod(input: RequestInfo | URL): string | null {
+  const url = readRequestUrl(input);
+  if (!url) {
+    return null;
+  }
+  try {
+    const pathname = new URL(url).pathname;
+    const segments = pathname.split("/").filter(Boolean);
+    return segments.length > 0 ? (segments.at(-1) ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function createTelegramBot(opts: TelegramBotOptions) {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -144,6 +173,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         if (init?.signal && onRequestAbort) {
           init.signal.removeEventListener("abort", onRequestAbort);
         }
+      });
+    }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
+  }
+  if (finalFetch) {
+    const baseFetch = finalFetch;
+    finalFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      return Promise.resolve(baseFetch(input, init)).catch((err: unknown) => {
+        try {
+          tagTelegramNetworkError(err, {
+            method: extractTelegramApiMethod(input),
+            url: readRequestUrl(input),
+          });
+        } catch {
+          // Tagging is best-effort; preserve the original fetch failure if the
+          // error object cannot accept extra metadata.
+        }
+        throw err;
       });
     }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
   }
@@ -439,6 +485,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     accountId: account.accountId,
     bot,
     opts,
+    telegramFetchImpl: fetchImpl as unknown as typeof fetch | undefined,
     runtime,
     mediaMaxBytes,
     telegramCfg,
