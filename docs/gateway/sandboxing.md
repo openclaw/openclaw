@@ -114,6 +114,69 @@ Security notes:
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
+## Network
+
+`agents.defaults.sandbox.docker.network` controls the Docker network mode for sandbox containers.
+
+Accepted values:
+
+- `"none"` (default): no network access — the safest option for most tool workloads.
+- `"bridge"`: connects the container to Docker's default bridge network, giving it outbound internet access.
+- Any custom network name (e.g. `"openclaw-internal"`): attaches the container to a named Docker network you have already created.
+
+Security restrictions (always enforced regardless of this setting):
+
+- `"host"` is blocked.
+- `"container:<id>"` (namespace join) is blocked by default. Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
+
+---
+
+`agents.defaults.sandbox.docker.extraHosts` adds static hostname → IP mappings inside the container (equivalent to `--add-host` in `docker run`). Useful for pointing sandboxed tools at a local API stub or internal service without granting broad network access.
+
+Format: `string[]` — each entry is `"hostname:ip"` (e.g. `"api.local:10.0.0.2"`).
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          network: "bridge",
+          extraHosts: ["api.local:10.0.0.2", "db.internal:10.0.0.3"],
+        },
+      },
+    },
+  },
+}
+```
+
+Security note: `extraHosts` entries are injected into the container's `/etc/hosts` regardless of `network` mode. In `"none"` mode the hosts are still unreachable at the network layer, so `extraHosts` is only effective when `network` is not `"none"`.
+
+---
+
+`agents.defaults.sandbox.docker.dns` overrides the DNS servers the container uses for name resolution. Only effective when `network` is not `"none"`.
+
+Format: `string[]` — each entry is a DNS server IP address (e.g. `"1.1.1.1"`).
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          network: "bridge",
+          dns: ["1.1.1.1", "8.8.8.8"],
+        },
+      },
+    },
+  },
+}
+```
+
 ## Images + setup
 
 Default image: `openclaw-sandbox:bookworm-slim`
@@ -214,6 +277,58 @@ Common pitfalls:
 - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
 - Sandbox exec does **not** inherit host `process.env`. Use
   `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
+
+## Environment variables
+
+`agents.defaults.sandbox.docker.env` injects extra environment variables into every tool execution inside the sandbox. Because sandbox exec does **not** inherit the host's `process.env`, any API keys or runtime values required by skills must be passed explicitly here.
+
+Format: `Record<string, string>` — plain key/value pairs.
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          env: {
+            MY_API_KEY: "sk-...",
+            SOME_ENDPOINT: "https://api.example.com",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Security note: values are stored in OpenClaw config and passed to the container at runtime. Avoid embedding long-lived or highly privileged credentials; prefer `:ro` bind mounts or a secrets manager for production workloads.
+
+## Resource limits
+
+`agents.defaults.sandbox.docker.memory` sets a hard memory limit on the container. Accepts a human-readable string (`"512m"`, `"2g"`) or a raw byte count as a number.
+
+`agents.defaults.sandbox.docker.cpus` limits CPU usage as a fractional number of CPU cores (e.g. `0.5` = half a core, `2` = two cores).
+
+Both default to Docker's unlimited behaviour when omitted. Setting limits is recommended for shared-gateway deployments to prevent a runaway tool from starving other agents.
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          memory: "512m",
+          cpus: 1,
+        },
+      },
+    },
+  },
+}
+```
 
 ## Tool policy + escape hatches
 
