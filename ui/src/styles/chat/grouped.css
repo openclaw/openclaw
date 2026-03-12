@@ -5,9 +5,9 @@
 /* Chat Group Layout - default (assistant/other on left) */
 .chat-group {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -54,6 +54,52 @@
   opacity: 0.7;
 }
 
+/* ── Group footer action buttons (TTS, delete) ── */
+.chat-group-footer button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out, color 120ms ease-out, background 120ms ease-out;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-group:hover .chat-group-footer button {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.chat-group-footer button:hover {
+  opacity: 1 !important;
+  background: var(--bg-hover, rgba(255,255,255,0.08));
+}
+
+.chat-group-footer button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-tts-btn--active {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  color: var(--accent, #3b82f6);
+}
+
+.chat-group-delete:hover {
+  color: var(--danger, #ef4444) !important;
+}
+
 /* Chat divider (e.g., compaction marker) */
 .chat-divider {
   display: flex;
@@ -83,22 +129,24 @@
 
 /* Avatar Styles */
 .chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   background: var(--panel-strong);
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end; /* Align with last message in group */
-  margin-bottom: 4px; /* Optical alignment */
+  align-self: flex-end;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
 }
 
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .chat-avatar.assistant {
@@ -127,14 +175,14 @@ img.chat-avatar {
 .chat-bubble {
   position: relative;
   display: inline-block;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   background: var(--card);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   box-shadow: none;
   transition:
-    background 150ms ease-out,
-    border-color 150ms ease-out;
+    background var(--duration-fast) ease-out,
+    border-color var(--duration-fast) ease-out;
   max-width: 100%;
   word-wrap: break-word;
 }
@@ -244,7 +292,7 @@ img.chat-avatar {
 }
 
 /* Light mode: restore borders */
-:root[data-theme="light"] .chat-bubble {
+:root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
@@ -259,7 +307,7 @@ img.chat-avatar {
   border-color: transparent;
 }
 
-:root[data-theme="light"] .chat-group.user .chat-bubble {
+:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
   border-color: rgba(234, 88, 12, 0.2);
   background: rgba(251, 146, 60, 0.12);
 }
@@ -297,4 +345,126 @@ img.chat-avatar {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ── Message metadata (tokens, cost, model, context %) ── */
+.msg-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.msg-meta__tokens,
+.msg-meta__cache,
+.msg-meta__cost,
+.msg-meta__ctx,
+.msg-meta__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.msg-meta__model {
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 4px);
+  font-family: var(--font-mono, monospace);
+}
+
+.msg-meta__cost {
+  color: var(--ok, #22c55e);
+}
+
+.msg-meta__ctx--warn {
+  color: var(--warning, #eab308);
+}
+
+.msg-meta__ctx--danger {
+  color: var(--danger, #ef4444);
+}
+
+/* ── Delete confirmation popover ── */
+.chat-delete-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chat-delete-confirm {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: var(--card, #1a1a1a);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: var(--radius-md, 8px);
+  padding: 12px;
+  min-width: 200px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 100;
+  animation: scale-in 0.15s ease-out;
+}
+
+.chat-delete-confirm__text {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg, #fff);
+}
+
+.chat-delete-confirm__remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted, #888);
+  margin-bottom: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-delete-confirm__check {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent, #3b82f6);
+  cursor: pointer;
+}
+
+.chat-delete-confirm__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.chat-delete-confirm__cancel,
+.chat-delete-confirm__yes {
+  border: none;
+  border-radius: var(--radius-sm, 4px);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.chat-delete-confirm__cancel {
+  background: var(--bg-hover, rgba(255,255,255,0.08));
+  color: var(--muted, #888);
+}
+
+.chat-delete-confirm__cancel:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+.chat-delete-confirm__yes {
+  background: var(--danger, #ef4444);
+  color: #fff;
+}
+
+.chat-delete-confirm__yes:hover {
+  background: #dc2626;
 }

@@ -2,45 +2,102 @@
    Mobile Layout
    =========================================== */
 
-/* Tablet: Horizontal nav */
+/* Tablet and smaller: collapse the left nav into a horizontal rail. */
 @media (max-width: 1100px) {
-  .nav {
+  .shell,
+  .shell--nav-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+    grid-template-areas:
+      "topbar"
+      "nav"
+      "content";
+  }
+
+  .shell--chat-focus {
+    grid-template-rows: var(--shell-topbar-height) 0 minmax(0, 1fr);
+  }
+
+  .shell-nav,
+  .shell--nav-collapsed .shell-nav {
+    width: auto;
+    min-width: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar,
+  .sidebar--collapsed {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-direction: row;
+    align-items: center;
+    border-right: none;
+  }
+
+  .sidebar-header,
+  .sidebar--collapsed .sidebar-header {
+    justify-content: flex-start;
+    padding: 8px 10px;
+    flex: 0 0 auto;
+  }
+
+  .sidebar-brand {
+    display: none;
+  }
+
+  .sidebar-nav,
+  .sidebar--collapsed .sidebar-nav {
+    flex: 1 1 auto;
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
-    gap: 4px;
-    padding: 10px 14px;
+    gap: 8px;
+    padding: 8px 10px 8px 0;
     overflow-x: auto;
+    overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
 
-  .nav::-webkit-scrollbar {
+  .sidebar-nav::-webkit-scrollbar,
+  .sidebar--collapsed .sidebar-nav::-webkit-scrollbar {
     display: none;
+  }
+
+  .nav-group,
+  .nav-group__items,
+  .sidebar--collapsed .nav-group,
+  .sidebar--collapsed .nav-group__items {
+    display: contents;
   }
 
   .nav-group {
-    display: contents;
+    margin-bottom: 0;
   }
 
-  .nav-group__items {
-    display: contents;
-  }
-
-  .nav-label {
+  .sidebar-nav .nav-group__label {
     display: none;
   }
 
-  .nav-group--collapsed .nav-group__items {
-    display: contents;
-  }
-
-  .nav-item {
+  .nav-item,
+  .sidebar--collapsed .nav-item {
+    margin: 0;
     padding: 8px 14px;
     font-size: 13px;
     border-radius: var(--radius-md);
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+  }
+
+  .sidebar--collapsed .nav-item--active::before,
+  .sidebar--collapsed .nav-item.active::before {
+    content: none;
+  }
+
+  .sidebar-footer,
+  .sidebar--collapsed .sidebar-footer {
+    display: none;
   }
 }
 
@@ -94,24 +151,17 @@
     display: none;
   }
 
-  /* Nav */
-  .nav {
-    padding: 8px 10px;
-    gap: 4px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+  .shell-nav {
+    border-bottom-width: 0;
   }
 
-  .nav::-webkit-scrollbar {
-    display: none;
+  .sidebar-header {
+    padding: 6px 8px;
   }
 
-  .nav-group {
-    display: contents;
-  }
-
-  .nav-label {
-    display: none;
+  .sidebar-nav {
+    gap: 6px;
+    padding: 6px 8px 6px 0;
   }
 
   .nav-item {
@@ -239,6 +289,26 @@
     font-size: 14px;
   }
 
+  .agent-chat__input {
+    margin: 0 8px 10px;
+  }
+
+  .agent-chat__toolbar {
+    padding: 4px 8px;
+  }
+
+  .agent-chat__input-btn,
+  .agent-chat__toolbar .btn-ghost {
+    width: 28px;
+    height: 28px;
+  }
+
+  .agent-chat__input-btn svg,
+  .agent-chat__toolbar .btn-ghost svg {
+    width: 14px;
+    height: 14px;
+  }
+
   /* Log stream */
   .log-stream {
     border-radius: var(--radius-md);
@@ -288,16 +358,10 @@
     font-size: 11px;
   }
 
-  /* Theme toggle */
-  .theme-toggle {
-    --theme-item: 24px;
-    --theme-gap: 2px;
-    --theme-pad: 3px;
-  }
-
-  .theme-icon {
-    width: 12px;
-    height: 12px;
+  .theme-orb__trigger {
+    width: 26px;
+    height: 26px;
+    font-size: 13px;
   }
 }
 
@@ -313,10 +377,6 @@
 
   .brand-title {
     font-size: 13px;
-  }
-
-  .nav {
-    padding: 6px 8px;
   }
 
   .nav-item {
@@ -361,14 +421,9 @@
     font-size: 10px;
   }
 
-  .theme-toggle {
-    --theme-item: 22px;
-    --theme-gap: 2px;
-    --theme-pad: 2px;
-  }
-
-  .theme-icon {
-    width: 11px;
-    height: 11px;
+  .theme-orb__trigger {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
   }
 }
