@@ -1661,7 +1661,6 @@ async function runFirecrawlSearch(params: {
     url: string;
     title: string;
     description: string;
-    markdown?: string;
   }>;
 }> {
   const endpoint = `${params.baseUrl.replace(/\/$/, "")}${FIRECRAWL_SEARCH_ENDPOINT_PATH}`;
@@ -1701,7 +1700,6 @@ async function runFirecrawlSearch(params: {
           url: item.url ?? "",
           title: item.title ?? "",
           description: item.description ?? "",
-          markdown: item.markdown || undefined,
         })),
       };
     },

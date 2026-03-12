@@ -249,6 +249,16 @@ describe("web_fetch with scrapingbee provider", () => {
     expect(sbUrl.searchParams.get("return_page_markdown")).toBe("true");
   });
 
+  it("throws when scrapingbee provider is set but API key is missing", async () => {
+    const tool = createFetchTool({
+      provider: "scrapingbee",
+    });
+
+    await expect(tool?.execute?.("call", { url: "https://example.com/no-key" })).rejects.toThrow(
+      "no API key configured",
+    );
+  });
+
   it("throws when ScrapingBee provider fails", async () => {
     const apiKeyField = ["api", "Key"].join("");
     installMockFetch((input: RequestInfo | URL) => {
@@ -358,6 +368,16 @@ describe("web_fetch with firecrawl as primary provider", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("Firecrawl primary content");
+  });
+
+  it("throws when firecrawl provider is set but API key is missing", async () => {
+    const tool = createFetchTool({
+      provider: "firecrawl",
+    });
+
+    await expect(tool?.execute?.("call", { url: "https://example.com/no-key" })).rejects.toThrow(
+      "no API key configured",
+    );
   });
 
   it("throws when firecrawl provider fails instead of silently falling back", async () => {

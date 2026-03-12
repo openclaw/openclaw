@@ -638,7 +638,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   // Provider "firecrawl": use Firecrawl as primary extractor.
-  if (params.provider === "firecrawl" && params.firecrawlEnabled && params.firecrawlApiKey) {
+  if (params.provider === "firecrawl") {
+    if (!params.firecrawlApiKey) {
+      throw new Error(
+        "Firecrawl fetch provider selected but no API key configured. Set tools.web.fetch.firecrawl.apiKey or FIRECRAWL_API_KEY.",
+      );
+    }
     const start = Date.now();
     try {
       const payload = await maybeFetchFirecrawlWebFetchPayload({
@@ -652,6 +657,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (payload) {
         return { ...payload, provider: "firecrawl" };
       }
+      throw new Error("Firecrawl fetch failed: no content returned");
     } catch (err) {
       logDebug(
         `[web-fetch] Firecrawl provider failed for ${redactUrlForDebugLog(params.url)}: ${err instanceof Error ? err.message : String(err)}`,
@@ -664,7 +670,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   // Provider "scrapingbee": fetch markdown directly via ScrapingBee API.
-  if (params.provider === "scrapingbee" && params.scrapingBeeApiKey) {
+  if (params.provider === "scrapingbee") {
+    if (!params.scrapingBeeApiKey) {
+      throw new Error(
+        "ScrapingBee fetch provider selected but no API key configured. Set tools.web.fetch.scrapingbee.apiKey or SCRAPINGBEE_API_KEY.",
+      );
+    }
     const start = Date.now();
     try {
       const sbResult = await fetchViaScrapingBee({
