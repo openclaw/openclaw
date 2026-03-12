@@ -1,3 +1,4 @@
+import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import { loadConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
@@ -35,23 +36,38 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
   }
 
   let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  let resolvedThreadId = threadId;
   try {
     const cfg = loadConfig();
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
-    let entry = store[sessionKey];
-    if (!entry?.deliveryContext && baseSessionKey !== sessionKey) {
-      entry = store[baseSessionKey];
+    const entries = [store[sessionKey]];
+    if (baseSessionKey !== sessionKey) {
+      entries.push(store[baseSessionKey]);
     }
-    if (entry?.deliveryContext) {
-      deliveryContext = {
-        channel: entry.deliveryContext.channel,
-        to: entry.deliveryContext.to,
-        accountId: entry.deliveryContext.accountId,
-      };
+    for (const entry of entries) {
+      if (!deliveryContext && entry?.deliveryContext) {
+        deliveryContext = {
+          channel: entry.deliveryContext.channel,
+          to: entry.deliveryContext.to,
+          accountId: entry.deliveryContext.accountId,
+        };
+      }
+      if (resolvedThreadId == null) {
+        const normalizedThreadId = normalizeDeliveryContext({
+          threadId:
+            entry?.lastThreadId ?? entry?.deliveryContext?.threadId ?? entry?.origin?.threadId,
+        })?.threadId;
+        if (normalizedThreadId != null && normalizedThreadId !== "") {
+          resolvedThreadId = String(normalizedThreadId);
+        }
+      }
+      if (deliveryContext && resolvedThreadId != null) {
+        break;
+      }
     }
   } catch {
     // ignore: best-effort
   }
-  return { deliveryContext, threadId };
+  return { deliveryContext, threadId: resolvedThreadId };
 }

@@ -873,13 +873,19 @@ function resolveFeishuSession(
     accountId: params.accountId,
     peer,
   });
+  const threadId = normalizeThreadId(params.threadId ?? params.replyToId);
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId,
+  });
   return {
-    sessionKey: baseSessionKey,
+    sessionKey: threadKeys.sessionKey,
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
     from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
     to: trimmed,
+    threadId,
   };
 }
 

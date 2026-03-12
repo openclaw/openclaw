@@ -1,4 +1,5 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
@@ -97,9 +98,17 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   if (!finalId) {
     return null;
   }
+  const threadId =
+    provider === "feishu" && ctx.MessageThreadId != null
+      ? String(ctx.MessageThreadId).trim()
+      : undefined;
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: `${provider}:${kind}:${finalId}`,
+    threadId,
+  });
 
   return {
-    key: `${provider}:${kind}:${finalId}`,
+    key: threadKeys.sessionKey,
     channel: provider,
     id: finalId,
     chatType: kind === "channel" ? "channel" : "group",

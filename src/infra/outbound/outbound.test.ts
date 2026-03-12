@@ -1071,6 +1071,20 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Feishu group routes keep thread-aware session keys",
+        cfg: baseConfig,
+        channel: "feishu",
+        target: "group:oc_group_chat",
+        threadId: "omt-thread-123",
+        expected: {
+          sessionKey: "agent:main:feishu:group:oc_group_chat:thread:omt-thread-123",
+          from: "feishu:group:oc_group_chat",
+          to: "oc_group_chat",
+          threadId: "omt-thread-123",
+          chatType: "group",
+        },
+      },
+      {
         name: "Feishu explicit dm prefix keeps direct routing",
         cfg: perChannelPeerCfg,
         channel: "feishu",

@@ -110,4 +110,27 @@ describe("extractDeliveryInfo", () => {
       threadId: "55",
     });
   });
+
+  it("falls back to persisted thread metadata for legacy session keys", () => {
+    const sessionKey = "agent:main:feishu:group:oc_group_chat";
+    storeState.store[sessionKey] = {
+      ...buildEntry({
+        channel: "feishu",
+        to: "oc_group_chat",
+        accountId: "default",
+      }),
+      lastThreadId: "omt-thread-123",
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "feishu",
+        to: "oc_group_chat",
+        accountId: "default",
+      },
+      threadId: "omt-thread-123",
+    });
+  });
 });

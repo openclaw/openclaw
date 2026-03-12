@@ -134,6 +134,17 @@ describe("sessions", () => {
       ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       expected: "whatsapp:group:12345-678@g.us",
     },
+    {
+      name: "includes feishu thread ids in group session keys",
+      scope: "per-sender" as const,
+      ctx: {
+        From: "oc_group_chat",
+        ChatType: "group",
+        Provider: "feishu",
+        MessageThreadId: "omt-thread-123",
+      },
+      expected: "feishu:group:oc_group_chat:thread:omt-thread-123",
+    },
   ] as const;
 
   for (const testCase of deriveSessionKeyCases) {
@@ -203,6 +214,18 @@ describe("sessions", () => {
       ctx: { From: "12345-678@g.us" },
       mainKey: "main",
       expected: "agent:main:whatsapp:group:12345-678@g.us",
+    },
+    {
+      name: "keeps feishu group thread sessions isolated",
+      scope: "per-sender" as const,
+      ctx: {
+        From: "oc_group_chat",
+        ChatType: "group",
+        Provider: "feishu",
+        MessageThreadId: "omt-thread-123",
+      },
+      mainKey: "main",
+      expected: "agent:main:feishu:group:oc_group_chat:thread:omt-thread-123",
     },
   ] as const;
 
