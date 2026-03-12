@@ -15,12 +15,12 @@ describe("resolveOpencodeZenAlias", () => {
     expect(resolveOpencodeZenAlias("sonnet")).toBe("claude-opus-4-6");
     expect(resolveOpencodeZenAlias("haiku")).toBe("claude-opus-4-6");
     expect(resolveOpencodeZenAlias("gpt4")).toBe("gpt-5.1");
-    expect(resolveOpencodeZenAlias("o1")).toBe("gpt-5.2");
+    expect(resolveOpencodeZenAlias("o1")).toBe("gpt-5.4");
     expect(resolveOpencodeZenAlias("gemini-2.5")).toBe("gemini-3-pro");
   });
 
   it("resolves gpt5 alias", () => {
-    expect(resolveOpencodeZenAlias("gpt5")).toBe("gpt-5.2");
+    expect(resolveOpencodeZenAlias("gpt5")).toBe("gpt-5.4");
   });
 
   it("resolves gemini alias", () => {

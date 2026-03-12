@@ -102,17 +102,6 @@ export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   if (lower.startsWith("gemini-")) {
     return "google-generative-ai";
   }
-  if (
-    lower.startsWith("glm-") ||
-    lower.startsWith("kimi-") ||
-    lower.startsWith("qwen") ||
-    lower.startsWith("big-") ||
-    lower.startsWith("mimo-") ||
-    lower.startsWith("nemotron-") ||
-    lower.startsWith("trinity-")
-  ) {
-    return "openai-responses";
-  }
   return "openai-completions";
 }
 
