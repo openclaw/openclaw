@@ -223,7 +223,7 @@ function createGoogleThinkingPayloadWrapper(
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, forwardedModel) => {
         if (model.api === "google-generative-ai") {
           sanitizeGoogleThinkingPayload({
             payload,
@@ -231,7 +231,7 @@ function createGoogleThinkingPayloadWrapper(
             thinkingLevel,
           });
         }
-        return onPayload?.(payload);
+        return onPayload?.(payload, forwardedModel);
       },
     });
   };
@@ -259,12 +259,12 @@ function createZaiToolStreamWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, forwardedModel) => {
         if (payload && typeof payload === "object") {
           // Inject tool_stream: true for Z.AI API
           (payload as Record<string, unknown>).tool_stream = true;
         }
-        return originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, forwardedModel);
       },
     });
   };
@@ -307,11 +307,11 @@ function createParallelToolCallsWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
+      onPayload: (payload, forwardedModel) => {
         if (payload && typeof payload === "object") {
           (payload as Record<string, unknown>).parallel_tool_calls = enabled;
         }
-        return originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, forwardedModel);
       },
     });
   };
