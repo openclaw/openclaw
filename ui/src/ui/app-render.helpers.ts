@@ -321,9 +321,6 @@ export function resolveMainSessionKey(
   if (agentMainDefault) {
     return agentMainDefault;
   }
-  if (inferredAgentMainKeys.length === 1) {
-    return inferredAgentMainKeys[0];
-  }
   // Keep "main" visible even when sessions.list is narrowed to active sessions.
   return "main";
 }

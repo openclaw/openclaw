@@ -354,6 +354,17 @@ describe("resolveMainSessionKey", () => {
     expect(resolveMainSessionKey(null, sessions)).toBe("main");
   });
 
+  it("falls back to main alias when only a non-default agent main key is visible", () => {
+    const sessions = {
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: { model: null, contextTokens: null },
+      sessions: [row({ key: "agent:ops:main", updatedAt: Date.now() })],
+    } satisfies SessionsListResult;
+    expect(resolveMainSessionKey(null, sessions)).toBe("main");
+  });
+
   it("falls back to main when snapshot and inferred keys are unavailable", () => {
     const sessions = {
       ts: Date.now(),
