@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
+import {
+  getCoreSettingFromDb,
+  setCoreSettingInDb,
+} from "../infra/state-db/core-settings-sqlite.js";
 
 export type NodeHostGatewayConfig = {
   host?: string;
@@ -19,11 +19,8 @@ export type NodeHostConfig = {
   gateway?: NodeHostGatewayConfig;
 };
 
-const NODE_HOST_FILE = "node.json";
-
-export function resolveNodeHostConfigPath(): string {
-  return path.join(resolveStateDir(), NODE_HOST_FILE);
-}
+const SCOPE = "node-host";
+const KEY = "config";
 
 function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig {
   const base: NodeHostConfig = {
@@ -43,19 +40,15 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
 }
 
 export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
-  const filePath = resolveNodeHostConfigPath();
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<NodeHostConfig>;
-    return normalizeConfig(parsed);
-  } catch {
+  const raw = getCoreSettingFromDb<Partial<NodeHostConfig>>(SCOPE, KEY);
+  if (!raw) {
     return null;
   }
+  return normalizeConfig(raw);
 }
 
 export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
-  const filePath = resolveNodeHostConfigPath();
-  await writeJsonAtomic(filePath, config, { mode: 0o600 });
+  setCoreSettingInDb(SCOPE, KEY, config);
 }
 
 export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {

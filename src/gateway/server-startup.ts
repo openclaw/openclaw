@@ -231,6 +231,24 @@ export async function startGatewaySidecars(params: {
     );
   }
 
+  // One-shot migration: Phase 5C node-host config JSON file → SQLite.
+  try {
+    const { migratePhase5cToSqlite } = await import("../infra/state-db/migrate-phase5c.js");
+    const results = migratePhase5cToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.count > 0);
+    for (const r of migrated) {
+      params.log.info(`[state-db] Migrated ${r.store}: ${r.count} entries from JSON to SQLite`);
+    }
+    const failed = results.filter((r) => r.error);
+    for (const r of failed) {
+      params.log.warn(`[state-db] ${r.store} migration failed: ${r.error}`);
+    }
+  } catch (err) {
+    params.log.warn(
+      `[state-db] Phase 5C node-host config JSON→SQLite migration failed: ${String(err)}`,
+    );
+  }
+
   // One-shot migration: Phase 4D workspace/security JSON files → SQLite.
   try {
     const { migratePhase4dToSqlite } = await import("../infra/state-db/migrate-phase4d.js");
