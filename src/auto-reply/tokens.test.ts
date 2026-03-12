@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripSilentToken,
+  stripTrailingSilentReplyToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -70,6 +75,36 @@ describe("stripSilentToken", () => {
 
   it("works with custom token", () => {
     expect(stripSilentToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+  });
+});
+
+describe("stripTrailingSilentReplyToken", () => {
+  it("strips trailing token from mixed content", () => {
+    expect(stripTrailingSilentReplyToken("Here is the answer NO_REPLY")).toBe("Here is the answer");
+    expect(stripTrailingSilentReplyToken("Done.\n\nNO_REPLY")).toBe("Done.");
+  });
+
+  it("returns undefined for token-only text", () => {
+    expect(stripTrailingSilentReplyToken("NO_REPLY")).toBeUndefined();
+    expect(stripTrailingSilentReplyToken("  NO_REPLY  ")).toBeUndefined();
+  });
+
+  it("returns undefined when token is at the start (prefix)", () => {
+    expect(stripTrailingSilentReplyToken("NO_REPLY but here is more")).toBeUndefined();
+  });
+
+  it("returns undefined for empty/undefined input", () => {
+    expect(stripTrailingSilentReplyToken(undefined)).toBeUndefined();
+    expect(stripTrailingSilentReplyToken("")).toBeUndefined();
+  });
+
+  it("returns text unchanged when no token present", () => {
+    expect(stripTrailingSilentReplyToken("just normal text")).toBe("just normal text");
+  });
+
+  it("works with custom token", () => {
+    expect(stripTrailingSilentReplyToken("done HEARTBEAT_OK", "HEARTBEAT_OK")).toBe("done");
+    expect(stripTrailingSilentReplyToken("HEARTBEAT_OK", "HEARTBEAT_OK")).toBeUndefined();
   });
 });
 
