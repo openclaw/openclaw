@@ -36,4 +36,24 @@ describe("chat focus mode", () => {
     expect(app.tab).toBe("chat");
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
   });
+
+  it("exits focus mode when hamburger menu is clicked", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const shell = app.querySelector(".shell");
+    const toggle = app.querySelector<HTMLButtonElement>('button[title^="Toggle focus mode"]');
+    expect(toggle).not.toBeNull();
+    toggle?.click();
+    await app.updateComplete;
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
+
+    const hamburger = app.querySelector<HTMLButtonElement>("button.nav-collapse-toggle");
+    expect(hamburger).not.toBeNull();
+    hamburger?.click();
+
+    await app.updateComplete;
+    expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
+    expect(shell?.classList.contains("shell--nav-collapsed")).toBe(false);
+  });
 });
