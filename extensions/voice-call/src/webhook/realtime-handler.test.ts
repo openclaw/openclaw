@@ -1,8 +1,8 @@
 import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallManager } from "../manager.js";
-import type { CallRecord } from "../types.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import type { CallRecord } from "../types.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
 /** Extract the stream token from a TwiML body string. */
@@ -144,10 +144,14 @@ describe("RealtimeCallHandler", () => {
         null,
       );
       const issue = (handler as unknown as { issueStreamToken: () => string }).issueStreamToken;
-      const consume = (handler as unknown as { consumeStreamToken: (t: string) => boolean }).consumeStreamToken;
+      const consume = (
+        handler as unknown as {
+          consumeStreamToken: (t: string) => { from?: string; to?: string } | null;
+        }
+      ).consumeStreamToken;
       const token = issue.call(handler);
-      expect(consume.call(handler, token)).toBe(true);
-      expect(consume.call(handler, token)).toBe(false);
+      expect(consume.call(handler, token)).not.toBeNull();
+      expect(consume.call(handler, token)).toBeNull();
     });
 
     it("rejects unknown tokens", () => {
@@ -157,8 +161,12 @@ describe("RealtimeCallHandler", () => {
         makeProvider(),
         null,
       );
-      const consume = (handler as unknown as { consumeStreamToken: (t: string) => boolean }).consumeStreamToken;
-      expect(consume.call(handler, "not-a-real-token")).toBe(false);
+      const consume = (
+        handler as unknown as {
+          consumeStreamToken: (t: string) => { from?: string; to?: string } | null;
+        }
+      ).consumeStreamToken;
+      expect(consume.call(handler, "not-a-real-token")).toBeNull();
     });
   });
 
@@ -173,22 +181,18 @@ describe("RealtimeCallHandler", () => {
       });
       const manager = makeManager(callRecord);
 
-      const handler = new RealtimeCallHandler(
-        baseRealtimeConfig,
-        manager,
-        makeProvider(),
-        null,
-      );
+      const handler = new RealtimeCallHandler(baseRealtimeConfig, manager, makeProvider(), null);
 
       // Access private method via type assertion for unit testing
-      (handler as unknown as { registerCallInManager: (sid: string) => string })
-        .registerCallInManager("CA_test");
+      (
+        handler as unknown as { registerCallInManager: (sid: string) => string }
+      ).registerCallInManager("CA_test");
 
       // call.initiated + call.answered should both have been emitted
       expect(vi.mocked(manager.processEvent)).toHaveBeenCalledTimes(2);
-      const eventTypes = vi.mocked(manager.processEvent).mock.calls.map(
-        ([e]) => (e as { type: string }).type,
-      );
+      const eventTypes = vi
+        .mocked(manager.processEvent)
+        .mock.calls.map(([e]) => (e as { type: string }).type);
       expect(eventTypes).toEqual(["call.initiated", "call.answered"]);
 
       // initialMessage must be cleared before call.answered fires
@@ -199,15 +203,11 @@ describe("RealtimeCallHandler", () => {
       const callRecord = makeCallRecord({ callId: "manager-gen-id" });
       const manager = makeManager(callRecord);
 
-      const handler = new RealtimeCallHandler(
-        baseRealtimeConfig,
-        manager,
-        makeProvider(),
-        null,
-      );
+      const handler = new RealtimeCallHandler(baseRealtimeConfig, manager, makeProvider(), null);
 
-      const result = (handler as unknown as { registerCallInManager: (sid: string) => string })
-        .registerCallInManager("CA_test");
+      const result = (
+        handler as unknown as { registerCallInManager: (sid: string) => string }
+      ).registerCallInManager("CA_test");
 
       expect(result).toBe("manager-gen-id");
     });
@@ -218,15 +218,11 @@ describe("RealtimeCallHandler", () => {
         getCallByProviderCallId: vi.fn(() => undefined),
       } as unknown as CallManager;
 
-      const handler = new RealtimeCallHandler(
-        baseRealtimeConfig,
-        manager,
-        makeProvider(),
-        null,
-      );
+      const handler = new RealtimeCallHandler(baseRealtimeConfig, manager, makeProvider(), null);
 
-      const result = (handler as unknown as { registerCallInManager: (sid: string) => string })
-        .registerCallInManager("CA_fallback");
+      const result = (
+        handler as unknown as { registerCallInManager: (sid: string) => string }
+      ).registerCallInManager("CA_fallback");
 
       expect(result).toBe("CA_fallback");
     });

@@ -215,7 +215,7 @@ export const RealtimeToolSchema = z
     description: z.string(),
     parameters: z.object({
       type: z.literal("object"),
-      properties: z.record(z.unknown()),
+      properties: z.record(z.string(), z.unknown()),
       required: z.array(z.string()).optional(),
     }),
   })
@@ -230,7 +230,18 @@ export const VoiceCallRealtimeConfigSchema = z
     model: z.string().optional(),
     /** Voice for AI speech output (env: REALTIME_VOICE_VOICE) */
     voice: z
-      .enum(["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"])
+      .enum([
+        "alloy",
+        "ash",
+        "ballad",
+        "cedar",
+        "coral",
+        "echo",
+        "marin",
+        "sage",
+        "shimmer",
+        "verse",
+      ])
       .optional(),
     /** System instructions / persona (env: REALTIME_VOICE_INSTRUCTIONS) */
     instructions: z.string().optional(),
@@ -453,7 +464,10 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     realtime: {
       ...defaults.realtime,
       ...config.realtime,
-      tools: config.realtime?.tools ?? defaults.realtime.tools,
+      // Cast: DeepPartial makes tool fields appear optional in the input type,
+      // but Zod validates the full shape before it reaches here.
+      tools:
+        (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
     },
     stt: { ...defaults.stt, ...config.stt },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
@@ -519,7 +533,8 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.realtime.model = resolved.realtime.model ?? process.env.REALTIME_VOICE_MODEL;
   resolved.realtime.voice =
     (resolved.realtime.voice ??
-      (process.env.REALTIME_VOICE_VOICE as VoiceCallRealtimeConfig["voice"])) || undefined;
+      (process.env.REALTIME_VOICE_VOICE as VoiceCallRealtimeConfig["voice"])) ||
+    undefined;
   resolved.realtime.instructions =
     resolved.realtime.instructions ?? process.env.REALTIME_VOICE_INSTRUCTIONS;
   if (resolved.realtime.temperature == null && process.env.REALTIME_VOICE_TEMPERATURE) {
@@ -605,8 +620,8 @@ export function validateProviderConfig(config: VoiceCallConfig): {
   // "open" or "allowlist" are the correct choices when realtime.enabled = true.
   if (config.realtime?.enabled && config.inboundPolicy === "disabled") {
     errors.push(
-      "plugins.entries.voice-call.config.inboundPolicy must not be \"disabled\" when realtime.enabled is true " +
-        "(use \"open\" or \"allowlist\" — realtime calls are answered before policy can reject them)",
+      'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true ' +
+        '(use "open" or "allowlist" — realtime calls are answered before policy can reject them)',
     );
   }
 

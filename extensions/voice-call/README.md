@@ -186,16 +186,16 @@ Realtime mode routes inbound calls directly to the [OpenAI Realtime API](https:/
 
 ```json5
 {
-  inboundPolicy: "open",   // required: realtime needs inbound calls enabled
+  inboundPolicy: "open", // required: realtime needs inbound calls enabled
 
   realtime: {
     enabled: true,
-    voice: "alloy",        // Realtime API voices: alloy, ash, ballad, cedar, coral,
-                           //                     echo, marin, sage, shimmer, verse
+    voice: "alloy", // Realtime API voices: alloy, ash, ballad, cedar, coral,
+    //                     echo, marin, sage, shimmer, verse
     instructions: "You are a helpful assistant.",
-    model: "gpt-4o-mini-realtime-preview",   // optional, this is the default
-    temperature: 0.8,      // 0–2, optional
-    vadThreshold: 0.5,     // voice activity detection sensitivity, 0–1, optional
+    model: "gpt-4o-mini-realtime-preview", // optional, this is the default
+    temperature: 0.8, // 0–2, optional
+    vadThreshold: 0.5, // voice activity detection sensitivity, 0–1, optional
     silenceDurationMs: 500, // ms of silence before end-of-turn, optional
   },
 }
@@ -205,15 +205,15 @@ Realtime mode routes inbound calls directly to the [OpenAI Realtime API](https:/
 
 All `realtime.*` fields can be set via environment variables (config takes precedence):
 
-| Env var | Config field |
-|---|---|
-| `REALTIME_VOICE_ENABLED=true` | `realtime.enabled` |
-| `REALTIME_VOICE_MODEL` | `realtime.model` |
-| `REALTIME_VOICE_VOICE` | `realtime.voice` |
-| `REALTIME_VOICE_INSTRUCTIONS` | `realtime.instructions` |
-| `REALTIME_VOICE_TEMPERATURE` | `realtime.temperature` |
-| `VAD_THRESHOLD` | `realtime.vadThreshold` |
-| `SILENCE_DURATION_MS` | `realtime.silenceDurationMs` |
+| Env var                       | Config field                 |
+| ----------------------------- | ---------------------------- |
+| `REALTIME_VOICE_ENABLED=true` | `realtime.enabled`           |
+| `REALTIME_VOICE_MODEL`        | `realtime.model`             |
+| `REALTIME_VOICE_VOICE`        | `realtime.voice`             |
+| `REALTIME_VOICE_INSTRUCTIONS` | `realtime.instructions`      |
+| `REALTIME_VOICE_TEMPERATURE`  | `realtime.temperature`       |
+| `VAD_THRESHOLD`               | `realtime.vadThreshold`      |
+| `SILENCE_DURATION_MS`         | `realtime.silenceDurationMs` |
 
 ### How it works
 

@@ -226,7 +226,18 @@ describe("VoiceCallRealtimeConfigSchema", () => {
   });
 
   it("accepts all valid Realtime API voice names", () => {
-    const voices = ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"];
+    const voices = [
+      "alloy",
+      "ash",
+      "ballad",
+      "cedar",
+      "coral",
+      "echo",
+      "marin",
+      "sage",
+      "shimmer",
+      "verse",
+    ];
     for (const voice of voices) {
       expect(() => VoiceCallRealtimeConfigSchema.parse({ voice })).not.toThrow();
     }

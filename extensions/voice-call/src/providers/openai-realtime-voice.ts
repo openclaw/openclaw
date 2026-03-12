@@ -450,9 +450,7 @@ export class OpenAIRealtimeVoiceBridge {
   private async attemptReconnect(): Promise<void> {
     if (this.intentionallyClosed) return;
 
-    if (
-      this.reconnectAttempts >= OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS
-    ) {
+    if (this.reconnectAttempts >= OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS) {
       const err = new Error(
         `[RealtimeVoice] Max reconnect attempts (${OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS}) exceeded`,
       );
@@ -464,8 +462,7 @@ export class OpenAIRealtimeVoiceBridge {
 
     this.reconnectAttempts++;
     const delay =
-      OpenAIRealtimeVoiceBridge.BASE_RECONNECT_DELAY_MS *
-      2 ** (this.reconnectAttempts - 1);
+      OpenAIRealtimeVoiceBridge.BASE_RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
 
     console.log(
       `[RealtimeVoice] Reconnecting (${this.reconnectAttempts}/${OpenAIRealtimeVoiceBridge.MAX_RECONNECT_ATTEMPTS}) in ${delay}ms...`,
@@ -870,6 +867,7 @@ interface RealtimeSessionUpdate {
       create_response: boolean;
     };
     temperature: number;
+    input_audio_transcription?: { model: string };
     tools?: RealtimeTool[];
     tool_choice?: string;
   };
