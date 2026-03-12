@@ -2,6 +2,7 @@
 
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
+- Clawd workflow overlay: before dispatching Codex here, also load `/Users/karimnaguib/clawd/CODING-CHECKLIST.md` plus `resources/agent-playbooks/codex-task-template.md` and `codex-review-template.md`, and explicitly note known repo-wide blockers vs change-specific failures.
 
 ## Project Structure & Module Organization
 
