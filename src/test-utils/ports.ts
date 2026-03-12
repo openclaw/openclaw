@@ -90,7 +90,7 @@ export async function getDeterministicFreePortBlock(params?: {
     }
   }
 
-  throw new Error("failed to acquire a free port block");
+  throw new Error("Failed to acquire a free port block");
 }
 
 export async function getFreePortBlockWithPermissionFallback(params: {

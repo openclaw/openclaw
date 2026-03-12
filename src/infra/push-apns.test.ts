@@ -61,7 +61,7 @@ describe("push APNs registration store", () => {
         topic: "ai.openclaw.ios",
         baseDir,
       }),
-    ).rejects.toThrow("invalid APNs token");
+    ).rejects.toThrow("Invalid APNs token");
   });
 });
 
