@@ -159,7 +159,7 @@ export function attachGatewayWsMessageHandler(params: {
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
-  originCheckMetrics: WsOriginCheckMetrics;
+  originCheckMetrics?: WsOriginCheckMetrics;
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -209,11 +209,25 @@ export function attachGatewayWsMessageHandler(params: {
     allowRealIpFallback,
   });
 
+  const requestForwardedHost = (() => {
+    const raw = upgradeReq.headers["x-forwarded-host"];
+    // Handle array (multiple headers)
+    if (Array.isArray(raw)) {
+      return raw[0];
+    }
+    // Handle comma-separated chain: "client-facing-host, middle-proxy-host"
+    // Use the first (client-facing) host
+    if (typeof raw === "string" && raw.includes(",")) {
+      return raw.split(",")[0].trim();
+    }
+    return raw;
+  })();
+
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
   // proxy without proper configuration - the proxy's loopback connection would otherwise
   // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = Boolean(forwardedFor || realIp);
+  const hasProxyHeaders = Boolean(forwardedFor || realIp || requestForwardedHost);
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
@@ -408,10 +422,12 @@ export function attachGatewayWsMessageHandler(params: {
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
+            requestForwardedHost,
             origin: requestOrigin,
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
+            isTrustedProxy: remoteIsTrustedProxy,
           });
           if (!originCheck.ok) {
             const errorMessage =
@@ -430,10 +446,21 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
+
+          // Security warning: if wildcard "*" bypass was used, log it
+          if (originCheck.ok && originCheck.wildcardMatched) {
+            logGateway.warn(
+              "security warning: allowedOrigins includes wildcard '*'. " +
+                "This disables all origin checking and opens all WebSocket endpoints to CSRF attacks. " +
+                "Only use in fully air-gapped or non-browser environments where cross-site requests are impossible.",
+            );
+          }
           if (originCheck.matchedBy === "host-header-fallback") {
-            originCheckMetrics.hostHeaderFallbackAccepted += 1;
+            if (originCheckMetrics) {
+              originCheckMetrics.hostHeaderFallbackAccepted += 1;
+            }
             logWsControl.warn(
-              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+              `security warning: websocket origin accepted via host-header fallback conn=${connId} count=${originCheckMetrics?.hostHeaderFallbackAccepted ?? 0} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
             );
             if (hostHeaderOriginFallbackEnabled) {
               logGateway.warn(
@@ -548,7 +575,9 @@ export function attachGatewayWsMessageHandler(params: {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
-              details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+              details: {
+                code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+              },
             });
             close(1008, errorMessage);
             return false;
@@ -561,7 +590,9 @@ export function attachGatewayWsMessageHandler(params: {
 
           markHandshakeFailure("device-required");
           sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, "device identity required", {
-            details: { code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED },
+            details: {
+              code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
+            },
           });
           close(1008, "device identity required");
           return false;
@@ -767,7 +798,9 @@ export function attachGatewayWsMessageHandler(params: {
                 );
               }
             } else if (pairing.created) {
-              context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+              context.broadcast("device.pair.requested", pairing.request, {
+                dropIfSlow: true,
+              });
             }
             if (pairing.request.silent !== true) {
               setHandshakeState("failed");
