@@ -175,10 +175,11 @@ describe("resolveExcludePatterns", () => {
   });
 
   // Protected path checks
-  it("warns when --exclude matches credentials/", async () => {
+  it("warns when --exclude matches credentials/ and says pattern was removed", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     await resolveExcludePatterns(makeSpec({ exclude: ["credentials/"] }), tempDir);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("removed"));
     warnSpy.mockRestore();
   });
 
@@ -225,6 +226,83 @@ describe("resolveExcludePatterns", () => {
     );
     expect(patterns).toContain("cred*");
     expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  // Finding 1: protected-path patterns are dropped (not just warned about)
+  it("drops protected-path pattern from returned patterns (exact match)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns, sources } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["credentials/", "*.log"] }),
+      tempDir,
+    );
+    expect(patterns).not.toContain("credentials/");
+    expect(patterns).toContain("*.log");
+    expect(sources.has("credentials/")).toBe(false);
+    warnSpy.mockRestore();
+  });
+
+  it("drops protected-path pattern from returned patterns (glob match)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns, sources } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["cred*", "*.log"] }),
+      tempDir,
+    );
+    expect(patterns).not.toContain("cred*");
+    expect(patterns).toContain("*.log");
+    expect(sources.has("cred*")).toBe(false);
+    warnSpy.mockRestore();
+  });
+
+  // Finding 3: descendant patterns trigger protected-path guard
+  it("catches descendant pattern credentials/*", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["credentials/*"] }),
+      tempDir,
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    expect(patterns).not.toContain("credentials/*");
+    warnSpy.mockRestore();
+  });
+
+  it("catches descendant pattern credentials/**", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["credentials/**"] }),
+      tempDir,
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    expect(patterns).not.toContain("credentials/**");
+    warnSpy.mockRestore();
+  });
+
+  it("catches descendant pattern cron/* in non-interactive mode", async () => {
+    await expect(
+      resolveExcludePatterns(makeSpec({ exclude: ["cron/*"], nonInteractive: true }), tempDir),
+    ).rejects.toThrow(ProtectedPathError);
+  });
+
+  // Finding 3b: case-variation bypass
+  it("catches case-variant Credentials/ (case-insensitive guard)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["Credentials/"] }),
+      tempDir,
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    expect(patterns).not.toContain("Credentials/");
+    warnSpy.mockRestore();
+  });
+
+  it("catches case-variant + descendant Credentials/*", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { patterns } = await resolveExcludePatterns(
+      makeSpec({ exclude: ["Credentials/*"] }),
+      tempDir,
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("protected path"));
+    expect(patterns).not.toContain("Credentials/*");
     warnSpy.mockRestore();
   });
 

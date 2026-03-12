@@ -234,25 +234,38 @@ export async function resolveExcludePatterns(
   }
 
   // Protected path checks (P2-010: glob bypass protection)
+  const droppedPatterns = new Set<string>();
   for (const pattern of deduplicated) {
     const normalized = pattern.replace(/\/$/, "");
+    const normalizedLower = normalized.toLowerCase();
     for (const protectedPath of PROTECTED_PATHS) {
       const protectedNormalized = protectedPath.replace(/\/$/, "");
-      // Check exact match AND glob match via ignore
+      const protectedLower = protectedNormalized.toLowerCase();
+      // Check exact match (case-insensitive), descendant prefix, AND glob match.
+      // ignore() defaults to ignorecase:true, so no toLowerCase needed for it.
       const wouldMatch =
-        normalized === protectedNormalized || ignore().add(pattern).ignores(protectedNormalized);
+        normalizedLower === protectedLower ||
+        normalizedLower.startsWith(`${protectedLower}/`) ||
+        ignore().add(pattern).ignores(protectedNormalized);
       if (wouldMatch && !spec.allowExcludeProtected) {
         if (spec.nonInteractive) {
           throw new ProtectedPathError(pattern);
         }
         console.warn(
-          `⚠️  Pattern "${pattern}" matches protected path "${protectedPath}". Use --allow-exclude-protected to override.`,
+          `⚠️  Pattern "${pattern}" matches protected path "${protectedPath}" and was removed. Use --allow-exclude-protected to override.`,
         );
+        droppedPatterns.add(pattern);
+        break; // no need to check remaining protected paths for this pattern
       }
     }
   }
 
-  return { patterns: deduplicated, sources };
+  const filtered = deduplicated.filter((p) => !droppedPatterns.has(p));
+  for (const dropped of droppedPatterns) {
+    sources.delete(dropped);
+  }
+
+  return { patterns: filtered, sources };
 }
 
 // ---------------------------------------------------------------------------
