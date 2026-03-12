@@ -20,13 +20,18 @@ Docs: https://docs.openclaw.ai
 - Security/WebSocket preauth: shorten unauthenticated handshake retention and reject oversized pre-auth frames before application-layer parsing to reduce pre-pairing exposure on unsupported public deployments. (`GHSA-jv4g-m82p-2j93`)(#44089) (`GHSA-xwx2-ppv2-wx98`)(#44089) Thanks @ez-lbz and @vincentkoc.
 - Security/Feishu reactions: preserve looked-up group chat typing and fail closed on ambiguous reaction context so group authorization and mention gating cannot be bypassed through synthetic `p2p` reactions. (`GHSA-m69h-jm2f-2pv8`)(#44088) Thanks @zpbrent and @vincentkoc.
 - Security/LINE webhook: require signatures for empty-event POST probes too so unsigned requests no longer confirm webhook reachability with a `200` response. (`GHSA-mhxh-9pjm-w7q5`)(#44090) Thanks @TerminalsandCoffee and @vincentkoc.
+- Security/Zalo webhook: rate limit invalid secret guesses before auth so weak webhook secrets cannot be brute-forced through unauthenticated churned requests without pre-auth `429` responses. (`GHSA-5m9r-p9g7-679c`)(#44173) Thanks @zpbrent and @vincentkoc.
+- Security/plugins: disable implicit workspace plugin auto-load so cloned repositories cannot execute workspace plugin code without an explicit trust decision. (`GHSA-99qw-6mr3-36qr`)(#44174) Thanks @lintsinghua and @vincentkoc.
 
 ### Changes
 
 - Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
+- Agents/subagents: add `sessions_yield` so orchestrators can end the current turn immediately, skip queued tool work, and carry a hidden follow-up payload into the next session turn. (#36537) thanks @jriff
 
 ### Fixes
 
+- Moonshot CN API: respect explicit `baseUrl` (api.moonshot.cn) in implicit provider resolution so platform.moonshot.cn API keys authenticate correctly instead of returning HTTP 401. (#33637) Thanks @chengzhichao-xydt.
+- Kimi Coding/provider config: respect explicit `models.providers["kimi-coding"].baseUrl` when resolving the implicit provider so custom Kimi Coding endpoints no longer get overwritten by the built-in default. (#36353) Thanks @2233admin.
 - Cron/proactive delivery: keep isolated direct cron sends out of the write-ahead resend queue so transient-send retries do not replay duplicate proactive messages after restart. (#40646) Thanks @openperf and @vincentkoc.
 - TUI/chat log: reuse the active assistant message component for the same streaming run so `openclaw tui` no longer renders duplicate assistant replies. (#35364) Thanks @lisitan.
 - macOS/Reminders: add the missing `NSRemindersUsageDescription` to the bundled app so `apple-reminders` can trigger the system permission prompt from OpenClaw.app. (#8559) Thanks @dinakars777.
@@ -41,6 +46,9 @@ Docs: https://docs.openclaw.ai
 - Doctor/gateway service audit: earlier groundwork for this fix landed in the superseded #28338 branch. Thanks @realriphub.
 - Telegram/model picker: make inline model button selections persist the chosen session model correctly, clear overrides when selecting the configured default, and include effective fallback models in `/models` button validation. (#40105) Thanks @avirweb.
 - Mattermost/reply media delivery: pass agent-scoped `mediaLocalRoots` through shared reply delivery so allowed local files upload correctly from button, slash-command, and model-picker replies. (#44021) Thanks @LyleLiu666.
+- Plugins/env-scoped roots: fix plugin discovery/load caches and provenance tracking so same-process `HOME`/`OPENCLAW_HOME` changes no longer reuse stale plugin state or misreport `~/...` plugins as untracked. (#44046) thanks @gumadeiras.
+- Gateway/session discovery: discover disk-only and retired ACP session stores under custom templated `session.store` roots so ACP reconciliation, session-id/session-label targeting, and run-id fallback keep working after restart. (#44176) thanks @gumadeiras.
+- Models/OpenRouter native ids: canonicalize native OpenRouter model keys across config writes, runtime lookups, fallback management, and `models list --plain`, and migrate legacy duplicated `openrouter/openrouter/...` config entries forward on write.
 
 ## 2026.3.11
 
@@ -65,9 +73,9 @@ Docs: https://docs.openclaw.ai
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
 - Git/runtime state: ignore the gateway-generated `.dev-state` file so local runtime state does not show up as untracked repo noise. (#41848) Thanks @smysle.
 - Exec/child commands: mark child command environments with `OPENCLAW_CLI` so subprocesses can detect when they were launched from the OpenClaw CLI. (#41411) Thanks @vincentkoc.
-  <<<<<<< HEAD
 - LLM Task/Lobster: add an optional `thinking` override so workflow calls can explicitly set embedded reasoning level with shared validation for invalid values and unsupported `xhigh` modes. (#15606) Thanks @xadenryan and @ImLukeF.
 - Mattermost/reply threading: add `channels.mattermost.replyToMode` for channel and group messages so top-level posts can start thread-scoped sessions without the manual reply-then-thread workaround. (#29587) Thanks @teconomix.
+- iOS/push relay: add relay-backed official-build push delivery with App Attest + receipt verification, gateway-bound send delegation, and config-based relay URL setup on the gateway. (#43369) Thanks @ngutman.
 
 ### Breaking
 
@@ -75,6 +83,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Windows/install: stop auto-installing `node-llama-cpp` during normal npm CLI installs so `openclaw@latest` no longer fails on Windows while building optional local-embedding dependencies.
 - Agents/text sanitization: strip leaked model control tokens (`<|...|>` and full-width `<｜...｜>` variants) from user-facing assistant text, preventing GLM-5 and DeepSeek internal delimiters from reaching end users. (#42173) Thanks @imwyvern.
 - iOS/gateway foreground recovery: reconnect immediately on foreground return after stale background sockets are torn down, so the app no longer stays disconnected until a later wake path happens. (#41384) Thanks @mbelinky.
 - Gateway/Control UI: keep dashboard auth tokens in session-scoped browser storage so same-tab refreshes preserve remote token auth without restoring long-lived localStorage token persistence, while scoping tokens to the selected gateway URL and fragment-only bootstrap flow. (#40892) thanks @velvet-shark.
@@ -247,6 +256,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: recognize additional serialized network errno strings plus `EHOSTDOWN` and `EPIPE` structured codes so transient transport failures trigger timeout failover more reliably. (#42830) Thanks @jnMetaCode.
 - Telegram/model picker: make inline model button selections persist the chosen session model correctly, clear overrides when selecting the configured default, and include effective fallback models in `/models` button validation. (#40105) Thanks @avirweb.
 - Agents/embedded runner: carry provider-observed overflow token counts into compaction so overflow retries and diagnostics use the rejected live prompt size instead of only transcript estimates. (#40357) thanks @rabsef-bicrym.
+- Agents/compaction transcript updates: emit a transcript-update event immediately after successful embedded compaction so downstream listeners observe the post-compact transcript without waiting for a later write. (#25558) thanks @rodrigouroz.
 
 ## 2026.3.7
 
