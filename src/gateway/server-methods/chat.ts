@@ -975,11 +975,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const effortLevel = entry?.effortLevel;
     respond(true, {
       sessionKey,
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
+      effortLevel,
       verboseLevel,
     });
   },
