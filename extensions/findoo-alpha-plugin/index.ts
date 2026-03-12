@@ -55,11 +55,13 @@ const findooPlugin = {
           text: string,
           options: { sessionKey: string; contextKey?: string },
         ) => void;
+        requestHeartbeatNow?: (opts?: { reason?: string; coalesceSec?: number }) => void;
       };
     };
 
     const runtime = api.runtime as unknown as RuntimeServices | undefined;
     const enqueueSystemEvent = runtime?.system?.enqueueSystemEvent;
+    const requestHeartbeatNow = runtime?.system?.requestHeartbeatNow;
 
     // ── PendingTaskTracker (background stream consumer) ──
     let tracker: PendingTaskTracker | undefined;
@@ -79,6 +81,8 @@ const findooPlugin = {
             sessionKey: "main",
             contextKey: "findoo-analysis",
           });
+          // Immediately wake heartbeat so LLM sees the result
+          requestHeartbeatNow?.({ reason: "findoo-analysis-complete", coalesceSec: 5 });
         },
 
         onTaskFailed(task, error) {
@@ -86,6 +90,7 @@ const findooPlugin = {
             sessionKey: "main",
             contextKey: "findoo-analysis",
           });
+          requestHeartbeatNow?.({ reason: "findoo-analysis-failed", coalesceSec: 5 });
         },
       });
 
