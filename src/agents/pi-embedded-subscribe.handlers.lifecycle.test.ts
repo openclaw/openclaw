@@ -54,13 +54,97 @@ describe("handleAgentEnd", () => {
 
     const warn = vi.mocked(ctx.log.warn);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
-    expect(warn.mock.calls[0]?.[0]).toContain("error=connection refused");
+    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      runId: "run-1",
+      error: "connection refused",
+      rawErrorPreview: "connection refused",
+    });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
         error: "connection refused",
+      },
+    });
+  });
+
+  it("attaches raw provider error metadata and includes model/provider in console output", () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-test",
+      errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      content: [{ type: "text", text: "" }],
+    });
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe("embedded run agent end");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      runId: "run-1",
+      error: "The AI service is temporarily overloaded. Please try again in a moment.",
+      failoverReason: "overloaded",
+      providerErrorType: "overloaded_error",
+      consoleMessage:
+        "embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment.",
+    });
+  });
+
+  it("sanitizes model and provider before writing consoleMessage", () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic\u001b]8;;https://evil.test\u0007",
+      model: "claude\tsonnet\n4",
+      errorMessage: "connection refused",
+      content: [{ type: "text", text: "" }],
+    });
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    const meta = warn.mock.calls[0]?.[1];
+    expect(meta).toMatchObject({
+      consoleMessage:
+        "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=connection refused",
+    });
+    expect(meta?.consoleMessage).not.toContain("\n");
+    expect(meta?.consoleMessage).not.toContain("\r");
+    expect(meta?.consoleMessage).not.toContain("\t");
+    expect(meta?.consoleMessage).not.toContain("\u001b");
+  });
+
+  it("redacts logged error text before emitting lifecycle events", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "x-api-key: sk-abcdefghijklmnopqrstuvwxyz123456",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent },
+    );
+
+    handleAgentEnd(ctx);
+
+    const warn = vi.mocked(ctx.log.warn);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      event: "embedded_run_agent_end",
+      error: "x-api-key: ***",
+      rawErrorPreview: "x-api-key: ***",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "x-api-key: ***",
       },
     });
   });

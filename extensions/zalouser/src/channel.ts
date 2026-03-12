@@ -1,5 +1,6 @@
 import {
   buildAccountScopedDmSecurityPolicy,
+  createAccountStatusSink,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/compat";
 import type {
@@ -19,7 +20,6 @@ import {
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
   isNumericTargetId,
@@ -42,6 +42,7 @@ import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
@@ -163,6 +164,16 @@ function resolveZalouserQrProfile(accountId?: string | null): string {
     return process.env.ZALOUSER_PROFILE?.trim() || process.env.ZCA_PROFILE?.trim() || "default";
   }
   return normalized;
+}
+
+function resolveZalouserOutboundChunkMode(cfg: OpenClawConfig, accountId?: string) {
+  return getZalouserRuntime().channel.text.resolveChunkMode(cfg, "zalouser", accountId);
+}
+
+function resolveZalouserOutboundTextChunkLimit(cfg: OpenClawConfig, accountId?: string) {
+  return getZalouserRuntime().channel.text.resolveTextChunkLimit(cfg, "zalouser", accountId, {
+    fallbackLimit: zalouserDock.outbound?.textChunkLimit ?? 2000,
+  });
 }
 
 function mapUser(params: {
@@ -594,14 +605,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkTextForOutbound,
-    chunkerMode: "text",
-    textChunkLimit: 2000,
     sendPayload: async (ctx) =>
       await sendPayloadWithChunkedTextAndMedia({
         ctx,
-        textChunkLimit: zalouserPlugin.outbound!.textChunkLimit,
-        chunker: zalouserPlugin.outbound!.chunker,
         sendText: (nextCtx) => zalouserPlugin.outbound!.sendText!(nextCtx),
         sendMedia: (nextCtx) => zalouserPlugin.outbound!.sendMedia!(nextCtx),
         emptyResult: { channel: "zalouser", messageId: "" },
@@ -612,6 +618,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       const result = await sendMessageZalouser(target.threadId, text, {
         profile: account.profile,
         isGroup: target.isGroup,
+        textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+        textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },
@@ -623,6 +632,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         isGroup: target.isGroup,
         mediaUrl,
         mediaLocalRoots,
+        textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+        textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },
@@ -682,6 +694,10 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       } catch {
         // ignore probe errors
       }
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
       ctx.log?.info(`[${account.accountId}] starting zalouser provider${userLabel}`);
       const { monitorZalouserProvider } = await import("./monitor.js");
       return monitorZalouserProvider({
@@ -689,7 +705,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         config: ctx.cfg,
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        statusSink,
       });
     },
     loginWithQrStart: async (params) => {
