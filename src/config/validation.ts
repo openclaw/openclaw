@@ -234,108 +234,81 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
     return [];
   }
 
+  // Skip validation if memory backend is qmd - it handles embeddings internally
+  if (config.memory?.backend === "qmd") {
+    return [];
+  }
+
   const provider = memorySearch.provider;
   const model = memorySearch.model;
   const remote = memorySearch.remote;
 
+  // Helper to check if apiKey is configured (either directly or via env/provider auth)
+  const hasApiKey = remote?.apiKey || process.env[`${provider?.toUpperCase()}_API_KEY`];
+
+  // Helper to check if model can use provider defaults
+  const hasModel = model || provider === "ollama"; // Ollama has default models
+
   // Validate openai provider
   if (provider === "openai") {
-    if (!remote?.apiKey) {
+    if (!hasApiKey) {
       issues.push({
         path: "agents.defaults.memorySearch",
         message:
-          "memorySearch.provider=openai requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "memorySearch.provider=openai requires an API key. " +
+          "Set agents.defaults.memorySearch.remote.apiKey or OPENAI_API_KEY environment variable. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $OPENAI_API_KEY",
       });
     }
-    if (!model) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=openai requires agents.defaults.memorySearch.model to be set. " +
-          "Example: agents.defaults.memorySearch.model: text-embedding-3-small",
-      });
-    }
+    // Model is optional - use provider default if not specified
   }
 
-  // Validate ollama provider
+  // Validate ollama provider - baseUrl is optional (uses default localhost)
   if (provider === "ollama") {
-    if (!remote?.baseUrl) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=ollama requires agents.defaults.memorySearch.remote.baseUrl to be set. " +
-          "Example: agents.defaults.memorySearch.remote.baseUrl: http://localhost:11434",
-      });
-    }
-    if (!model) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=ollama requires agents.defaults.memorySearch.model to be set. " +
-          "Example: agents.defaults.memorySearch.model: nomic-embed-text",
-      });
-    }
+    // baseUrl is optional - will use default http://localhost:11434
+    // Model is optional - will use provider default
   }
 
   // Validate gemini provider
   if (provider === "gemini") {
-    if (!remote?.apiKey) {
+    if (!hasApiKey) {
       issues.push({
         path: "agents.defaults.memorySearch",
         message:
-          "memorySearch.provider=gemini requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "memorySearch.provider=gemini requires an API key. " +
+          "Set agents.defaults.memorySearch.remote.apiKey or GEMINI_API_KEY environment variable. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $GEMINI_API_KEY",
       });
     }
-    if (!model) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=gemini requires agents.defaults.memorySearch.model to be set. " +
-          "Example: agents.defaults.memorySearch.model: gemini-embedding-001",
-      });
-    }
+    // Model is optional - use provider default if not specified
   }
 
   // Validate voyage provider
   if (provider === "voyage") {
-    if (!remote?.apiKey) {
+    if (!hasApiKey) {
       issues.push({
         path: "agents.defaults.memorySearch",
         message:
-          "memorySearch.provider=voyage requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "memorySearch.provider=voyage requires an API key. " +
+          "Set agents.defaults.memorySearch.remote.apiKey or VOYAGE_API_KEY environment variable. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $VOYAGE_API_KEY",
       });
     }
-    if (!model) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=voyage requires agents.defaults.memorySearch.model to be set. " +
-          "Example: agents.defaults.memorySearch.model: voyage-3",
-      });
-    }
+    // Model is optional - use provider default if not specified
   }
 
   // Validate mistral provider
   if (provider === "mistral") {
-    if (!remote?.apiKey) {
+    if (!hasApiKey) {
       issues.push({
         path: "agents.defaults.memorySearch",
         message:
-          "memorySearch.provider=mistral requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "memorySearch.provider=mistral requires an API key. " +
+          "Set agents.defaults.memorySearch.remote.apiKey or MISTRAL_API_KEY environment variable. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $MISTRAL_API_KEY",
       });
     }
-    if (!model) {
-      issues.push({
-        path: "agents.defaults.memorySearch",
-        message:
-          "memorySearch.provider=mistral requires agents.defaults.memorySearch.model to be set. " +
-          "Example: agents.defaults.memorySearch.model: mistral-embed",
-      });
-    }
+    // Model is optional - use provider default if not specified
   }
 
   return issues;

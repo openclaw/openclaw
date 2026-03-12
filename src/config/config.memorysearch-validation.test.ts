@@ -19,13 +19,43 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts valid ollama configuration", () => {
+  it("accepts valid ollama configuration with baseUrl", () => {
     const result = validateConfigObject({
       agents: {
         defaults: {
           memorySearch: {
             provider: "ollama",
             model: "nomic-embed-text",
+            remote: {
+              baseUrl: "http://localhost:11434",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts ollama without baseUrl (uses default localhost)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts ollama without model (uses provider default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
             remote: {
               baseUrl: "http://localhost:11434",
             },
@@ -60,6 +90,22 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts openai without explicit model (uses provider default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              apiKey: "sk-test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects openai provider without apiKey", () => {
     const result = validateConfigObject({
       agents: {
@@ -76,24 +122,6 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.issues[0]?.message).toContain("apiKey");
   });
 
-  it("rejects openai provider without model", () => {
-    const result = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              apiKey: "sk-test-key",
-            },
-          },
-        },
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("model");
-  });
-
   it("rejects openai provider without apiKey and model", () => {
     const result = validateConfigObject({
       agents: {
@@ -105,41 +133,8 @@ describe("validateConfigObject - memorySearch", () => {
       },
     });
     expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(2);
-  });
-
-  it("rejects ollama provider without baseUrl", () => {
-    const result = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            model: "nomic-embed-text",
-          },
-        },
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("baseUrl");
-  });
-
-  it("rejects ollama provider without model", () => {
-    const result = validateConfigObject({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "ollama",
-            remote: {
-              baseUrl: "http://localhost:11434",
-            },
-          },
-        },
-      },
-    });
-    expect(result.ok).toBe(false);
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]?.message).toContain("model");
+    expect(result.issues).toHaveLength(1); // Only apiKey issue, model is optional
+    expect(result.issues[0]?.message).toContain("apiKey");
   });
 
   it("rejects gemini provider without apiKey", () => {
@@ -158,6 +153,22 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.issues[0]?.message).toContain("apiKey");
   });
 
+  it("accepts gemini without explicit model (uses provider default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            remote: {
+              apiKey: "test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects voyage provider without apiKey", () => {
     const result = validateConfigObject({
       agents: {
@@ -174,6 +185,22 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.issues[0]?.message).toContain("apiKey");
   });
 
+  it("accepts voyage without explicit model (uses provider default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "voyage",
+            remote: {
+              apiKey: "test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects mistral provider without apiKey", () => {
     const result = validateConfigObject({
       agents: {
@@ -188,5 +215,38 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(false);
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.message).toContain("apiKey");
+  });
+
+  it("accepts mistral without explicit model (uses provider default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "mistral",
+            remote: {
+              apiKey: "test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("skips validation when memory backend is qmd", () => {
+    const result = validateConfigObject({
+      memory: {
+        backend: "qmd",
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            // No apiKey - should be OK because qmd handles embeddings internally
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
   });
 });
