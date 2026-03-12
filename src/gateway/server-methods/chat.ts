@@ -195,6 +195,7 @@ function resolveChatSendOriginatingRoute(params: {
     (isFromGatewayCliClient || !hasClientMetadata);
   const canInheritWebchatTelegramRoute = Boolean(
     isFromWebchatClient &&
+    sessionChannelHint === "telegram" &&
     routeChannelCandidate === "telegram" &&
     !isChannelAgnosticSessionScope &&
     (isChannelScopedSession || hasLegacyChannelPeerShape),
