@@ -94,4 +94,18 @@ describe("resolveAutoImageModel", () => {
 
     expect(resolved).toEqual({ provider: "minimax-portal", model: "MiniMax-M2.5" });
   });
+
+  it("keeps requested model when a text-only provider has no default image fallback", async () => {
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "moonshot", id: "kimi-k2", name: "Kimi K2", input: ["text"] },
+    ]);
+
+    const { resolveAutoImageModel } = await import("./runner.js");
+    const resolved = await resolveAutoImageModel({
+      cfg: {} as never,
+      activeModel: { provider: "moonshot", model: "kimi-k2" },
+    });
+
+    expect(resolved).toEqual({ provider: "moonshot", model: "kimi-k2" });
+  });
 });

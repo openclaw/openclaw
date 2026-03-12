@@ -351,7 +351,7 @@ async function resolveImageModelForCapability(params: {
   const entry = findModelInCatalog(catalog, params.providerId, requested);
   const hasDeclaredInputMetadata = Array.isArray((entry as { input?: unknown } | undefined)?.input);
   if (entry && hasDeclaredInputMetadata && !modelSupportsVision(entry)) {
-    return DEFAULT_IMAGE_MODELS[params.providerId];
+    return DEFAULT_IMAGE_MODELS[params.providerId] ?? requested;
   }
   return requested;
 }
