@@ -179,18 +179,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   if (finalFetch) {
     const baseFetch = finalFetch;
     finalFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      return Promise.resolve(baseFetch(input, init)).catch((err: unknown) => {
-        try {
-          tagTelegramNetworkError(err, {
-            method: extractTelegramApiMethod(input),
-            url: readRequestUrl(input),
-          });
-        } catch {
-          // Tagging is best-effort; preserve the original fetch failure if the
-          // error object cannot accept extra metadata.
-        }
-        throw err;
-      });
+      return Promise.resolve((baseFetch as unknown as typeof fetch)(input, init)).catch(
+        (err: unknown) => {
+          try {
+            tagTelegramNetworkError(err, {
+              method: extractTelegramApiMethod(input),
+              url: readRequestUrl(input),
+            });
+          } catch {
+            // Tagging is best-effort; preserve the original fetch failure if the
+            // error object cannot accept extra metadata.
+          }
+          throw err;
+        },
+      );
     }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
   }
 
