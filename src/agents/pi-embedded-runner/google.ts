@@ -24,7 +24,7 @@ import {
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { isAnthropicApi, resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -166,7 +166,7 @@ function shouldDropSyntheticAssistantTranscriptMessages(params: {
   modelApi?: string | null;
   provider?: string;
 }): boolean {
-  return params.provider === "anthropic" || params.modelApi === "anthropic-messages";
+  return isAnthropicApi(params.modelApi, params.provider);
 }
 
 function parseMessageTimestamp(value: unknown): number | null {

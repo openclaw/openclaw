@@ -8,6 +8,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validateAnthropicTurns } from "./pi-embedded-helpers.js";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
+import { isAnthropicApi } from "./transcript-policy.js";
 
 const ZERO_USAGE: Usage = {
   input: 0,
@@ -132,10 +133,9 @@ async function getReplayableMessagesForTarget(
     sessionManager: reopened,
     sessionId: "test-session",
   });
-  const validated =
-    target.provider === "anthropic" || target.modelApi === "anthropic-messages"
-      ? validateAnthropicTurns(replayable)
-      : replayable;
+  const validated = isAnthropicApi(target.modelApi, target.provider)
+    ? validateAnthropicTurns(replayable)
+    : replayable;
   return validated.filter(isLlmMessage);
 }
 
@@ -266,7 +266,7 @@ describe("anthropic thinking replay", () => {
     });
   });
 
-  it("drops delivery-mirror assistant entries for anthropic-compatible replay providers", async () => {
+  it("drops delivery-mirror assistant entries for bedrock anthropic-compatible replay", async () => {
     const sessionFile = path.join(tempRoot, `session-${Date.now()}-bedrock.jsonl`);
 
     const sessionManager = SessionManager.open(sessionFile);
@@ -277,7 +277,7 @@ describe("anthropic thinking replay", () => {
     });
     sessionManager.appendMessage({
       role: "assistant",
-      api: "anthropic-messages",
+      api: "bedrock-converse-stream",
       provider: "bedrock",
       model: "claude-sonnet-4-6",
       usage: ZERO_USAGE,
@@ -302,7 +302,7 @@ describe("anthropic thinking replay", () => {
     });
 
     const replayable = await getReplayableMessagesForTarget(sessionFile, {
-      modelApi: "anthropic-messages",
+      modelApi: "bedrock-converse-stream",
       provider: "bedrock",
       modelId: "claude-sonnet-4-6",
     });
