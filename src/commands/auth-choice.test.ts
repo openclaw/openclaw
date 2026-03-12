@@ -5,6 +5,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
+import * as onboardAuth from "./onboard-auth.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -22,17 +23,26 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
+type LoginOpenAICodexOAuth = typeof import("./openai-codex-oauth.js").loginOpenAICodexOAuth;
 type PromptAndConfigureOllama = typeof import("./ollama-setup.js").promptAndConfigureOllama;
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
-const loginOpenAICodexOAuth = vi.hoisted(() =>
-  vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
-);
+const loginOpenAICodexOAuth = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>(async () => null));
 vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
+}));
+const loginOpenAICodexDeviceCode = vi.hoisted(() =>
+  vi.fn<() => Promise<OAuthCredentials>>(async () => ({
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 60_000,
+  })),
+);
+vi.mock("./openai-codex-device-code.js", () => ({
+  loginOpenAICodexDeviceCode,
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
@@ -147,6 +157,12 @@ describe("applyAuthChoice", () => {
       config: cfg,
       defaultModelId: "qwen3.5:35b",
     }));
+    loginOpenAICodexDeviceCode.mockReset();
+    loginOpenAICodexDeviceCode.mockResolvedValue({
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+    });
     await lifecycle.cleanup();
     activeStateDir = null;
   });
@@ -154,10 +170,12 @@ describe("applyAuthChoice", () => {
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();
 
-    loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
-
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
+    loginOpenAICodexOAuth.mockImplementationOnce(async ({ runtime: loginRuntime }) => {
+      loginRuntime.error("oauth failed");
+      throw new Error("oauth failed");
+    });
 
     await expect(
       applyAuthChoice({
@@ -168,6 +186,41 @@ describe("applyAuthChoice", () => {
         setDefaultModel: false,
       }),
     ).resolves.toEqual({ config: {} });
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith("oauth failed");
+  });
+
+  it("rethrows openai-codex credential persistence failures", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const writeOAuthCredentialsSpy = vi
+      .spyOn(onboardAuth, "writeOAuthCredentials")
+      .mockRejectedValueOnce(new Error("disk full"));
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    try {
+      await expect(
+        applyAuthChoice({
+          authChoice: "openai-codex",
+          config: {},
+          prompter,
+          runtime,
+          setDefaultModel: false,
+        }),
+      ).rejects.toThrow("disk full");
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      writeOAuthCredentialsSpy.mockRestore();
+    }
   });
 
   it("stores openai-codex OAuth with email profile id", async () => {
@@ -202,6 +255,41 @@ describe("applyAuthChoice", () => {
       refresh: "refresh-token",
       access: "access-token",
       email: "user@example.com",
+    });
+  });
+
+  it("stores openai-device-code credentials into the openai-codex auth store", async () => {
+    await setupTempState();
+
+    loginOpenAICodexDeviceCode.mockResolvedValueOnce({
+      email: "device@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-device-code",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(loginOpenAICodexDeviceCode).toHaveBeenCalledOnce();
+    expect(result.config.auth?.profiles?.["openai-codex:device@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(await readAuthProfile("openai-codex:device@example.com")).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      refresh: "refresh-token",
+      access: "access-token",
+      email: "device@example.com",
     });
   });
 

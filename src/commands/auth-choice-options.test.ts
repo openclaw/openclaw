@@ -83,6 +83,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
   });
 
+  it("shows OpenAI device code in the OpenAI group", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openAiGroup = groups.find((group) => group.value === "openai");
+
+    expect(openAiGroup?.options.some((opt) => opt.value === "openai-device-code")).toBe(true);
+  });
+
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {
     const { groups } = buildAuthChoiceGroups({
       store: EMPTY_STORE,

@@ -12,6 +12,7 @@ export type AuthChoice =
   | "vllm"
   | "ollama"
   | "openai-codex"
+  | "openai-device-code"
   | "openai-api-key"
   | "openrouter-api-key"
   | "kilocode-api-key"

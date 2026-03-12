@@ -1,6 +1,8 @@
 import path from "node:path";
 import process from "node:process";
 
+export const WINDOWS_CMD_SHIM_COMMANDS = ["npm", "npx", "pnpm", "yarn", "codex"] as const;
+
 export function resolveWindowsCommandShim(params: {
   command: string;
   cmdCommands: readonly string[];

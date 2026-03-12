@@ -1,3 +1,4 @@
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -9,6 +10,7 @@ import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { applyAuthProfileConfig, setOpenaiApiKey, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
+import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -73,27 +75,16 @@ export async function applyAuthChoiceOpenAI(
     return await applyOpenAiDefaultModelChoice();
   }
 
-  if (params.authChoice === "openai-codex") {
+  if (params.authChoice === "openai-codex" || params.authChoice === "openai-device-code") {
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
+    let creds: OAuthCredentials | null = null;
 
-    let creds;
-    try {
-      creds = await loginOpenAICodexOAuth({
-        prompter: params.prompter,
-        runtime: params.runtime,
-        isRemote: isRemoteEnvironment(),
-        openUrl: async (url) => {
-          await openUrl(url);
-        },
-        localBrowserMessage: "Complete sign-in in browser…",
-      });
-    } catch {
-      // The helper already surfaces the error to the user.
-      // Keep onboarding flow alive and return unchanged config.
-      return { config: nextConfig, agentModelOverride };
-    }
-    if (creds) {
+    const persistCodexCredentials = async (creds: OAuthCredentials | null) => {
+      if (!creds) {
+        return;
+      }
+
       const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
         syncSiblingAgents: true,
       });
@@ -115,7 +106,36 @@ export async function applyAuthChoiceOpenAI(
         agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
         await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
       }
+    };
+
+    try {
+      if (params.authChoice === "openai-device-code") {
+        await params.prompter.note(
+          [
+            "Starting Codex CLI login.",
+            "Follow the device-code instructions printed in this terminal.",
+          ].join("\n"),
+          "OpenAI device code",
+        );
+        creds = await loginOpenAICodexDeviceCode();
+      } else {
+        creds = await loginOpenAICodexOAuth({
+          prompter: params.prompter,
+          runtime: params.runtime,
+          isRemote: isRemoteEnvironment(),
+          openUrl: async (url) => {
+            await openUrl(url);
+          },
+          localBrowserMessage: "Complete sign-in in browser…",
+        });
+      }
+    } catch (error) {
+      if (params.authChoice === "openai-device-code") {
+        params.runtime.error(error instanceof Error ? error.message : String(error));
+      }
+      return { config: nextConfig, agentModelOverride };
     }
+    await persistCodexCredentials(creds);
     return { config: nextConfig, agentModelOverride };
   }
 

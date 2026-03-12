@@ -7,7 +7,7 @@ import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import { resolveWindowsCommandShim } from "./windows-command.js";
+import { resolveWindowsCommandShim, WINDOWS_CMD_SHIM_COMMANDS } from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,13 +73,14 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 
 /**
  * Resolves a command for Windows compatibility.
- * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
- * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
+ * On Windows, npm-style shims (like pnpm, yarn, codex) are resolved to .cmd;
+ * npm/npx are handled by resolveNpmArgvForWindows to avoid spawn EINVAL
+ * (no direct .cmd spawn).
  */
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["pnpm", "yarn"],
+    cmdCommands: WINDOWS_CMD_SHIM_COMMANDS,
   });
 }
 
@@ -171,6 +172,8 @@ export type CommandOptions = {
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
+  mirrorStdout?: boolean;
+  mirrorStderr?: boolean;
 };
 
 export function resolveCommandEnv(params: {
@@ -215,7 +218,7 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { timeoutMs, cwd, input, env, noOutputTimeoutMs, mirrorStdout, mirrorStderr } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
@@ -291,10 +294,16 @@ export async function runCommandWithTimeout(
 
     child.stdout?.on("data", (d) => {
       stdout += d.toString();
+      if (mirrorStdout) {
+        process.stdout.write(d);
+      }
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
       stderr += d.toString();
+      if (mirrorStderr) {
+        process.stderr.write(d);
+      }
       armNoOutputTimer();
     });
     child.on("error", (err) => {

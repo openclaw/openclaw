@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
   loginOpenAICodexOAuth: vi.fn(),
+  loginOpenAICodexDeviceCode: vi.fn(),
   writeOAuthCredentials: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
   updateConfig: vi.fn(),
@@ -55,6 +56,10 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
 
 vi.mock("../openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth: mocks.loginOpenAICodexOAuth,
+}));
+
+vi.mock("../openai-codex-device-code.js", () => ({
+  loginOpenAICodexDeviceCode: mocks.loginOpenAICodexDeviceCode,
 }));
 
 vi.mock("../onboard-auth.js", async (importActual) => {
@@ -153,6 +158,14 @@ describe("modelsAuthLoginCommand", () => {
       expires: Date.now() + 60_000,
       email: "user@example.com",
     });
+    mocks.loginOpenAICodexDeviceCode.mockResolvedValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "device@example.com",
+    });
     mocks.writeOAuthCredentials.mockResolvedValue("openai-codex:user@example.com");
     mocks.resolvePluginProviders.mockReturnValue([]);
   });
@@ -183,7 +196,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.3-codex (use --set-default to apply)",
+      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
     );
   });
 
@@ -193,9 +206,47 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
 
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
-      primary: "openai-codex/gpt-5.3-codex",
+      primary: "openai-codex/gpt-5.4",
     });
-    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.3-codex");
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.4");
+  });
+
+  it("supports built-in openai-codex device-code login", async () => {
+    const runtime = createRuntime();
+    mocks.writeOAuthCredentials.mockResolvedValueOnce("openai-codex:device@example.com");
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime);
+
+    expect(mocks.loginOpenAICodexDeviceCode).toHaveBeenCalledOnce();
+    expect(mocks.loginOpenAICodexOAuth).not.toHaveBeenCalled();
+    expect(mocks.writeOAuthCredentials).toHaveBeenCalledWith(
+      "openai-codex",
+      expect.objectContaining({ email: "device@example.com" }),
+      "/tmp/openclaw/agents/main",
+      { syncSiblingAgents: true },
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:device@example.com (openai-codex/oauth)",
+    );
+  });
+
+  it("uses a device-code-specific missing credentials error", async () => {
+    const runtime = createRuntime();
+    mocks.loginOpenAICodexDeviceCode.mockResolvedValueOnce(null);
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai-codex", method: "device-code" }, runtime),
+    ).rejects.toThrow("Codex CLI device-code login did not return credentials.");
+  });
+
+  it("rejects unknown built-in openai-codex auth methods", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai-codex", method: "sso" }, runtime),
+    ).rejects.toThrow(
+      "Unknown auth method for openai-codex. Use --method oauth or --method device-code.",
+    );
   });
 
   it("keeps existing plugin error behavior for non built-in providers", async () => {

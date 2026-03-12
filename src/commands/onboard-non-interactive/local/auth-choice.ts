@@ -142,11 +142,22 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
+  if (authChoice === "claude-cli") {
     runtime.error(
       [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
+        'Auth choice "claude-cli" is deprecated.',
+        'Use "--auth-choice token" (Anthropic setup-token).',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  if (authChoice === "codex-cli") {
+    runtime.error(
+      [
+        'Auth choice "codex-cli" is deprecated.',
+        'Run "openclaw onboard" and choose OpenAI device code (Codex CLI) or OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -177,6 +188,17 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "ollama") {
     return configureOllamaNonInteractive({ nextConfig, opts, runtime });
+  }
+
+  if (authChoice === "openai-device-code") {
+    runtime.error(
+      [
+        'Auth choice "openai-device-code" requires interactive mode.',
+        'Run "openclaw onboard" and select OpenAI device code (Codex CLI).',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
   }
 
   if (authChoice === "apiKey") {

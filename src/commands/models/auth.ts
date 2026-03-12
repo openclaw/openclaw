@@ -27,6 +27,7 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
+import { loginOpenAICodexDeviceCode } from "../openai-codex-device-code.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -265,6 +266,23 @@ type LoginOptions = {
   setDefault?: boolean;
 };
 
+type BuiltInOpenAICodexMethod = "oauth" | "device-code";
+
+function resolveBuiltInOpenAICodexMethodOrThrow(rawMethod?: string): BuiltInOpenAICodexMethod {
+  const normalized = String(rawMethod ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized || normalized === "oauth") {
+    return "oauth";
+  }
+  if (normalized === "device-code" || normalized === "device_code" || normalized === "device") {
+    return "device-code";
+  }
+  throw new Error(
+    "Unknown auth method for openai-codex. Use --method oauth or --method device-code.",
+  );
+}
+
 export function resolveRequestedLoginProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -303,17 +321,34 @@ async function runBuiltInOpenAICodexLogin(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   agentDir: string;
 }) {
-  const creds = await loginOpenAICodexOAuth({
-    prompter: params.prompter,
-    runtime: params.runtime,
-    isRemote: isRemoteEnvironment(),
-    openUrl: async (url) => {
-      await openUrl(url);
-    },
-    localBrowserMessage: "Complete sign-in in browser…",
-  });
+  const method = resolveBuiltInOpenAICodexMethodOrThrow(params.opts.method);
+  const creds =
+    method === "device-code"
+      ? await (async () => {
+          await params.prompter.note(
+            [
+              "Starting Codex CLI login.",
+              "Follow the device-code instructions printed in this terminal.",
+            ].join("\n"),
+            "OpenAI device code",
+          );
+          return await loginOpenAICodexDeviceCode();
+        })()
+      : await loginOpenAICodexOAuth({
+          prompter: params.prompter,
+          runtime: params.runtime,
+          isRemote: isRemoteEnvironment(),
+          openUrl: async (url) => {
+            await openUrl(url);
+          },
+          localBrowserMessage: "Complete sign-in in browser…",
+        });
   if (!creds) {
-    throw new Error("OpenAI Codex OAuth did not return credentials.");
+    throw new Error(
+      method === "device-code"
+        ? "Codex CLI device-code login did not return credentials."
+        : "OpenAI Codex OAuth did not return credentials.",
+    );
   }
 
   const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {

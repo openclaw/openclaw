@@ -52,6 +52,16 @@ openclaw onboard --auth-choice openai-codex
 openclaw models auth login --provider openai-codex
 ```
 
+### CLI setup (Codex device code)
+
+```bash
+# Run Codex device login in the wizard
+openclaw onboard --auth-choice openai-device-code
+
+# Or import credentials after Codex CLI login
+openclaw models auth login --provider openai-codex --method device-code
+```
+
 ### Config snippet (Codex subscription)
 
 ```json5

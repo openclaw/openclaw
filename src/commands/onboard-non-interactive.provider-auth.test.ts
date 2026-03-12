@@ -485,6 +485,20 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("rejects OpenAI device code auth choice in non-interactive mode", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-openai-device-code-non-interactive-",
+      async ({ runtime }) => {
+        await expect(
+          runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "openai-device-code",
+            skipSkills: true,
+          }),
+        ).rejects.toThrow('Run "openclaw onboard" and select OpenAI device code (Codex CLI).');
+      },
+    );
+  });
+
   it("stores LiteLLM API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

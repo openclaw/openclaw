@@ -16,7 +16,7 @@ export function normalizeLegacyOnboardAuthChoice(
     return "setup-token";
   }
   if (authChoice === "codex-cli") {
-    return "openai-codex";
+    return "openai-device-code";
   }
   return authChoice;
 }
