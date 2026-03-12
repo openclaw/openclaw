@@ -4,6 +4,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 const {
   hookRunner,
   ensureRuntimePluginsLoaded,
+  resolveContextEngineMock,
   resolveModelMock,
   sessionCompactImpl,
   triggerInternalHook,
@@ -12,50 +13,58 @@ const {
   getMemorySearchManagerMock,
   resolveMemorySearchConfigMock,
   resolveSessionAgentIdMock,
-} = vi.hoisted(() => ({
-  hookRunner: {
-    hasHooks: vi.fn(),
-    runBeforeCompaction: vi.fn(),
-    runAfterCompaction: vi.fn(),
-  },
-  ensureRuntimePluginsLoaded: vi.fn(),
-  resolveModelMock: vi.fn(() => ({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
-    error: null,
-    authStorage: { setRuntimeApiKey: vi.fn() },
-    modelRegistry: {},
-  })),
-  sessionCompactImpl: vi.fn(async () => ({
-    summary: "summary",
-    firstKeptEntryId: "entry-1",
-    tokensBefore: 120,
-    details: { ok: true },
-  })),
-  triggerInternalHook: vi.fn(),
-  sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
-  contextEngineCompactMock: vi.fn(async () => ({
+} = vi.hoisted(() => {
+  const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
     compacted: true as boolean,
     reason: undefined as string | undefined,
     result: { summary: "engine-summary", tokensAfter: 50 } as
       | { summary: string; tokensAfter: number }
       | undefined,
-  })),
-  getMemorySearchManagerMock: vi.fn(async () => ({
-    manager: {
-      sync: vi.fn(async () => {}),
+  }));
+
+  return {
+    hookRunner: {
+      hasHooks: vi.fn(),
+      runBeforeCompaction: vi.fn(),
+      runAfterCompaction: vi.fn(),
     },
-  })),
-  resolveMemorySearchConfigMock: vi.fn(() => ({
-    sources: ["sessions"],
-    sync: {
-      sessions: {
-        postCompactionForce: true,
+    ensureRuntimePluginsLoaded: vi.fn(),
+    resolveContextEngineMock: vi.fn(async () => ({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+    })),
+    resolveModelMock: vi.fn(() => ({
+      model: { provider: "openai", api: "responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    })),
+    sessionCompactImpl: vi.fn(async () => ({
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      details: { ok: true },
+    })),
+    triggerInternalHook: vi.fn(),
+    sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
+    contextEngineCompactMock,
+    getMemorySearchManagerMock: vi.fn(async () => ({
+      manager: {
+        sync: vi.fn(async () => {}),
       },
-    },
-  })),
-  resolveSessionAgentIdMock: vi.fn(() => "main"),
-}));
+    })),
+    resolveMemorySearchConfigMock: vi.fn(() => ({
+      sources: ["sessions"],
+      sync: {
+        sessions: {
+          postCompactionForce: true,
+        },
+      },
+    })),
+    resolveSessionAgentIdMock: vi.fn(() => "main"),
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
@@ -152,10 +161,7 @@ vi.mock("../session-write-lock.js", () => ({
 
 vi.mock("../../context-engine/index.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
-  resolveContextEngine: vi.fn(async () => ({
-    info: { ownsCompaction: true },
-    compact: contextEngineCompactMock,
-  })),
+  resolveContextEngine: resolveContextEngineMock,
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -653,6 +659,11 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     hookRunner.hasHooks.mockReset();
     hookRunner.runBeforeCompaction.mockReset();
     hookRunner.runAfterCompaction.mockReset();
+    resolveContextEngineMock.mockReset();
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true },
+      compact: contextEngineCompactMock,
+    });
     contextEngineCompactMock.mockReset();
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
@@ -768,6 +779,43 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate transcript updates or sync in the wrapper when the engine delegates compaction", async () => {
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+
+    try {
+      const result = await compactEmbeddedPiSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        customInstructions: "focus on decisions",
+        enqueue: (task) => task(),
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                postIndexSync: "await",
+              },
+            },
+          },
+        } as never,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(listener).not.toHaveBeenCalled();
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
   });
 
   it("catches and logs hook exceptions without aborting compaction", async () => {
