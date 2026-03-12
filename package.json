@@ -425,7 +425,7 @@
     "nice-grpc-client-middleware-retry": "^3.1.13"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.16.0"
   },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
