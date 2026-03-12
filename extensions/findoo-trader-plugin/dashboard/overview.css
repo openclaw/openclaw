@@ -141,7 +141,9 @@
   border-radius: var(--r);
   text-decoration: none;
   color: inherit;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 .getting-started__card:hover {
   border-color: var(--accent);
@@ -235,7 +237,10 @@
   border: 1px solid var(--border);
   border-radius: var(--r);
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.1s;
   color: inherit;
   font-family: inherit;
 }
@@ -345,7 +350,9 @@
   text-decoration: none;
   padding: 6px 8px;
   border-radius: var(--r-sm);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 .quick-link:hover {
   background: var(--bg-card);
@@ -363,7 +370,11 @@
    ════════════════════════════════════════════════════════════════ */
 
 .daily-brief-card {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.06)) !important;
+  background: linear-gradient(
+    135deg,
+    rgba(102, 126, 234, 0.08),
+    rgba(118, 75, 162, 0.06)
+  ) !important;
   border-color: rgba(102, 126, 234, 0.2) !important;
 }
 .daily-brief-card__title {

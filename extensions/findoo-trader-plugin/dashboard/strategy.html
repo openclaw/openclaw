@@ -21,7 +21,8 @@
   </head>
   <body>
     <script>
-      if (new URLSearchParams(location.search).get("embedded") === "1") document.body.classList.add("embedded");
+      if (new URLSearchParams(location.search).get("embedded") === "1")
+        document.body.classList.add("embedded");
     </script>
     <script>
       var pageData = /*__PAGE_DATA__*/ {};
@@ -41,7 +42,9 @@
       <div class="topbar__sep"></div>
       <nav class="topbar__nav">
         <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/overview">Overview</a>
-        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/strategy">Strategy</a>
+        <a class="topbar__nav-item active" href="/plugins/findoo-trader/dashboard/strategy"
+          >Strategy</a
+        >
         <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/trader">Trader</a>
         <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/flow">Flow</a>
         <a class="topbar__nav-item" href="/plugins/findoo-trader/dashboard/setting">Setting</a>
@@ -101,7 +104,7 @@
               <button class="chip" data-market="a-share">A-Share</button>
             </div>
           </div>
-          <div class="filter-group" style="margin-top:6px">
+          <div class="filter-group" style="margin-top: 6px">
             <div class="filter-group__label">Filter by Status</div>
             <div class="chip-row" id="statusChips">
               <button class="chip active" data-status="all">All</button>
@@ -115,7 +118,13 @@
 
         <!-- Pending Actions -->
         <div class="col-l__section fade-up d2">
-          <div class="pending-card" id="pendingCard" onclick="document.getElementById('approvalSection').scrollIntoView({behavior:'smooth'})">
+          <div
+            class="pending-card"
+            id="pendingCard"
+            onclick="
+              document.getElementById('approvalSection').scrollIntoView({ behavior: 'smooth' })
+            "
+          >
             <div class="pending-card__header">
               <span class="pending-card__pulse" id="pendingPulse"></span>
               Requires Your Attention
@@ -151,7 +160,9 @@
         <!-- Quick Actions -->
         <div class="col-l__section fade-up d3">
           <div class="qa-grid">
-            <button class="qa-btn qa-btn--primary" onclick="ST.openSlide('create')">New Strategy</button>
+            <button class="qa-btn qa-btn--primary" onclick="ST.openSlide('create')">
+              New Strategy
+            </button>
             <button class="qa-btn" onclick="ST.triggerEvolution()">Evolve</button>
             <button class="qa-btn" onclick="ST.runAllBacktests()">Backtest All</button>
           </div>
@@ -164,28 +175,56 @@
         <div class="panel-card fade-up d1" id="kanbanSection">
           <div class="panel-card__head">
             <div class="panel-card__title">Strategy Pipeline</div>
-            <span class="num" style="font-size:9px;color:var(--text-dim)" id="kanbanCount"></span>
+            <span
+              class="num"
+              style="font-size: 9px; color: var(--text-dim)"
+              id="kanbanCount"
+            ></span>
           </div>
           <div class="kanban pipeline-vertical" id="kanbanGrid">
             <div class="kanban-col" id="kanbanL0">
-              <div class="kanban-col-header"><span class="kanban-col-header__dot kanban-col-header__dot--l0"></span>L0 Incubate<span class="kanban-col-header__count" id="kbL0Count">0</span></div>
+              <div class="kanban-col-header">
+                <span class="kanban-col-header__dot kanban-col-header__dot--l0"></span>L0
+                Incubate<span class="kanban-col-header__count" id="kbL0Count">0</span>
+              </div>
             </div>
             <div class="kanban-col" id="kanbanL1">
-              <div class="kanban-col-header"><span class="kanban-col-header__dot kanban-col-header__dot--l1"></span>L1 Backtest<span class="kanban-col-header__count" id="kbL1Count">0</span></div>
+              <div class="kanban-col-header">
+                <span class="kanban-col-header__dot kanban-col-header__dot--l1"></span>L1
+                Backtest<span class="kanban-col-header__count" id="kbL1Count">0</span>
+              </div>
             </div>
             <div class="kanban-col" id="kanbanL2">
-              <div class="kanban-col-header"><span class="kanban-col-header__dot kanban-col-header__dot--l2"></span>L2 Paper<span class="kanban-col-header__count" id="kbL2Count">0</span></div>
+              <div class="kanban-col-header">
+                <span class="kanban-col-header__dot kanban-col-header__dot--l2"></span>L2 Paper<span
+                  class="kanban-col-header__count"
+                  id="kbL2Count"
+                  >0</span
+                >
+              </div>
             </div>
             <div class="kanban-col" id="kanbanL3">
-              <div class="kanban-col-header"><span class="kanban-col-header__dot kanban-col-header__dot--l3"></span>L3 Live<span class="kanban-col-header__count" id="kbL3Count">0</span></div>
+              <div class="kanban-col-header">
+                <span class="kanban-col-header__dot kanban-col-header__dot--l3"></span>L3 Live<span
+                  class="kanban-col-header__count"
+                  id="kbL3Count"
+                  >0</span
+                >
+              </div>
             </div>
           </div>
           <!-- Hidden pipeline counts for test compatibility -->
-          <div style="display:none"><span id="pipeL0">0</span><span id="pipeL1">0</span><span id="pipeL2">0</span><span id="pipeL3">0</span></div>
+          <div style="display: none">
+            <span id="pipeL0">0</span><span id="pipeL1">0</span><span id="pipeL2">0</span
+            ><span id="pipeL3">0</span>
+          </div>
         </div>
 
         <!-- Strategy Raceboard -->
-        <div class="panel-card fade-up d2" style="flex: 2; display: flex; flex-direction: column; min-height: 0">
+        <div
+          class="panel-card fade-up d2"
+          style="flex: 2; display: flex; flex-direction: column; min-height: 0"
+        >
           <div class="panel-card__head">
             <div class="panel-card__title">Strategy Raceboard</div>
             <div style="display: flex; align-items: center; gap: 8px">
@@ -231,8 +270,12 @@
               <tbody id="lbBody"></tbody>
             </table>
             <div class="rb-footer" id="rbFooter">
-              <button class="rb-footer-btn rb-footer-btn--primary" onclick="ST.openSlide('create')">Add Strategy</button>
-              <button class="rb-footer-btn" onclick="ST.runAllBacktests()">Run All Backtests</button>
+              <button class="rb-footer-btn rb-footer-btn--primary" onclick="ST.openSlide('create')">
+                Add Strategy
+              </button>
+              <button class="rb-footer-btn" onclick="ST.runAllBacktests()">
+                Run All Backtests
+              </button>
             </div>
           </div>
         </div>
@@ -242,7 +285,10 @@
           <div class="panel-card__head">
             <div class="panel-card__title">Fitness Decay Monitor</div>
           </div>
-          <div id="decayList" style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 0"></div>
+          <div
+            id="decayList"
+            style="display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0"
+          ></div>
         </div>
 
         <!-- Approval Queue -->
@@ -257,16 +303,26 @@
         </div>
 
         <!-- Backtest Results -->
-        <div class="panel-card fade-up d4" style="flex: 1; display: flex; flex-direction: column; min-height: 0">
+        <div
+          class="panel-card fade-up d4"
+          style="flex: 1; display: flex; flex-direction: column; min-height: 0"
+        >
           <div class="panel-card__head">
             <div class="panel-card__title">Backtest Results</div>
-            <button class="bt-compare-btn" id="btCompareBtn" style="display:none" onclick="ST.openCompare()">Compare Selected (<span id="btCompareCount">0</span>)</button>
+            <button
+              class="bt-compare-btn"
+              id="btCompareBtn"
+              style="display: none"
+              onclick="ST.openCompare()"
+            >
+              Compare Selected (<span id="btCompareCount">0</span>)
+            </button>
           </div>
           <div style="flex: 1; overflow-y: auto; margin: 0 -12px; padding: 0 12px">
             <table class="fin-table">
               <thead>
                 <tr>
-                  <th style="width:28px"></th>
+                  <th style="width: 28px"></th>
                   <th>Strategy</th>
                   <th style="text-align: right">Return</th>
                   <th style="text-align: right">Sharpe</th>
@@ -306,9 +362,18 @@
       </div>
       <div class="botbar__msg" id="botMsg">Loading Strategy...</div>
       <div class="botbar__stats" id="botStats">
-        <span><span class="botbar__stat-label">Strategies: </span><span class="botbar__stat-val" id="botStratCount">--</span></span>
-        <span><span class="botbar__stat-label">Paper PnL: </span><span class="botbar__stat-val" id="botPaperPnl">$--</span></span>
-        <span><span class="botbar__stat-label">Live PnL: </span><span class="botbar__stat-val" id="botLivePnl">$--</span></span>
+        <span
+          ><span class="botbar__stat-label">Strategies: </span
+          ><span class="botbar__stat-val" id="botStratCount">--</span></span
+        >
+        <span
+          ><span class="botbar__stat-label">Paper PnL: </span
+          ><span class="botbar__stat-val" id="botPaperPnl">$--</span></span
+        >
+        <span
+          ><span class="botbar__stat-label">Live PnL: </span
+          ><span class="botbar__stat-val" id="botLivePnl">$--</span></span
+        >
       </div>
       <div class="botbar__sse" id="botSse"></div>
       <span class="botbar__ver">v0.4.0</span>
@@ -344,7 +409,13 @@
           <button class="slideover__close" onclick="ST.closeSlide('create')">&times;</button>
         </div>
         <div class="slideover__body">
-          <form id="createForm" onsubmit="event.preventDefault(); ST.submitCreate();">
+          <form
+            id="createForm"
+            onsubmit="
+              event.preventDefault();
+              ST.submitCreate();
+            "
+          >
             <div class="fg">
               <label class="fg__label">Strategy Name</label>
               <input name="stratName" placeholder="momentum-btc-4h" style="width: 100%" required />
@@ -373,7 +444,12 @@
             </div>
             <div class="fg">
               <label class="fg__label">Description</label>
-              <textarea name="stratDescription" rows="3" placeholder="Strategy description..." style="width: 100%; resize: vertical"></textarea>
+              <textarea
+                name="stratDescription"
+                rows="3"
+                placeholder="Strategy description..."
+                style="width: 100%; resize: vertical"
+              ></textarea>
             </div>
             <button type="submit" class="submit-btn">Create Strategy</button>
           </form>
@@ -395,55 +471,139 @@
         </div>
         <div class="modal-box__actions">
           <button class="modal-btn modal-btn--cancel" onclick="ST.closeEstop()">Cancel</button>
-          <button class="modal-btn modal-btn--danger" onclick="ST.confirmEstop()">CONFIRM STOP</button>
+          <button class="modal-btn modal-btn--danger" onclick="ST.confirmEstop()">
+            CONFIRM STOP
+          </button>
         </div>
       </div>
     </div>
 
     <!-- Sort indicator + kanban meta styles -->
     <style>
-      th.sort-asc::after { content: " \25B2"; font-size: 8px; opacity: 0.7; }
-      th.sort-desc::after { content: " \25BC"; font-size: 8px; opacity: 0.7; }
-      .kc-meta { display: flex; align-items: center; gap: 4px; margin: 2px 0; }
-      .kc-tf { font-size: 9px; }
+      th.sort-asc::after {
+        content: " \25B2";
+        font-size: 8px;
+        opacity: 0.7;
+      }
+      th.sort-desc::after {
+        content: " \25BC";
+        font-size: 8px;
+        opacity: 0.7;
+      }
+      .kc-meta {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        margin: 2px 0;
+      }
+      .kc-tf {
+        font-size: 9px;
+      }
 
       /* ── Backtest Compare ── */
       .bt-compare-btn {
-        background: var(--accent, #6c5ce7); color: #fff; border: none; border-radius: 4px;
-        padding: 4px 10px; font-size: 10px; font-weight: 600; cursor: pointer;
-        font-family: inherit; transition: opacity .15s;
+        background: var(--accent, #6c5ce7);
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+        transition: opacity 0.15s;
       }
-      .bt-compare-btn:hover { opacity: .85; }
-      .bt-cb { width: 14px; height: 14px; accent-color: var(--accent, #6c5ce7); cursor: pointer; margin: 0; vertical-align: middle; }
-      .bt-cb:disabled { opacity: .35; cursor: not-allowed; }
+      .bt-compare-btn:hover {
+        opacity: 0.85;
+      }
+      .bt-cb {
+        width: 14px;
+        height: 14px;
+        accent-color: var(--accent, #6c5ce7);
+        cursor: pointer;
+        margin: 0;
+        vertical-align: middle;
+      }
+      .bt-cb:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
 
       .bt-compare-panel {
-        background: var(--card, #1a1a2e); border: 1px solid var(--border, #2a2a4a);
-        border-radius: 10px; width: 92vw; max-width: 960px; max-height: 82vh;
-        display: flex; flex-direction: column; overflow: hidden;
-        box-shadow: 0 8px 32px rgba(0,0,0,.5);
+        background: var(--card, #1a1a2e);
+        border: 1px solid var(--border, #2a2a4a);
+        border-radius: 10px;
+        width: 92vw;
+        max-width: 960px;
+        max-height: 82vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
       }
       .bt-compare-panel__head {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 14px 18px; border-bottom: 1px solid var(--border, #2a2a4a);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border, #2a2a4a);
       }
-      .bt-compare-panel__title { font-weight: 600; font-size: 13px; color: var(--text-hi, #e0e0e0); }
+      .bt-compare-panel__title {
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--text-hi, #e0e0e0);
+      }
       .bt-compare-panel__body {
-        display: flex; gap: 16px; padding: 16px 18px; overflow-y: auto; flex: 1; min-height: 0;
+        display: flex;
+        gap: 16px;
+        padding: 16px 18px;
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
       }
-      .bt-compare-panel__metrics { flex: 1; min-width: 0; overflow-x: auto; }
+      .bt-compare-panel__metrics {
+        flex: 1;
+        min-width: 0;
+        overflow-x: auto;
+      }
       .bt-compare-panel__metrics .fin-table th,
-      .bt-compare-panel__metrics .fin-table td { font-size: 10px; padding: 5px 8px; white-space: nowrap; }
-      .bt-compare-panel__chart { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-      .bt-compare-panel__chart-label {
-        font-size: 10px; font-weight: 600; color: var(--text-dim, #888); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px;
+      .bt-compare-panel__metrics .fin-table td {
+        font-size: 10px;
+        padding: 5px 8px;
+        white-space: nowrap;
       }
-      .bt-compare-panel__chart canvas { flex: 1; width: 100% !important; }
+      .bt-compare-panel__chart {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .bt-compare-panel__chart-label {
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-dim, #888);
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .bt-compare-panel__chart canvas {
+        flex: 1;
+        width: 100% !important;
+      }
 
       @media (max-width: 700px) {
-        .bt-compare-panel { width: 98vw; max-height: 90vh; }
-        .bt-compare-panel__body { flex-direction: column; }
-        .bt-compare-panel__metrics, .bt-compare-panel__chart { flex: none; width: 100%; }
+        .bt-compare-panel {
+          width: 98vw;
+          max-height: 90vh;
+        }
+        .bt-compare-panel__body {
+          flex-direction: column;
+        }
+        .bt-compare-panel__metrics,
+        .bt-compare-panel__chart {
+          flex: none;
+          width: 100%;
+        }
       }
     </style>
 
@@ -502,9 +662,9 @@
         setInterval(tick, 10000);
 
         // ── Propagate ?embedded=1 to internal dashboard links ──
-        (function() {
+        (function () {
           if (!document.body.classList.contains("embedded")) return;
-          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function(a) {
+          document.querySelectorAll('a[href*="/dashboard/"]').forEach(function (a) {
             var href = a.getAttribute("href");
             if (href && href.indexOf("embedded") === -1) {
               a.setAttribute("href", href + (href.indexOf("?") === -1 ? "?" : "&") + "embedded=1");
@@ -701,7 +861,8 @@
           var pending = ((events && events.events) || []).filter(function (e) {
             return e.status === "pending" || e.needsApproval;
           });
-          var promo = 0, trade = 0;
+          var promo = 0,
+            trade = 0;
           pending.forEach(function (e) {
             var t = (e.type || e.action || "").toLowerCase();
             if (/promot/i.test(t)) promo++;
@@ -711,10 +872,12 @@
           var tradeEl = $("pendTrade");
           promoEl.textContent = promo;
           tradeEl.textContent = trade;
-          promoEl.className = "pending-row__count num" + (promo === 0 ? " pending-row__count--zero" : "");
-          tradeEl.className = "pending-row__count num" + (trade === 0 ? " pending-row__count--zero" : "");
+          promoEl.className =
+            "pending-row__count num" + (promo === 0 ? " pending-row__count--zero" : "");
+          tradeEl.className =
+            "pending-row__count num" + (trade === 0 ? " pending-row__count--zero" : "");
           var pulse = $("pendingPulse");
-          pulse.style.display = (promo + trade) > 0 ? "" : "none";
+          pulse.style.display = promo + trade > 0 ? "" : "none";
         }
 
         // ── Render: Kanban (Step 3) ──
@@ -746,7 +909,10 @@
             for (var i = 0; i < oldCards.length; i++) oldCards[i].remove();
 
             if (items.length === 0) {
-              col.insertAdjacentHTML("beforeend", '<div class="kanban-col-empty">No strategies</div>');
+              col.insertAdjacentHTML(
+                "beforeend",
+                '<div class="kanban-col-empty">No strategies</div>',
+              );
               return;
             }
 
@@ -760,21 +926,53 @@
               var tf = stratTf(s);
               var ver = stratVersion(s);
               html +=
-                '<div class="kanban-card" data-market="' + esc(m) + '" data-id="' + esc(s.id || s.name || "") + '">' +
-                '<div class="kc-top"><span class="kc-name">' + esc(s.name || s.id) + "</span>" +
-                (ver ? '<span class="kc-ver">' + esc(ver) + "</span>" : "") + "</div>" +
+                '<div class="kanban-card" data-market="' +
+                esc(m) +
+                '" data-id="' +
+                esc(s.id || s.name || "") +
+                '">' +
+                '<div class="kc-top"><span class="kc-name">' +
+                esc(s.name || s.id) +
+                "</span>" +
+                (ver ? '<span class="kc-ver">' + esc(ver) + "</span>" : "") +
+                "</div>" +
                 '<div class="kc-meta">' +
-                (m !== "--" ? '<span class="kc-market kc-market--' + esc(m) + '">' + esc(marketLabels[m] || m) + "</span>" : "") +
+                (m !== "--"
+                  ? '<span class="kc-market kc-market--' +
+                    esc(m) +
+                    '">' +
+                    esc(marketLabels[m] || m) +
+                    "</span>"
+                  : "") +
                 (tf !== "--" ? '<span class="kc-tf dim">' + esc(tf) + "</span>" : "") +
                 "</div>" +
-                (sym !== "--" ? '<div class="kc-sym dim" style="font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px" title="' + esc(sym) + '">' + esc(sym) + "</div>" : "") +
+                (sym !== "--"
+                  ? '<div class="kc-sym dim" style="font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px" title="' +
+                    esc(sym) +
+                    '">' +
+                    esc(sym) +
+                    "</div>"
+                  : "") +
                 '<div class="kc-fitness"><div class="kc-fitness-bar"><div class="kc-fitness-fill" style="width:' +
-                (fit * 100) + "%;background:" + fitnessColor(fit) + '"></div></div>' +
-                '<span class="kc-fitness-val ' + (fit >= 0.7 ? "gain" : fit >= 0.4 ? "" : "dim") + '">' +
-                fit.toFixed(2) + "</span></div>" +
-                '<div class="kc-bottom"><span class="kc-return ' + pnlClass(ret) + ' num">' + fmtPct(ret) + "</span>" +
-                '<span class="kc-status"><span class="status-dot ' + statusDotCls(st) + '"></span>' +
-                esc(st) + "</span></div></div>";
+                fit * 100 +
+                "%;background:" +
+                fitnessColor(fit) +
+                '"></div></div>' +
+                '<span class="kc-fitness-val ' +
+                (fit >= 0.7 ? "gain" : fit >= 0.4 ? "" : "dim") +
+                '">' +
+                fit.toFixed(2) +
+                "</span></div>" +
+                '<div class="kc-bottom"><span class="kc-return ' +
+                pnlClass(ret) +
+                ' num">' +
+                fmtPct(ret) +
+                "</span>" +
+                '<span class="kc-status"><span class="status-dot ' +
+                statusDotCls(st) +
+                '"></span>' +
+                esc(st) +
+                "</span></div></div>";
             });
             col.insertAdjacentHTML("beforeend", html);
           });
@@ -783,7 +981,12 @@
           $("kanbanCount").textContent = total + " strategies";
 
           // ── Sortable: drag-and-drop between kanban columns ──
-          var levelMap = { kanbanL0: "L0_INCUBATE", kanbanL1: "L1_BACKTEST", kanbanL2: "L2_PAPER", kanbanL3: "L3_LIVE" };
+          var levelMap = {
+            kanbanL0: "L0_INCUBATE",
+            kanbanL1: "L1_BACKTEST",
+            kanbanL2: "L2_PAPER",
+            kanbanL3: "L3_LIVE",
+          };
           var levelOrder = ["L0_INCUBATE", "L1_BACKTEST", "L2_PAPER", "L3_LIVE"];
 
           if (typeof Sortable !== "undefined") {
@@ -812,7 +1015,15 @@
                   // L3_LIVE promotion: API returns 202 pending_approval, show toast
                   // Demotion: confirm before executing
                   if (isDemote) {
-                    if (!confirm("Demote strategy from " + fromLevel + " to " + toLevel + "?\nThis will move the strategy to a lower lifecycle stage.")) {
+                    if (
+                      !confirm(
+                        "Demote strategy from " +
+                          fromLevel +
+                          " to " +
+                          toLevel +
+                          "?\nThis will move the strategy to a lower lifecycle stage.",
+                      )
+                    ) {
                       // Revert: re-render to restore original positions
                       renderKanban(state.strategies);
                       return;
@@ -825,16 +1036,23 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ id: cardId, targetLevel: toLevel }),
                   })
-                    .then(function (r) { return r.json(); })
+                    .then(function (r) {
+                      return r.json();
+                    })
                     .then(function (data) {
                       if (data.status === "pending_approval") {
-                        toast("L3 Live promotion requires approval. Check pending approvals.", "warn");
+                        toast(
+                          "L3 Live promotion requires approval. Check pending approvals.",
+                          "warn",
+                        );
                         // Revert card position — approval flow handles it
                         renderKanban(state.strategies);
                       } else if (data.status === "promoted") {
                         toast("Strategy moved: " + fromLevel + " \u2192 " + toLevel, "success");
                         // Update local state
-                        var s = (state.strategies || []).find(function (x) { return (x.id || x.name) === cardId; });
+                        var s = (state.strategies || []).find(function (x) {
+                          return (x.id || x.name) === cardId;
+                        });
                         if (s) s.level = toLevel;
                         renderKanban(state.strategies);
                       } else {
@@ -903,7 +1121,10 @@
           var sd = state.sortDir === "asc" ? 1 : -1;
           var sorted = strategies.slice().sort(function (a, b) {
             if (sc === "fitness") return ((b.fitness || 0) - (a.fitness || 0)) * sd;
-            if (sc === "return") return ((b.totalReturn || b.returnPct || 0) - (a.totalReturn || a.returnPct || 0)) * sd;
+            if (sc === "return")
+              return (
+                ((b.totalReturn || b.returnPct || 0) - (a.totalReturn || a.returnPct || 0)) * sd
+              );
             if (sc === "sharpe") return ((b.sharpe || 0) - (a.sharpe || 0)) * sd;
             if (sc === "maxdd") return ((b.maxDrawdown || 0) - (a.maxDrawdown || 0)) * sd;
             // default: fitness then sharpe
@@ -941,38 +1162,95 @@
             if (!hidden) visibleCount++;
 
             html +=
-              '<tr data-level="' + lvlNum + '" data-market="' + esc(m) + '" data-tf="' + esc(stf) +
-              '" data-id="' + esc(s.id || s.name || "") + '"' +
-              (hidden ? ' style="display:none"' : "") + ">" +
-              '<td><span class="race-rank ' + rankCls + '">' + rank + "</span></td>" +
-              '<td style="color:var(--text-hi);font-weight:600">' + esc(s.name || s.id) + "</td>" +
-              '<td><span class="level-badge level-badge--' + (levelCls[lvl] || "l0") + '">' +
-              (levelLabels[lvl] || lvl) + "</span></td>" +
-              '<td>' + (m !== "--" ? '<span class="rb-market ' + marketCls(m) + '">' + esc(marketLabels[m] || m) + "</span>" : '<span class="dim">--</span>') + "</td>" +
-              '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' + esc(sym) + '">' + esc(sym) + "</td>" +
-              '<td class="num">' + esc(stf) + "</td>" +
+              '<tr data-level="' +
+              lvlNum +
+              '" data-market="' +
+              esc(m) +
+              '" data-tf="' +
+              esc(stf) +
+              '" data-id="' +
+              esc(s.id || s.name || "") +
+              '"' +
+              (hidden ? ' style="display:none"' : "") +
+              ">" +
+              '<td><span class="race-rank ' +
+              rankCls +
+              '">' +
+              rank +
+              "</span></td>" +
+              '<td style="color:var(--text-hi);font-weight:600">' +
+              esc(s.name || s.id) +
+              "</td>" +
+              '<td><span class="level-badge level-badge--' +
+              (levelCls[lvl] || "l0") +
+              '">' +
+              (levelLabels[lvl] || lvl) +
+              "</span></td>" +
+              "<td>" +
+              (m !== "--"
+                ? '<span class="rb-market ' +
+                  marketCls(m) +
+                  '">' +
+                  esc(marketLabels[m] || m) +
+                  "</span>"
+                : '<span class="dim">--</span>') +
+              "</td>" +
+              '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis" title="' +
+              esc(sym) +
+              '">' +
+              esc(sym) +
+              "</td>" +
+              '<td class="num">' +
+              esc(stf) +
+              "</td>" +
               '<td><div class="rb-fitness"><div class="rb-fbar"><div class="rb-ffill" style="width:' +
-              (fit * 100) + "%;background:" + fitnessColor(fit) + '"></div></div>' +
-              '<span class="' + (fit >= 0.7 ? "gain" : fit >= 0.4 ? "num" : "dim") +
-              ' num" style="font-weight:700;font-size:9px">' + fit.toFixed(2) + "</span></div></td>" +
-              '<td class="' + pnlClass(ret) + ' num" style="font-weight:600">' + fmtPct(ret) + "</td>" +
-              '<td class="num" style="color:var(--text-hi)">' + sharpe.toFixed(2) + "</td>" +
-              '<td class="loss num">' + fmtPct(dd) + "</td>" +
-              '<td class="num">' + win.toFixed(1) + "%</td>" +
-              '<td class="num">' + trades + "</td>" +
-              '<td><span class="status-dot ' + statusDotCls(st) + '"></span>' +
-              '<span class="dim" style="font-size:9px">' + esc(st) + "</span></td>" +
+              fit * 100 +
+              "%;background:" +
+              fitnessColor(fit) +
+              '"></div></div>' +
+              '<span class="' +
+              (fit >= 0.7 ? "gain" : fit >= 0.4 ? "num" : "dim") +
+              ' num" style="font-weight:700;font-size:9px">' +
+              fit.toFixed(2) +
+              "</span></div></td>" +
+              '<td class="' +
+              pnlClass(ret) +
+              ' num" style="font-weight:600">' +
+              fmtPct(ret) +
+              "</td>" +
+              '<td class="num" style="color:var(--text-hi)">' +
+              sharpe.toFixed(2) +
+              "</td>" +
+              '<td class="loss num">' +
+              fmtPct(dd) +
+              "</td>" +
+              '<td class="num">' +
+              win.toFixed(1) +
+              "%</td>" +
+              '<td class="num">' +
+              trades +
+              "</td>" +
+              '<td><span class="status-dot ' +
+              statusDotCls(st) +
+              '"></span>' +
+              '<span class="dim" style="font-size:9px">' +
+              esc(st) +
+              "</span></td>" +
               '<td><div class="race-actions">' +
               (lvlNum < 3
                 ? '<button class="race-act race-act--promote" title="Promote" data-strat-id="' +
-                  esc(s.id || s.name) + '" data-strat-action="promote">&#9650;</button>'
+                  esc(s.id || s.name) +
+                  '" data-strat-action="promote">&#9650;</button>'
                 : "") +
               '<button class="race-act race-act--pause" title="Pause" data-strat-id="' +
-              esc(s.id || s.name) + '" data-strat-action="pause">&#9646;&#9646;</button>' +
+              esc(s.id || s.name) +
+              '" data-strat-action="pause">&#9646;&#9646;</button>' +
               '<button class="race-act race-act--detail" title="Details" data-strat-id="' +
-              esc(s.id || s.name) + '" data-strat-action="details">&#8230;</button>' +
+              esc(s.id || s.name) +
+              '" data-strat-action="details">&#8230;</button>' +
               '<button class="race-act race-act--kill" title="Kill" data-strat-id="' +
-              esc(s.id || s.name) + '" data-strat-action="kill">&#10005;</button>' +
+              esc(s.id || s.name) +
+              '" data-strat-action="kill">&#10005;</button>' +
               "</div></td>" +
               "</tr>";
           });
@@ -1017,23 +1295,42 @@
             var winr = e.winRate != null ? e.winRate.toFixed(1) + "%" : "--";
 
             html +=
-              '<div class="approval-card" data-id="' + esc(e.id || "") + '">' +
+              '<div class="approval-card" data-id="' +
+              esc(e.id || "") +
+              '">' +
               '<div class="aq-top">' +
-              '<span class="aq-type aq-type--' + tc + '">' + tl + "</span>" +
-              '<span class="aq-time num">' + timeAgo(e.timestamp || e.createdAt) + "</span>" +
+              '<span class="aq-type aq-type--' +
+              tc +
+              '">' +
+              tl +
+              "</span>" +
+              '<span class="aq-time num">' +
+              timeAgo(e.timestamp || e.createdAt) +
+              "</span>" +
               "</div>" +
-              '<div class="aq-desc">' + esc(e.title || e.summary || e.message || "") + "</div>" +
+              '<div class="aq-desc">' +
+              esc(e.title || e.summary || e.message || "") +
+              "</div>" +
               '<div class="aq-metrics">' +
-              '<span class="aq-metric"><span class="aq-metric__label">Sharpe</span><span class="aq-metric__value">' + sharpe + "</span></span>" +
-              '<span class="aq-metric"><span class="aq-metric__label">MaxDD</span><span class="aq-metric__value loss">' + maxdd + "</span></span>" +
-              '<span class="aq-metric"><span class="aq-metric__label">Win%</span><span class="aq-metric__value">' + winr + "</span></span>" +
+              '<span class="aq-metric"><span class="aq-metric__label">Sharpe</span><span class="aq-metric__value">' +
+              sharpe +
+              "</span></span>" +
+              '<span class="aq-metric"><span class="aq-metric__label">MaxDD</span><span class="aq-metric__value loss">' +
+              maxdd +
+              "</span></span>" +
+              '<span class="aq-metric"><span class="aq-metric__label">Win%</span><span class="aq-metric__value">' +
+              winr +
+              "</span></span>" +
               "</div>" +
               '<div class="aq-actions">' +
-              '<button class="aq-btn aq-btn--approve" data-event-id="' + esc(e.id) +
+              '<button class="aq-btn aq-btn--approve" data-event-id="' +
+              esc(e.id) +
               '" data-event-approve="true">Approve</button>' +
-              '<button class="aq-btn aq-btn--reject" data-event-id="' + esc(e.id) +
+              '<button class="aq-btn aq-btn--reject" data-event-id="' +
+              esc(e.id) +
               '" data-event-approve="false">Reject</button>' +
-              '<button class="aq-btn aq-btn--details" data-event-id="' + esc(e.id) +
+              '<button class="aq-btn aq-btn--details" data-event-id="' +
+              esc(e.id) +
               '" data-event-action="details">Details</button>' +
               "</div>" +
               "</div>";
@@ -1064,15 +1361,35 @@
 
             html +=
               "<tr>" +
-              '<td style="text-align:center"><input type="checkbox" class="bt-cb" data-bt-idx="' + i + '"' +
-              (checked ? " checked" : "") + (disabled ? " disabled" : "") + ' /></td>' +
-              '<td style="color:var(--text-hi)">' + esc(b.strategyName || b.strategyId || b.name || "") + "</td>" +
-              '<td class="' + pnlClass(ret) + ' num" style="text-align:right;font-weight:600">' + fmtPct(ret) + "</td>" +
-              '<td class="num" style="text-align:right">' + sharpe.toFixed(2) + "</td>" +
-              '<td class="loss num" style="text-align:right">' + fmtPct(dd) + "</td>" +
-              '<td class="num" style="text-align:right">' + win.toFixed(1) + "%</td>" +
-              '<td class="num" style="text-align:right">' + pf.toFixed(2) + "</td>" +
-              '<td class="num" style="text-align:right">' + trades + "</td>" +
+              '<td style="text-align:center"><input type="checkbox" class="bt-cb" data-bt-idx="' +
+              i +
+              '"' +
+              (checked ? " checked" : "") +
+              (disabled ? " disabled" : "") +
+              " /></td>" +
+              '<td style="color:var(--text-hi)">' +
+              esc(b.strategyName || b.strategyId || b.name || "") +
+              "</td>" +
+              '<td class="' +
+              pnlClass(ret) +
+              ' num" style="text-align:right;font-weight:600">' +
+              fmtPct(ret) +
+              "</td>" +
+              '<td class="num" style="text-align:right">' +
+              sharpe.toFixed(2) +
+              "</td>" +
+              '<td class="loss num" style="text-align:right">' +
+              fmtPct(dd) +
+              "</td>" +
+              '<td class="num" style="text-align:right">' +
+              win.toFixed(1) +
+              "%</td>" +
+              '<td class="num" style="text-align:right">' +
+              pf.toFixed(2) +
+              "</td>" +
+              '<td class="num" style="text-align:right">' +
+              trades +
+              "</td>" +
               "</tr>";
           });
           body.innerHTML = html;
@@ -1106,21 +1423,37 @@
             html +=
               '<div style="flex:1;min-width:180px;max-width:280px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px">' +
               '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-              '<span style="color:var(--text-hi);font-weight:600;font-size:11px">' + esc(d.strategyName || d.strategyId) + "</span>" +
-              '<span style="background:' + color + ";color:#000;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase\">" +
-              esc(d.decayLevel) + "</span>" +
+              '<span style="color:var(--text-hi);font-weight:600;font-size:11px">' +
+              esc(d.strategyName || d.strategyId) +
+              "</span>" +
+              '<span style="background:' +
+              color +
+              ';color:#000;padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;text-transform:uppercase">' +
+              esc(d.decayLevel) +
+              "</span>" +
               "</div>" +
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px">' +
               '<div><span class="dim">Sharpe 7d</span> <span class="num" style="color:' +
-              (d.rollingSharpe7d >= 0.5 ? "var(--gain)" : d.rollingSharpe7d >= 0 ? "var(--warn)" : "var(--loss)") +
-              '">' + (d.rollingSharpe7d != null ? d.rollingSharpe7d.toFixed(2) : "--") + "</span></div>" +
+              (d.rollingSharpe7d >= 0.5
+                ? "var(--gain)"
+                : d.rollingSharpe7d >= 0
+                  ? "var(--warn)"
+                  : "var(--loss)") +
+              '">' +
+              (d.rollingSharpe7d != null ? d.rollingSharpe7d.toFixed(2) : "--") +
+              "</span></div>" +
               '<div><span class="dim">Sharpe 30d</span> <span class="num">' +
-              (d.rollingSharpe30d != null ? d.rollingSharpe30d.toFixed(2) : "--") + "</span></div>" +
+              (d.rollingSharpe30d != null ? d.rollingSharpe30d.toFixed(2) : "--") +
+              "</span></div>" +
               '<div><span class="dim">Drawdown</span> <span class="loss num">' +
-              (d.currentDrawdown != null ? d.currentDrawdown.toFixed(1) + "%" : "--") + "</span></div>" +
+              (d.currentDrawdown != null ? d.currentDrawdown.toFixed(1) + "%" : "--") +
+              "</span></div>" +
               '<div><span class="dim">Momentum</span> <span class="num" style="color:' +
-              (d.sharpeMomentum >= 0 ? "var(--gain)" : "var(--loss)") + '">' +
-              (d.sharpeMomentum != null ? (d.sharpeMomentum >= 0 ? "+" : "") + d.sharpeMomentum.toFixed(2) : "--") +
+              (d.sharpeMomentum >= 0 ? "var(--gain)" : "var(--loss)") +
+              '">' +
+              (d.sharpeMomentum != null
+                ? (d.sharpeMomentum >= 0 ? "+" : "") + d.sharpeMomentum.toFixed(2)
+                : "--") +
               "</span></div>" +
               "</div>" +
               "</div>";
@@ -1142,7 +1475,8 @@
         function eventTypeLabel(e) {
           var t = ((e.type || e.action || "") + " " + (e.title || "")).toLowerCase();
           if (/promot/i.test(t)) return { label: "PROMOTION", cls: "promotion" };
-          if (/evolut|mutat|crossover|gene/i.test(t)) return { label: "EVOLUTION", cls: "evolution" };
+          if (/evolut|mutat|crossover|gene/i.test(t))
+            return { label: "EVOLUTION", cls: "evolution" };
           if (/backtest/i.test(t)) return { label: "BACKTEST", cls: "backtest" };
           if (/decay|degrad/i.test(t)) return { label: "DECAY", cls: "decay" };
           if (/discover/i.test(t)) return { label: "DISCOVERY", cls: "discovery" };
@@ -1154,7 +1488,8 @@
         function renderFeed(events, filter) {
           var el = $("feedList");
           if (!events || !events.length) {
-            el.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No strategy events yet</div>';
+            el.innerHTML =
+              '<div style="text-align:center;color:var(--text-dim);padding:20px;font-size:10px">No strategy events yet</div>';
             return;
           }
           var html = "";
@@ -1166,16 +1501,26 @@
             count++;
             var tl = eventTypeLabel(e);
             html +=
-              '<div class="event-card event-card--' + tl.cls + '" style="animation-delay:' + (idx * 0.03) + 's">' +
+              '<div class="event-card event-card--' +
+              tl.cls +
+              '" style="animation-delay:' +
+              idx * 0.03 +
+              's">' +
               '<div class="event-card__top">' +
-              '<span class="event-card__type">' + tl.label + '</span>' +
-              '<span class="event-card__time num">' + timeAgo(e.timestamp || e.createdAt) + '</span>' +
-              '</div>' +
-              '<div class="event-card__title">' + esc(e.title || e.summary || e.message || "") + '</div>' +
+              '<span class="event-card__type">' +
+              tl.label +
+              "</span>" +
+              '<span class="event-card__time num">' +
+              timeAgo(e.timestamp || e.createdAt) +
+              "</span>" +
+              "</div>" +
+              '<div class="event-card__title">' +
+              esc(e.title || e.summary || e.message || "") +
+              "</div>" +
               (e.description || e.detail
-                ? '<div class="event-card__desc">' + esc(e.description || e.detail) + '</div>'
-                : '') +
-              '</div>';
+                ? '<div class="event-card__desc">' + esc(e.description || e.detail) + "</div>"
+                : "") +
+              "</div>";
           });
           el.innerHTML = html;
         }
@@ -1184,7 +1529,8 @@
         function renderBottomBar(strategies) {
           var strats = strategies || [];
           $("botStratCount").textContent = strats.length;
-          var paperPnl = 0, livePnl = 0;
+          var paperPnl = 0,
+            livePnl = 0;
           strats.forEach(function (s) {
             var ln = stratLevelNum(s);
             var ret = s.totalReturn || s.returnPct || 0;
@@ -1209,7 +1555,10 @@
           renderDecay(state.decayData);
           renderApprovals(state.events);
           renderBacktests(state.backtests);
-          renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+          renderFeed(
+            ((state.events && state.events.events) || []).slice().reverse(),
+            state.feedFilter,
+          );
           renderBottomBar(state.strategies);
         }
 
@@ -1260,7 +1609,9 @@
             var pollUrl = url.replace("/stream", "");
             if (dotEl) dotEl.className = "sse-dot";
             fetch(pollUrl)
-              .then(function (r) { return r.json(); })
+              .then(function (r) {
+                return r.json();
+              })
               .then(function (d) {
                 onMessage(d);
                 if (dotEl) dotEl.className = "sse-dot connected";
@@ -1270,7 +1621,9 @@
               });
             setInterval(function () {
               fetch(pollUrl)
-                .then(function (r) { return r.json(); })
+                .then(function (r) {
+                  return r.json();
+                })
                 .then(function (d) {
                   onMessage(d);
                   if (dotEl) dotEl.className = "sse-dot connected";
@@ -1288,7 +1641,10 @@
         function onStrategyData(data) {
           if (data.pipeline) state.pipeline = data.pipeline;
           if (data.strategies) state.strategies = data.strategies;
-          if (data.backtests) { state.backtests = data.backtests; state.btSelected = []; }
+          if (data.backtests) {
+            state.backtests = data.backtests;
+            state.btSelected = [];
+          }
           if (data.decayData) state.decayData = data.decayData;
           if (data.events) state.events = data.events;
           scheduleRender();
@@ -1355,7 +1711,9 @@
               market: market,
               timeframe: timeframe,
               symbols: symbols
-                ? symbols.split(",").map(function (s) { return s.trim(); })
+                ? symbols.split(",").map(function (s) {
+                    return s.trim();
+                  })
                 : [],
               description: description || undefined,
             })
@@ -1371,8 +1729,12 @@
           },
           triggerEvolution: function () {
             $("botMsg").innerHTML = "<em>Triggering evolution cycle...</em>";
-            toast("Evolution is triggered by the AI agent automatically via heartbeat. Check agent activity for status.", "info");
-            $("botMsg").innerHTML = "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
+            toast(
+              "Evolution is triggered by the AI agent automatically via heartbeat. Check agent activity for status.",
+              "info",
+            );
+            $("botMsg").innerHTML =
+              "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
           },
           runAllBacktests: function () {
             $("botMsg").innerHTML = "<em>Running all backtests...</em>";
@@ -1416,18 +1778,85 @@
           openCompare: function () {
             var sel = state.btSelected;
             if (sel.length < 2) return;
-            var items = sel.map(function (i) { return state.backtests[i]; }).filter(Boolean);
+            var items = sel
+              .map(function (i) {
+                return state.backtests[i];
+              })
+              .filter(Boolean);
             if (items.length < 2) return;
 
             // Build metrics comparison table
             var metricRows = [
-              { key: "totalReturn", label: "Total Return", fmt: function (v) { return fmtPct(v); }, cls: function (v) { return pnlClass(v); } },
-              { key: "sharpe", label: "Sharpe Ratio", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
-              { key: "maxDrawdown", label: "Max Drawdown", fmt: function (v) { return fmtPct(v); }, cls: function () { return "loss num"; } },
-              { key: "winRate", label: "Win Rate", fmt: function (v) { return v != null ? v.toFixed(1) + "%" : "--"; }, cls: function () { return "num"; } },
-              { key: "totalTrades", label: "Total Trades", fmt: function (v) { return v != null ? String(v) : "--"; }, cls: function () { return "num"; } },
-              { key: "profitFactor", label: "Profit Factor", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
-              { key: "sortino", label: "Sortino", fmt: function (v) { return v != null ? v.toFixed(2) : "--"; }, cls: function () { return "num"; } },
+              {
+                key: "totalReturn",
+                label: "Total Return",
+                fmt: function (v) {
+                  return fmtPct(v);
+                },
+                cls: function (v) {
+                  return pnlClass(v);
+                },
+              },
+              {
+                key: "sharpe",
+                label: "Sharpe Ratio",
+                fmt: function (v) {
+                  return v != null ? v.toFixed(2) : "--";
+                },
+                cls: function () {
+                  return "num";
+                },
+              },
+              {
+                key: "maxDrawdown",
+                label: "Max Drawdown",
+                fmt: function (v) {
+                  return fmtPct(v);
+                },
+                cls: function () {
+                  return "loss num";
+                },
+              },
+              {
+                key: "winRate",
+                label: "Win Rate",
+                fmt: function (v) {
+                  return v != null ? v.toFixed(1) + "%" : "--";
+                },
+                cls: function () {
+                  return "num";
+                },
+              },
+              {
+                key: "totalTrades",
+                label: "Total Trades",
+                fmt: function (v) {
+                  return v != null ? String(v) : "--";
+                },
+                cls: function () {
+                  return "num";
+                },
+              },
+              {
+                key: "profitFactor",
+                label: "Profit Factor",
+                fmt: function (v) {
+                  return v != null ? v.toFixed(2) : "--";
+                },
+                cls: function () {
+                  return "num";
+                },
+              },
+              {
+                key: "sortino",
+                label: "Sortino",
+                fmt: function (v) {
+                  return v != null ? v.toFixed(2) : "--";
+                },
+                cls: function () {
+                  return "num";
+                },
+              },
             ];
             var tbl = "<thead><tr><th>Metric</th>";
             items.forEach(function (b) {
@@ -1436,15 +1865,30 @@
             tbl += "</tr></thead><tbody>";
             metricRows.forEach(function (m) {
               // Find best value for highlighting
-              var vals = items.map(function (b) { return b[m.key] || b[m.key.replace("totalReturn", "returnPct")] || 0; });
-              var bestIdx = m.key === "maxDrawdown"
-                ? vals.reduce(function (bi, v, i) { return v > vals[bi] ? i : bi; }, 0)
-                : vals.reduce(function (bi, v, i) { return v > vals[bi] ? i : bi; }, 0);
-              tbl += "<tr><td style=\"color:var(--text-dim);font-weight:500\">" + m.label + "</td>";
+              var vals = items.map(function (b) {
+                return b[m.key] || b[m.key.replace("totalReturn", "returnPct")] || 0;
+              });
+              var bestIdx =
+                m.key === "maxDrawdown"
+                  ? vals.reduce(function (bi, v, i) {
+                      return v > vals[bi] ? i : bi;
+                    }, 0)
+                  : vals.reduce(function (bi, v, i) {
+                      return v > vals[bi] ? i : bi;
+                    }, 0);
+              tbl += '<tr><td style="color:var(--text-dim);font-weight:500">' + m.label + "</td>";
               items.forEach(function (b, i) {
-                var raw = b[m.key] != null ? b[m.key] : (b[m.key.replace("totalReturn", "returnPct")] || 0);
+                var raw =
+                  b[m.key] != null ? b[m.key] : b[m.key.replace("totalReturn", "returnPct")] || 0;
                 var best = i === bestIdx ? "font-weight:700;" : "";
-                tbl += '<td class="' + m.cls(raw) + '" style="text-align:right;' + best + '">' + m.fmt(raw) + "</td>";
+                tbl +=
+                  '<td class="' +
+                  m.cls(raw) +
+                  '" style="text-align:right;' +
+                  best +
+                  '">' +
+                  m.fmt(raw) +
+                  "</td>";
               });
               tbl += "</tr>";
             });
@@ -1454,7 +1898,10 @@
             // Draw equity curve chart
             var chartColors = ["#6c5ce7", "#00cec9", "#fdcb6e", "#e17055"];
             var canvas = $("btCompareCanvas");
-            if (window._btCompareChart) { window._btCompareChart.destroy(); window._btCompareChart = null; }
+            if (window._btCompareChart) {
+              window._btCompareChart.destroy();
+              window._btCompareChart = null;
+            }
 
             var maxLen = 0;
             items.forEach(function (b) {
@@ -1468,7 +1915,9 @@
               var curve = b.equityCurve || [];
               // Normalize to percentage return from initial
               var initial = curve[0] || 1;
-              var normalized = curve.map(function (v) { return ((v - initial) / initial) * 100; });
+              var normalized = curve.map(function (v) {
+                return ((v - initial) / initial) * 100;
+              });
               return {
                 label: b.strategyName || b.strategyId || b.name || "BT" + (i + 1),
                 data: normalized,
@@ -1484,16 +1933,40 @@
               type: "line",
               data: { labels: labels, datasets: datasets },
               options: {
-                responsive: true, maintainAspectRatio: false,
+                responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
-                  legend: { position: "bottom", labels: { color: "rgba(255,255,255,.6)", font: { size: 10 }, boxWidth: 12 } },
-                  tooltip: { mode: "index", intersect: false, callbacks: {
-                    label: function (ctx) { return ctx.dataset.label + ": " + ctx.parsed.y.toFixed(2) + "%"; }
-                  }},
+                  legend: {
+                    position: "bottom",
+                    labels: { color: "rgba(255,255,255,.6)", font: { size: 10 }, boxWidth: 12 },
+                  },
+                  tooltip: {
+                    mode: "index",
+                    intersect: false,
+                    callbacks: {
+                      label: function (ctx) {
+                        return ctx.dataset.label + ": " + ctx.parsed.y.toFixed(2) + "%";
+                      },
+                    },
+                  },
                 },
                 scales: {
-                  x: { display: true, ticks: { color: "rgba(255,255,255,.3)", font: { size: 8 }, maxTicksLimit: 10 }, grid: { color: "rgba(255,255,255,.05)" } },
-                  y: { display: true, ticks: { color: "rgba(255,255,255,.3)", font: { size: 8 }, callback: function (v) { return v.toFixed(0) + "%"; } }, grid: { color: "rgba(255,255,255,.05)" } },
+                  x: {
+                    display: true,
+                    ticks: { color: "rgba(255,255,255,.3)", font: { size: 8 }, maxTicksLimit: 10 },
+                    grid: { color: "rgba(255,255,255,.05)" },
+                  },
+                  y: {
+                    display: true,
+                    ticks: {
+                      color: "rgba(255,255,255,.3)",
+                      font: { size: 8 },
+                      callback: function (v) {
+                        return v.toFixed(0) + "%";
+                      },
+                    },
+                    grid: { color: "rgba(255,255,255,.05)" },
+                  },
                 },
                 interaction: { mode: "nearest", axis: "x", intersect: false },
               },
@@ -1503,7 +1976,10 @@
           },
           closeCompare: function () {
             $("btCompareModal").classList.remove("open");
-            if (window._btCompareChart) { window._btCompareChart.destroy(); window._btCompareChart = null; }
+            if (window._btCompareChart) {
+              window._btCompareChart.destroy();
+              window._btCompareChart = null;
+            }
           },
         };
 
@@ -1515,7 +1991,10 @@
             });
             c.classList.add("active");
             state.feedFilter = c.dataset.f;
-            renderFeed(((state.events && state.events.events) || []).slice().reverse(), state.feedFilter);
+            renderFeed(
+              ((state.events && state.events.events) || []).slice().reverse(),
+              state.feedFilter,
+            );
           });
         });
 
@@ -1524,56 +2003,78 @@
           state.marketFilter = activeVal;
           // sync left sidebar
           var mc = $("marketChips");
-          if (mc) mc.querySelectorAll("[data-market]").forEach(function (x) {
-            x.classList.toggle("active", x.dataset.market === activeVal);
-          });
+          if (mc)
+            mc.querySelectorAll("[data-market]").forEach(function (x) {
+              x.classList.toggle("active", x.dataset.market === activeVal);
+            });
           // sync raceboard bar
           var bar = $("rbFilterBar");
-          if (bar) bar.querySelectorAll("[data-rbm]").forEach(function (x) {
-            x.classList.toggle("active", x.dataset.rbm === activeVal);
-          });
+          if (bar)
+            bar.querySelectorAll("[data-rbm]").forEach(function (x) {
+              x.classList.toggle("active", x.dataset.rbm === activeVal);
+            });
           scheduleRender();
         }
 
-        $("marketChips").querySelectorAll("[data-market]").forEach(function (c) {
-          c.addEventListener("click", function () {
-            syncMarketChips(c.dataset.market);
+        $("marketChips")
+          .querySelectorAll("[data-market]")
+          .forEach(function (c) {
+            c.addEventListener("click", function () {
+              syncMarketChips(c.dataset.market);
+            });
           });
-        });
-        $("rbFilterBar").querySelectorAll("[data-rbm]").forEach(function (c) {
-          c.addEventListener("click", function () {
-            syncMarketChips(c.dataset.rbm);
+        $("rbFilterBar")
+          .querySelectorAll("[data-rbm]")
+          .forEach(function (c) {
+            c.addEventListener("click", function () {
+              syncMarketChips(c.dataset.rbm);
+            });
           });
-        });
 
         // ── Status filter: left sidebar only ──
-        $("statusChips").querySelectorAll("[data-status]").forEach(function (c) {
-          c.addEventListener("click", function () {
-            $("statusChips").querySelectorAll("[data-status]").forEach(function (x) {
-              x.classList.remove("active");
+        $("statusChips")
+          .querySelectorAll("[data-status]")
+          .forEach(function (c) {
+            c.addEventListener("click", function () {
+              $("statusChips")
+                .querySelectorAll("[data-status]")
+                .forEach(function (x) {
+                  x.classList.remove("active");
+                });
+              c.classList.add("active");
+              state.statusFilter = c.dataset.status;
+              scheduleRender();
             });
-            c.classList.add("active");
-            state.statusFilter = c.dataset.status;
-            scheduleRender();
           });
-        });
 
         // ── Level filter: raceboard only ──
-        $("rbFilterBar").querySelectorAll("[data-rbl]").forEach(function (c) {
-          c.addEventListener("click", function () {
-            $("rbFilterBar").querySelectorAll("[data-rbl]").forEach(function (x) {
-              x.classList.remove("active");
+        $("rbFilterBar")
+          .querySelectorAll("[data-rbl]")
+          .forEach(function (c) {
+            c.addEventListener("click", function () {
+              $("rbFilterBar")
+                .querySelectorAll("[data-rbl]")
+                .forEach(function (x) {
+                  x.classList.remove("active");
+                });
+              c.classList.add("active");
+              state.levelFilter = c.dataset.rbl;
+              scheduleRender();
             });
-            c.classList.add("active");
-            state.levelFilter = c.dataset.rbl;
-            scheduleRender();
           });
-        });
 
         // ── Raceboard column header sort ──
         (function () {
-          var sortableMap = { "Fitness": "fitness", "Return": "return", "Sharpe": "sharpe", "MaxDD": "maxdd" };
-          var thead = document.querySelector("#lbBody")?.closest("table")?.querySelector("thead tr");
+          var sortableMap = {
+            Fitness: "fitness",
+            Return: "return",
+            Sharpe: "sharpe",
+            MaxDD: "maxdd",
+          };
+          var thead = document
+            .querySelector("#lbBody")
+            ?.closest("table")
+            ?.querySelector("thead tr");
           if (!thead) return;
           thead.querySelectorAll("th").forEach(function (th) {
             var col = sortableMap[th.textContent.trim()];
@@ -1620,7 +2121,10 @@
           var sel = state.btSelected;
           var pos = sel.indexOf(idx);
           if (e.target.checked && pos === -1) {
-            if (sel.length >= 4) { e.target.checked = false; return; }
+            if (sel.length >= 4) {
+              e.target.checked = false;
+              return;
+            }
             sel.push(idx);
           } else if (!e.target.checked && pos !== -1) {
             sel.splice(pos, 1);

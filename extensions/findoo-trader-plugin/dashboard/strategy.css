@@ -184,7 +184,15 @@
 }
 
 /* Feed card type colors — strategy-specific */
-.fcard__type--backtest { color: var(--info); }
-.fcard__type--decay { color: var(--warn); }
-.fcard__type--discovery { color: var(--purple); }
-.fcard__type--system { color: var(--text-dim); }
+.fcard__type--backtest {
+  color: var(--info);
+}
+.fcard__type--decay {
+  color: var(--warn);
+}
+.fcard__type--discovery {
+  color: var(--purple);
+}
+.fcard__type--system {
+  color: var(--text-dim);
+}

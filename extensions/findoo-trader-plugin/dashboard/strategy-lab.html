@@ -1550,7 +1550,13 @@
             // Update tier bars with real tier counts
             if (data.evolutionStats.byTier) {
               var bt = data.evolutionStats.byTier;
-              var maxTier = Math.max(bt.thriving || 0, bt.healthy || 0, bt.stressed || 0, bt.critical || 0, 1);
+              var maxTier = Math.max(
+                bt.thriving || 0,
+                bt.healthy || 0,
+                bt.stressed || 0,
+                bt.critical || 0,
+                1,
+              );
               ["thriving", "healthy", "stressed", "critical"].forEach(function (tier) {
                 var pct = ((bt[tier] || 0) / maxTier) * 100;
                 var fillEl = $("tier" + tier.charAt(0).toUpperCase() + tier.slice(1));
@@ -1640,7 +1646,8 @@
           triggerEvolution: function () {
             $("botMsg").innerHTML = "<em>Triggering evolution cycle...</em>";
             toast("Evolution is triggered by the AI agent automatically via heartbeat.", "info");
-            $("botMsg").innerHTML = "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
+            $("botMsg").innerHTML =
+              "<em>Evolution runs via AI agent heartbeat cycle (fin_evolve_trigger tool).</em>";
           },
           runAllBacktests: function () {
             $("botMsg").innerHTML = "<em>Running all backtests...</em>";

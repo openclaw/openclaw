@@ -69,10 +69,18 @@
   flex-shrink: 0;
 }
 
-.pipeline-col__dot--l0 { background: var(--l0); }
-.pipeline-col__dot--l1 { background: var(--l1); }
-.pipeline-col__dot--l2 { background: var(--l2); }
-.pipeline-col__dot--l3 { background: var(--l3); }
+.pipeline-col__dot--l0 {
+  background: var(--l0);
+}
+.pipeline-col__dot--l1 {
+  background: var(--l1);
+}
+.pipeline-col__dot--l2 {
+  background: var(--l2);
+}
+.pipeline-col__dot--l3 {
+  background: var(--l3);
+}
 
 .pipeline-col__label {
   font-family: var(--mono);
@@ -108,7 +116,9 @@
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   padding: 10px;
-  transition: border-color 0.15s, transform 0.2s;
+  transition:
+    border-color 0.15s,
+    transform 0.2s;
 }
 
 .strat-card:hover {
@@ -121,8 +131,15 @@
 }
 
 @keyframes pulse-border {
-  0%, 100% { border-color: var(--warn); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
-  50% { border-color: var(--warn); box-shadow: 0 0 8px 2px rgba(245, 158, 11, 0.25); }
+  0%,
+  100% {
+    border-color: var(--warn);
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+  50% {
+    border-color: var(--warn);
+    box-shadow: 0 0 8px 2px rgba(245, 158, 11, 0.25);
+  }
 }
 
 .strat-card__name {
@@ -157,8 +174,12 @@
   color: var(--text);
 }
 
-.strat-card__metric-val--good { color: var(--gain); }
-.strat-card__metric-val--bad { color: var(--loss); }
+.strat-card__metric-val--good {
+  color: var(--gain);
+}
+.strat-card__metric-val--bad {
+  color: var(--loss);
+}
 
 .strat-card__time {
   margin-top: 6px;
@@ -240,8 +261,15 @@
   transition: all 0.12s;
 }
 
-.timeline-chip:hover { color: var(--text); border-color: var(--border-hi); }
-.timeline-chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.timeline-chip:hover {
+  color: var(--text);
+  border-color: var(--border-hi);
+}
+.timeline-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
 
 .timeline-entries {
   flex: 1;
@@ -266,8 +294,12 @@
 }
 
 @keyframes entry-flash {
-  from { background: rgba(167, 139, 250, 0.1); }
-  to { background: transparent; }
+  from {
+    background: rgba(167, 139, 250, 0.1);
+  }
+  to {
+    background: transparent;
+  }
 }
 
 .timeline-entry__icon {
@@ -281,14 +313,30 @@
   margin-top: 1px;
 }
 
-.timeline-entry__icon--wake { color: var(--info); }
-.timeline-entry__icon--promotion { color: var(--gain); }
-.timeline-entry__icon--demotion { color: var(--loss); }
-.timeline-entry__icon--approval { color: var(--warn); }
-.timeline-entry__icon--decision { color: var(--accent); }
-.timeline-entry__icon--error { color: var(--loss); }
-.timeline-entry__icon--heartbeat { color: var(--text-dim); }
-.timeline-entry__icon--seed { color: var(--purple); }
+.timeline-entry__icon--wake {
+  color: var(--info);
+}
+.timeline-entry__icon--promotion {
+  color: var(--gain);
+}
+.timeline-entry__icon--demotion {
+  color: var(--loss);
+}
+.timeline-entry__icon--approval {
+  color: var(--warn);
+}
+.timeline-entry__icon--decision {
+  color: var(--accent);
+}
+.timeline-entry__icon--error {
+  color: var(--loss);
+}
+.timeline-entry__icon--heartbeat {
+  color: var(--text-dim);
+}
+.timeline-entry__icon--seed {
+  color: var(--purple);
+}
 
 .timeline-entry__body {
   flex: 1;
@@ -329,11 +377,21 @@
   animation: hb-pulse 2s ease-in-out infinite;
 }
 
-.heartbeat-dot--stale { background: var(--loss); animation: none; }
+.heartbeat-dot--stale {
+  background: var(--loss);
+  animation: none;
+}
 
 @keyframes hb-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.3); }
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
 }
 
 /* ── Status Bar Details ──────────────────────────────────────── */
@@ -350,8 +408,12 @@
   border-radius: 50%;
 }
 
-.flow-status__dot--running { background: var(--gain); }
-.flow-status__dot--stopped { background: var(--loss); }
+.flow-status__dot--running {
+  background: var(--gain);
+}
+.flow-status__dot--stopped {
+  background: var(--loss);
+}
 
 /* ── Empty State ─────────────────────────────────────────────── */
 
