@@ -59,4 +59,32 @@ describe("createTelegramBot fetch abort", () => {
       url: "https://api.telegram.org/bot123456:ABC/getUpdates",
     });
   });
+
+  it("preserves the original fetch error when tagging cannot attach metadata", async () => {
+    const shutdown = new AbortController();
+    const frozenError = Object.freeze(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("connect timeout"), {
+          code: "UND_ERR_CONNECT_TIMEOUT",
+        }),
+      }),
+    );
+    const fetchSpy = vi.fn(async () => {
+      throw frozenError;
+    });
+    botCtorSpy.mockClear();
+    createTelegramBot({
+      token: "tok",
+      fetchAbortSignal: shutdown.signal,
+      proxyFetch: fetchSpy as unknown as typeof fetch,
+    });
+    const clientFetch = (botCtorSpy.mock.calls.at(-1)?.[1] as { client?: { fetch?: unknown } })
+      ?.client?.fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>;
+    expect(clientFetch).toBeTypeOf("function");
+
+    await expect(clientFetch("https://api.telegram.org/bot123456:ABC/getUpdates")).rejects.toBe(
+      frozenError,
+    );
+    expect(getTelegramNetworkErrorOrigin(frozenError)).toBeNull();
+  });
 });
