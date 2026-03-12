@@ -103,6 +103,7 @@ async function runSessionResetFromAgent(params: {
   if (!result.ok) {
     return result;
   }
+
   return {
     ok: true,
     key: result.key,

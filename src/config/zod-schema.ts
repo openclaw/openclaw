@@ -21,6 +21,16 @@ import {
   SessionSendPolicySchema,
 } from "./zod-schema.session.js";
 
+const ClosingTurnSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    prompt: z.string().optional(),
+    agentId: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const BrowserSnapshotDefaultsSchema = z
   .object({
     mode: z.literal("efficient").optional(),
@@ -951,6 +961,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    closingTurn: ClosingTurnSchema,
   })
   .strict()
   .superRefine((cfg, ctx) => {

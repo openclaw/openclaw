@@ -1,0 +1,10 @@
+export declare const MAX_PAYLOAD_BYTES: number;
+export declare const MAX_BUFFERED_BYTES: number;
+export declare const getMaxChatHistoryMessagesBytes: () => number;
+export declare const __setMaxChatHistoryMessagesBytesForTest: (value?: number) => void;
+export declare const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10000;
+export declare const getHandshakeTimeoutMs: () => number;
+export declare const TICK_INTERVAL_MS = 30000;
+export declare const HEALTH_REFRESH_INTERVAL_MS = 60000;
+export declare const DEDUPE_TTL_MS: number;
+export declare const DEDUPE_MAX = 1000;

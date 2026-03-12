@@ -1,0 +1,34 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+export type ProcessGatewayAllowlistParams = {
+    command: string;
+    workdir: string;
+    env: Record<string, string>;
+    pty: boolean;
+    timeoutSec?: number;
+    defaultTimeoutSec: number;
+    security: ExecSecurity;
+    ask: ExecAsk;
+    safeBins: Set<string>;
+    safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
+    agentId?: string;
+    sessionKey?: string;
+    turnSourceChannel?: string;
+    turnSourceTo?: string;
+    turnSourceAccountId?: string;
+    turnSourceThreadId?: string | number;
+    scopeKey?: string;
+    warnings: string[];
+    notifySessionKey?: string;
+    approvalRunningNoticeMs: number;
+    maxOutput: number;
+    pendingMaxOutput: number;
+    trustedSafeBinDirs?: ReadonlySet<string>;
+};
+export type ProcessGatewayAllowlistResult = {
+    execCommandOverride?: string;
+    pendingResult?: AgentToolResult<ExecToolDetails>;
+};
+export declare function processGatewayAllowlist(params: ProcessGatewayAllowlistParams): Promise<ProcessGatewayAllowlistResult>;

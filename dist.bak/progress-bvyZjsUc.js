@@ -1,0 +1,133 @@
+import { Ot as theme, S as unregisterActiveProgressLine, b as clearActiveProgressLine, x as registerActiveProgressLine } from "./entry.js";
+import { spinner } from "@clack/prompts";
+import { createOscProgressController, supportsOscProgress } from "osc-progress";
+
+//#region src/cli/progress.ts
+const DEFAULT_DELAY_MS = 0;
+let activeProgress = 0;
+const noopReporter = {
+	setLabel: () => {},
+	setPercent: () => {},
+	tick: () => {},
+	done: () => {}
+};
+function createCliProgress(options) {
+	if (options.enabled === false) return noopReporter;
+	if (activeProgress > 0) return noopReporter;
+	const stream = options.stream ?? process.stderr;
+	const isTty = stream.isTTY;
+	const allowLog = !isTty && options.fallback === "log";
+	if (!isTty && !allowLog) return noopReporter;
+	const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
+	const canOsc = isTty && supportsOscProgress(process.env, isTty);
+	const allowSpinner = isTty && (options.fallback === void 0 || options.fallback === "spinner");
+	const allowLine = isTty && options.fallback === "line";
+	let started = false;
+	let label = options.label;
+	const total = options.total ?? null;
+	let completed = 0;
+	let percent = 0;
+	let indeterminate = options.indeterminate ?? (options.total === void 0 || options.total === null);
+	activeProgress += 1;
+	if (isTty) registerActiveProgressLine(stream);
+	const controller = canOsc ? createOscProgressController({
+		env: process.env,
+		isTty: stream.isTTY,
+		write: (chunk) => stream.write(chunk)
+	}) : null;
+	const spin = allowSpinner ? spinner() : null;
+	const renderLine = allowLine ? () => {
+		if (!started) return;
+		const suffix = indeterminate ? "" : ` ${percent}%`;
+		clearActiveProgressLine();
+		stream.write(`${theme.accent(label)}${suffix}`);
+	} : null;
+	const renderLog = allowLog ? (() => {
+		let lastLine = "";
+		let lastAt = 0;
+		const throttleMs = 250;
+		return () => {
+			if (!started) return;
+			const suffix = indeterminate ? "" : ` ${percent}%`;
+			const nextLine = `${label}${suffix}`;
+			const now = Date.now();
+			if (nextLine === lastLine && now - lastAt < throttleMs) return;
+			lastLine = nextLine;
+			lastAt = now;
+			stream.write(`${nextLine}\n`);
+		};
+	})() : null;
+	let timer = null;
+	const applyState = () => {
+		if (!started) return;
+		if (controller) if (indeterminate) controller.setIndeterminate(label);
+		else controller.setPercent(label, percent);
+		if (spin) spin.message(theme.accent(label));
+		if (renderLine) renderLine();
+		if (renderLog) renderLog();
+	};
+	const start = () => {
+		if (started) return;
+		started = true;
+		if (spin) spin.start(theme.accent(label));
+		applyState();
+	};
+	if (delayMs === 0) start();
+	else timer = setTimeout(start, delayMs);
+	const setLabel = (next) => {
+		label = next;
+		applyState();
+	};
+	const setPercent = (nextPercent) => {
+		percent = Math.max(0, Math.min(100, Math.round(nextPercent)));
+		indeterminate = false;
+		applyState();
+	};
+	const tick = (delta = 1) => {
+		if (!total) return;
+		completed = Math.min(total, completed + delta);
+		setPercent(total > 0 ? Math.round(completed / total * 100) : 0);
+	};
+	const done = () => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = null;
+		}
+		if (!started) {
+			activeProgress = Math.max(0, activeProgress - 1);
+			return;
+		}
+		if (controller) controller.clear();
+		if (spin) spin.stop();
+		clearActiveProgressLine();
+		if (isTty) unregisterActiveProgressLine(stream);
+		activeProgress = Math.max(0, activeProgress - 1);
+	};
+	return {
+		setLabel,
+		setPercent,
+		tick,
+		done
+	};
+}
+async function withProgress(options, work) {
+	const progress = createCliProgress(options);
+	try {
+		return await work(progress);
+	} finally {
+		progress.done();
+	}
+}
+async function withProgressTotals(options, work) {
+	return await withProgress(options, async (progress) => {
+		const update = ({ completed, total, label }) => {
+			if (label) progress.setLabel(label);
+			if (!Number.isFinite(total) || total <= 0) return;
+			progress.setPercent(completed / total * 100);
+		};
+		return await work(update, progress);
+	});
+}
+
+//#endregion
+export { withProgress as n, withProgressTotals as r, createCliProgress as t };

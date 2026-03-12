@@ -14,7 +14,6 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
-import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -28,6 +27,13 @@ import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+
+export type ClosingTurnConfig = {
+  enabled: boolean;
+  prompt?: string;
+  agentId?: string;
+  timeoutSeconds?: number;
+};
 
 export type OpenClawConfig = {
   meta?: {
@@ -121,7 +127,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
-  mcp?: McpConfig;
+  closingTurn?: ClosingTurnConfig;
 };
 
 declare const openClawConfigStateBrand: unique symbol;

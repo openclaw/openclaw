@@ -49,7 +49,9 @@ import {
   formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  normalizeReasoningLevel,
   supportsXHighThinking,
+  type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -330,6 +332,7 @@ function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+  resolvedReasoningLevel: ReasoningLevel | undefined;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts & { senderIsOwner: boolean };
@@ -485,6 +488,7 @@ function runAgentAttempt(params: {
     authProfileId,
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
+    reasoningLevel: params.resolvedReasoningLevel,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
@@ -577,6 +581,11 @@ async function prepareAgentCommandExecution(
     throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
   }
 
+  const reasoningOverride = normalizeReasoningLevel(opts.reasoning);
+  if (opts.reasoning && !reasoningOverride) {
+    throw new Error(`Invalid reasoning level "${opts.reasoning}". Use one of: on, off, stream.`);
+  }
+
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
@@ -656,6 +665,7 @@ async function prepareAgentCommandExecution(
     thinkOverride,
     thinkOnce,
     verboseOverride,
+    reasoningOverride,
     timeoutMs,
     sessionId,
     sessionKey,
@@ -689,6 +699,7 @@ async function agentCommandInternal(
     thinkOverride,
     thinkOnce,
     verboseOverride,
+    reasoningOverride,
     timeoutMs,
     sessionId,
     sessionKey,
@@ -865,6 +876,9 @@ async function agentCommandInternal(
     let resolvedThinkLevel = thinkOnce ?? thinkOverride ?? persistedThinking;
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    // Explicit opts.reasoning override wins; otherwise undefined (let the embedded runner
+    // auto-detect via resolveDefaultReasoningLevel(), matching live session behaviour).
+    const resolvedReasoningLevel: ReasoningLevel | undefined = reasoningOverride;
 
     if (sessionKey) {
       registerAgentRunContext(runId, {
@@ -1067,7 +1081,10 @@ async function agentCommandInternal(
       }
     }
     let sessionFile: string | undefined;
-    if (sessionStore && sessionKey) {
+    if (opts.sessionFile) {
+      // Explicit session file provided — skip store resolution entirely.
+      sessionFile = opts.sessionFile;
+    } else if (sessionStore && sessionKey) {
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
@@ -1139,6 +1156,7 @@ async function agentCommandInternal(
             body,
             isFallbackRetry,
             resolvedThinkLevel,
+            resolvedReasoningLevel,
             timeoutMs,
             runId,
             opts,

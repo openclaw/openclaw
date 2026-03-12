@@ -3,12 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded-runner/runs.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -996,10 +991,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
-    emitSessionsChanged(context, {
-      sessionKey: result.key,
-      reason,
-    });
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
@@ -1208,3 +1199,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+// Closing turn functionality moved to src/hooks/bundled/closing-turn/handler.ts
+// It now fires as an internal hook on command:new and command:reset events,
+// providing universal coverage across all ingress channels.
