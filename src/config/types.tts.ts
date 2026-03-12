@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "deepgram";
 
 export type TtsMode = "final" | "all";
 
@@ -79,6 +79,12 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Deepgram Aura configuration. */
+  deepgram?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
