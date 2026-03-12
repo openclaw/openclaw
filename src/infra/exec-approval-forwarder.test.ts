@@ -294,6 +294,24 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
+  it("renders invisible Unicode format chars as visible escapes", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          command: "bash safe\u200B.sh",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+
+    expect(getFirstDeliveryText(deliver)).toContain("Command: `bash safe\\u{200B}.sh`");
+  });
+
   it("formats complex commands as fenced code blocks", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
