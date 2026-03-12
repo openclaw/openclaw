@@ -51,6 +51,28 @@ type ExternalCatalogEntry = {
   description?: string;
 } & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
+const BUILTIN_CATALOG_ENTRIES: ExternalCatalogEntry[] = [
+  {
+    name: "@soimy/dingtalk",
+    openclaw: {
+      channel: {
+        id: "dingtalk",
+        label: "DingTalk",
+        selectionLabel: "DingTalk (Stream Mode)",
+        docsPath: "https://github.com/soimy/openclaw-channel-dingtalk",
+        docsLabel: "openclaw-channel-dingtalk",
+        blurb: "DingTalk bot plugin for Stream mode setup.",
+        order: 70,
+        aliases: ["dd", "ding"],
+      },
+      install: {
+        npmSpec: "@soimy/dingtalk",
+        defaultChoice: "npm",
+      },
+    },
+  },
+];
+
 const DEFAULT_CATALOG_PATHS = [
   path.join(CONFIG_DIR, "mpm", "plugins.json"),
   path.join(CONFIG_DIR, "mpm", "catalog.json"),
@@ -101,8 +123,8 @@ function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
 }
 
 function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEntry[] {
+  const entries: ExternalCatalogEntry[] = [...BUILTIN_CATALOG_ENTRIES];
   const paths = resolveExternalCatalogPaths(options);
-  const entries: ExternalCatalogEntry[] = [];
   for (const rawPath of paths) {
     const resolved = resolveUserPath(rawPath);
     if (!fs.existsSync(resolved)) {

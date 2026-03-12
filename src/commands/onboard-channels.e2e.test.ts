@@ -223,6 +223,33 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
+  it("shows DingTalk in QuickStart channel selection for first-install setup", async () => {
+    const select = vi.fn(async ({ message, options }: { message: string; options?: unknown[] }) => {
+      if (message === "Select channel (QuickStart)") {
+        const values = (options ?? []).map((option) => (option as { value?: string }).value ?? "");
+        expect(values).toContain("dingtalk");
+        return "__skip__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("continues Telegram onboarding even when plugin registry is empty (avoids 'plugin not available' block)", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());

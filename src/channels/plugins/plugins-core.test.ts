@@ -102,6 +102,12 @@ describe("channel plugin registry", () => {
 });
 
 describe("channel plugin catalog", () => {
+  it("includes DingTalk for first-install onboarding", () => {
+    const entry = getChannelPluginCatalogEntry("dingtalk");
+    expect(entry?.install.npmSpec).toBe("@soimy/dingtalk");
+    expect(entry?.meta.label).toBe("DingTalk");
+  });
+
   it("includes Microsoft Teams", () => {
     const entry = getChannelPluginCatalogEntry("msteams");
     expect(entry?.install.npmSpec).toBe("@openclaw/msteams");
@@ -110,6 +116,7 @@ describe("channel plugin catalog", () => {
 
   it("lists plugin catalog entries", () => {
     const ids = listChannelPluginCatalogEntries().map((entry) => entry.id);
+    expect(ids).toContain("dingtalk");
     expect(ids).toContain("msteams");
   });
 
