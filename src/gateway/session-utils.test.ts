@@ -877,6 +877,99 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
 
+  test("keeps zero estimated session cost when configured model pricing resolves to free", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.3-codex-spark",
+                label: "GPT 5.3 Codex Spark",
+                baseUrl: "https://api.openai.com/v1",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          inputTokens: 5_107,
+          outputTokens: 1_827,
+          cacheRead: 1_536,
+          cacheWrite: 0,
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
+  });
+
+  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-zero-cost-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            usage: {
+              input: 5_107,
+              output: 1_827,
+              cacheRead: 1_536,
+              cost: { total: 0 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg: baseCfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "openai-codex",
+            model: "gpt-5.3-codex-spark",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]?.totalTokens).toBe(6_643);
+      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+      expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-"));
     const storePath = path.join(tmpDir, "sessions.json");

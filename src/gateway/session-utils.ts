@@ -226,6 +226,10 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -233,7 +237,7 @@ function resolveEstimatedSessionCostUsd(params: {
   entry?: Pick<SessionEntry, "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite">;
   explicitCostUsd?: number;
 }): number | undefined {
-  const explicitCostUsd = resolvePositiveNumber(params.explicitCostUsd);
+  const explicitCostUsd = resolveNonNegativeNumber(params.explicitCostUsd);
   if (explicitCostUsd !== undefined) {
     return explicitCostUsd;
   }
@@ -266,7 +270,7 @@ function resolveEstimatedSessionCostUsd(params: {
     },
     cost,
   });
-  return resolvePositiveNumber(estimated);
+  return resolveNonNegativeNumber(estimated);
 }
 
 function resolveChildSessionKeys(
@@ -1110,7 +1114,7 @@ export function buildGatewaySessionRow(params: {
       provider: modelProvider,
       model,
       entry,
-    }) ?? resolvePositiveNumber(transcriptUsage?.estimatedCostUsd);
+    }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const contextTokens =
     resolvePositiveNumber(entry?.contextTokens) ??
     resolvePositiveNumber(transcriptUsage?.contextTokens) ??
