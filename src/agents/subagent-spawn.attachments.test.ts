@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { decodeStrictBase64, spawnSubagentDirect } from "./subagent-spawn.js";
 
@@ -31,6 +32,7 @@ let configOverride: Record<string, unknown> = {
     },
   },
 };
+let workspaceDirOverride = "";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -61,7 +63,7 @@ vi.mock("./agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./agent-scope.js")>();
   return {
     ...actual,
-    resolveAgentWorkspaceDir: () => path.join(os.tmpdir(), "agent-workspace"),
+    resolveAgentWorkspaceDir: () => workspaceDirOverride,
   };
 });
 
@@ -145,6 +147,16 @@ describe("spawnSubagentDirect filename validation", () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     setupGatewayMock();
+    workspaceDirOverride = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-subagent-attachments-${process.pid}-${Date.now()}-`),
+    );
+  });
+
+  afterEach(() => {
+    if (workspaceDirOverride) {
+      fs.rmSync(workspaceDirOverride, { recursive: true, force: true });
+      workspaceDirOverride = "";
+    }
   });
 
   const ctx = {
@@ -209,5 +221,44 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnWithName("");
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
+  it("removes materialized attachments when lineage patching fails", async () => {
+    const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      calls.push(request);
+      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
+        throw new Error("lineage patch failed");
+      }
+      if (request.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "lineage patch failed",
+    });
+    const attachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
+    const retainedDirs = fs.existsSync(attachmentsRoot)
+      ? fs.readdirSync(attachmentsRoot).filter((entry) => !entry.startsWith("."))
+      : [];
+    expect(retainedDirs).toHaveLength(0);
+    const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: expect.stringMatching(/^agent:main:subagent:/),
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
   });
 });

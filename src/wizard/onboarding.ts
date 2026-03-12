@@ -81,7 +81,7 @@ export async function runOnboardingWizard(
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -426,6 +426,8 @@ export async function runOnboardingWizard(
       prompter,
       store: authStore,
       includeSkip: true,
+      config: nextConfig,
+      workspaceDir,
     }));
 
   if (authChoice === "custom-api-key") {
@@ -449,6 +451,10 @@ export async function runOnboardingWizard(
       },
     });
     nextConfig = authResult.config;
+
+    if (authResult.agentModelOverride) {
+      nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
+    }
   }
 
   if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
@@ -457,8 +463,14 @@ export async function runOnboardingWizard(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
-      includeVllm: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      includeProviderPluginSetups: true,
+      preferredProvider: resolvePreferredProviderForAuthChoice({
+        choice: authChoice,
+        config: nextConfig,
+        workspaceDir,
+      }),
+      workspaceDir,
+      runtime,
     });
     if (modelSelection.config) {
       nextConfig = modelSelection.config;
