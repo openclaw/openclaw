@@ -306,7 +306,7 @@ If you add new skills later that depend on additional binaries, you must:
 **Example Dockerfile**
 
 ```dockerfile
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 

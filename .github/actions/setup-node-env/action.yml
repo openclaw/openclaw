@@ -1,12 +1,16 @@
 name: Setup Node environment
 description: >
-  Initialize submodules with retry, install Node 22, pnpm, optionally Bun,
+  Initialize submodules with retry, install Node 24 by default, pnpm, optionally Bun,
   and optionally run pnpm install. Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
     required: false
-    default: "22.x"
+    default: "24.x"
+  cache-key-suffix:
+    description: Suffix appended to the pnpm store cache key.
+    required: false
+    default: "node24"
   pnpm-version:
     description: pnpm version for corepack.
     required: false
@@ -54,7 +58,7 @@ runs:
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
-        cache-key-suffix: "node22"
+        cache-key-suffix: ${{ inputs.cache-key-suffix }}
         use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
