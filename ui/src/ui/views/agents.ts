@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { renderSelect } from "../components/select.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -449,23 +450,24 @@ function renderAgentOverview(params: {
         <div class="row" style="gap: 12px; flex-wrap: wrap;">
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
-            <select
-              .value=${effectivePrimary ?? ""}
-              ?disabled=${!configForm || configLoading || configSaving}
-              @change=${(e: Event) =>
-                onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
-            >
-              ${
-                isDefault
-                  ? nothing
-                  : html`
-                      <option value="">
-                        ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
-                      </option>
-                    `
-              }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
-            </select>
+            ${renderSelect({
+              value: effectivePrimary ?? "",
+              options: [
+                ...(isDefault
+                  ? []
+                  : [
+                      {
+                        value: "",
+                        label: defaultPrimary
+                          ? `Inherit default (${defaultPrimary})`
+                          : "Inherit default",
+                      },
+                    ]),
+                ...buildModelOptions(configForm, effectivePrimary ?? undefined),
+              ],
+              onChange: (value) => onModelChange(agent.id, value || null),
+              disabled: !configForm || configLoading || configSaving,
+            })}
           </label>
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Fallbacks (comma-separated)</span>

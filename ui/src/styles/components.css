@@ -1,6 +1,82 @@
 @import "./chat.css";
 
 /* ===========================================
+   Select
+   =========================================== */
+
+.oc-select {
+  padding: 9px 40px 9px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.oc-select:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+
+.oc-select:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.oc-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.oc-select option {
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.oc-select option:checked {
+  background: var(--accent-subtle);
+  color: var(--text-strong);
+}
+
+.oc-select option:disabled {
+  color: var(--muted);
+}
+
+.oc-select[multiple] {
+  padding: 4px;
+  background-image: none;
+  height: auto;
+}
+
+.oc-select[multiple] option {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  margin: 1px 0;
+}
+
+:root[data-theme="light"] .oc-select {
+  background-color: white;
+}
+
+:root[data-theme="light"] .oc-select option {
+  background: white;
+}
+
+:root[data-theme="light"] .oc-select option:checked {
+  background: var(--accent-subtle);
+}
+
+/* ===========================================
    Update Banner
    =========================================== */
 

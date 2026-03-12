@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { renderSelect } from "../components/select.ts";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
@@ -314,25 +315,18 @@ function renderBindings(state: BindingState) {
                 <div class="list-meta">
                   <label class="field">
                     <span>Node</span>
-                    <select
-                      ?disabled=${state.disabled || !supportsBinding}
-                      @change=${(event: Event) => {
-                        const target = event.target as HTMLSelectElement;
-                        const value = target.value.trim();
-                        state.onBindDefault(value ? value : null);
-                      }}
-                    >
-                      <option value="" ?selected=${defaultValue === ""}>Any node</option>
-                      ${state.nodes.map(
-                        (node) =>
-                          html`<option
-                            value=${node.id}
-                            ?selected=${defaultValue === node.id}
-                          >
-                            ${node.label}
-                          </option>`,
-                      )}
-                    </select>
+                    ${renderSelect({
+                      value: defaultValue,
+                      options: [
+                        { value: "", label: "Any node" },
+                        ...state.nodes.map((node) => ({ value: node.id, label: node.label })),
+                      ],
+                      onChange: (value) => {
+                        const trimmed = value.trim();
+                        state.onBindDefault(trimmed ? trimmed : null);
+                      },
+                      disabled: state.disabled || !supportsBinding,
+                    })}
                   </label>
                   ${
                     !supportsBinding
@@ -378,27 +372,18 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
       <div class="list-meta">
         <label class="field">
           <span>Binding</span>
-          <select
-            ?disabled=${state.disabled || !supportsBinding}
-            @change=${(event: Event) => {
-              const target = event.target as HTMLSelectElement;
-              const value = target.value.trim();
-              state.onBindAgent(agent.index, value === "__default__" ? null : value);
-            }}
-          >
-            <option value="__default__" ?selected=${bindingValue === "__default__"}>
-              Use default
-            </option>
-            ${state.nodes.map(
-              (node) =>
-                html`<option
-                  value=${node.id}
-                  ?selected=${bindingValue === node.id}
-                >
-                  ${node.label}
-                </option>`,
-            )}
-          </select>
+          ${renderSelect({
+            value: bindingValue,
+            options: [
+              { value: "__default__", label: "Use default" },
+              ...state.nodes.map((node) => ({ value: node.id, label: node.label })),
+            ],
+            onChange: (value) => {
+              const trimmed = value.trim();
+              state.onBindAgent(agent.index, trimmed === "__default__" ? null : trimmed);
+            },
+            disabled: state.disabled || !supportsBinding,
+          })}
         </label>
       </div>
     </div>
