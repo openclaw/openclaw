@@ -62,8 +62,11 @@ import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
-import { resolveThinkingDefault } from "../../model-selection.js";
+import {
+  normalizeProviderId,
+  resolveDefaultModelForAgent,
+  resolveThinkingDefault,
+} from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";

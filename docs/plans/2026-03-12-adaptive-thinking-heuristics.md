@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Gating tests
+## Task 1: Gating tests
 
 **Files:**
 
@@ -45,7 +45,7 @@ Run: `pnpm test src/agents/system-prompt.test.ts src/agents/openclaw-tools.set-t
 
 Expected: same targeted failure.
 
-### Task 2: Gate tool registration and prompt visibility
+## Task 2: Gate tool registration and prompt visibility
 
 **Files:**
 
@@ -83,7 +83,7 @@ Expected: PASS
 
 If the prompt builder becomes noisy, extract a small helper inside `src/agents/system-prompt.ts`. Do not broaden scope.
 
-### Task 3: Prompt regression verification
+## Task 3: Prompt regression verification
 
 **Files:**
 
