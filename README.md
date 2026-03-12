@@ -37,7 +37,12 @@ The upstream "security hardening" (GHSA-5wcw-8jjv-m286) only removes a bypass â€
 - IPv6 support with bracket notation handling
 - Port normalization (:443, :80 stripping)
 
-Use this fork if you run OpenClaw behind a reverse proxy.
+The upstream requires users to either:
+
+1. Not use a reverse proxy (broken for proxy users), OR
+2. Enable `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback: true` which is inherently insecure â€” it trusts the Host header directly, reopening the bypass vulnerability
+
+This fork provides a third option: proper proxy-aware origin validation.
 
 ---
 
