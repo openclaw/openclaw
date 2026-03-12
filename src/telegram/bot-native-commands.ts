@@ -127,7 +127,7 @@ type RegisterTelegramNativeCommandsParams = {
   telegramCfg: TelegramAccountConfig;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   useAccessGroups: boolean;
   nativeEnabled: boolean;

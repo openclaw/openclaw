@@ -1639,14 +1639,19 @@ describe("resolveReplyToMode", () => {
 
     const cases: Array<{
       cfg: OpenClawConfig;
-      channel?: "telegram" | "discord" | "slack";
+      channel?: "telegram" | "discord" | "slack" | "whatsapp";
       chatType?: "direct" | "group" | "channel";
       expected: "off" | "all" | "first";
     }> = [
       { cfg: emptyCfg, channel: "telegram", expected: "off" },
+      { cfg: emptyCfg, channel: "telegram", chatType: "direct", expected: "off" },
       { cfg: emptyCfg, channel: "discord", expected: "off" },
       { cfg: emptyCfg, channel: "slack", expected: "off" },
-      { cfg: emptyCfg, channel: undefined, expected: "all" },
+      { cfg: emptyCfg, channel: undefined, expected: "off" },
+      { cfg: emptyCfg, channel: undefined, chatType: "direct", expected: "off" },
+      { cfg: emptyCfg, channel: undefined, chatType: "group", expected: "all" },
+      { cfg: emptyCfg, channel: "whatsapp", chatType: "direct", expected: "off" },
+      { cfg: emptyCfg, channel: "whatsapp", chatType: "group", expected: "all" },
       { cfg: configuredCfg, channel: "telegram", expected: "all" },
       { cfg: configuredCfg, channel: "discord", expected: "first" },
       { cfg: configuredCfg, channel: "slack", expected: "all" },

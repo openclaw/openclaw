@@ -850,6 +850,58 @@ describe("deliverReplies", () => {
     }
   });
 
+  it("keeps explicit reply targets when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "explicit reply", replyToId: "801", replyToTag: true }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 801 }),
+    );
+  });
+
+  it("keeps explicit replyToId targets when replyToMode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 23,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "explicit id reply", replyToId: "802" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({ reply_to_message_id: 802 }),
+    );
+  });
+
   it("replyToMode 'first' only applies reply-to to first media item", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({

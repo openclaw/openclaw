@@ -18,7 +18,7 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   telegramCfg: TelegramAccountConfig;
   runtime: RuntimeEnv;
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;

@@ -91,6 +91,16 @@ function resolveReplyToForSend(params: {
     : undefined;
 }
 
+function resolveReplyToModeForDelivery(params: {
+  configuredReplyToMode?: ReplyToMode;
+  thread?: TelegramThreadSpec | null;
+}): ReplyToMode {
+  if (params.configuredReplyToMode) {
+    return params.configuredReplyToMode;
+  }
+  return params.thread?.scope === "dm" ? "off" : "all";
+}
+
 function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void {
   if (replyToId && !progress.hasReplied) {
     progress.hasReplied = true;
@@ -568,7 +578,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
@@ -588,6 +598,10 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const effectiveReplyToMode = resolveReplyToModeForDelivery({
+    configuredReplyToMode: params.replyToMode,
+    thread: params.thread,
+  });
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
@@ -651,8 +665,12 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const explicitReplyOverride =
+        Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent) || Boolean(reply.replyToId);
       const replyToId =
-        params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+        effectiveReplyToMode === "off" && !explicitReplyOverride
+          ? undefined
+          : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
@@ -669,7 +687,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           linkPreview: params.linkPreview,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       } else {
@@ -688,7 +706,7 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       }

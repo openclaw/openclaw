@@ -11,16 +11,19 @@ export function resolveReplyToMode(
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {
+  const normalizedChatType = chatType?.trim().toLowerCase();
+  const defaultMode: ReplyToMode =
+    normalizedChatType && normalizedChatType !== "direct" ? "all" : "off";
   const provider = normalizeChannelId(channel);
   if (!provider) {
-    return "all";
+    return defaultMode;
   }
   const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
     chatType,
   });
-  return resolved ?? "all";
+  return resolved ?? defaultMode;
 }
 
 export function createReplyToModeFilter(

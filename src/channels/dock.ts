@@ -260,7 +260,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
+      resolveReplyToMode: ({ cfg, chatType }) => {
+        const configured = cfg.channels?.telegram?.replyToMode;
+        if (configured) {
+          return configured;
+        }
+        const normalizedChatType = chatType?.trim().toLowerCase();
+        return normalizedChatType && normalizedChatType !== "direct" ? "all" : "off";
+      },
       buildToolContext: ({ context, hasRepliedRef }) => {
         // Telegram auto-threading should only use actual thread/topic IDs.
         // ReplyToId is a message ID and causes invalid message_thread_id in DMs.

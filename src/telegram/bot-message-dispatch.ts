@@ -102,7 +102,7 @@ type DispatchTelegramMessageParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
@@ -110,6 +110,16 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+
+function resolveTelegramReplyToModeForContext(params: {
+  configuredReplyToMode?: ReplyToMode;
+  isGroup: boolean;
+}): ReplyToMode {
+  if (params.configuredReplyToMode) {
+    return params.configuredReplyToMode;
+  }
+  return params.isGroup ? "all" : "off";
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -189,8 +199,14 @@ export const dispatchTelegramMessage = async ({
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const effectiveReplyToMode = resolveTelegramReplyToModeForContext({
+    configuredReplyToMode: replyToMode,
+    isGroup,
+  });
   const draftReplyToMessageId =
-    replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
+    effectiveReplyToMode !== "off" && typeof msg.message_id === "number"
+      ? msg.message_id
+      : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // Keep DM preview lanes on real message transport. Native draft previews still
   // require a draft->message materialize hop, and that overlap keeps reintroducing
@@ -454,7 +470,7 @@ export const dispatchTelegramMessage = async ({
     runtime,
     bot,
     mediaLocalRoots,
-    replyToMode,
+    replyToMode: effectiveReplyToMode,
     textLimit,
     thread: threadSpec,
     tableMode,
