@@ -110,6 +110,28 @@ describe("web search provider config", () => {
   });
 });
 
+describe("tools.web.fetch.firecrawl", () => {
+  it("accepts Firecrawl fallback config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            firecrawl: {
+              apiKey: "fc-test-key",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: true,
+              maxAgeMs: 172800000,
+              timeoutSeconds: 60,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", () => {
     const res = validateConfigObject({
