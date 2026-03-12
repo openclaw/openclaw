@@ -166,6 +166,45 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("renders thinking stream updates for active runs when reasoning level is stream", () => {
+    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-think",
+        sessionInfo: { verboseLevel: "on", reasoningLevel: "stream" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-think",
+      stream: "thinking",
+      data: { text: "Reasoning:\n_checking now_" },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith(
+      "Reasoning:\n_checking now_",
+      "run-think:thinking",
+    );
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores thinking stream updates when reasoning level is not stream", () => {
+    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-think",
+        sessionInfo: { verboseLevel: "on", reasoningLevel: "off" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-think",
+      stream: "thinking",
+      data: { text: "Reasoning:\n_hidden_" },
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("captures runId from chat events when activeChatRunId is unset", () => {
     const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -277,6 +316,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("clears active thinking stream when the run reaches final", () => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-think-final",
+        sessionInfo: { verboseLevel: "on", reasoningLevel: "stream" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-think-final",
+      stream: "thinking",
+      data: { text: "Reasoning:\n_working_" },
+    });
+    chatLog.dropAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-think-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("run-think-final:thinking");
   });
 
   it("ignores lifecycle updates for non-active runs in the same session", () => {
