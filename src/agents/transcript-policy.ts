@@ -49,7 +49,7 @@ function isOpenAiProvider(provider?: string | null): boolean {
   return isOpenAiProviderFamily(provider);
 }
 
-export function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
+function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
   if (modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream") {
     return true;
   }

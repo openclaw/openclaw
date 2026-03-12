@@ -24,13 +24,14 @@ import {
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { isAnthropicApi, resolveTranscriptPolicy } from "../transcript-policy.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
+import { isAnthropicBedrockModel } from "./anthropic-stream-wrappers.js";
 import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
@@ -165,8 +166,14 @@ function dropSyntheticAssistantTranscriptMessages(messages: AgentMessage[]): Age
 function shouldDropSyntheticAssistantTranscriptMessages(params: {
   modelApi?: string | null;
   provider?: string;
+  modelId?: string;
 }): boolean {
-  return isAnthropicApi(params.modelApi, params.provider);
+  if (params.provider === "anthropic" || params.modelApi === "anthropic-messages") {
+    return true;
+  }
+  return (
+    params.modelApi === "bedrock-converse-stream" && isAnthropicBedrockModel(params.modelId ?? "")
+  );
 }
 
 function parseMessageTimestamp(value: unknown): number | null {
