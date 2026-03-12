@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import ignore from "ignore";
 // ---------------------------------------------------------------------------
 // Types
@@ -322,14 +322,17 @@ export function buildExcludeFilter(
   const filter = (entryPath: string, stat: { size?: number }): boolean => {
     try {
       // Normalize to relative path with forward slashes — required by `ignore`.
+      // Normalize separators early: tar on Windows may pass mixed separators
+      // (e.g. C:\Users\...\openclaw/venvs) from its readdir-based subpath construction.
+      const normalized = entryPath.replaceAll("\\", "/");
       let rel: string;
       if (isAbsolute(entryPath)) {
-        rel = relative(baseDir, entryPath);
+        rel = relative(baseDir, entryPath).replaceAll("\\", "/");
       } else {
-        rel = entryPath;
+        rel = normalized;
       }
-      // Normalize separators (Windows safety) and strip leading `./`
-      rel = rel.split(sep).join("/").replace(/^\.\//, "");
+      // Strip leading `./`
+      rel = rel.replace(/^\.\//, "");
 
       if (!rel) {
         return true; // root directory itself — always include
