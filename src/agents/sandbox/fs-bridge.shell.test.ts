@@ -45,10 +45,10 @@ describe("sandbox fs bridge shell compatibility", () => {
     });
   });
 
-  it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
+  it("path canonicalization recheck script is valid POSIX sh", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
-    await bridge.mkdirp({ filePath: "nested" });
+    await bridge.writeFile({ filePath: "b.txt", data: "hello" });
 
     const scripts = getScriptsFromCalls();
     const canonicalScript = scripts.find((script) => script.includes("allow_final"));
@@ -130,11 +130,37 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
+    expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);
   });
 
-  it("re-validates target before final rename and cleans temp file on failure", async () => {
+  it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
+    await withTempDir("openclaw-fs-bridge-shell-write-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "a.txt"), "hello", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await bridge.mkdirp({ filePath: "nested" });
+      await bridge.remove({ filePath: "nested/file.txt" });
+      await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
+
+      const scripts = getScriptsFromCalls();
+      expect(scripts.filter((script) => script.includes("operation = sys.argv[1]")).length).toBe(3);
+      expect(scripts.some((script) => script.includes('mkdir -p -- "$2"'))).toBe(false);
+      expect(scripts.some((script) => script.includes('rm -f -- "$2"'))).toBe(false);
+      expect(scripts.some((script) => script.includes('mv -- "$3" "$2/$4"'))).toBe(false);
+    });
+  });
+
+  it("re-validates target before the pinned write helper runs", async () => {
     const { mockedOpenBoundaryFile } = await import("./fs-bridge.test-helpers.js");
     mockedOpenBoundaryFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
@@ -150,8 +176,6 @@ describe("sandbox fs bridge shell compatibility", () => {
     );
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes("mktemp"))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('rm -f -- "$1"'))).toBe(true);
+    expect(scripts.some((script) => script.includes("os.replace("))).toBe(false);
   });
 });
