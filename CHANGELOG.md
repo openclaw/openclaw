@@ -138,7 +138,6 @@ Docs: https://docs.openclaw.ai
 - Secret files: harden CLI and channel credential file reads against path-swap races by requiring direct regular files for `*File` secret inputs and rejecting symlink-backed secret files.
 - Archive extraction: harden TAR and external `tar.bz2` installs against destination symlink and pre-existing child-symlink escapes by extracting into staging first and merging into the canonical destination with safe file opens.
 - Secrets/SecretRef: reject exec SecretRef traversal ids across schema, runtime, and gateway. (#42370) Thanks @joshavant.
-- Agents/failover: classify z.ai `network_error` stop reasons as retryable timeouts so provider connectivity failures trigger fallback instead of surfacing raw unhandled-stop-reason errors. (#43884) Thanks @hougangdev.
 - Sandbox/fs bridge: pin staged writes to verified parent directories so temporary write files cannot materialize outside the allowed mount before atomic replace. Thanks @tdjackey.
 - Gateway/auth: fail closed when local `gateway.auth.*` SecretRefs are configured but unavailable, instead of silently falling back to `gateway.remote.*` credentials in local mode. (#42672) Thanks @joshavant.
 - Commands/config writes: enforce `configWrites` against both the originating account and the targeted account scope for `/config` and config-backed `/allowlist` edits, blocking sibling-account mutations while preserving gateway `operator.admin` flows. Thanks @tdjackey for reporting.
@@ -148,6 +147,7 @@ Docs: https://docs.openclaw.ai
 - Security/nodes: treat the `nodes` agent tool as owner-only fallback policy so non-owner senders cannot reach paired-node approval or invoke paths through the shared tool set.
 - Sandbox/sessions_spawn: restore real workspace handoff for read-only sandboxed sessions so spawned subagents mount the configured workspace at `/agent` instead of inheriting the sandbox copy. Related #40582.
 - Security/external content: treat whitespace-delimited `EXTERNAL UNTRUSTED CONTENT` boundary markers like underscore-delimited variants so prompt wrappers cannot bypass marker sanitization. (#35983) Thanks @urianpaul94.
+- Agents/failover: classify z.ai `network_error` stop reasons as retryable timeouts so provider connectivity failures trigger fallback instead of surfacing raw unhandled-stop-reason errors. (#43884) Thanks @hougangdev.
 - Telegram/exec approvals: reject `/approve` commands aimed at other bots, keep deterministic approval prompts visible when tool-result delivery fails, and stop resolved exact IDs from matching other pending approvals by prefix. (#37233) Thanks @huntharo.
 - Subagents/authority: persist leaf vs orchestrator control scope at spawn time and route tool plus slash-command control through shared ownership checks, so leaf sessions cannot regain orchestration privileges after restore or flat-key lookups. Thanks @tdjackey.
 - ACP/ACPX plugin: bump the bundled `acpx` pin to `0.1.16` so plugin-local installs and strict version checks match the latest published CLI. (#41975) Thanks @dutifulbob.
