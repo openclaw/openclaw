@@ -78,7 +78,7 @@ const findooPlugin = {
         onTaskCompleted(task, result) {
           const summary = extractSummary(result);
           enqueueSystemEvent(`[findoo] 深度分析完成 — "${task.query.slice(0, 40)}"\n\n${summary}`, {
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             contextKey: "findoo-analysis",
           });
           // Immediately wake heartbeat so LLM sees the result
@@ -87,7 +87,7 @@ const findooPlugin = {
 
         onTaskFailed(task, error) {
           enqueueSystemEvent(`[findoo] 分析任务失败 — "${task.query.slice(0, 40)}": ${error}`, {
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             contextKey: "findoo-analysis",
           });
           requestHeartbeatNow?.({ reason: "findoo-analysis-failed", coalesceSec: 5 });
