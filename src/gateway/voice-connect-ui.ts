@@ -72,6 +72,9 @@ function setStaticFileHeaders(res: ServerResponse, filePath: string) {
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   }
   res.setHeader("X-Content-Type-Options", "nosniff");
+  // Override the gateway default Permissions-Policy to allow microphone access for the Voice Connect UI.
+  // This UI is same-origin and intended to capture audio.
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
 }
 
 function respondAssetsUnavailable(res: ServerResponse, root?: string) {
