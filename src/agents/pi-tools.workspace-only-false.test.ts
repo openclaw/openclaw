@@ -3,10 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
-  getOAuthApiKey: () => undefined,
-  getOAuthProviders: () => [],
-}));
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    getOAuthApiKey: () => undefined,
+    getOAuthProviders: () => [],
+  };
+});
 
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
