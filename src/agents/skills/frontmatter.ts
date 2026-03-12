@@ -193,6 +193,22 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+
+  // Parse references block
+  const refsObj = metadataObj.references;
+  let references: OpenClawSkillMetadata["references"];
+  if (refsObj && typeof refsObj === "object") {
+    const refsRecord = refsObj as Record<string, unknown>;
+    const autoLoad = normalizeStringList(refsRecord.autoLoad);
+    const onDemand = normalizeStringList(refsRecord.onDemand);
+    if (autoLoad.length > 0 || onDemand.length > 0) {
+      references = {
+        ...(autoLoad.length > 0 ? { autoLoad } : {}),
+        ...(onDemand.length > 0 ? { onDemand } : {}),
+      };
+    }
+  }
+
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -202,6 +218,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    references,
   };
 }
 
