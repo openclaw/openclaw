@@ -224,6 +224,54 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.apn).toBeUndefined();
   });
 
+  it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          "env-primary": { enabled: true },
+          "env-secondary": { enabled: true },
+        },
+      },
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["env-primary"]?.enabled).toBeUndefined();
+  });
+
   it("auto-enables provider auth plugins when profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
