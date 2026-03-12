@@ -462,8 +462,8 @@ function runAgentAttempt(params: {
     trigger: "user",
     messageChannel: params.messageChannel,
     agentAccountId: params.runContext.accountId,
-    messageTo: params.opts.replyTo ?? params.opts.to,
-    messageThreadId: params.opts.threadId,
+    messageTo: params.opts.replyTo ?? params.opts.to ?? params.runContext.currentChannelId,
+    messageThreadId: params.opts.threadId ?? params.runContext.currentThreadTs,
     groupId: params.runContext.groupId,
     groupChannel: params.runContext.groupChannel,
     groupSpace: params.runContext.groupSpace,
@@ -1083,7 +1083,7 @@ async function agentCommandInternal(
     let fallbackProvider = provider;
     let fallbackModel = model;
     try {
-      const runContext = resolveAgentRunContext(opts);
+      const runContext = resolveAgentRunContext(opts, sessionEntry);
       const messageChannel = resolveMessageChannel(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,

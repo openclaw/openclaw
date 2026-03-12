@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
 import { formatThreadBindingDurationLabel } from "../channels/thread-bindings-messages.js";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+} from "../channels/thread-bindings-policy.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
@@ -661,6 +666,26 @@ export function getTelegramThreadBindingManager(
   accountId?: string,
 ): TelegramThreadBindingManager | null {
   return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
+}
+
+export function ensureTelegramThreadBindingManager(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): TelegramThreadBindingManager {
+  const accountId = normalizeAccountId(params.accountId);
+  return createTelegramThreadBindingManager({
+    accountId,
+    idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+      cfg: params.cfg,
+      channel: "telegram",
+      accountId,
+    }),
+    maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+      cfg: params.cfg,
+      channel: "telegram",
+      accountId,
+    }),
+  });
 }
 
 function updateTelegramBindingsBySessionKey(params: {
