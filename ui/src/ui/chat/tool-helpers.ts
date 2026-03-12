@@ -11,8 +11,9 @@ function fenceFor(text: string): string {
     return "```";
   }
   const maxLen = Math.max(...match.map((s) => s.length));
-  // Use one more backtick than the longest run
-  return "`".repeat(maxLen + 1);
+  // Use one more backtick than the longest run, minimum 3
+  const fenceLen = Math.max(3, maxLen + 1);
+  return "`".repeat(fenceLen);
 }
 
 /**

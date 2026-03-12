@@ -18,7 +18,8 @@ export function extractToolCards(message: unknown): ToolCard[] {
 
   // Build lookup maps from tool calls for result-card arg pairing
   const argsByToolCallId = new Map<string, unknown>();
-  const argsByName = new Map<string, unknown>();
+  // Use per-name queue for ordered matching (FIFO) instead of last-wins
+  const argsQueueByName = new Map<string, unknown[]>();
 
   for (const item of content) {
     const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
@@ -39,8 +40,11 @@ export function extractToolCards(message: unknown): ToolCard[] {
       if (toolCallId) {
         argsByToolCallId.set(toolCallId, args);
       }
-      // Also index by name (last wins for same name)
-      argsByName.set(name, args);
+      // Push to per-name queue for ordered matching
+      if (!argsQueueByName.has(name)) {
+        argsQueueByName.set(name, []);
+      }
+      argsQueueByName.get(name)!.push(args);
     }
   }
 
@@ -59,9 +63,12 @@ export function extractToolCards(message: unknown): ToolCard[] {
         (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
       if (toolCallId && argsByToolCallId.has(toolCallId)) {
         args = argsByToolCallId.get(toolCallId);
-      } else if (argsByName.has(name)) {
-        // Fallback to name-based matching
-        args = argsByName.get(name);
+      } else if (argsQueueByName.has(name)) {
+        // FIFO: shift from per-name queue for ordered matching
+        const queue = argsQueueByName.get(name)!;
+        if (queue.length > 0) {
+          args = queue.shift();
+        }
       }
     }
     cards.push({
@@ -78,10 +85,13 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
-    // Also try to look up args from any prior tool call by name
+    // Also try to look up args from any prior tool call by name (FIFO)
     let args = coerceArgs(m.arguments ?? m.args);
-    if ((args === undefined || args === null) && argsByName.has(name)) {
-      args = argsByName.get(name);
+    if ((args === undefined || args === null) && argsQueueByName.has(name)) {
+      const queue = argsQueueByName.get(name)!;
+      if (queue.length > 0) {
+        args = queue.shift();
+      }
     }
     cards.push({ kind: "result", name, text, args });
   }
