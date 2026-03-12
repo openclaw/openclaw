@@ -7,11 +7,12 @@ CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${STATE_DIR}/openclaw.json}"
 SKILL_SOURCE_DIR="${OPENCLAW_SRE_SKILL_SOURCE_DIR:-${REPO_ROOT}/skills/morpho-sre}"
 SKILL_DEST_DIR="${STATE_DIR}/skills/morpho-sre"
 WORKSPACE_DIR="${STATE_DIR}/workspace"
-OWNERSHIP_DEST="${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-${STATE_DIR}/state/sre-index/repo-ownership.json}"
-GRAPH_DIR="${OPENCLAW_SRE_GRAPH_DIR:-${STATE_DIR}/state/sre-graph}"
-DOSSIERS_DIR="${OPENCLAW_SRE_DOSSIERS_DIR:-${STATE_DIR}/state/sre-dossiers}"
-INDEX_DIR="${OPENCLAW_SRE_INDEX_DIR:-${STATE_DIR}/state/sre-index}"
-PLANS_DIR="${OPENCLAW_SRE_PLANS_DIR:-${STATE_DIR}/state/sre-plans}"
+SRE_WORKSPACE_DIR="${STATE_DIR}/workspace-sre"
+OWNERSHIP_DEST="${OPENCLAW_SRE_INIT_REPO_OWNERSHIP_FILE:-${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-${STATE_DIR}/state/sre-index/repo-ownership.json}}"
+GRAPH_DIR="${OPENCLAW_SRE_INIT_GRAPH_DIR:-${OPENCLAW_SRE_GRAPH_DIR:-${STATE_DIR}/state/sre-graph}}"
+DOSSIERS_DIR="${OPENCLAW_SRE_INIT_DOSSIERS_DIR:-${OPENCLAW_SRE_DOSSIERS_DIR:-${STATE_DIR}/state/sre-dossiers}}"
+INDEX_DIR="${OPENCLAW_SRE_INIT_INDEX_DIR:-${OPENCLAW_SRE_INDEX_DIR:-${STATE_DIR}/state/sre-index}}"
+PLANS_DIR="${OPENCLAW_SRE_INIT_PLANS_DIR:-${OPENCLAW_SRE_PLANS_DIR:-${STATE_DIR}/state/sre-plans}}"
 
 copy_tree() {
   local src="$1"
@@ -35,14 +36,34 @@ chmod_scripts_in_dir() {
   fi
 }
 
+ensure_workspace_memory_scaffold() {
+  local workspace_dir="$1"
+  local today_file yesterday_file
+
+  mkdir -p "${workspace_dir}/memory"
+  touch "${workspace_dir}/MEMORY.md"
+  if date -u -d 'yesterday' +%F >/dev/null 2>&1; then
+    today_file="${workspace_dir}/memory/$(date -u +%F).md"
+    yesterday_file="${workspace_dir}/memory/$(date -u -d 'yesterday' +%F).md"
+  else
+    today_file="${workspace_dir}/memory/$(date -u +%F).md"
+    yesterday_file="${workspace_dir}/memory/$(date -u -v-1d +%F).md"
+  fi
+  touch "$today_file" "$yesterday_file"
+}
+
 mkdir -p \
   "$STATE_DIR/bin" \
   "$STATE_DIR/skills" \
   "$WORKSPACE_DIR" \
+  "$SRE_WORKSPACE_DIR" \
   "$GRAPH_DIR" \
   "$DOSSIERS_DIR" \
   "$INDEX_DIR" \
   "$PLANS_DIR"
+
+ensure_workspace_memory_scaffold "$WORKSPACE_DIR"
+ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
 
 copy_file "${SKILL_SOURCE_DIR}/config/openclaw.json" "$CONFIG_PATH"
 chmod 600 "$CONFIG_PATH" || true
@@ -52,6 +73,7 @@ mkdir -p "${SKILL_DEST_DIR}/scripts" "${SKILL_DEST_DIR}/references"
 
 copy_file "${SKILL_SOURCE_DIR}/SKILL.md" "${SKILL_DEST_DIR}/SKILL.md"
 copy_file "${SKILL_SOURCE_DIR}/HEARTBEAT.md" "${WORKSPACE_DIR}/HEARTBEAT.md"
+copy_file "${SKILL_SOURCE_DIR}/HEARTBEAT.md" "${SRE_WORKSPACE_DIR}/HEARTBEAT.md"
 
 if [ -f "${SKILL_SOURCE_DIR}/rca_hypothesis_ids.v1.json" ]; then
   copy_file "${SKILL_SOURCE_DIR}/rca_hypothesis_ids.v1.json" \
@@ -68,7 +90,7 @@ while IFS= read -r path; do
   [ -f "$path" ] || continue
   name="$(basename "$path")"
   case "$name" in
-    SKILL.md|HEARTBEAT.md)
+    SKILL.md|HEARTBEAT.md|._*)
       ;;
     *.sh)
       copy_file "$path" "${SKILL_DEST_DIR}/scripts/${name}"
@@ -94,6 +116,7 @@ required_bundled_skills=(
   argocd-diff
   eks-troubleshoot
   foundry-evm-debug
+  grafana-metrics-best-practices
   go-memory-profiling
   terraform-ci-review
 )
@@ -103,7 +126,8 @@ for skill_name in "${required_bundled_skills[@]}"; do
     copy_tree "${REPO_ROOT}/skills/${skill_name}" "${STATE_DIR}/skills/${skill_name}"
     chmod_scripts_in_dir "${STATE_DIR}/skills/${skill_name}"
   else
-    echo "seed-state:warning required skill '${skill_name}' not found at ${REPO_ROOT}/skills/${skill_name}" >&2
+    echo "seed-state:error required skill '${skill_name}' not found at ${REPO_ROOT}/skills/${skill_name}" >&2
+    exit 1
   fi
 done
 

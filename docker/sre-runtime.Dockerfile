@@ -110,7 +110,11 @@ COPY --chown=node:node morpho-infra /srv/openclaw/repos/morpho-infra
 COPY --chown=node:node morpho-infra-helm /srv/openclaw/repos/morpho-infra-helm
 COPY --chown=node:node openclaw-sre /srv/openclaw/repos/openclaw-sre
 
-RUN chmod -R a+rX /usr/local/lib/node_modules/openclaw/extensions/acpx \
+RUN ACPX_VERSION="$(node -p "require('/usr/local/lib/node_modules/openclaw/extensions/acpx/package.json').dependencies.acpx")" \
+  && [ "$ACPX_VERSION" != "undefined" ] \
+  && [ -n "$ACPX_VERSION" ] \
+  && npm --prefix /usr/local/lib/node_modules/openclaw/extensions/acpx install --omit=dev --no-save "acpx@${ACPX_VERSION}" \
+  && chmod -R a+rX /usr/local/lib/node_modules/openclaw/extensions/acpx \
   && find /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules/.bin -type f -exec chmod 755 {} + \
   && for skill_root in \
     /usr/local/lib/node_modules/openclaw/skills/morpho-sre \

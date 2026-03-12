@@ -49,10 +49,13 @@ assert_jq "cast missing from safeBins" '(.tools.exec.safeBins // []) | index("ca
 assert_jq "anvil missing from safeBins" '(.tools.exec.safeBins // []) | index("anvil")' "$CONFIG"
 assert_jq "forge missing from safeBins" '(.tools.exec.safeBins // []) | index("forge")' "$CONFIG"
 assert_jq "chisel missing from safeBins" '(.tools.exec.safeBins // []) | index("chisel")' "$CONFIG"
+assert_jq "safeBinTrustedDirs missing /usr/local/bin" '(.tools.exec.safeBinTrustedDirs // []) | index("/usr/local/bin")' "$CONFIG"
 
 assert_grep "seed skill guide missing foundry-evm-debug reference" -F 'use the bundled `foundry-evm-debug` skill' "$SKILL"
+assert_grep "seed-state missing grafana skill copy" -F 'grafana-metrics-best-practices' "$SEED_STATE_SCRIPT"
 assert_grep "seed-state missing foundry-evm-debug copy" -F 'foundry-evm-debug' "$SEED_STATE_SCRIPT"
 assert_grep "seed-state missing bundled helper skill list" -F 'required_bundled_skills=(' "$SEED_STATE_SCRIPT"
+assert_grep "runtime dockerfile missing acpx install" -F 'npm --prefix /usr/local/lib/node_modules/openclaw/extensions/acpx install --omit=dev --no-save "acpx@${ACPX_VERSION}"' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing foundry version arg" -F 'ARG OPENCLAW_FOUNDRY_VERSION=1.3.1' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing foundry install" -F '/opt/foundry/bin/foundryup --install "${OPENCLAW_FOUNDRY_VERSION}"' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing forge link" -F 'ln -sf /opt/foundry/bin/forge /usr/local/bin/forge' "$RUNTIME_DOCKERFILE"

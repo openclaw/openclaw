@@ -14,9 +14,11 @@ for bundled_skill in \
   argocd-diff \
   eks-troubleshoot \
   foundry-evm-debug \
+  grafana-metrics-best-practices \
   go-memory-profiling \
   terraform-ci-review; do
   mkdir -p "$RUNTIME_REPO/skills/$bundled_skill"
+  cp -R "$REPO_ROOT/skills/$bundled_skill/." "$RUNTIME_REPO/skills/$bundled_skill/"
 done
 
 cp "$REPO_ROOT/skills/morpho-sre/SKILL.md" "$SKILL_ROOT/SKILL.md"
@@ -38,4 +40,17 @@ test -f "$STATE_DIR/skills/morpho-sre/SKILL.md"
 test -f "$STATE_DIR/skills/morpho-sre/scripts/sentinel-triage.sh"
 test -f "$STATE_DIR/skills/morpho-sre/knowledge-index.md"
 test -f "$STATE_DIR/state/sre-index/repo-ownership.json"
+test -f "$STATE_DIR/workspace/MEMORY.md"
+test -f "$STATE_DIR/workspace-sre/MEMORY.md"
+test -f "$STATE_DIR/workspace/HEARTBEAT.md"
+test -f "$STATE_DIR/workspace-sre/HEARTBEAT.md"
+test -d "$STATE_DIR/workspace/memory"
+test -d "$STATE_DIR/workspace-sre/memory"
+ls "$STATE_DIR"/workspace/memory/*.md >/dev/null 2>&1
+ls "$STATE_DIR"/workspace-sre/memory/*.md >/dev/null 2>&1
 test -d "$STATE_DIR/skills/foundry-evm-debug"
+test -f "$STATE_DIR/skills/argocd-diff/SKILL.md"
+test -f "$STATE_DIR/skills/eks-troubleshoot/SKILL.md"
+test -f "$STATE_DIR/skills/grafana-metrics-best-practices/SKILL.md"
+test -f "$STATE_DIR/skills/go-memory-profiling/SKILL.md"
+test -f "$STATE_DIR/skills/terraform-ci-review/SKILL.md"

@@ -131,7 +131,6 @@
         "name": "SRE K8s",
         "skills": ["morpho-sre", "eks-troubleshoot", "argocd-diff"],
         "tools": {
-          "profile": "coding",
           "deny": ["gateway", "nodes"]
         }
       },
@@ -140,7 +139,6 @@
         "name": "SRE Observability",
         "skills": ["morpho-sre", "go-memory-profiling", "grafana-metrics-best-practices"],
         "tools": {
-          "profile": "coding",
           "deny": ["gateway", "nodes"]
         }
       },
@@ -149,7 +147,6 @@
         "name": "SRE Release",
         "skills": ["morpho-sre", "terraform-ci-review", "foundry-evm-debug"],
         "tools": {
-          "profile": "coding",
           "deny": ["gateway", "nodes"]
         }
       },
@@ -159,7 +156,6 @@
         "workspace": "/srv/openclaw/repos/openclaw-sre",
         "skills": ["morpho-sre", "foundry-evm-debug"],
         "tools": {
-          "profile": "coding",
           "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
         }
       },
@@ -169,7 +165,6 @@
         "workspace": "/srv/openclaw/repos/morpho-infra-helm",
         "skills": ["morpho-sre"],
         "tools": {
-          "profile": "coding",
           "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
         }
       },
@@ -248,9 +243,25 @@
         "uniq": {},
         "wc": {}
       },
-      "safeBinTrustedDirs": []
+      "safeBinTrustedDirs": ["/usr/local/bin"]
     },
-    "profile": "coding",
+    "allow": [
+      "edit",
+      "exec",
+      "memory_get",
+      "memory_search",
+      "process",
+      "read",
+      "session_status",
+      "sessions_history",
+      "sessions_list",
+      "sessions_send",
+      "sessions_spawn",
+      "subagents",
+      "web_fetch",
+      "web_search",
+      "write"
+    ],
     "deny": ["gateway", "nodes"],
     "loopDetection": {
       "enabled": true
@@ -302,11 +313,6 @@
           "path": "/srv/openclaw/repos/openclaw-sre/skills/morpho-sre",
           "name": "repo-docs-openclaw-sre-skill",
           "pattern": "*.md"
-        },
-        {
-          "path": "/home/node/.openclaw/state/sre-index/session-summaries",
-          "name": "session-summary-index",
-          "pattern": "**/*.md"
         }
       ],
       "sessions": {
