@@ -219,6 +219,9 @@ export async function runNodeMain(params = {}) {
     env: params.env ? { ...params.env } : { ...process.env },
     platform: params.platform ?? process.platform,
   };
+  if (deps.args[0] === "--") {
+    deps.args = deps.args.slice(1);
+  }
 
   deps.distRoot = path.join(deps.cwd, "dist");
   deps.distEntry = path.join(deps.distRoot, "/entry.js");

@@ -4,6 +4,7 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 
 const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+const modelsConfigureVllmCommand = vi.fn().mockResolvedValue(undefined);
 const noopAsync = vi.fn(async () => undefined);
 
 vi.mock("../commands/models.js", () => ({
@@ -27,6 +28,7 @@ vi.mock("../commands/models.js", () => ({
   modelsImageFallbacksClearCommand: noopAsync,
   modelsImageFallbacksListCommand: noopAsync,
   modelsImageFallbacksRemoveCommand: noopAsync,
+  modelsConfigureVllmCommand,
   modelsListCommand: noopAsync,
   modelsScanCommand: noopAsync,
   modelsSetCommand: noopAsync,
@@ -44,6 +46,7 @@ describe("models cli", () => {
   beforeEach(() => {
     githubCopilotLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
+    modelsConfigureVllmCommand.mockClear();
   });
 
   function createProgram() {
@@ -88,6 +91,31 @@ describe("models cli", () => {
     await runModelsCommand(args);
     expect(modelsStatusCommand).toHaveBeenCalledWith(
       expect.objectContaining({ agent: "poe" }),
+      expect.any(Object),
+    );
+  });
+
+  it("configures vllm with flags", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(
+      [
+        "models",
+        "configure",
+        "vllm",
+        "--api-key",
+        "sk-test",
+        "--model-id",
+        "meta-llama/Meta-Llama-3-8B-Instruct",
+      ],
+      { from: "user" },
+    );
+
+    expect(modelsConfigureVllmCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "sk-test",
+        modelId: "meta-llama/Meta-Llama-3-8B-Instruct",
+      }),
       expect.any(Object),
     );
   });
