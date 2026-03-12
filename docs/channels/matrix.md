@@ -72,6 +72,9 @@ Details: [Plugins](/tools/plugin)
    - If both are set, config takes precedence.
    - With access token: user ID is fetched automatically via `/whoami`.
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
+
+- If your homeserver resolves to a private or internal address and you run strict SSRF policy (`browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false`), add the exact homeserver hostname to `browser.ssrfPolicy.allowedHostnames` so password login can reach `/_matrix/client/v3/login`.
+
 5. Restart the gateway (or finish onboarding).
 6. Start a DM with the bot or invite it to a room from any Matrix client
    (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
@@ -102,6 +105,28 @@ E2EE config (end to end encryption enabled):
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
       encryption: true,
+      dm: { policy: "pairing" },
+    },
+  },
+}
+```
+
+Password login on a private/internal homeserver with strict SSRF policy:
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["matrix.example.test"],
+    },
+  },
+  channels: {
+    matrix: {
+      enabled: true,
+      homeserver: "https://matrix.example.test",
+      userId: "@assistant:example.test",
+      password: "<matrix-password>",
       dm: { policy: "pairing" },
     },
   },
@@ -285,6 +310,7 @@ Provider options:
 - `channels.matrix.deviceName`: device display name.
 - `channels.matrix.encryption`: enable E2EE (default: false).
 - `channels.matrix.initialSyncLimit`: initial sync limit.
+- `browser.ssrfPolicy.allowedHostnames`: exact hostname exceptions for strict SSRF mode. Add your Matrix homeserver hostname here if password login needs to reach a private/internal server while `dangerouslyAllowPrivateNetwork` is disabled.
 - `channels.matrix.threadReplies`: `off | inbound | always` (default: inbound).
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).
 - `channels.matrix.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.

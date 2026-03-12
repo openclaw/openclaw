@@ -72,6 +72,9 @@ openclaw plugins install ./extensions/matrix
    - 如果两者都设置，配置优先。
    - 使用访问令牌时：用户 ID 通过 `/whoami` 自动获取。
    - 设置时，`channels.matrix.userId` 应为完整的 Matrix ID（示例：`@bot:example.org`）。
+
+- 如果你的 homeserver 解析到私有/内网地址，并且启用了严格 SSRF 策略（`browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false`），请把该 homeserver 的精确主机名加入 `browser.ssrfPolicy.allowedHostnames`，这样密码登录才能访问 `/_matrix/client/v3/login`。
+
 5. 重启 Gateway 网关（或完成新手引导）。
 6. 从任何 Matrix 客户端（Element、Beeper 等；参见 https://matrix.org/ecosystem/clients/）与机器人开始私信或邀请它加入房间。Beeper 需要 E2EE，因此请设置 `channels.matrix.encryption: true` 并验证设备。
 
@@ -100,6 +103,28 @@ E2EE 配置（启用端到端加密）：
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
       encryption: true,
+      dm: { policy: "pairing" },
+    },
+  },
+}
+```
+
+在严格 SSRF 策略下连接私有/内网 homeserver 的密码登录示例：
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["matrix.example.test"],
+    },
+  },
+  channels: {
+    matrix: {
+      enabled: true,
+      homeserver: "https://matrix.example.test",
+      userId: "@assistant:example.test",
+      password: "<matrix-password>",
       dm: { policy: "pairing" },
     },
   },
@@ -204,6 +229,7 @@ E2EE 配置（启用端到端加密）：
 - `channels.matrix.deviceName`：设备显示名称。
 - `channels.matrix.encryption`：启用 E2EE（默认：false）。
 - `channels.matrix.initialSyncLimit`：初始同步限制。
+- `browser.ssrfPolicy.allowedHostnames`：严格 SSRF 模式下的精确主机名例外列表。如果在禁用 `dangerouslyAllowPrivateNetwork` 时需要对私有/内网 Matrix 服务器执行密码登录，请把 homeserver 主机名加入这里。
 - `channels.matrix.threadReplies`：`off | inbound | always`（默认：inbound）。
 - `channels.matrix.textChunkLimit`：出站文本分块大小（字符）。
 - `channels.matrix.chunkMode`：`length`（默认）或 `newline` 在长度分块前按空行（段落边界）分割。
