@@ -646,6 +646,38 @@ describe("createInboundDebouncer", () => {
     }
   });
 
+  it("reports whether flushKey drained the key or rescheduled it for retry", async () => {
+    vi.useFakeTimers();
+    try {
+      let shouldFail = true;
+      const delivered: Array<string[]> = [];
+
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 10,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          if (shouldFail) {
+            throw new Error("temporary lock contention");
+          }
+          delivered.push(items.map((entry) => entry.id));
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+
+      expect(await debouncer.flushKey("a")).toBe(false);
+      expect(delivered).toEqual([]);
+
+      shouldFail = false;
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(delivered).toEqual([["1"]]);
+      expect(await debouncer.flushKey("a")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes priority non-debounced items directly when a key is stuck retrying", async () => {
     vi.useFakeTimers();
     try {

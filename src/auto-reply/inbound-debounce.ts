@@ -350,8 +350,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   return {
     enqueue,
-    flushKey: async (key: string) => {
-      await flushKeyInternal(key);
-    },
+    flushKey: (key: string) => flushKeyInternal(key),
   };
 }
