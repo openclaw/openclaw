@@ -292,6 +292,19 @@ describe("getApiKeyForModel", () => {
     });
   });
 
+  it("resolveEnvApiKey('opencode-go') returns OPENCODE_API_KEY when set", async () => {
+    const saved = process.env.OPENCODE_API_KEY;
+    try {
+      process.env.OPENCODE_API_KEY = "test-opencode-go-key";
+      const resolved = resolveEnvApiKey("opencode-go");
+      expect(resolved).not.toBeNull();
+      expect(resolved!.apiKey).toBe("test-opencode-go-key");
+    } finally {
+      if (saved === undefined) delete process.env.OPENCODE_API_KEY;
+      else process.env.OPENCODE_API_KEY = saved;
+    }
+  });
+
   it("resolveEnvApiKey('huggingface') returns HUGGINGFACE_HUB_TOKEN when set", async () => {
     await withEnvAsync(
       {
