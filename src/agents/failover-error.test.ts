@@ -320,6 +320,8 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
   });
 
   it("infers timeout from abort/error stop-reason messages", () => {
