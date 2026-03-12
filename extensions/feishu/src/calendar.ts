@@ -75,7 +75,7 @@ async function addAttendees(client: Lark.Client, params: FeishuCalendarParams) {
   }
 
   // The Lark SDK types don't expose the attendees sub-resource; cast to any to access it.
-  const res = await (client.calendar.calendarEvent.attendees as any).create({
+  const res = await (client.calendar.calendarEvent as any).attendees.create({
     path: {
       calendar_id: PRIMARY_CALENDAR_ID,
       event_id: params.event_id,
