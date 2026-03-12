@@ -7,6 +7,14 @@ export type FastModeState = {
   source: "session" | "config" | "default";
 };
 
+export function resolveFastModeParam(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  return normalizeFastMode(
+    (extraParams?.fastMode ?? extraParams?.fast_mode) as string | boolean | null | undefined,
+  );
+}
+
 function resolveConfiguredFastModeRaw(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
