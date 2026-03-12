@@ -7,7 +7,7 @@ import { RealtimeCallHandler } from "./realtime-handler.js";
 
 /** Extract the stream token from a TwiML body string. */
 function extractStreamToken(twiml: string): string | null {
-  const match = twiml.match(/\?token=([^"&\s]+)/);
+  const match = twiml.match(/\/voice\/stream\/realtime\/([^"&\s]+)/);
   return match?.[1] ?? null;
 }
 
@@ -99,7 +99,7 @@ describe("RealtimeCallHandler", () => {
       expect(payload.headers?.["Content-Type"]).toBe("text/xml");
       expect(payload.body).toContain("<Connect>");
       expect(payload.body).toContain("<Stream");
-      expect(payload.body).toContain("wss://gateway.ts.net/voice/stream/realtime?token=");
+      expect(payload.body).toMatch(/wss:\/\/gateway\.ts\.net\/voice\/stream\/realtime\/[0-9a-f-]{36}/);
     });
 
     it("falls back to localhost when no host header is present", () => {
@@ -112,7 +112,7 @@ describe("RealtimeCallHandler", () => {
       const req = makeRequest("/voice/webhook", "");
       const payload = handler.buildTwiMLPayload(req);
 
-      expect(payload.body).toContain("wss://localhost:8443/voice/stream/realtime?token=");
+      expect(payload.body).toMatch(/wss:\/\/localhost:8443\/voice\/stream\/realtime\/[0-9a-f-]{36}/);
     });
 
     it("embeds a unique token on each call", () => {
