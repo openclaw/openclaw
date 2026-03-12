@@ -32,6 +32,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { runSessionsSendA2AFlow } from "./tools/sessions-send-tool.a2a.js";
 
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
@@ -815,6 +816,349 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("sessions_send suppresses ping-pong for Telegram topic room moves and preserves thread delivery", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    let sendParams:
+      | {
+          to?: string;
+          channel?: string;
+          message?: string;
+          threadId?: string;
+        }
+      | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        const reply = params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+          ? "ANNOUNCE_SKIP"
+          : "Hello from topic 3";
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 2000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: "agent:main:telegram:group:-1001234567890:topic:3",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-1001234567890",
+                accountId: "default",
+              },
+              lastThreadId: 3,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendParams = request.params as {
+          to?: string;
+          channel?: string;
+          message?: string;
+          threadId?: string;
+        };
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:47",
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-telegram-room-move", {
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:3",
+      message: "Move to the topic and post a visible hello.",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "Hello from topic 3",
+    });
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 2);
+
+    const replySteps = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replySteps).toHaveLength(0);
+    expect(sendParams).toMatchObject({
+      to: "-1001234567890",
+      channel: "telegram",
+      message: "Hello from topic 3",
+      threadId: "3",
+    });
+  });
+
+  it("reuses the target reply for visible Telegram topic handoffs when announce skips", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    let sendParams:
+      | {
+          to?: string;
+          channel?: string;
+          message?: string;
+          threadId?: string;
+        }
+      | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        const runId = "run-announce";
+        replyByRunId.set(runId, "ANNOUNCE_SKIP");
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 3000,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-announce", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: "agent:worker:telegram:group:-1001234567890:topic:3",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-1001234567890",
+                accountId: "default",
+              },
+              lastThreadId: 3,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendParams = request.params as {
+          to?: string;
+          channel?: string;
+          message?: string;
+          threadId?: string;
+        };
+        return { messageId: "m-visible" };
+      }
+      return {};
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:telegram:group:-1001234567890:topic:3",
+      displayKey: "agent:worker:telegram:group:-1001234567890:topic:3",
+      message: "Join the Telegram topic visibly and acknowledge the handoff.",
+      announceTimeoutMs: 1_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:telegram:group:-1001234567890:topic:47",
+      requesterChannel: "telegram",
+      roundOneReply: "Engineering hello from topic 3",
+    });
+
+    const replySteps = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replySteps).toHaveLength(0);
+    expect(sendParams).toMatchObject({
+      to: "-1001234567890",
+      channel: "telegram",
+      message: "Engineering hello from topic 3",
+      threadId: "3",
+    });
+  });
+
+  it("does not post the raw original instruction when a same-agent Telegram room move has no reusable reply", async () => {
+    let sendCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as
+          | {
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        return {
+          runId: params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+            ? "run-announce"
+            : "run-initial",
+          status: "accepted",
+          acceptedAt: 3000,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "ANNOUNCE_SKIP" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: "agent:main:telegram:group:-1001234567890:topic:3",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-1001234567890",
+                accountId: "default",
+              },
+              lastThreadId: 3,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendCount += 1;
+        return { messageId: "unexpected-send" };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:47",
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    await tool.execute("call-telegram-no-raw-fallback", {
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:3",
+      message: "Move to the topic and tell them hello.",
+      timeoutSeconds: 1,
+    });
+    expect(sendCount).toBe(0);
+  });
+
+  it("keeps Telegram topic handoffs silent when visible delivery was not requested and announce skips", async () => {
+    let sendCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        return {
+          runId: "run-announce",
+          status: "accepted",
+          acceptedAt: 3000,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "ANNOUNCE_SKIP" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: "agent:worker:telegram:group:-1001234567890:topic:3",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-1001234567890",
+                accountId: "default",
+              },
+              lastThreadId: 3,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        sendCount += 1;
+        return { messageId: "unexpected-visible-send" };
+      }
+      return {};
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:worker:telegram:group:-1001234567890:topic:3",
+      displayKey: "agent:worker:telegram:group:-1001234567890:topic:3",
+      message: "Join the Telegram topic and acknowledge the handoff.",
+      announceTimeoutMs: 1_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:telegram:group:-1001234567890:topic:47",
+      requesterChannel: "telegram",
+      roundOneReply: "Engineering hello from topic 3",
+    });
+
+    expect(sendCount).toBe(0);
   });
 
   it("subagents lists active and recent runs", async () => {

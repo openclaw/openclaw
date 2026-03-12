@@ -11,6 +11,8 @@ import {
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
   isReplySkip,
+  resolveAgentToAgentAnnounceFallback,
+  shouldSuppressAgentToAgentPingPong,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -60,7 +62,11 @@ export async function runSessionsSendA2AFlow(params: {
     if (
       params.maxPingPongTurns > 0 &&
       params.requesterSessionKey &&
-      params.requesterSessionKey !== params.targetSessionKey
+      params.requesterSessionKey !== params.targetSessionKey &&
+      !shouldSuppressAgentToAgentPingPong({
+        requesterSessionKey: params.requesterSessionKey,
+        targetSessionKey: params.targetSessionKey,
+      })
     ) {
       let currentSessionKey = params.requesterSessionKey;
       let nextSessionKey = params.targetSessionKey;
@@ -118,15 +124,26 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    const announceDeliveryText =
+      announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)
+        ? announceReply.trim()
+        : resolveAgentToAgentAnnounceFallback({
+            requesterSessionKey: params.requesterSessionKey,
+            targetSessionKey: params.targetSessionKey,
+            roundOneReply: primaryReply,
+            latestReply,
+            originalMessage: params.message,
+          });
+    if (announceTarget && announceDeliveryText) {
       try {
         await callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
-            message: announceReply.trim(),
+            message: announceDeliveryText,
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
+            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
