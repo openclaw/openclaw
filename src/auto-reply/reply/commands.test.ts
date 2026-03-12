@@ -181,6 +181,9 @@ describe("handleCommands gating", () => {
             commands: { config: false, debug: false, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
           }) as OpenClawConfig,
+        applyParams: (params: ReturnType<typeof buildParams>) => {
+          params.command.senderIsOwner = true;
+        },
         expectedText: "/config is disabled",
       },
       {
@@ -191,6 +194,9 @@ describe("handleCommands gating", () => {
             commands: { config: false, debug: false, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
           }) as OpenClawConfig,
+        applyParams: (params: ReturnType<typeof buildParams>) => {
+          params.command.senderIsOwner = true;
+        },
         expectedText: "/debug is disabled",
       },
       {
@@ -223,6 +229,9 @@ describe("handleCommands gating", () => {
             channels: { whatsapp: { allowFrom: ["*"] } },
           } as OpenClawConfig;
         },
+        applyParams: (params: ReturnType<typeof buildParams>) => {
+          params.command.senderIsOwner = true;
+        },
         expectedText: "/config is disabled",
       },
       {
@@ -238,6 +247,9 @@ describe("handleCommands gating", () => {
             commands: inheritedCommands as never,
             channels: { whatsapp: { allowFrom: ["*"] } },
           } as OpenClawConfig;
+        },
+        applyParams: (params: ReturnType<typeof buildParams>) => {
+          params.command.senderIsOwner = true;
         },
         expectedText: "/debug is disabled",
       },
@@ -670,6 +682,36 @@ describe("extractMessageText", () => {
   });
 });
 
+describe("handleCommands /config owner gating", () => {
+  it("blocks /config show from authorized non-owner senders", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/config show", cfg);
+    params.command.senderIsOwner = false;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("keeps /config show working for owners", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackreaction: ":)" } },
+    });
+    const params = buildParams("/config show messages.ackReaction", cfg);
+    params.command.senderIsOwner = true;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config messages.ackreaction");
+  });
+});
+
 describe("handleCommands /config configWrites gating", () => {
   it("blocks /config set when channel config writes are disabled", async () => {
     const cfg = {
@@ -677,6 +719,7 @@ describe("handleCommands /config configWrites gating", () => {
       channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
     } as OpenClawConfig;
     const params = buildParams('/config set messages.ackReaction=":)"', cfg);
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");
@@ -704,6 +747,7 @@ describe("handleCommands /config configWrites gating", () => {
         Surface: "telegram",
       },
     );
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
@@ -720,6 +764,7 @@ describe("handleCommands /config configWrites gating", () => {
       Provider: "telegram",
       Surface: "telegram",
     });
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain(
@@ -738,6 +783,7 @@ describe("handleCommands /config configWrites gating", () => {
       GatewayClientScopes: ["operator.write"],
     });
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("requires operator.admin");
@@ -757,6 +803,7 @@ describe("handleCommands /config configWrites gating", () => {
       GatewayClientScopes: ["operator.write"],
     });
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    params.command.senderIsOwner = false;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config messages.ackreaction");
@@ -780,6 +827,7 @@ describe("handleCommands /config configWrites gating", () => {
       GatewayClientScopes: ["operator.write", "operator.admin"],
     });
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(writeConfigFileMock).toHaveBeenCalledOnce();
@@ -822,11 +870,38 @@ describe("handleCommands /config configWrites gating", () => {
       },
     );
     params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config updated");
     const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
     expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
+  });
+});
+
+describe("handleCommands /debug owner gating", () => {
+  it("blocks /debug show from authorized non-owner senders", async () => {
+    const cfg = {
+      commands: { debug: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/debug show", cfg);
+    params.command.senderIsOwner = false;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+
+  it("keeps /debug show working for owners", async () => {
+    const cfg = {
+      commands: { debug: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/debug show", cfg);
+    params.command.senderIsOwner = true;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Debug overrides");
   });
 });
 
