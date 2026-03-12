@@ -150,7 +150,7 @@ const PROVIDER_ALIAS_MAP: Record<string, string> = {
   lark: "feishu",
 };
 
-function normalizeProviderForComparison(value?: string): string | undefined {
+function normalizeProviderForSuppression(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
@@ -174,11 +174,11 @@ function normalizeThreadIdForComparison(value?: string): string | undefined {
   return trimmed.toLowerCase();
 }
 
-function resolveTargetProviderForComparison(params: {
+function resolveTargetProviderForSuppression(params: {
   currentProvider: string;
   targetProvider?: string;
 }): string {
-  const targetProvider = normalizeProviderForComparison(params.targetProvider);
+  const targetProvider = normalizeProviderForSuppression(params.targetProvider);
   if (!targetProvider || targetProvider === "message") {
     return params.currentProvider;
   }
@@ -225,7 +225,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   originatingTo?: string;
   accountId?: string;
 }): boolean {
-  const provider = normalizeProviderForComparison(params.messageProvider);
+  const provider = normalizeProviderForSuppression(params.messageProvider);
   if (!provider) {
     return false;
   }
@@ -239,7 +239,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
-    const targetProvider = resolveTargetProviderForComparison({
+    const targetProvider = resolveTargetProviderForSuppression({
       currentProvider: provider,
       targetProvider: target?.provider,
     });

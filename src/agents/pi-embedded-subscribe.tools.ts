@@ -314,9 +314,9 @@ export function extractMessagingToolSend(
     const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
-    const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
+    const to = provider ? normalizeTargetForProvider(provider, toRaw) : toRaw.trim() || undefined;
+    return to ? { tool: toolName, ...(provider ? { provider } : {}), accountId, to } : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {

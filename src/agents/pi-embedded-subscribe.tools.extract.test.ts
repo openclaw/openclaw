@@ -36,6 +36,17 @@ describe("extractMessagingToolSend", () => {
     expect(result?.to).toBe("channel:C1");
   });
 
+  it("keeps provider unset when message send omits channel/provider", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      to: "268300329",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBeUndefined();
+    expect(result?.to).toBe("268300329");
+  });
+
   it("accepts target alias when to is omitted", () => {
     const result = extractMessagingToolSend("message", {
       action: "send",

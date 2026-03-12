@@ -76,6 +76,7 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
+  hasUnknownMessagingToolTarget: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
 };
@@ -156,6 +157,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "successfulCronAdds"
+  | "hasUnknownMessagingToolTarget"
   | "deterministicApprovalPromptSent"
 >;
 

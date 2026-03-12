@@ -73,6 +73,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Timestamp (ms) when a busy-queue acknowledgement was last sent. */
+  lastBusyQueueNoticeAt?: number;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
