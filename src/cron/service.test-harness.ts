@@ -217,6 +217,7 @@ export function createMockCronStateForJobs(params: {
   return {
     store: { version: 1, jobs: params.jobs },
     running: false,
+    stopping: false,
     timer: null,
     storeLoadedAtMs: nowMs,
     storeFileMtimeMs: null,
