@@ -236,6 +236,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Web Fetch Cache TTL (min)",
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
+  "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Web Fetch Dangerously Allow Private Network",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist": "Web Fetch Hostname Allowlist",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl Fallback",
   "tools.web.fetch.firecrawl.apiKey": "Firecrawl API Key", // pragma: allowlist secret

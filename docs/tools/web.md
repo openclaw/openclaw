@@ -350,6 +350,11 @@ Fetch a URL and extract readable content.
         cacheTtlMinutes: 15,
         maxRedirects: 3,
         userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false, // default strict public-only mode
+          // allowedHostnames: ["localhost"],
+          // hostnameAllowlist: ["*.example.com", "example.com"],
+        },
         readability: true,
         firecrawl: {
           enabled: true,
@@ -378,6 +383,9 @@ Notes:
 - Firecrawl SecretRefs are resolved only when Firecrawl is active (`tools.web.fetch.enabled !== false` and `tools.web.fetch.firecrawl.enabled !== false`).
 - If Firecrawl is active and its SecretRef is unresolved with no `FIRECRAWL_API_KEY` fallback, startup/reload fails fast.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
+- `web_fetch` defaults to strict public-only SSRF handling. Use `tools.web.fetch.ssrfPolicy` only for the minimum explicit exceptions you need.
+- `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` allows private/internal destinations and opts into trusted proxy routing when env proxy variables are set.
+- In strict mode, use `tools.web.fetch.ssrfPolicy.allowedHostnames` and `tools.web.fetch.ssrfPolicy.hostnameAllowlist` for narrow exceptions.
 - `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
 - `web_fetch` caps the downloaded response body size to `tools.web.fetch.maxResponseBytes` before parsing; oversized responses are truncated and include a warning.

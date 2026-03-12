@@ -2377,6 +2377,28 @@ See [Plugins](/tools/plugin).
   `--disable-gpu`, window sizing, or debug flags).
 - `relayBindHost` changes where the Chrome extension relay listens. Leave unset for loopback-only access; set an explicit non-loopback bind address such as `0.0.0.0` only when the relay must cross a namespace boundary (for example WSL2) and the host network is already trusted.
 
+## Tools.web.fetch SSRF Policy
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false, // default strict public-only mode
+          // hostnameAllowlist: ["*.example.com", "example.com"],
+          // allowedHostnames: ["localhost"],
+        },
+      },
+    },
+  },
+}
+```
+
+- `tools.web.fetch.ssrfPolicy` defaults to strict public-only access when unset.
+- Set `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when `web_fetch` must reach private/internal hosts or trusted proxy paths.
+- In strict mode, use `tools.web.fetch.ssrfPolicy.hostnameAllowlist` and `tools.web.fetch.ssrfPolicy.allowedHostnames` for explicit exceptions.
+
 ---
 
 ## UI

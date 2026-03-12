@@ -1,7 +1,14 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { normalizeHostname } from "../../infra/net/hostname.js";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateNetworkAllowedByPolicy,
+  resolvePinnedHostnameWithPolicy,
+  SsrFBlockedError,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -26,7 +33,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -81,6 +87,8 @@ type FirecrawlFetchConfig =
     }
   | undefined;
 
+type WebFetchSsrFPolicyConfig = NonNullable<WebFetchConfig>["ssrfPolicy"] | undefined;
+
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
   if (!fetch || typeof fetch !== "object") {
@@ -101,6 +109,47 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
+}
+
+function normalizeStringList(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => value.trim())
+    .filter((value): value is string => value.length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function resolveFetchSsrFPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  const ssrfPolicy = fetch?.ssrfPolicy as WebFetchSsrFPolicyConfig;
+  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(ssrfPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(ssrfPolicy?.hostnameAllowlist);
+
+  if (dangerouslyAllowPrivateNetwork !== true && !allowedHostnames && !hostnameAllowlist) {
+    return undefined;
+  }
+
+  return {
+    ...(dangerouslyAllowPrivateNetwork === true ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
+}
+
+function buildFetchSsrFCacheKeyFragment(ssrfPolicy?: SsrFPolicy): string {
+  if (!ssrfPolicy) {
+    return "ssrf:strict";
+  }
+  const allowedHostnames = normalizeStringList(ssrfPolicy.allowedHostnames)?.toSorted() ?? [];
+  const hostnameAllowlist = normalizeStringList(ssrfPolicy.hostnameAllowlist)?.toSorted() ?? [];
+  return JSON.stringify({
+    dangerouslyAllowPrivateNetwork: isPrivateNetworkAllowedByPolicy(ssrfPolicy),
+    allowRfc2544BenchmarkRange: ssrfPolicy.allowRfc2544BenchmarkRange === true,
+    allowedHostnames,
+    hostnameAllowlist,
+  });
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -354,6 +403,78 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   return trimmed || undefined;
 }
 
+function resolveTrustedEndpointSsrFPolicy(rawUrl: string): SsrFPolicy | undefined {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldUseEnvProxyForWebFetch(ssrfPolicy?: SsrFPolicy): boolean {
+  return isPrivateNetworkAllowedByPolicy(ssrfPolicy);
+}
+
+async function shouldForwardUrlToFirecrawl(
+  rawUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+  // Never forward explicit private/special-use targets to a remote extractor,
+  // even if local web_fetch policy allows them.
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    return false;
+  }
+  // Hostname-based local exceptions are for local fetch only. If this specific URL
+  // matches an explicit local exception, do not forward it to a remote extractor.
+  const normalizedHostname = normalizeHostname(parsed.hostname);
+  const allowedHostnames =
+    ssrfPolicy?.allowedHostnames
+      ?.map((value) => normalizeHostname(value))
+      .filter((value) => value.length > 0) ?? [];
+  const hostnameAllowlist =
+    ssrfPolicy?.hostnameAllowlist
+      ?.map((value) => value.trim().toLowerCase())
+      .map((value) =>
+        value.startsWith("*.")
+          ? `*.${normalizeHostname(value.slice(2))}`
+          : normalizeHostname(value),
+      )
+      .filter((value) => value !== "*" && value !== "*." && value.length > 0) ?? [];
+  const matchesHostnameAllowlist = hostnameAllowlist.some((pattern) => {
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(2);
+      return normalizedHostname.endsWith(`.${suffix}`) && normalizedHostname !== suffix;
+    }
+    return normalizedHostname === pattern;
+  });
+  if (allowedHostnames.includes(normalizedHostname) || matchesHostnameAllowlist) {
+    return false;
+  }
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, { policy: ssrfPolicy });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchFirecrawlContent(params: {
   url: string;
   extractMode: ExtractMode;
@@ -382,53 +503,62 @@ export async function fetchFirecrawlContent(params: {
     storeInCache: params.storeInCache,
   };
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
+  const { response: res, release } = await fetchWithWebToolsNetworkGuard({
+    url: endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    useEnvProxy: true,
+    policy: resolveTrustedEndpointSsrFPolicy(endpoint),
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
 
-  const payload = (await res.json()) as {
-    success?: boolean;
-    data?: {
-      markdown?: string;
-      content?: string;
-      metadata?: {
-        title?: string;
-        sourceURL?: string;
-        statusCode?: number;
+  try {
+    const payload = (await res.json()) as {
+      success?: boolean;
+      data?: {
+        markdown?: string;
+        content?: string;
+        metadata?: {
+          title?: string;
+          sourceURL?: string;
+          statusCode?: number;
+        };
       };
+      warning?: string;
+      error?: string;
     };
-    warning?: string;
-    error?: string;
-  };
 
-  if (!res.ok || payload?.success === false) {
-    const detail = payload?.error ?? "";
-    throw new Error(
-      `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
-    );
+    if (!res.ok || payload?.success === false) {
+      const detail = payload?.error ?? "";
+      throw new Error(
+        `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
+      );
+    }
+
+    const data = payload?.data ?? {};
+    const rawText =
+      typeof data.markdown === "string"
+        ? data.markdown
+        : typeof data.content === "string"
+          ? data.content
+          : "";
+    const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
+    return {
+      text,
+      title: data.metadata?.title,
+      finalUrl: data.metadata?.sourceURL,
+      status: data.metadata?.statusCode,
+      warning: payload?.warning,
+    };
+  } finally {
+    await release();
   }
-
-  const data = payload?.data ?? {};
-  const rawText =
-    typeof data.markdown === "string"
-      ? data.markdown
-      : typeof data.content === "string"
-        ? data.content
-        : "";
-  const text = params.extractMode === "text" ? markdownToText(rawText) : rawText;
-  return {
-    text,
-    title: data.metadata?.title,
-    finalUrl: data.metadata?.sourceURL,
-    status: data.metadata?.statusCode,
-    warning: payload?.warning,
-  };
 }
 
 type FirecrawlRuntimeParams = {
@@ -452,6 +582,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -491,6 +622,13 @@ async function maybeFetchFirecrawlWebFetchPayload(
     return null;
   }
 
+  // Never forward a URL to Firecrawl if it only passes because web_fetch relaxed
+  // private/internal SSRF checks locally. That would leak internal targets to a
+  // remote extractor service.
+  if (!(await shouldForwardUrlToFirecrawl(params.urlToFetch, params.ssrfPolicy))) {
+    return null;
+  }
+
   const firecrawl = await fetchFirecrawlContent(firecrawlParams);
   const payload = buildFirecrawlWebFetchPayload({
     firecrawl,
@@ -507,7 +645,7 @@ async function maybeFetchFirecrawlWebFetchPayload(
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}:${buildFetchSsrFCacheKeyFragment(params.ssrfPolicy)}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -533,6 +671,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.ssrfPolicy,
+      useEnvProxy: shouldUseEnvProxyForWebFetch(params.ssrfPolicy),
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -684,10 +824,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 }
 
 async function tryFirecrawlFallback(
-  params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
+  params: FirecrawlRuntimeParams & {
+    url: string;
+    extractMode: ExtractMode;
+    ssrfPolicy?: SsrFPolicy;
+  },
 ): Promise<{ text: string; title?: string } | null> {
   const firecrawlParams = toFirecrawlContentParams(params);
   if (!firecrawlParams) {
+    return null;
+  }
+  if (!(await shouldForwardUrlToFirecrawl(params.url, params.ssrfPolicy))) {
     return null;
   }
   try {
@@ -741,6 +888,7 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const ssrfPolicy = resolveFetchSsrFPolicy(fetch);
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -771,6 +919,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

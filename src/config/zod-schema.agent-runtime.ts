@@ -318,8 +318,18 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
+const ToolsWebFetchSsrFPolicySchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+    hostnameAllowlist: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebFetchSchema = z
   .object({
+    ssrfPolicy: ToolsWebFetchSsrFPolicySchema,
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),

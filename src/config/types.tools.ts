@@ -520,6 +520,15 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** SSRF guardrail policy for direct web_fetch requests (default: strict public-only). */
+      ssrfPolicy?: {
+        /** If true, permit web_fetch access to private/internal networks. */
+        dangerouslyAllowPrivateNetwork?: boolean;
+        /** Exact hostname exceptions, including blocked names like localhost. */
+        allowedHostnames?: string[];
+        /** Hostname allowlist patterns (exact hosts or *.example.com). */
+        hostnameAllowlist?: string[];
+      };
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {
