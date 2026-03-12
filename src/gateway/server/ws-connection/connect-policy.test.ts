@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
+import type { ConnectParams } from "../../protocol/index.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
@@ -304,12 +305,18 @@ describe("ws connect policy", () => {
   });
 
   test("backend self-pairing skip requires trusted local backend handshake conditions", () => {
-    const makeConnectParams = (clientId: string, mode: string) => ({
+    const makeConnectParams = (
+      clientId: ConnectParams["client"]["id"],
+      mode: ConnectParams["client"]["mode"],
+    ): ConnectParams => ({
       client: {
         id: clientId,
         mode,
         version: "1.0.0",
+        platform: "node",
       },
+      minProtocol: 1,
+      maxProtocol: 1,
     });
 
     expect(
@@ -379,7 +386,7 @@ describe("ws connect policy", () => {
 
     expect(
       shouldSkipBackendSelfPairing({
-        connectParams: makeConnectParams("not-gateway-client", GATEWAY_CLIENT_MODES.BACKEND),
+        connectParams: makeConnectParams("webchat", GATEWAY_CLIENT_MODES.BACKEND),
         isLocalClient: true,
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
