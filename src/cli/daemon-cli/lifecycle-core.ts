@@ -4,6 +4,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import { describeGatewayServiceRestart } from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
@@ -224,7 +225,20 @@ export async function runServiceStart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    const restartResult = await params.service.restart({ env: process.env, stdout });
+    const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+    if (restartStatus.scheduled) {
+      emit({
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, loaded),
+      });
+      if (!json) {
+        defaultRuntime.log(restartStatus.message);
+      }
+      return;
+    }
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
@@ -318,7 +332,7 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
-  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
@@ -407,22 +421,38 @@ export async function runServiceRestart(params: {
     if (loaded) {
       restartResult = await params.service.restart({ env: process.env, stdout });
     }
-    if (restartResult.outcome === "scheduled") {
-      const message = `restart scheduled, ${params.serviceNoun.toLowerCase()} will restart momentarily`;
+    let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+    if (restartStatus.scheduled) {
       emit({
         ok: true,
-        result: "scheduled",
-        message,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
         service: buildDaemonServiceSnapshot(params.service, loaded),
         warnings: warnings.length ? warnings : undefined,
       });
       if (!json) {
-        defaultRuntime.log(message);
+        defaultRuntime.log(restartStatus.message);
       }
       return true;
     }
     if (params.postRestartCheck) {
-      await params.postRestartCheck({ json, stdout, warnings, fail });
+      const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
+      if (postRestartResult) {
+        restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
+        if (restartStatus.scheduled) {
+          emit({
+            ok: true,
+            result: restartStatus.daemonActionResult,
+            message: restartStatus.message,
+            service: buildDaemonServiceSnapshot(params.service, loaded),
+            warnings: warnings.length ? warnings : undefined,
+          });
+          if (!json) {
+            defaultRuntime.log(restartStatus.message);
+          }
+          return true;
+        }
+      }
     }
     let restarted = loaded;
     if (loaded) {
