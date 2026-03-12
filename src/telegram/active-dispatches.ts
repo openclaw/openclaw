@@ -7,18 +7,27 @@
  * active — bypassing per-chat serialization so the steer check in
  * `get-reply-run.ts` can see the first run as active and inject the second
  * message via `agent.steer()`.
+ *
+ * Uses reference counting so concurrent dispatches for the same key (the
+ * primary run + steered follow-ups) keep the key marked active until ALL
+ * dispatches complete.
  */
 
-const activeDispatches = new Set<string>();
+const activeDispatches = new Map<string, number>();
 
 export function markTelegramDispatchActive(key: string): void {
-  activeDispatches.add(key);
+  activeDispatches.set(key, (activeDispatches.get(key) ?? 0) + 1);
 }
 
 export function clearTelegramDispatchActive(key: string): void {
-  activeDispatches.delete(key);
+  const count = activeDispatches.get(key) ?? 0;
+  if (count <= 1) {
+    activeDispatches.delete(key);
+  } else {
+    activeDispatches.set(key, count - 1);
+  }
 }
 
 export function isTelegramDispatchActive(key: string): boolean {
-  return activeDispatches.has(key);
+  return (activeDispatches.get(key) ?? 0) > 0;
 }
