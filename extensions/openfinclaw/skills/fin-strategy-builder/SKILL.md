@@ -123,8 +123,8 @@ technical:
 # ── 回测配置 (必填) ───────────────────────────────────────
 backtest:
   defaultPeriod:
-    startDate: "2024-01-01"
-    endDate: "2024-12-31"
+    startDate: "2025-01-01"
+    endDate: "2025-12-31"
   frequencyDays: 1 # 回测频率（天）
   initialCapital: 10000 # 初始资金 (USD)
   currency: USD # 货币类型
@@ -165,13 +165,13 @@ backtest:
     name: "OpenFinClaw" # 默认作者名
     wallet: "0x..." # 可选：收益分配地址
   ```
-- `createdAt`: `"2024-01-01"` (YYYY-MM-DD)
-- `updatedAt`: `"2024-06-01"` (YYYY-MM-DD)
+- `createdAt`: `"2025-01-01"` (YYYY-MM-DD)
+- `updatedAt`: `"2025-06-01"` (YYYY-MM-DD)
 - `changelog`: 变更日志数组
   ```yaml
   changelog:
     - version: "1.0.0"
-      date: "2024-01-01"
+      date: "2025-01-01"
       changes: "Initial release"
   ```
 
@@ -179,12 +179,22 @@ backtest:
 
 ```yaml
 classification:
-  archetype: systematic # systematic | discretionary | hybrid
-  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
+  archetype: systematic           # systematic | discretionary | hybrid
+  market: Crypto                  # Crypto | US | CN | HK | Forex | Commodity
   assetClasses: [crypto]
-  frequency: weekly # daily | weekly | monthly
-  riskProfile: medium # low | medium | high (fallback for risk.riskLevel)
+  frequency: weekly               # daily | weekly | monthly
+  riskProfile: medium             # low | medium | high (fallback for risk.riskLevel)
 ```
+
+**字段说明：**
+
+| 字段 | 类型 | 必填 | 可选值 | 说明 |
+|------|------|------|--------|------|
+| `archetype` | string | 否 | `systematic` \| `discretionary` \| `hybrid` | 策略类型：系统化/主观/混合 |
+| `market` | string | 否 | `Crypto` \| `US` \| `CN` \| `HK` \| `Forex` \| `Commodity` | 目标市场 |
+| `assetClasses` | string[] | 否 | `[crypto]`, `[equity]`, `[forex]`, `[commodity]` | 资产类别数组 |
+| `frequency` | string | 否 | `daily` \| `weekly` \| `monthly` | 交易频率 |
+| `riskProfile` | string | 否 | `low` \| `medium` \| `high` | 风险等级（可被 `risk.riskLevel` 覆盖） |
 
 ### Parameters (可选)
 
@@ -291,7 +301,7 @@ Extract key dimensions:
 | Core idea      | buy dips, trend follow, grid, DCA |
 | Capital        | $10,000                           |
 | Risk tolerance | 25% max drawdown                  |
-| Time horizon   | 2024-01-01 to 2024-12-31          |
+| Time horizon   | 2025-01-01 to 2025-12-31          |
 | Market         | Crypto, US, CN, HK                |
 
 Ask clarifying questions if the idea is vague (e.g. "buy when cheap" → RSI oversold? below MA? fixed schedule?).
