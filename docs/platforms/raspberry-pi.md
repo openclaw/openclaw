@@ -157,33 +157,26 @@ journalctl -u openclaw -f
 
 Replace `user@gateway-host` with your Pi username and hostname or IP address.
 
-On a terminal on your local machine, run:
+On your computer, ask the Pi to print a fresh dashboard URL:
 
 ```bash
-ssh user@gateway-host
+ssh user@gateway-host 'openclaw dashboard --no-open'
 ```
 
-Then run:
+The command prints `Dashboard URL:`. Depending on how `gateway.auth.token`
+is configured, the URL may be a plain `http://127.0.0.1:18789/` link or one
+that includes `#token=...`.
+
+In another terminal on your computer, create the SSH tunnel:
 
 ```bash
-openclaw dashboard
+ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 ```
 
-The output will look something like:
+Then open the printed Dashboard URL in your local browser.
 
-```text
-Dashboard URL: http://127.0.0.1:18789#token=<token>
-```
-
-Open another terminal and run:
-
-```bash
-ssh -L 18789:localhost:18789 user@gateway-host
-```
-
-Then paste the Dashboard URL printed by `openclaw dashboard` into your browser.
-
-You should see the OpenClaw dashboard.
+If the UI asks for auth, paste the token from `gateway.auth.token`
+(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
 
 ---
 

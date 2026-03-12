@@ -6,10 +6,10 @@ read_when:
 summary: 在 Raspberry Pi 上运行 OpenClaw（低成本自托管设置）
 title: Raspberry Pi
 x-i18n:
-  generated_at: "2026-03-12T02:06:39Z"
+  generated_at: "2026-02-03T07:53:30Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 9c17d2d0ee7f0a3d671e9ea3b2512c41f7f59b7b9d43c3d06ea19751c0f3c1dc
+  source_hash: 6741eaf0115a4fa0efd6599a99e0526a20ceb30eda1d9b04cba9dd5dec84bee2
   source_path: platforms/raspberry-pi.md
   workflow: 15
 ---
@@ -160,37 +160,29 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) 访问 OpenClaw 仪表板
+## 9) 访问仪表板
 
-将 `user@gateway-host` 替换为你的 Pi 用户名以及主机名或 IP 地址。
-
-在你本地机器的终端中，运行：
+由于 Pi 是无头的，使用 SSH 隧道：
 
 ```bash
-ssh user@gateway-host
-```
-
-然后运行：
-
-```bash
-openclaw dashboard
-```
-
-输出大致如下：
-
-```text
-Dashboard URL: http://127.0.0.1:18789#token=<token>
-```
-
-打开另一个终端并运行：
-
-```bash
+# 从你的笔记本电脑/台式机
 ssh -L 18789:localhost:18789 user@gateway-host
+
+# 然后在浏览器中打开
+open http://localhost:18789
 ```
 
-然后将 `openclaw dashboard` 输出的 Dashboard URL 粘贴到浏览器中。
+或使用 Tailscale 实现常驻访问：
 
-你应该会看到 OpenClaw 仪表板。
+```bash
+# 在 Pi 上
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# 更新配置
+openclaw config set gateway.bind tailnet
+sudo systemctl restart openclaw
+```
 
 ---
 
