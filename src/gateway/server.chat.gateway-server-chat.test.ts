@@ -532,7 +532,7 @@ describe("gateway server chat", () => {
 
   test("agent.wait returns the deduped agent result payload when the run finishes without lifecycle history", async () => {
     const agentSpy = vi.mocked(agentCommand);
-    agentSpy.mockResolvedValueOnce("gateway final answer");
+    agentSpy.mockResolvedValueOnce("gateway final answer" as never);
 
     await withMainSessionStore(async () => {
       const runId = "idem-wait-agent-result";
