@@ -301,6 +301,23 @@ describe("failover-error", () => {
     ).toBe("timeout");
   });
 
+  it("infers timeout from context-window stop-reason messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Unhandled stop reason: model_context_window_exceeded",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "Unhandled stop reason: context_window_exceeded",
+      }),
+    ).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "model_context_window_exceeded" })).toBe(
+      "timeout",
+    );
+    expect(resolveFailoverReasonFromError({ message: "context_window_exceeded" })).toBe("timeout");
+  });
+
   it("infers timeout from connection/network error messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");

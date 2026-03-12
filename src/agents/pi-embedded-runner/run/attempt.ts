@@ -2314,13 +2314,18 @@ export async function runEmbeddedAttempt(
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
         };
-        const hookResult = await resolvePromptBuildHookResult({
-          prompt: params.prompt,
-          messages: activeSession.messages,
-          hookCtx,
-          hookRunner,
-          legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
-        });
+        const hookResult = params.suppressPromptHookContext
+          ? undefined
+          : await resolvePromptBuildHookResult({
+              prompt: params.prompt,
+              messages: activeSession.messages,
+              hookCtx,
+              hookRunner,
+              legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+            });
+        if (params.suppressPromptHookContext) {
+          log.warn("hooks: prompt context injection suppressed for overflow recovery attempt");
+        }
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;

@@ -120,6 +120,15 @@ describe("formatAssistantErrorText", () => {
 });
 
 describe("formatRawAssistantErrorForUi", () => {
+  it("normalizes raw context-window stop reasons into friendly copy", () => {
+    expect(
+      formatRawAssistantErrorForUi("Unhandled stop reason: model_context_window_exceeded"),
+    ).toContain("Context overflow");
+    expect(
+      formatRawAssistantErrorForUi("Unhandled stop reason: context_window_exceeded"),
+    ).toContain("Context overflow");
+  });
+
   it("renders HTTP code + type + message from Anthropic payloads", () => {
     const text = formatRawAssistantErrorForUi(
       '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited."},"request_id":"req_123"}',

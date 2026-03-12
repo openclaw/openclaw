@@ -741,6 +741,7 @@ export async function runEmbeddedPiAgent(
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      let suppressPromptHookContextNextAttempt = false;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
@@ -848,6 +849,9 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          const suppressPromptHookContext = suppressPromptHookContextNextAttempt;
+          suppressPromptHookContextNextAttempt = false;
+
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -891,6 +895,7 @@ export async function runEmbeddedPiAgent(
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
+            suppressPromptHookContext,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -1186,6 +1191,13 @@ export async function runEmbeddedPiAgent(
                   `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
                   `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
               );
+            }
+            if (!isCompactionFailure && !suppressPromptHookContext) {
+              suppressPromptHookContextNextAttempt = true;
+              log.warn(
+                "[context-overflow-recovery] Retrying with prompt hook context injection suppressed",
+              );
+              continue;
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             return {
