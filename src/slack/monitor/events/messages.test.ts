@@ -121,7 +121,7 @@ describe("registerSlackMessageEvents", () => {
       calls: 0,
     },
     {
-      name: "blocks message_deleted system events for users outside channel users allowlist",
+      name: "ignores message_deleted system events",
       input: {
         overrides: {
           dmPolicy: "open",

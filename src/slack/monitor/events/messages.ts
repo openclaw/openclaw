@@ -23,7 +23,10 @@ export function registerSlackMessageEvents(params: {
       const message = event as SlackMessageEvent;
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
-        if (subtypeHandler.eventKind === "message_changed") {
+        if (
+          subtypeHandler.eventKind === "message_changed" ||
+          subtypeHandler.eventKind === "message_deleted"
+        ) {
           return;
         }
         const channelId = subtypeHandler.resolveChannelId(message);
