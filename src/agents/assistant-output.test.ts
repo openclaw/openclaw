@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createAssistantOutputIdState,
   extractAssistantOutputSegments,
   reconcileAssistantOutputs,
   reconcileLiveAssistantCommentary,
@@ -139,6 +140,7 @@ describe("assistant output extraction", () => {
 
 describe("assistant output reconciliation", () => {
   it("delivers live commentary from a partial assistant stream message once", async () => {
+    const idState = createAssistantOutputIdState();
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
     const message = {
@@ -159,6 +161,7 @@ describe("assistant output reconciliation", () => {
     };
 
     const firstPass = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: message as any,
       seenSegmentIds,
@@ -174,6 +177,7 @@ describe("assistant output reconciliation", () => {
     expect(onCommentary).toHaveBeenCalledTimes(1);
 
     const secondPass = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: message as any,
       seenSegmentIds,
@@ -184,6 +188,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("waits for a cumulative commentary segment to stop growing before delivering it", async () => {
+    const idState = createAssistantOutputIdState();
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
     const firstPartial = {
@@ -225,6 +230,7 @@ describe("assistant output reconciliation", () => {
     };
 
     const firstPass = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: firstPartial as any,
       seenSegmentIds,
@@ -233,6 +239,7 @@ describe("assistant output reconciliation", () => {
     expect(firstPass.newOutputs).toEqual([]);
 
     const secondPass = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: secondPartial as any,
       seenSegmentIds,
@@ -241,6 +248,7 @@ describe("assistant output reconciliation", () => {
     expect(secondPass.newOutputs).toEqual([]);
 
     const thirdPass = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: completedPartial as any,
       seenSegmentIds,
@@ -257,6 +265,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("tracks finalized assistant outputs separately and revisits incomplete messages", async () => {
+    const idState = createAssistantOutputIdState();
     const seenSegmentIds = new Set<string>();
     const messages = [
       {
@@ -273,6 +282,7 @@ describe("assistant output reconciliation", () => {
     ];
 
     const firstPass = await reconcileAssistantOutputs({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       messages: messages as any,
       startIndex: 0,
@@ -284,6 +294,7 @@ describe("assistant output reconciliation", () => {
     Object.assign(messages[0], { stopReason: "toolUse" });
 
     const secondPass = await reconcileAssistantOutputs({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       messages: messages as any,
       startIndex: firstPass.nextStartIndex,
@@ -339,6 +350,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("stops finalized reconciliation at the first in-flight assistant message", async () => {
+    const idState = createAssistantOutputIdState();
     const seenSegmentIds = new Set<string>();
     const messages = [
       {
@@ -358,6 +370,7 @@ describe("assistant output reconciliation", () => {
     ];
 
     const firstPass = await reconcileAssistantOutputs({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       messages: messages as any,
       startIndex: 0,
@@ -374,6 +387,7 @@ describe("assistant output reconciliation", () => {
 
     Object.assign(messages[1], { stopReason: "toolUse" });
     const secondPass = await reconcileAssistantOutputs({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       messages: messages as any,
       startIndex: firstPass.nextStartIndex,
@@ -553,6 +567,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("reuses fallback segment ids for equivalent unsigned live and finalized messages", async () => {
+    const idState = createAssistantOutputIdState();
     const seenSegmentIds = new Set<string>();
     const liveMessage = {
       role: "assistant",
@@ -574,11 +589,13 @@ describe("assistant output reconciliation", () => {
     };
 
     const liveResult = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: liveMessage as any,
       seenSegmentIds,
     });
     const finalizedResult = await reconcileAssistantOutputs({
+      idState,
       messages: [
         {
           ...liveMessage,
@@ -633,6 +650,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("uses distinct live fallback ids for commentary messages without ids or signatures", async () => {
+    const idState = createAssistantOutputIdState();
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
     const firstMessage = {
@@ -669,12 +687,14 @@ describe("assistant output reconciliation", () => {
     };
 
     const firstResult = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: firstMessage as any,
       seenSegmentIds,
       onCommentary,
     });
     const secondResult = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: secondMessage as any,
       seenSegmentIds,
@@ -690,6 +710,7 @@ describe("assistant output reconciliation", () => {
   });
 
   it("reuses fallback segment ids between live and finalized reconciliation", async () => {
+    const idState = createAssistantOutputIdState();
     const onCommentary = vi.fn();
     const seenSegmentIds = new Set<string>();
     const message = {
@@ -710,6 +731,7 @@ describe("assistant output reconciliation", () => {
     };
 
     const liveResult = await reconcileLiveAssistantCommentary({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       message: message as any,
       seenSegmentIds,
@@ -719,6 +741,7 @@ describe("assistant output reconciliation", () => {
 
     Object.assign(message, { stopReason: "toolUse" });
     const finalizedResult = await reconcileAssistantOutputs({
+      idState,
       // oxlint-disable-next-line typescript/no-explicit-any
       messages: [message] as any,
       startIndex: 0,
@@ -727,5 +750,79 @@ describe("assistant output reconciliation", () => {
 
     expect(finalizedResult.newOutputs).toEqual([]);
     expect(finalizedResult.nextStartIndex).toBe(1);
+  });
+
+  it("does not collapse repeated identical unsigned assistant messages across turns", async () => {
+    const idState = createAssistantOutputIdState();
+    const seenSegmentIds = new Set<string>();
+    const liveMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+    const secondLiveMessage = {
+      ...liveMessage,
+      content: [
+        {
+          type: "text",
+          text: "Still working...",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-2",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const firstLiveResult = await reconcileLiveAssistantCommentary({
+      idState,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: liveMessage as any,
+      seenSegmentIds: new Set<string>(),
+    });
+    const firstFinalizedResult = await reconcileAssistantOutputs({
+      idState,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: [{ ...liveMessage, stopReason: "toolUse" }] as any,
+      startIndex: 0,
+      seenSegmentIds,
+    });
+    const secondLiveResult = await reconcileLiveAssistantCommentary({
+      idState,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: secondLiveMessage as any,
+      seenSegmentIds: new Set<string>(),
+    });
+    const secondFinalizedResult = await reconcileAssistantOutputs({
+      idState,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      messages: [{ ...secondLiveMessage, stopReason: "toolUse" }] as any,
+      startIndex: 0,
+      seenSegmentIds: new Set<string>(),
+    });
+
+    expect(firstLiveResult.newOutputs[0]?.segmentId).toBe(
+      firstFinalizedResult.newOutputs[0]?.segmentId,
+    );
+    expect(secondLiveResult.newOutputs[0]?.segmentId).toBe(
+      secondFinalizedResult.newOutputs[0]?.segmentId,
+    );
+    expect(firstLiveResult.newOutputs[0]?.segmentId).not.toBe(
+      secondLiveResult.newOutputs[0]?.segmentId,
+    );
   });
 });

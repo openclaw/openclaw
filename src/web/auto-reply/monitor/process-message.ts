@@ -124,6 +124,7 @@ function resolvePinnedMainDmRecipient(params: {
   });
 }
 
+// Returns true if any reply visible to the user was delivered, including live commentary.
 export async function processMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;

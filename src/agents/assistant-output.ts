@@ -21,9 +21,26 @@ type AssistantOutputCandidate = AssistantOutputEntry & {
   isTerminal: boolean;
 };
 
-const liveAssistantFallbackMessageIds = new WeakMap<object, string>();
-const liveAssistantFallbackMessageIdsByFingerprint = new Map<string, string>();
-let nextLiveAssistantFallbackMessageId = 0;
+type AssistantFallbackFingerprintState = {
+  activeLiveMessageId?: string;
+  messageIdsByOccurrence: string[];
+};
+
+export type AssistantOutputIdState = {
+  fingerprintStates: Map<string, AssistantFallbackFingerprintState>;
+  messageIdsByObject: WeakMap<object, string>;
+  nextGeneratedMessageId: number;
+};
+
+export function createAssistantOutputIdState(): AssistantOutputIdState {
+  // Keep fallback-id reuse scoped to a single run so identical unsigned messages
+  // across unrelated conversations do not accumulate or collide globally.
+  return {
+    fingerprintStates: new Map(),
+    messageIdsByObject: new WeakMap(),
+    nextGeneratedMessageId: 0,
+  };
+}
 
 export function normalizeAssistantMessagePhase(value: unknown): AssistantMessagePhase | null {
   return value === "commentary" || value === "final_answer" ? value : null;
@@ -92,28 +109,47 @@ function resolveAssistantMessageStableId(
     : (fallbackMessageStableId ?? "message");
 }
 
-function resolveLiveAssistantFallbackMessageId(message: AgentMessage) {
+function buildNextAssistantFallbackMessageId(state: AssistantOutputIdState) {
+  const id = `stream-${state.nextGeneratedMessageId}`;
+  state.nextGeneratedMessageId += 1;
+  return id;
+}
+
+function getAssistantFallbackFingerprintState(state: AssistantOutputIdState, fingerprint: string) {
+  const existingState = state.fingerprintStates.get(fingerprint);
+  if (existingState) {
+    return existingState;
+  }
+  const nextState: AssistantFallbackFingerprintState = {
+    messageIdsByOccurrence: [],
+  };
+  state.fingerprintStates.set(fingerprint, nextState);
+  return nextState;
+}
+
+function resolveLiveAssistantFallbackMessageId(
+  message: AgentMessage,
+  state: AssistantOutputIdState,
+) {
   if (!message || typeof message !== "object") {
     return "stream";
   }
-  const existingId = liveAssistantFallbackMessageIds.get(message as object);
+  const existingId = state.messageIdsByObject.get(message as object);
   if (existingId) {
-    liveAssistantFallbackMessageIdsByFingerprint.set(
-      buildAssistantFallbackFingerprint(message),
-      existingId,
-    );
     return existingId;
   }
   const fingerprint = buildAssistantFallbackFingerprint(message);
-  const fingerprintMatch = liveAssistantFallbackMessageIdsByFingerprint.get(fingerprint);
-  if (fingerprintMatch) {
-    liveAssistantFallbackMessageIds.set(message as object, fingerprintMatch);
-    return fingerprintMatch;
+  const fingerprintState = getAssistantFallbackFingerprintState(state, fingerprint);
+  if (fingerprintState.activeLiveMessageId) {
+    // Live reconciliation only ever tracks the current in-flight assistant turn,
+    // so reusing the active id for an equivalent replacement object is safe here.
+    state.messageIdsByObject.set(message as object, fingerprintState.activeLiveMessageId);
+    return fingerprintState.activeLiveMessageId;
   }
-  const id = `stream-${nextLiveAssistantFallbackMessageId}`;
-  nextLiveAssistantFallbackMessageId += 1;
-  liveAssistantFallbackMessageIds.set(message as object, id);
-  liveAssistantFallbackMessageIdsByFingerprint.set(fingerprint, id);
+  const id = buildNextAssistantFallbackMessageId(state);
+  fingerprintState.activeLiveMessageId = id;
+  fingerprintState.messageIdsByOccurrence.push(id);
+  state.messageIdsByObject.set(message as object, id);
   return id;
 }
 
@@ -135,6 +171,65 @@ function hashAssistantIdentityKey(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return `stream-${(hash >>> 0).toString(36)}`;
+}
+
+function getAssistantFallbackFingerprint(message: AgentMessage) {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const messageRecord = message as unknown as Record<string, unknown>;
+  if (typeof messageRecord.id === "string" && messageRecord.id.trim().length > 0) {
+    return undefined;
+  }
+  return buildAssistantFallbackFingerprint(message);
+}
+
+function seedAssistantFallbackFingerprintOccurrences(
+  messages: AgentMessage[],
+  upToIndexExclusive: number,
+) {
+  const occurrences = new Map<string, number>();
+  for (const message of messages.slice(0, upToIndexExclusive)) {
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const fingerprint = getAssistantFallbackFingerprint(message);
+    if (!fingerprint) {
+      continue;
+    }
+    occurrences.set(fingerprint, (occurrences.get(fingerprint) ?? 0) + 1);
+  }
+  return occurrences;
+}
+
+function recordAssistantFallbackFingerprintOccurrence(
+  occurrences: Map<string, number>,
+  fingerprint: string | undefined,
+) {
+  if (!fingerprint) {
+    return undefined;
+  }
+  const occurrenceIndex = occurrences.get(fingerprint) ?? 0;
+  occurrences.set(fingerprint, occurrenceIndex + 1);
+  return occurrenceIndex;
+}
+
+function resolveFinalizedAssistantFallbackMessageId(params: {
+  fingerprint: string;
+  occurrenceIndex: number;
+  state: AssistantOutputIdState;
+}) {
+  const fingerprintState = getAssistantFallbackFingerprintState(params.state, params.fingerprint);
+  const existingId = fingerprintState.messageIdsByOccurrence[params.occurrenceIndex];
+  if (existingId) {
+    if (fingerprintState.activeLiveMessageId === existingId) {
+      fingerprintState.activeLiveMessageId = undefined;
+    }
+    return existingId;
+  }
+  const id = buildNextAssistantFallbackMessageId(params.state);
+  fingerprintState.messageIdsByOccurrence[params.occurrenceIndex] = id;
+  return id;
 }
 
 function toOptionalTrimmedString(value: unknown) {
@@ -230,7 +325,7 @@ function extractAssistantOutputCandidates(
     msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
   const messageStableId = resolveAssistantMessageStableId(
     messageRecord,
-    options?.fallbackMessageStableId ?? resolveLiveAssistantFallbackMessageId(msg),
+    options?.fallbackMessageStableId,
   );
   const defaultPhase = normalizeAssistantMessagePhase(messageRecord?.phase);
   const errorContext = messageRecord?.stopReason === "error";
@@ -322,6 +417,7 @@ export function extractAssistantOutputSegments(
 }
 
 export async function reconcileLiveAssistantCommentary(params: {
+  idState?: AssistantOutputIdState;
   message: AgentMessage | null | undefined;
   seenSegmentIds: Set<string>;
   onCommentary?: (segment: AssistantOutputEntry) => void | Promise<void>;
@@ -330,7 +426,8 @@ export async function reconcileLiveAssistantCommentary(params: {
     return { newOutputs: [] as AssistantOutputEntry[] };
   }
 
-  const liveFallbackMessageId = resolveLiveAssistantFallbackMessageId(params.message);
+  const idState = params.idState ?? createAssistantOutputIdState();
+  const liveFallbackMessageId = resolveLiveAssistantFallbackMessageId(params.message, idState);
 
   const newOutputs: AssistantOutputEntry[] = [];
   for (const segment of extractAssistantOutputCandidates(params.message, {
@@ -353,12 +450,14 @@ export async function reconcileLiveAssistantCommentary(params: {
 }
 
 export async function reconcileAssistantOutputs(params: {
+  idState?: AssistantOutputIdState;
   messages: AgentMessage[];
   startIndex: number;
   seenSegmentIds: Set<string>;
   historyBeforePrompt?: AgentMessage[];
 }) {
   const newOutputs: AssistantOutputEntry[] = [];
+  const idState = params.idState ?? createAssistantOutputIdState();
   const recoveredPromptBoundaryIndex =
     params.historyBeforePrompt && params.historyBeforePrompt.length > 0
       ? resolveCompactedPromptBoundaryIndex(params.messages, params.historyBeforePrompt)
@@ -371,6 +470,10 @@ export async function reconcileAssistantOutputs(params: {
     typeof recoveredPromptBoundaryIndex === "number"
       ? Math.min(candidateStartIndex, recoveredPromptBoundaryIndex)
       : candidateStartIndex;
+  const fallbackFingerprintOccurrences = seedAssistantFallbackFingerprintOccurrences(
+    params.messages,
+    normalizedStartIndex,
+  );
   let nextStartIndex = params.messages.length;
 
   for (const [index, msg] of params.messages.slice(normalizedStartIndex).entries()) {
@@ -384,8 +487,20 @@ export async function reconcileAssistantOutputs(params: {
       nextStartIndex = absoluteIndex;
       break;
     }
+    const fallbackFingerprint = getAssistantFallbackFingerprint(msg);
+    const fallbackOccurrenceIndex = recordAssistantFallbackFingerprintOccurrence(
+      fallbackFingerprintOccurrences,
+      fallbackFingerprint,
+    );
     for (const segment of extractAssistantOutputSegments(msg, {
-      fallbackMessageStableId: resolveLiveAssistantFallbackMessageId(msg),
+      fallbackMessageStableId:
+        fallbackFingerprint && typeof fallbackOccurrenceIndex === "number"
+          ? resolveFinalizedAssistantFallbackMessageId({
+              fingerprint: fallbackFingerprint,
+              occurrenceIndex: fallbackOccurrenceIndex,
+              state: idState,
+            })
+          : undefined,
     })) {
       if (params.seenSegmentIds.has(segment.segmentId)) {
         continue;

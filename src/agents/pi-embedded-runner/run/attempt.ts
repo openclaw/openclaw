@@ -35,6 +35,7 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
+  createAssistantOutputIdState,
   reconcileAssistantOutputs,
   reconcileLiveAssistantCommentary,
   type AssistantOutputEntry,
@@ -1642,6 +1643,7 @@ export async function runEmbeddedAttempt(
       const seenAssistantOutputIds = new Set<string>();
       const seenLiveCommentaryIds = new Set<string>();
       const deliveredCommentarySegmentIds = new Set<string>();
+      const assistantOutputIdState = createAssistantOutputIdState();
       let reconcileStartIndex = prePromptMessageCount;
       let stopCommentaryReconciler = false;
       const deliverLiveCommentary = async (segment: AssistantOutputEntry) => {
@@ -1657,6 +1659,7 @@ export async function runEmbeddedAttempt(
       const reconcileLiveStreamCommentary = async () => {
         try {
           const result = await reconcileLiveAssistantCommentary({
+            idState: assistantOutputIdState,
             message: activeSession.agent.state.streamMessage as AgentMessage | null | undefined,
             seenSegmentIds: seenLiveCommentaryIds,
             onCommentary: params.onCommentaryReply ? deliverLiveCommentary : undefined,
@@ -1676,6 +1679,7 @@ export async function runEmbeddedAttempt(
         try {
           const result = await reconcileAssistantOutputs({
             historyBeforePrompt,
+            idState: assistantOutputIdState,
             messages,
             startIndex: reconcileStartIndex,
             seenSegmentIds: seenAssistantOutputIds,
@@ -1698,16 +1702,19 @@ export async function runEmbeddedAttempt(
           );
         }
       };
-      const commentaryReconciler = (async () => {
-        while (!stopCommentaryReconciler) {
-          await reconcileLiveStreamCommentary();
-          await reconcileFinalizedAssistantOutputs(activeSession.messages);
-          if (stopCommentaryReconciler) {
-            break;
-          }
-          await sleep(250);
-        }
-      })();
+      // Only poll for live commentary when the current channel actually consumes it.
+      const commentaryReconciler = params.onCommentaryReply
+        ? (async () => {
+            while (!stopCommentaryReconciler) {
+              await reconcileLiveStreamCommentary();
+              await reconcileFinalizedAssistantOutputs(activeSession.messages);
+              if (stopCommentaryReconciler) {
+                break;
+              }
+              await sleep(250);
+            }
+          })()
+        : Promise.resolve();
       try {
         const promptStartedAt = Date.now();
 
