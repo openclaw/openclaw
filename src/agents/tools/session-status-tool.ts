@@ -36,10 +36,12 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
+  createSessionVisibilityGuard,
   shouldResolveSessionIdInput,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
   createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  resolveInternalSessionKey,
+  resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -175,6 +177,7 @@ async function resolveModelOverride(params: {
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
+  sandboxed?: boolean;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -185,7 +188,11 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? loadConfig();
-      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
+        cfg,
+        agentSessionKey: opts?.agentSessionKey,
+        sandboxed: opts?.sandboxed,
+      });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
@@ -256,6 +263,40 @@ export function createSessionStatusTool(opts?: {
       if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
+      }
+
+      const normalizeVisibilitySessionKey = (sessionKey: string, sessionAgentId: string) => {
+        const trimmed = sessionKey.trim();
+        if (trimmed.startsWith("agent:")) {
+          return trimmed;
+        }
+        if (trimmed === "main" || trimmed === alias || trimmed === mainKey) {
+          return buildAgentMainSessionKey({
+            agentId: sessionAgentId,
+            mainKey,
+          });
+        }
+        return trimmed;
+      };
+
+      if (opts?.sandboxed === true) {
+        const visibility = resolveEffectiveSessionToolsVisibility({
+          cfg,
+          sandboxed: true,
+        });
+        const visibilityGuard = await createSessionVisibilityGuard({
+          action: "status",
+          requesterSessionKey: normalizeVisibilitySessionKey(
+            effectiveRequesterKey,
+            requesterAgentId,
+          ),
+          visibility,
+          a2aPolicy,
+        });
+        const access = visibilityGuard.check(normalizeVisibilitySessionKey(resolved.key, agentId));
+        if (!access.allowed) {
+          throw new Error(access.error);
+        }
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
