@@ -58,9 +58,17 @@ object OpenClawCanvasA2UIAction {
   }
 
   fun jsDispatchA2UIActionStatus(actionId: String, ok: Boolean, error: String?): String {
-    val err = (error ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
+    val err = escapeJsString(error ?: "")
     val okLiteral = if (ok) "true" else "false"
-    val idEscaped = actionId.replace("\\", "\\\\").replace("\"", "\\\"")
+    val idEscaped = escapeJsString(actionId)
     return "window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail: { id: \"${idEscaped}\", ok: ${okLiteral}, error: \"${err}\" } }));"
   }
+
+  private fun escapeJsString(raw: String): String =
+    raw
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t")
 }
