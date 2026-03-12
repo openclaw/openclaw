@@ -160,6 +160,31 @@
   background: rgba(239, 68, 68, 0.15);
 }
 
+.update-banner__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--danger);
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.update-banner__close:hover {
+  opacity: 1;
+}
+.update-banner__close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
 /* ===========================================
    Cards - Refined with depth
    =========================================== */
