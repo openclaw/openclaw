@@ -132,6 +132,7 @@
   border-radius: var(--radius-md);
   white-space: pre-wrap;
   word-break: break-word;
+  white-space: pre;
   overflow-x: auto;
   max-height: 120px;
   line-height: 1.4;
