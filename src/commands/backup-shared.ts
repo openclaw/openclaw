@@ -63,6 +63,7 @@ export type BackupSkipReason = "covered" | "missing";
 
 export type PatternSource = "default" | "cli" | "config-file" | "auto-file";
 
+/** @deprecated Use ExcludedStats instead. Retained for test compatibility during migration. */
 export type ExcludedEntry = {
   readonly path: string;
   readonly pattern: string;
