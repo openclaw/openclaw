@@ -1,8 +1,10 @@
 import { describe, expect, test } from "vitest";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldSkipBackendSelfPairing,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 
@@ -299,5 +301,90 @@ describe("ws connect policy", () => {
         }),
       ).toBe(tc.expected);
     }
+  });
+
+  test("backend self-pairing skip requires trusted local backend handshake conditions", () => {
+    const makeConnectParams = (clientId: string, mode: string) => ({
+      client: {
+        id: clientId,
+        mode,
+        version: "1.0.0",
+      },
+    });
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "trusted-proxy",
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams("not-gateway-client", GATEWAY_CLIENT_MODES.BACKEND),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
   });
 });
