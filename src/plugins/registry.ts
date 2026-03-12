@@ -440,6 +440,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    // Strip reserved names from aliases too. A plugin alias that maps to
+    // "inter_session" or "webchat" would cause normalizeMessageChannel to
+    // remap the sentinel into a real deliverable channel, bypassing the guards
+    // in resolveLastChannelRaw / resolveLastToRaw.
+    const reservedAliases =
+      plugin.meta?.aliases?.filter((a) => RESERVED_CHANNEL_IDS.has(a.trim().toLowerCase())) ?? [];
+    if (reservedAliases.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `channel aliases [${reservedAliases.join(", ")}] are reserved for internal OpenClaw routing and cannot be used by a plugin`,
+      });
+      // Strip reserved aliases rather than blocking the whole registration so
+      // the rest of the channel can still be used normally.
+      if (plugin.meta?.aliases) {
+        plugin.meta.aliases = plugin.meta.aliases.filter(
+          (a) => !RESERVED_CHANNEL_IDS.has(a.trim().toLowerCase()),
+        );
+      }
+    }
     const existing = registry.channels.find((entry) => entry.plugin.id === id);
     if (existing) {
       pushDiagnostic({
