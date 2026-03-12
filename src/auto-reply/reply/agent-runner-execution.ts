@@ -361,6 +361,7 @@ export async function runAgentTurnWithFallback(params: {
                   mediaUrls: payload.mediaUrls,
                 });
               },
+              onCommentaryReply: params.opts?.onCommentaryReply,
               onAssistantMessageStart: async () => {
                 await params.typingSignals.signalMessageStart();
                 await params.opts?.onAssistantMessageStart?.();

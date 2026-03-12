@@ -1,15 +1,7 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-
-vi.mock("../runtime-plugins.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-
 import { runEmbeddedPiAgent } from "./run.js";
+import { mockedEnsureRuntimePluginsLoaded } from "./run.overflow-compaction.mocks.shared.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
@@ -39,7 +31,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       runId: "run-plugin-bootstrap",
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+    expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
@@ -75,6 +67,36 @@ describe("runEmbeddedPiAgent usage reporting", () => {
         senderName: "Josh Lehman",
         senderUsername: "josh",
         senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("forwards live commentary callbacks into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const onCommentaryReply = vi.fn();
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-commentary-forwarding",
+      onCommentaryReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onCommentaryReply,
       }),
     );
   });

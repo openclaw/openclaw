@@ -60,6 +60,26 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it("includes WhatsApp commentary delivery enum values", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        whatsapp: {
+          commentaryDelivery: "maybe",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "channels.whatsapp.commentaryDelivery",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.allowedValues).toEqual(["off", "live"]);
+      expect(issue?.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
   it("skips allowed-values hints for unions with open-ended branches", () => {
     const result = validateConfigObjectRaw({
       cron: { sessionRetention: true },

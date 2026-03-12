@@ -212,6 +212,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("does not wire live commentary callbacks for telegram dispatch", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const firstCall = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as
+      | { replyOptions?: { onCommentaryReply?: unknown } }
+      | undefined;
+    expect(firstCall?.replyOptions?.onCommentaryReply).toBeUndefined();
+  });
+
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
