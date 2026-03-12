@@ -128,6 +128,8 @@ export type AgentDefaultsConfig = {
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
   pdfMaxPages?: number;
+  /** Explicit PDF extraction mode override: local, ocr, or auto. */
+  pdfExtractionMode?: "local" | "ocr" | "auto";
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
