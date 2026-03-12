@@ -383,6 +383,40 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledWith("cap");
   });
 
+  it("sends opus audio media as WhatsApp voice note when requested", async () => {
+    const msg = makeMsg();
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("aud"),
+      contentType: "audio/opus",
+      kind: "audio",
+      fileName: "voice.opus",
+    });
+
+    await deliverWebReply({
+      replyResult: {
+        text: "cap",
+        mediaUrl: "http://example.com/a.opus",
+        audioAsVoice: true,
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: expect.any(Buffer),
+        ptt: true,
+        mimetype: "audio/ogg; codecs=opus",
+      }),
+    );
+    expect(msg.reply).toHaveBeenCalledWith("cap");
+  });
+
   it("sends non-voice audio without forcing ptt and keeps text as a normal reply", async () => {
     const msg = makeMsg();
     (

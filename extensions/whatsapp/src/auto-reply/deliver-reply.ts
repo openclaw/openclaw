@@ -162,7 +162,8 @@ export async function deliverWebReply(params: {
                 audio: media.buffer,
                 ...(wantsVoiceNote ? { ptt: true } : {}),
                 mimetype:
-                  wantsVoiceNote && media.contentType === "audio/ogg"
+                  wantsVoiceNote &&
+                  (media.contentType === "audio/ogg" || media.contentType === "audio/opus")
                     ? "audio/ogg; codecs=opus"
                     : media.contentType,
               },
