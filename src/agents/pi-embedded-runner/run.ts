@@ -40,6 +40,7 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
+  extractObservedOverflowTokenCount,
   formatAssistantErrorText,
   isAuthAssistantError,
   isBillingAssistantError,
@@ -988,11 +989,13 @@ export async function runEmbeddedPiAgent(
             const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
+            const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${params.sessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
+                `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
@@ -1050,8 +1053,12 @@ export async function runEmbeddedPiAgent(
               try {
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
+                  ...(observedOverflowTokens !== undefined
+                    ? { currentTokenCount: observedOverflowTokens }
+                    : {}),
                   force: true,
                   compactionTarget: "budget",
                   runtimeContext: {
@@ -1074,6 +1081,9 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
                     trigger: "overflow",
+                    ...(observedOverflowTokens !== undefined
+                      ? { currentTokenCount: observedOverflowTokens }
+                      : {}),
                     diagId: overflowDiagId,
                     attempt: overflowCompactionAttempts,
                     maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
@@ -1565,7 +1575,9 @@ export async function runEmbeddedPiAgent(
               // ACP bridge) can distinguish end_turn from max_tokens.
               stopReason: attempt.clientToolCall
                 ? "tool_calls"
-                : (lastAssistant?.stopReason as string | undefined),
+                : attempt.yieldDetected
+                  ? "end_turn"
+                  : (lastAssistant?.stopReason as string | undefined),
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

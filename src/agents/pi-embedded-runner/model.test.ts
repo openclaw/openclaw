@@ -915,6 +915,43 @@ describe("resolveModel", () => {
     });
   });
 
+  it("lets provider config override registry-found kimi user agent headers", () => {
+    mockDiscoveredModel({
+      provider: "kimi-coding",
+      modelId: "k2p5",
+      templateModel: {
+        ...buildForwardCompatTemplate({
+          id: "k2p5",
+          name: "Kimi for Coding",
+          provider: "kimi-coding",
+          api: "anthropic-messages",
+          baseUrl: "https://api.kimi.com/coding/",
+        }),
+        headers: { "User-Agent": "claude-code/0.1.0" },
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "kimi-coding": {
+            headers: {
+              "User-Agent": "custom-kimi-client/1.0",
+              "X-Kimi-Tenant": "tenant-a",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("kimi-coding", "k2p5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "User-Agent": "custom-kimi-client/1.0",
+      "X-Kimi-Tenant": "tenant-a",
+    });
+  });
+
   it("does not override when no provider config exists", () => {
     mockDiscoveredModel({
       provider: "anthropic",

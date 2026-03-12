@@ -405,30 +405,53 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
-  it("only forwards workspaceDir for spawned subagent runs", async () => {
+  it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "normal run",
-        sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/ignored",
-        idempotencyKey: "workspace-ignored",
-      },
-      { reqId: "workspace-ignored-1" },
-    );
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const normalCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
-    expect(normalCall.workspaceDir).toBeUndefined();
-    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
 
     await invokeAgent(
       {
         message: "spawned run",
         sessionKey: "agent:main:main",
         spawnedBy: "agent:main:subagent:parent",
-        workspaceDir: "/tmp/inherited",
+        workspaceDir: "/tmp/injected",
+        idempotencyKey: "workspace-rejected",
+      } as AgentParams,
+      { reqId: "workspace-rejected-1", respond },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      spawnedBy: "agent:main:subagent:parent",
+      spawnedWorkspaceDir: "/tmp/inherited",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/tmp/inherited",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
         idempotencyKey: "workspace-forwarded",
       },
       { reqId: "workspace-forwarded-1" },
