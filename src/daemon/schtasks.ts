@@ -354,13 +354,37 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
+/**
+ * Read the gateway port from the installed scheduled task's command line.
+ * Falls back to default port 18789 if not found or on error.
+ */
+async function readScheduledTaskPort(taskName: string): Promise<number> {
+  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  if (res.code !== 0) {
+    return 18789;
+  }
+
+  const output = res.stdout || res.stderr || "";
+  // Extract --port argument from task command line
+  const portMatch = output.match(/--port\s+(\d+)/);
+  if (portMatch) {
+    return parseInt(portMatch[1], 10);
+  }
+
+  // Fall back to default port
+  return 18789;
+}
+
 export async function restartScheduledTask({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env ?? (process.env as GatewayServiceEnv));
-  const port = parseInt((env ?? process.env).OPENCLAW_GATEWAY_PORT || "18789", 10);
+  
+  // Read port from installed task config, not from environment
+  // This ensures we wait for the correct port when custom port is configured
+  const port = await readScheduledTaskPort(taskName);
 
   // 1. End the scheduled task
   await execSchtasks(["/End", "/TN", taskName]);
