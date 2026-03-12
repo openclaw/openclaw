@@ -155,17 +155,22 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
 }
 
 function extractTelegramDirectThreadTarget(sessionKey: string): string | null {
-  const normalized = sessionKey.trim().toLowerCase();
-  const match = /^agent:[^:]+:telegram:direct:([^:]+):thread:[^:]+:(\d+)$/.exec(normalized);
+  const trimmed = sessionKey.trim();
+  const match = /^agent:[^:]+:telegram:(?:[^:]+:)?direct:([^:]+):thread:([^:]+):(\d+)$/i.exec(
+    trimmed,
+  );
   if (!match) {
     return null;
   }
-  const chatId = match[1]?.trim();
-  const threadId = match[2]?.trim();
-  if (!chatId || !threadId) {
+  // NOTE: Keep the original casing for chat identifiers.
+  const directPeerId = match[1]?.trim();
+  const threadChatId = match[2]?.trim();
+  const threadId = match[3]?.trim();
+  if (!directPeerId || !threadChatId || !threadId) {
     return null;
   }
-  return `${chatId}:topic:${threadId}`;
+  // Prefer the chatId from the thread suffix (Telegram DM flows can have senderId != chat.id).
+  return `${threadChatId}:topic:${threadId}`;
 }
 
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
@@ -215,7 +220,8 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
     channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
   }
 
-  const resolvedPeerId = channel === "telegram" && telegramThreadTarget ? telegramThreadTarget : peerId;
+  const resolvedPeerId =
+    channel === "telegram" && telegramThreadTarget ? telegramThreadTarget : peerId;
   const delivery: CronDelivery = { mode: "announce", to: resolvedPeerId };
   if (channel) {
     delivery.channel = channel;
