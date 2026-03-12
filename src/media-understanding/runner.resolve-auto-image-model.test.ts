@@ -59,4 +59,16 @@ describe("resolveAutoImageModel", () => {
 
     expect(resolved).toEqual({ provider: "minimax-portal", model: "unknown-model-id" });
   });
+
+  it("keeps active model when catalog entry exists but input capability metadata is missing", async () => {
+    loadModelCatalogMock.mockResolvedValue([{ provider: "minimax-portal", id: "MiniMax-M2.5" }]);
+
+    const { resolveAutoImageModel } = await import("./runner.js");
+    const resolved = await resolveAutoImageModel({
+      cfg: {} as never,
+      activeModel: { provider: "minimax-portal", model: "MiniMax-M2.5" },
+    });
+
+    expect(resolved).toEqual({ provider: "minimax-portal", model: "MiniMax-M2.5" });
+  });
 });
