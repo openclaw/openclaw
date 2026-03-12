@@ -179,6 +179,8 @@ export async function sendMessageIMessage(
       timeoutMs: opts.timeoutMs,
     });
     const resolvedId = resolveMessageId(result);
+    // The imsg binary sets `ok` to a non-empty string on success; treat any truthy
+    // value as a success indicator (the binary never sends "false"/"0" for ok).
     if (!resolvedId && !result?.ok) {
       throw new Error("iMessage send returned no message ID and no success indicator");
     }
