@@ -521,6 +521,39 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
       }
     });
   });
+
+  it("cleans up the temp dir when embedded heartbeat clone copy fails during setup", async () => {
+    await withTempSessionFile("seed", async (sessionFile) => {
+      const realMkdtemp = fs.mkdtemp.bind(fs);
+      const createdDirs: string[] = [];
+      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
+        const dir = await realMkdtemp(prefix);
+        createdDirs.push(dir);
+        return dir;
+      });
+      const copyFileSpy = vi.spyOn(fs, "copyFile").mockRejectedValueOnce(new Error("copy failed"));
+
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: { sessionFile },
+        });
+
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
+
+        expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+        expect(payload?.text).toContain("copy failed");
+        expect(createdDirs).toHaveLength(1);
+        expect(await pathExists(createdDirs[0])).toBe(false);
+      } finally {
+        copyFileSpy.mockRestore();
+        mkdtempSpy.mockRestore();
+      }
+    });
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
