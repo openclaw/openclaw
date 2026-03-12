@@ -7,10 +7,15 @@ const mocks = vi.hoisted(() => ({
   createVpsAwareOAuthHandlers: vi.fn(),
   runOpenAIOAuthTlsPreflight: vi.fn(),
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
+  withEnvProxyGlobalDispatcher: vi.fn(async (run: () => Promise<unknown>) => await run()),
 }));
 
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   loginOpenAICodex: mocks.loginOpenAICodex,
+}));
+
+vi.mock("../infra/net/env-proxy-global-dispatcher.js", () => ({
+  withEnvProxyGlobalDispatcher: mocks.withEnvProxyGlobalDispatcher,
 }));
 
 vi.mock("./oauth-flow.js", () => ({
@@ -79,6 +84,7 @@ describe("loginOpenAICodexOAuth", () => {
     const { result, spin, runtime } = await runCodexOAuth({ isRemote: false });
 
     expect(result).toEqual(creds);
+    expect(mocks.withEnvProxyGlobalDispatcher).toHaveBeenCalledTimes(1);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();

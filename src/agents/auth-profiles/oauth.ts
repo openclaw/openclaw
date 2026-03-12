@@ -1,8 +1,9 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai/oauth";
 import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import { withEnvProxyGlobalDispatcher } from "../../infra/net/env-proxy-global-dispatcher.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
@@ -194,7 +195,10 @@ async function refreshOAuthTokenWithLock(params: {
               if (!oauthProvider) {
                 return null;
               }
-              return await getOAuthApiKey(oauthProvider, oauthCreds);
+              const resolveApiKey = async () => await getOAuthApiKey(oauthProvider, oauthCreds);
+              return normalizeProviderId(cred.provider) === "openai-codex"
+                ? await withEnvProxyGlobalDispatcher(resolveApiKey)
+                : await resolveApiKey();
             })();
     if (!result) {
       return null;
