@@ -619,6 +619,67 @@ function registerEventHandlers(
   });
 }
 
+// Delays must be >= PROBE_ERROR_TTL_MS (60s) so each retry makes a real network request
+// instead of silently hitting the probe error cache.
+const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000];
+
+export function waitForAbortableDelay(delayMs: number, abortSignal?: AbortSignal): Promise<boolean> {
+  if (abortSignal?.aborted) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", handleAbort);
+      resolve(true);
+    }, delayMs);
+    timer.unref?.();
+
+    const handleAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+
+    abortSignal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+async function retryBotIdentityProbe(
+  account: ResolvedFeishuAccount,
+  accountId: string,
+  runtime: RuntimeEnv | undefined,
+  abortSignal: AbortSignal | undefined,
+): Promise<void> {
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+  for (let i = 0; i < BOT_IDENTITY_RETRY_DELAYS_MS.length; i++) {
+    if (abortSignal?.aborted) return;
+    const delayElapsed = await waitForAbortableDelay(BOT_IDENTITY_RETRY_DELAYS_MS[i], abortSignal);
+    if (!delayElapsed) {
+      return;
+    }
+    const identity = await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+    if (identity.botOpenId) {
+      botOpenIds.set(accountId, identity.botOpenId);
+      if (identity.botName?.trim()) {
+        botNames.set(accountId, identity.botName.trim());
+      }
+      log(
+        `feishu[${accountId}]: bot open_id recovered via background retry: ${identity.botOpenId}`,
+      );
+      return;
+    }
+    const nextDelay = BOT_IDENTITY_RETRY_DELAYS_MS[i + 1];
+    error(
+      `feishu[${accountId}]: bot identity background retry ${i + 1}/${BOT_IDENTITY_RETRY_DELAYS_MS.length} failed` +
+        (nextDelay ? `; next attempt in ${nextDelay / 1000}s` : ""),
+    );
+  }
+  error(
+    `feishu[${accountId}]: bot identity background retry exhausted; requireMention group messages may be skipped until restart`,
+  );
+}
+
 export type BotOpenIdSource =
   | { kind: "prefetched"; botOpenId?: string; botName?: string }
   | { kind: "fetch" };
@@ -650,6 +711,18 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     botNames.delete(accountId);
   }
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+
+  // When the startup probe failed, retry in the background so the degraded
+  // state (responding to all group messages) is bounded rather than permanent.
+  if (!botOpenId && !abortSignal?.aborted) {
+    log(
+      `feishu[${accountId}]: bot open_id unknown; starting background retry (delays: ${BOT_IDENTITY_RETRY_DELAYS_MS.map((d) => `${d / 1000}s`).join(", ")})`,
+    );
+    log(
+      `feishu[${accountId}]: requireMention group messages stay gated until bot identity recovery succeeds`,
+    );
+    void retryBotIdentityProbe(account, accountId, runtime, abortSignal);
+  }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
