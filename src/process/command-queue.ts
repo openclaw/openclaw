@@ -154,7 +154,7 @@ function drainLane(lane: string) {
  * Returns whether the gateway is currently draining for restart.
  */
 export function isGatewayDraining(): boolean {
-  return gatewayDraining;
+  return queueState.gatewayDraining;
 }
 
 /**
