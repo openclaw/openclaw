@@ -386,6 +386,16 @@ export async function handleWebhookRequest(account: ResolvedWempAccount, req: In
       });
       return;
     }
+    // Apply replay guard before body read in encrypted mode to reject replays cheaply.
+    const encReplayState = markReplayGuard(account.accountId, nonce, [signature, msgSignature]);
+    if (!encReplayState.ok) {
+      rejectInvalidSignature(res, account, "replay_detected", {
+        path: pathname,
+        method,
+        replayBy: encReplayState.reason,
+      });
+      return;
+    }
   } else if (!verifySignature(signature || msgSignature, timestamp, nonce, account.token)) {
     rejectInvalidSignature(res, account, "invalid_signature", {
       path: pathname,
@@ -454,8 +464,7 @@ async function handlePostMessageBody(
       timeoutMs: GLOBAL_WEBHOOK_TIMEOUT_MS,
     });
     if (!res.writableEnded && !res.destroyed) {
-      const replyXml = buildPassiveTextReply("", account.appId, "消息已收到，正在处理中。");
-      sendText(res, 200, replyXml, "application/xml; charset=utf-8");
+      sendText(res, 200, "success");
     }
   }
 
@@ -518,14 +527,6 @@ async function handlePostMessageBody(
         if (!verifyMessageSignature(msgSignature, timestamp, nonce, encrypted, account.token)) {
           rejectInvalidSignature(res, account, "invalid_message_signature", {
             path: pathname,
-          });
-          return null;
-        }
-        const replayState = markReplayGuard(account.accountId, nonce, [msgSignature, signature]);
-        if (!replayState.ok) {
-          rejectInvalidSignature(res, account, "replay_detected", {
-            path: pathname,
-            replayBy: replayState.reason,
           });
           return null;
         }

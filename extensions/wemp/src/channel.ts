@@ -173,8 +173,15 @@ function isBlockedIpv4Host(hostname: string): boolean {
   return false;
 }
 
+function stripIpv6Brackets(hostname: string): string {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    return hostname.slice(1, -1);
+  }
+  return hostname;
+}
+
 function isBlockedIpv6Host(hostname: string): boolean {
-  const normalized = hostname.toLowerCase().split("%")[0] || "";
+  const normalized = stripIpv6Brackets(hostname).toLowerCase().split("%")[0] || "";
   if (!normalized) return false;
   if (normalized === "::" || normalized === "::1") return true;
   if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
@@ -225,6 +232,9 @@ function validateOutboundMediaUrl(input: string): URL {
     throw new Error(`wemp_media_url_rejected:blocked_ipv4:${hostname}`);
   }
   if (hostname.includes(":") && isBlockedIpv6Host(hostname)) {
+    throw new Error(`wemp_media_url_rejected:blocked_ipv6:${hostname}`);
+  }
+  if (hostname.startsWith("[") && isBlockedIpv6Host(hostname)) {
     throw new Error(`wemp_media_url_rejected:blocked_ipv6:${hostname}`);
   }
   return parsed;
@@ -683,7 +693,7 @@ export const wempPlugin: ChannelPlugin<ResolvedWempAccount> = {
         const validatedUrl = validateOutboundMediaUrl(mediaUrl);
         let mediaResponse: Response;
         try {
-          mediaResponse = await fetch(validatedUrl.toString());
+          mediaResponse = await fetch(validatedUrl.toString(), { redirect: "error" });
         } catch (error) {
           throw new Error(`wemp_media_download_failed:${error instanceof Error ? error.message : String(error)}`);
         }
