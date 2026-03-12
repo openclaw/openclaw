@@ -45,7 +45,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
             .map((p) => normalizeProviderId(p as string)),
         );
         models =
-          providerSet.size > 0 ? catalog.filter((m) => providerSet.has(m.provider)) : catalog;
+          providerSet.size > 0
+            ? catalog.filter((m) => providerSet.has(normalizeProviderId(m.provider)))
+            : catalog;
       }
       respond(true, { models }, undefined);
     } catch (err) {
