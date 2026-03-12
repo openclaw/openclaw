@@ -1,4 +1,6 @@
 import { sleep } from "../utils.js";
+import { sleepWithAbort } from "./backoff.js";
+import { isAbortError } from "./unhandled-rejections.js";
 
 export type RetryConfig = {
   attempts?: number;
@@ -17,6 +19,7 @@ export type RetryInfo = {
 
 export type RetryOptions = RetryConfig & {
   label?: string;
+  signal?: AbortSignal;
   shouldRetry?: (err: unknown, attempt: number) => boolean;
   retryAfterMs?: (err: unknown) => number | undefined;
   onRetry?: (info: RetryInfo) => void;
@@ -100,15 +103,23 @@ export async function retryAsync<T>(
       ? resolved.maxDelayMs
       : Number.POSITIVE_INFINITY;
   const jitter = resolved.jitter;
+  const { signal } = options;
   const shouldRetry = options.shouldRetry ?? (() => true);
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      const abortErr = new Error("aborted");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
+
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
+      const canRetry = attempt < maxAttempts && !isAbortError(err) && shouldRetry(err, attempt);
+      if (!canRetry) {
         break;
       }
 
@@ -128,7 +139,20 @@ export async function retryAsync<T>(
         err,
         label: options.label,
       });
-      await sleep(delay);
+      if (signal !== undefined) {
+        try {
+          await sleepWithAbort(delay, signal);
+        } catch (e) {
+          if (signal?.aborted) {
+            const abortErr = new Error("aborted");
+            abortErr.name = "AbortError";
+            throw abortErr;
+          }
+          throw e;
+        }
+      } else {
+        await sleep(delay);
+      }
     }
   }
 
