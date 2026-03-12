@@ -36,6 +36,7 @@ export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -47,13 +48,14 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
-      const requesterAgentId = opts?.agentSessionKey
-        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
-        : undefined;
+      const requesterAgentId =
+        opts?.requesterAgentIdOverride ??
+        (opts?.agentSessionKey ? resolveAgentIdFromSessionKey(opts.agentSessionKey) : undefined);
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
 
