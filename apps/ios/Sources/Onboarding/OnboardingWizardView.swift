@@ -536,7 +536,7 @@ struct OnboardingWizardView: View {
                     Text(
                         "Approve this device on the gateway.\n"
                             + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
-                            + "2) `/pair approve` in Telegram\n"
+                            + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
                             + "OpenClaw will also retry automatically when you return to this app.")
                 }

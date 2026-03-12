@@ -265,6 +265,19 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnedBy).toBe("agent:main:main");
   });
 
+  test("sets spawnedWorkspaceDir for subagent sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:subagent:child",
+        patch: {
+          key: "agent:main:subagent:child",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        },
+      }),
+    );
+    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
+  });
+
   test("sets spawnDepth for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -280,6 +293,13 @@ describe("gateway sessions patch", () => {
       patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
     });
     expectPatchError(result, "spawnDepth is only supported");
+  });
+
+  test("rejects spawnedWorkspaceDir on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
+    });
+    expectPatchError(result, "spawnedWorkspaceDir is only supported");
   });
 
   test("normalizes exec/send/group patches", async () => {

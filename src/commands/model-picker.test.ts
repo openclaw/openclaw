@@ -30,10 +30,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
-const getCustomProviderApiKey = vi.hoisted(() => vi.fn(() => undefined));
+const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
-  getCustomProviderApiKey,
+  hasUsableCustomProviderApiKey,
 }));
 
 const OPENROUTER_CATALOG = [

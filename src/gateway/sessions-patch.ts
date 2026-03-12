@@ -67,6 +67,22 @@ function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
 
+function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "orchestrator" || normalized === "leaf") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "children" || normalized === "none") {
+    return normalized;
+  }
+  return undefined;
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -112,6 +128,27 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnedWorkspaceDir" in patch) {
+    const raw = patch.spawnedWorkspaceDir;
+    if (raw === null) {
+      if (existing?.spawnedWorkspaceDir) {
+        return invalid("spawnedWorkspaceDir cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid spawnedWorkspaceDir: empty");
+      }
+      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
+        return invalid("spawnedWorkspaceDir cannot be changed once set");
+      }
+      next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
   if ("spawnDepth" in patch) {
     const raw = patch.spawnDepth;
     if (raw === null) {
@@ -131,6 +168,48 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnDepth cannot be changed once set");
       }
       next.spawnDepth = normalized;
+    }
+  }
+
+  if ("subagentRole" in patch) {
+    const raw = patch.subagentRole;
+    if (raw === null) {
+      if (existing?.subagentRole) {
+        return invalid("subagentRole cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentRole is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentRole(String(raw));
+      if (!normalized) {
+        return invalid('invalid subagentRole (use "orchestrator" or "leaf")');
+      }
+      if (existing?.subagentRole && existing.subagentRole !== normalized) {
+        return invalid("subagentRole cannot be changed once set");
+      }
+      next.subagentRole = normalized;
+    }
+  }
+
+  if ("subagentControlScope" in patch) {
+    const raw = patch.subagentControlScope;
+    if (raw === null) {
+      if (existing?.subagentControlScope) {
+        return invalid("subagentControlScope cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("subagentControlScope is only supported for subagent:* or acp:* sessions");
+      }
+      const normalized = normalizeSubagentControlScope(String(raw));
+      if (!normalized) {
+        return invalid('invalid subagentControlScope (use "children" or "none")');
+      }
+      if (existing?.subagentControlScope && existing.subagentControlScope !== normalized) {
+        return invalid("subagentControlScope cannot be changed once set");
+      }
+      next.subagentControlScope = normalized;
     }
   }
 

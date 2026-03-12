@@ -17,6 +17,7 @@ enum HostEnvSecurityPolicy {
         "BASH_ENV",
         "ENV",
         "GIT_EXTERNAL_DIFF",
+        "GIT_EXEC_PATH",
         "SHELL",
         "SHELLOPTS",
         "PS4",
