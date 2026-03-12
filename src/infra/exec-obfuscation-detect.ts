@@ -188,6 +188,10 @@ function extractHttpUrls(command: string): URL[] {
   return parsed;
 }
 
+function pathMatchesSafePrefix(pathname: string, pathPrefix: string): boolean {
+  return pathname === pathPrefix || pathname.startsWith(`${pathPrefix}/`);
+}
+
 function shouldSuppressCurlPipeShell(command: string): boolean {
   const urls = extractHttpUrls(command);
   if (urls.length !== 1) {
@@ -202,7 +206,7 @@ function shouldSuppressCurlPipeShell(command: string): boolean {
   return SAFE_CURL_PIPE_URLS.some(
     (candidate) =>
       url.hostname === candidate.host &&
-      (!candidate.pathPrefix || url.pathname.startsWith(candidate.pathPrefix)),
+      (!candidate.pathPrefix || pathMatchesSafePrefix(url.pathname, candidate.pathPrefix)),
   );
 }
 
