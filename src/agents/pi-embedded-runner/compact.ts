@@ -268,6 +268,18 @@ function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+const REAL_MESSAGE_ROLES = new Set(["user", "assistant", "toolResult"]);
+
+/** Check whether a session has at least one real conversation message. */
+export function sessionHasRealMessages(sessionManager: SessionManager): boolean {
+  const entries = sessionManager.getEntries();
+  return entries.some(
+    (entry) =>
+      entry.type === "message" &&
+      REAL_MESSAGE_ROLES.has((entry as { message?: { role?: string } }).message?.role ?? ""),
+  );
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -613,6 +625,26 @@ export async function compactEmbeddedPiSessionDirect(
         allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
+
+      // Early bail-out: skip compaction when the session contains no real
+      // conversation messages (user/assistant/toolResult).  This avoids the
+      // entire extension-factory + createAgentSession + session.compact()
+      // pipeline — including potential LLM API calls — for idle or
+      // system-only sessions (e.g. isolated cron sessions with no interactions).
+      const hasRealMessages = sessionHasRealMessages(sessionManager);
+      if (!hasRealMessages) {
+        log.debug(
+          `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+            `diagId=${diagId} trigger=${trigger} outcome=skipped reason=no_real_messages ` +
+            `durationMs=${Date.now() - startedAt}`,
+        );
+        return {
+          ok: false,
+          compacted: false,
+          reason: "no real conversation messages to compact",
+        };
+      }
+
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
         agentDir,
