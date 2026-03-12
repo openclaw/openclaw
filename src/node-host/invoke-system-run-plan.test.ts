@@ -247,6 +247,38 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 1,
     },
     {
+      name: "tsx direct file",
+      binName: "tsx",
+      argv: ["tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "jiti direct file",
+      binName: "jiti",
+      argv: ["jiti", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "ts-node direct file",
+      binName: "ts-node",
+      argv: ["ts-node", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "vite-node direct file",
+      binName: "vite-node",
+      argv: ["vite-node", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
       name: "bun direct file",
       binName: "bun",
       argv: ["bun", "./run.ts"],
@@ -374,6 +406,28 @@ describe("hardenApprovedExecutionPaths", () => {
         try {
           const prepared = buildSystemRunApprovalPlan({
             command: ["deno", "eval", "console.log('SAFE')"],
+            cwd: tmp,
+          });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects tsx eval invocations that do not bind a concrete file", () => {
+    withFakeRuntimeBin({
+      binName: "tsx",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tsx-eval-"));
+        try {
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["tsx", "--eval", "console.log('SAFE')"],
             cwd: tmp,
           });
           expect(prepared).toEqual({

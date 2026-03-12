@@ -99,7 +99,7 @@ def normalize_release_version(raw_value)
   version = raw_value.to_s.strip.sub(/\Av/, "")
   UI.user_error!("Missing root package.json version.") unless env_present?(version)
   unless version.match?(/\A\d+\.\d+\.\d+(?:[.-]?beta[.-]\d+)?\z/i)
-    UI.user_error!("Invalid package.json version '#{raw_value}'. Expected 2026.3.9 or 2026.3.9-beta.1.")
+    UI.user_error!("Invalid package.json version '#{raw_value}'. Expected 2026.3.11 or 2026.3.11-beta.1.")
   end
 
   version

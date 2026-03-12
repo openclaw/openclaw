@@ -138,6 +138,13 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
 
+  // Billing/quota errors can contain patterns like "request size exceeds" or
+  // "maximum token limit exceeded" that match the context overflow heuristic.
+  // Billing is a more specific error class — exclude it early.
+  if (isBillingErrorMessage(errorMessage)) {
+    return false;
+  }
+
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
@@ -176,6 +183,32 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   }
   // Keep explicit fallback for bare "context overflow" strings.
   return lower.includes("context overflow");
+}
+
+const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
+  /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /requested\s+([\d,]+)\s+tokens/i,
+  /resulted in\s+([\d,]+)\s+tokens/i,
+];
+
+export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
+  if (!errorMessage) {
+    return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const rawCount = match?.[1]?.replaceAll(",", "");
+    if (!rawCount) {
+      continue;
+    }
+    const parsed = Number(rawCount);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+
+  return undefined;
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
