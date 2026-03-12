@@ -69,7 +69,7 @@ export function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.e
     case "darwin":
       return [
         `Tip: ${formatCliCommand("moltbot gateway stop")}`,
-        `Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
+        `Or: launchctl stop gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
       ];
     case "linux":
       return [
