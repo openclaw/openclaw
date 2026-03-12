@@ -535,6 +535,23 @@ describe("isFailoverErrorMessage", () => {
     }
   });
 
+  it("matches network errno codes in serialized error messages", () => {
+    const samples = [
+      "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+      "Error: connect EHOSTUNREACH 10.0.0.1:443",
+      "Error: connect ENETUNREACH 10.0.0.1:443",
+      "Error: write EPIPE",
+      "Error: read ENETRESET",
+      "Error: connect EHOSTDOWN 192.168.1.1:443",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
     const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
     expect(isTimeoutErrorMessage(sample)).toBe(false);
