@@ -219,14 +219,25 @@ export async function waitForGatewayHealthyRestart(params: {
         // Return immediately to allow stale PID termination
         return snapshot;
       }
-      // Runtime is running but stale PIDs exist - wait briefly then recheck
-      await sleep(delayMs);
-      snapshot = await inspectGatewayRestart({
-        service: params.service,
-        port: params.port,
-        env: params.env,
-        includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      });
+      // Runtime is running but stale PIDs exist - this is the overlap period
+      // Wait briefly (max 5 seconds) for stale processes to exit, then recheck
+      const maxOverlapAttempts = Math.min(10, Math.floor(5000 / delayMs));
+      for (let overlapAttempt = 0; overlapAttempt < maxOverlapAttempts; overlapAttempt++) {
+        await sleep(delayMs);
+        snapshot = await inspectGatewayRestart({
+          service: params.service,
+          port: params.port,
+          env: params.env,
+          includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+        });
+        if (snapshot.healthy || snapshot.staleGatewayPids.length === 0) {
+          break;
+        }
+      }
+      // After brief wait, if still unhealthy, return to allow cleanup
+      if (!snapshot.healthy && snapshot.staleGatewayPids.length > 0) {
+        return snapshot;
+      }
       continue;
     }
     await sleep(delayMs);
