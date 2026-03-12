@@ -71,6 +71,7 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -84,9 +85,9 @@ export function createSessionsSendTool(opts?: {
       const message = readStringParam(params, "message", { required: true });
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
-      const requesterAgentId = opts?.agentSessionKey
-        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
-        : undefined;
+      const requesterAgentId =
+        opts?.requesterAgentIdOverride ??
+        (opts?.agentSessionKey ? resolveAgentIdFromSessionKey(opts.agentSessionKey) : undefined);
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({

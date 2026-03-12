@@ -4,6 +4,9 @@ const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("./tools/sessions-send-tool.a2a.js", () => ({
+  runSessionsSendA2AFlow: vi.fn(),
+}));
 
 let mockConfig: Record<string, unknown> = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -37,14 +40,36 @@ async function loadFreshOpenClawToolsModuleForTest() {
   ({ createOpenClawTools } = await import("./openclaw-tools.js"));
 }
 
-function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
+function getSessionsHistoryTool(options?: {
+  sandboxed?: boolean;
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+}) {
   const tool = createOpenClawTools({
-    agentSessionKey: "main",
+    agentSessionKey: options?.agentSessionKey ?? "main",
     sandboxed: options?.sandboxed,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
   }).find((candidate) => candidate.name === "sessions_history");
   expect(tool).toBeDefined();
   if (!tool) {
     throw new Error("missing sessions_history tool");
+  }
+  return tool;
+}
+
+function getSessionsSendTool(options?: {
+  sandboxed?: boolean;
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+}) {
+  const tool = createOpenClawTools({
+    agentSessionKey: options?.agentSessionKey ?? "main",
+    sandboxed: options?.sandboxed,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
+  }).find((candidate) => candidate.name === "sessions_send");
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error("missing sessions_send tool");
   }
   return tool;
 }
@@ -135,5 +160,67 @@ describe("sessions tools visibility", () => {
       sessionKey: "agent:other:main",
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("uses requesterAgentIdOverride for sandbox clamp in sessions_history", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    };
+    mockGatewayWithHistory();
+
+    const tool = getSessionsHistoryTool({
+      sandboxed: true,
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "tony",
+    });
+
+    const result = await tool.execute("call5", {
+      sessionKey: "agent:other:main",
+    });
+    expect(result.details).toMatchObject({
+      sessionKey: "agent:other:main",
+    });
+    expect(Array.isArray((result.details as { messages?: unknown }).messages)).toBe(true);
+  });
+
+  it("uses requesterAgentIdOverride for sandbox clamp in sessions_send", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    };
+    callGatewayMock.mockClear();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const req = opts as { method?: string };
+      if (req.method === "agent") {
+        return { runId: "run-override" };
+      }
+      return {};
+    });
+
+    const tool = getSessionsSendTool({
+      sandboxed: true,
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "tony",
+    });
+
+    const result = await tool.execute("call6", {
+      sessionKey: "agent:other:main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: "agent:other:main",
+      runId: "run-override",
+    });
   });
 });

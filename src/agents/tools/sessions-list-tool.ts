@@ -37,6 +37,7 @@ export function createSessionsListTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  requesterAgentIdOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -46,13 +47,14 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? loadConfig();
-      const requesterAgentId = opts?.agentSessionKey
-        ? resolveAgentIdFromSessionKey(opts.agentSessionKey)
-        : undefined;
+      const requesterAgentId =
+        opts?.requesterAgentIdOverride ??
+        (opts?.agentSessionKey ? resolveAgentIdFromSessionKey(opts.agentSessionKey) : undefined);
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const effectiveRequesterKey = requesterInternalKey ?? alias;
