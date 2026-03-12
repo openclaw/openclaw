@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **Civic Google** — Authenticate `gog` (Google CLI) commands using Civic AuthZ OAuth tokens. Enables agents to search Gmail, manage Calendar, create drafts, and more — without storing credentials locally. Tokens are managed by Civic and refreshed automatically.
+  npm: `@civic/openclaw-google`
+  repo: `https://github.com/civicteam/openclaw-google`
+  install: `openclaw plugins install @civic/openclaw-google`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
