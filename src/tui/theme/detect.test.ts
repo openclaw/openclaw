@@ -53,6 +53,16 @@ describe("detectThemeName", () => {
     expect(detectThemeName()).toBe("dark");
   });
 
+  it("treats bg=8 (bright black / dark gray) as dark", () => {
+    process.env.COLORFGBG = "7;8";
+    expect(detectThemeName()).toBe("dark");
+  });
+
+  it("treats bg=12 (bright blue) as dark", () => {
+    process.env.COLORFGBG = "15;12";
+    expect(detectThemeName()).toBe("dark");
+  });
+
   it("handles three-part COLORFGBG (rxvt format)", () => {
     // Some terminals emit "fg;bg;..." or "fg;extra;bg"
     process.env.COLORFGBG = "0;0;15";

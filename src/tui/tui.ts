@@ -322,7 +322,11 @@ export function resolveCtrlCAction(params: {
 export async function runTui(opts: TuiOptions) {
   // Apply theme from CLI flag, env var, or auto-detect (in that priority).
   if (opts.theme) {
-    setTheme(opts.theme);
+    const resolved = setTheme(opts.theme);
+    if (resolved !== opts.theme) {
+      // eslint-disable-next-line no-console
+      console.error(`warning: unknown theme "${opts.theme}"; falling back to "${resolved}"`);
+    }
   }
 
   const config = loadConfig();
@@ -522,7 +526,18 @@ export async function runTui(opts: TuiOptions) {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
-  const editor = new CustomEditor(tui, editorTheme);
+  // Wrap editorTheme in a proxy so the editor picks up runtime theme changes.
+  // The Editor constructor captures the theme object by reference, so we give
+  // it a stable object whose methods always delegate to the live binding.
+  const liveEditorTheme: typeof editorTheme = {
+    get borderColor() {
+      return editorTheme.borderColor;
+    },
+    get selectList() {
+      return editorTheme.selectList;
+    },
+  };
+  const editor = new CustomEditor(tui, liveEditorTheme);
   const root = new Container();
   root.addChild(header);
   root.addChild(chatLog);
