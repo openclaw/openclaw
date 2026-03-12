@@ -305,6 +305,55 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
+export type PluginInteractiveChannel = "telegram";
+
+export type PluginInteractiveButtons = Array<
+  Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
+>;
+
+export type PluginInteractiveTelegramHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveTelegramHandlerContext = {
+  channel: "telegram";
+  accountId: string;
+  callbackId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: number;
+  isGroup: boolean;
+  isForum: boolean;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  callback: {
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId: number;
+    chatId: string;
+    messageText?: string;
+  };
+  respond: {
+    reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editMessage: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
+    editButtons: (params: { buttons: PluginInteractiveButtons }) => Promise<void>;
+    clearButtons: () => Promise<void>;
+    deleteMessage: () => Promise<void>;
+  };
+};
+
+export type PluginInteractiveHandlerRegistration = {
+  channel: PluginInteractiveChannel;
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveTelegramHandlerContext,
+  ) => Promise<PluginInteractiveTelegramHandlerResult> | PluginInteractiveTelegramHandlerResult;
+};
+
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
 
@@ -388,6 +437,7 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
@@ -431,6 +481,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "inbound_claim"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -457,6 +508,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "inbound_claim",
   "message_received",
   "message_sending",
   "message_sent",
@@ -663,6 +715,37 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+};
+
+export type PluginHookInboundClaimContext = PluginHookMessageContext & {
+  parentConversationId?: string;
+  senderId?: string;
+  messageId?: string;
+};
+
+export type PluginHookInboundClaimEvent = {
+  content: string;
+  body?: string;
+  bodyForAgent?: string;
+  transcript?: string;
+  timestamp?: number;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  messageId?: string;
+  isGroup: boolean;
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookInboundClaimResult = {
+  handled: boolean;
 };
 
 // message_received hook
@@ -921,6 +1004,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  inbound_claim: (
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

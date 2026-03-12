@@ -33,6 +33,7 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { dispatchPluginInteractiveHandler } from "../plugins/interactive.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -1121,6 +1122,24 @@ export const registerTelegramHandlers = ({
         }
         return await editCallbackMessage(messageText, replyMarkup);
       };
+      const editCallbackButtons = async (
+        buttons: Array<
+          Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
+        >,
+      ) => {
+        const keyboard = buildInlineKeyboard(buttons) ?? { inline_keyboard: [] };
+        const replyMarkup = { reply_markup: keyboard };
+        const editReplyMarkupFn = (ctx as { editMessageReplyMarkup?: unknown })
+          .editMessageReplyMarkup;
+        if (typeof editReplyMarkupFn === "function") {
+          return await ctx.editMessageReplyMarkup(replyMarkup);
+        }
+        return await bot.api.editMessageReplyMarkup(
+          callbackMessage.chat.id,
+          callbackMessage.message_id,
+          replyMarkup,
+        );
+      };
       const deleteCallbackMessage = async () => {
         const deleteFn = (ctx as { deleteMessage?: unknown }).deleteMessage;
         if (typeof deleteFn === "function") {
@@ -1198,6 +1217,59 @@ export const registerTelegramHandlers = ({
         context: eventAuthContext,
       });
       if (!senderAuthorization.allowed) {
+        return;
+      }
+
+      const callbackConversationId =
+        messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
+      const pluginCallback = await dispatchPluginInteractiveHandler({
+        channel: "telegram",
+        data,
+        callbackId: callback.id,
+        ctx: {
+          accountId,
+          callbackId: callback.id,
+          conversationId: callbackConversationId,
+          parentConversationId: messageThreadId != null ? String(chatId) : undefined,
+          senderId: senderId || undefined,
+          senderUsername: senderUsername || undefined,
+          threadId: messageThreadId,
+          isGroup,
+          isForum,
+          auth: {
+            isAuthorizedSender: true,
+          },
+          callbackMessage: {
+            messageId: callbackMessage.message_id,
+            chatId: String(chatId),
+            messageText: callbackMessage.text ?? callbackMessage.caption,
+          },
+        },
+        respond: {
+          reply: async ({ text, buttons }) => {
+            await replyToCallbackChat(
+              text,
+              buttons ? { reply_markup: buildInlineKeyboard(buttons) } : undefined,
+            );
+          },
+          editMessage: async ({ text, buttons }) => {
+            await editCallbackMessage(
+              text,
+              buttons ? { reply_markup: buildInlineKeyboard(buttons) } : undefined,
+            );
+          },
+          editButtons: async ({ buttons }) => {
+            await editCallbackButtons(buttons);
+          },
+          clearButtons: async () => {
+            await clearCallbackButtons();
+          },
+          deleteMessage: async () => {
+            await deleteCallbackMessage();
+          },
+        },
+      });
+      if (pluginCallback.handled) {
         return;
       }
 

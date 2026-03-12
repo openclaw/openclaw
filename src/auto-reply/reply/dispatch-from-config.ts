@@ -12,6 +12,8 @@ import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
+  toPluginInboundClaimContext,
+  toPluginInboundClaimEvent,
   toInternalMessageReceivedContext,
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
@@ -183,6 +185,22 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
+
+  if (hookRunner?.hasHooks("inbound_claim")) {
+    const inboundClaim = await hookRunner.runInboundClaim(
+      toPluginInboundClaimEvent(hookContext, {
+        commandAuthorized:
+          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+      }),
+      toPluginInboundClaimContext(hookContext),
+    );
+    if (inboundClaim?.handled) {
+      markIdle("plugin_claim");
+      recordProcessed("completed", { reason: "plugin-claimed" });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+  }
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {

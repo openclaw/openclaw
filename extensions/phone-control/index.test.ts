@@ -39,6 +39,7 @@ function createApi(params: {
     registerCli() {},
     registerService() {},
     registerProvider() {},
+    registerInteractiveHandler() {},
     registerContextEngine() {},
     registerCommand: params.registerCommand,
     resolvePath(input: string) {

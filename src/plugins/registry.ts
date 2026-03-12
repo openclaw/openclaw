@@ -14,6 +14,7 @@ import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { registerPluginInteractiveHandler } from "./interactive.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import {
   isPluginHookName,
@@ -600,6 +601,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
+      registerInteractiveHandler: (registration) => {
+        const result = registerPluginInteractiveHandler(record.id, registration);
+        if (!result.ok) {
+          pushDiagnostic({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message: result.error ?? "interactive handler registration failed",
+          });
+        }
+      },
       registerCommand: (command) => registerCommand(record, command),
       registerContextEngine: (id, factory) => registerContextEngine(id, factory),
       resolvePath: (input: string) => resolveUserPath(input),

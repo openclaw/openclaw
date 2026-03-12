@@ -1,6 +1,8 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
@@ -144,6 +146,103 @@ export function toPluginMessageContext(
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+  };
+}
+
+function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const prefix = `${channelId}:`;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function deriveParentConversationId(
+  canonical: CanonicalInboundMessageHookContext,
+): string | undefined {
+  if (canonical.channelId !== "telegram") {
+    return undefined;
+  }
+  if (typeof canonical.threadId !== "number" && typeof canonical.threadId !== "string") {
+    return undefined;
+  }
+  return stripChannelPrefix(
+    canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
+    "telegram",
+  );
+}
+
+function deriveConversationId(canonical: CanonicalInboundMessageHookContext): string | undefined {
+  const baseConversationId = stripChannelPrefix(
+    canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
+    canonical.channelId,
+  );
+  if (canonical.channelId === "telegram" && baseConversationId) {
+    const threadId =
+      typeof canonical.threadId === "number" || typeof canonical.threadId === "string"
+        ? String(canonical.threadId).trim()
+        : "";
+    if (threadId) {
+      return `${baseConversationId}:topic:${threadId}`;
+    }
+  }
+  return baseConversationId;
+}
+
+export function toPluginInboundClaimContext(
+  canonical: CanonicalInboundMessageHookContext,
+): PluginHookInboundClaimContext {
+  const conversationId = deriveConversationId(canonical);
+  return {
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId,
+    parentConversationId: deriveParentConversationId(canonical),
+    senderId: canonical.senderId,
+    messageId: canonical.messageId,
+  };
+}
+
+export function toPluginInboundClaimEvent(
+  canonical: CanonicalInboundMessageHookContext,
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
+  },
+): PluginHookInboundClaimEvent {
+  const context = toPluginInboundClaimContext(canonical);
+  return {
+    content: canonical.content,
+    body: canonical.body,
+    bodyForAgent: canonical.bodyForAgent,
+    transcript: canonical.transcript,
+    timestamp: canonical.timestamp,
+    channel: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: context.conversationId,
+    parentConversationId: context.parentConversationId,
+    senderId: canonical.senderId,
+    senderName: canonical.senderName,
+    senderUsername: canonical.senderUsername,
+    threadId: canonical.threadId,
+    messageId: canonical.messageId,
+    isGroup: canonical.isGroup,
+    commandAuthorized: extras?.commandAuthorized,
+    wasMentioned: extras?.wasMentioned,
+    metadata: {
+      from: canonical.from,
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      originatingChannel: canonical.originatingChannel,
+      originatingTo: canonical.originatingTo,
+      senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaType: canonical.mediaType,
+      guildId: canonical.guildId,
+      channelName: canonical.channelName,
+      groupId: canonical.groupId,
+    },
   };
 }
 

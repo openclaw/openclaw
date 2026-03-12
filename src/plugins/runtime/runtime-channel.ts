@@ -65,6 +65,7 @@ import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   listLineAccountIds,
   normalizeAccountId as normalizeLineAccountId,
@@ -111,13 +112,25 @@ import {
 } from "../../telegram/audit.js";
 import { monitorTelegramProvider } from "../../telegram/monitor.js";
 import { probeTelegram } from "../../telegram/probe.js";
-import { sendMessageTelegram, sendPollTelegram } from "../../telegram/send.js";
+import {
+  deleteMessageTelegram,
+  editMessageReplyMarkupTelegram,
+  editMessageTelegram,
+  pinMessageTelegram,
+  renameForumTopicTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendTypingTelegram,
+  unpinMessageTelegram,
+} from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   return {
+    bindings: getSessionBindingService(),
     text: {
       chunkByNewline,
       chunkMarkdownText,
@@ -230,6 +243,33 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       sendPollTelegram,
       monitorTelegramProvider,
       messageActions: telegramMessageActions,
+      typing: {
+        pulse: sendTypingTelegram,
+        start: async ({ to, accountId, cfg, intervalMs, messageThreadId }) =>
+          await createTelegramTypingLease({
+            to,
+            accountId,
+            cfg,
+            intervalMs,
+            messageThreadId,
+            pulse: async ({ to, accountId, cfg, messageThreadId }) =>
+              await sendTypingTelegram(to, {
+                accountId,
+                cfg,
+                messageThreadId,
+              }),
+          }),
+      },
+      conversationActions: {
+        editMessage: editMessageTelegram,
+        editReplyMarkup: editMessageReplyMarkupTelegram,
+        clearReplyMarkup: async (chatIdInput, messageIdInput, opts = {}) =>
+          await editMessageReplyMarkupTelegram(chatIdInput, messageIdInput, [], opts),
+        deleteMessage: deleteMessageTelegram,
+        renameTopic: renameForumTopicTelegram,
+        pinMessage: pinMessageTelegram,
+        unpinMessage: unpinMessageTelegram,
+      },
     },
     signal: {
       probeSignal,

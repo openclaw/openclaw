@@ -19,6 +19,9 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -66,6 +69,9 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
@@ -263,6 +269,37 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return result;
   }
 
+  /**
+   * Run a sequential claim hook where the first `{ handled: true }` result wins.
+   */
+  async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
+    const hooks = getHooksForName(registry, hookName);
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
+
+    for (const hook of hooks) {
+      try {
+        const handlerResult = await (
+          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
+        )(event, ctx);
+        if (handlerResult?.handled) {
+          return handlerResult;
+        }
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return undefined;
+  }
+
   // =========================================================================
   // Agent Hooks
   // =========================================================================
@@ -383,6 +420,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
   // Message Hooks
   // =========================================================================
+
+  /**
+   * Run inbound_claim hook.
+   * Allows plugins to claim an inbound event before commands/agent dispatch.
+   */
+  async function runInboundClaim(
+    event: PluginHookInboundClaimEvent,
+    ctx: PluginHookInboundClaimContext,
+  ): Promise<PluginHookInboundClaimResult | undefined> {
+    return runClaimingHook<"inbound_claim", PluginHookInboundClaimResult>(
+      "inbound_claim",
+      event,
+      ctx,
+    );
+  }
 
   /**
    * Run message_received hook.
@@ -734,6 +786,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runAfterCompaction,
     runBeforeReset,
     // Message hooks
+    runInboundClaim,
     runMessageReceived,
     runMessageSending,
     runMessageSent,
