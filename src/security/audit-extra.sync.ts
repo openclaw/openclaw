@@ -21,6 +21,7 @@ import {
 } from "../config/model-input.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveAllowedAgentIds } from "../gateway/hooks.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
@@ -85,13 +86,6 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
-}
-
-function isHookAgentRoutingUnrestricted(allowedAgentIds: string[] | undefined): boolean {
-  if (!allowedAgentIds) {
-    return true;
-  }
-  return allowedAgentIds.some((agentId) => agentId === "*");
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -670,11 +664,7 @@ export function collectHooksHardeningFindings(
   const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
   const defaultSessionKey =
     typeof cfg.hooks?.defaultSessionKey === "string" ? cfg.hooks.defaultSessionKey.trim() : "";
-  const allowedAgentIds = Array.isArray(cfg.hooks?.allowedAgentIds)
-    ? cfg.hooks.allowedAgentIds
-        .map((agentId) => agentId.trim())
-        .filter((agentId) => agentId.length > 0)
-    : undefined;
+  const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const allowedPrefixes = Array.isArray(cfg.hooks?.allowedSessionKeyPrefixes)
     ? cfg.hooks.allowedSessionKeyPrefixes
         .map((prefix) => prefix.trim())
@@ -693,9 +683,9 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  if (isHookAgentRoutingUnrestricted(allowedAgentIds)) {
+  if (allowedAgentIds === undefined) {
     findings.push({
-      checkId: "hooks.allowed_agent_ids_unset",
+      checkId: "hooks.allowed_agent_ids_unrestricted",
       severity: remoteExposure ? "critical" : "warn",
       title: "Hook agent routing allows any configured agent",
       detail:
