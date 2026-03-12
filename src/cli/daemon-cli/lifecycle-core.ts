@@ -3,6 +3,7 @@ import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/confi
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
@@ -402,8 +403,23 @@ export async function runServiceRestart(params: {
   }
 
   try {
+    let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
-      await params.service.restart({ env: process.env, stdout });
+      restartResult = await params.service.restart({ env: process.env, stdout });
+    }
+    if (restartResult.outcome === "scheduled") {
+      const message = `restart scheduled, ${params.serviceNoun.toLowerCase()} will restart momentarily`;
+      emit({
+        ok: true,
+        result: "scheduled",
+        message,
+        service: buildDaemonServiceSnapshot(params.service, loaded),
+        warnings: warnings.length ? warnings : undefined,
+      });
+      if (!json) {
+        defaultRuntime.log(message);
+      }
+      return true;
     }
     if (params.postRestartCheck) {
       await params.postRestartCheck({ json, stdout, warnings, fail });
