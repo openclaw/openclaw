@@ -978,6 +978,14 @@ async function applyStartupCatchupOutcomes(
         if (!job || !job.enabled) {
           continue;
         }
+        // If the regular timer already executed this deferred job while
+        // catch-up was running, its lastRunAtMs will be recent.  Do not
+        // overwrite its nextRunAtMs with a stagger value — that would
+        // pull it back to a near-term time and cause a duplicate run
+        // (#42883).
+        if (typeof job.state.lastRunAtMs === "number" && job.state.lastRunAtMs >= baseNow) {
+          continue;
+        }
         job.state.nextRunAtMs = baseNow + offset;
         offset += staggerMs;
       }
