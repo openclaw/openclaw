@@ -4,6 +4,34 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { formatTokenCount } from "../../utils/usage-format.js";
 
+function resolveEffectiveContextWindowTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): number | undefined {
+  const resolved = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+  });
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return undefined;
+  }
+
+  const modelContextTokens = Math.floor(resolved);
+  const configuredCap = params.cfg.agents?.defaults?.contextTokens;
+  if (
+    typeof configuredCap === "number" &&
+    Number.isFinite(configuredCap) &&
+    configuredCap > 0 &&
+    configuredCap < modelContextTokens
+  ) {
+    return Math.floor(configuredCap);
+  }
+
+  return modelContextTokens;
+}
+
 export function maybeBlockOversizedModelSwitch(params: {
   cfg: OpenClawConfig;
   sessionEntry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null;
@@ -26,7 +54,7 @@ export function maybeBlockOversizedModelSwitch(params: {
     return undefined;
   }
 
-  const contextWindowTokens = resolveContextTokensForModel({
+  const contextWindowTokens = resolveEffectiveContextWindowTokens({
     cfg: params.cfg,
     provider: targetProvider,
     model: targetModel,
