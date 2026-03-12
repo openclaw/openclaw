@@ -43,7 +43,11 @@ export async function resolveOutboundAttachmentFromUrl(
   maxBytes: number,
   options?: { localRoots?: readonly string[] },
 ): Promise<{ path: string; contentType?: string }> {
-  const trimmed = mediaUrl.trim();
+  // Strip the MEDIA: prefix before any further processing so that isRemoteMediaUrl
+  // and loadWebMedia both see the bare URL/path. Without this, a MEDIA:-prefixed
+  // remote URL (e.g. "MEDIA:https://...") would fail the isRemoteMediaUrl check
+  // and enter the local-file path, producing a path.resolve("https://...") garbage path.
+  const trimmed = mediaUrl.trim().replace(/^\s*MEDIA\s*:\s*/i, "");
   const media = await loadWebMedia(
     trimmed,
     buildOutboundMediaLoadOptions({
