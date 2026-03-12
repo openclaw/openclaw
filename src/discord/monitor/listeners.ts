@@ -13,7 +13,6 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -25,6 +24,7 @@ import {
   normalizeDiscordSlug,
   resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordMemberAccessState,
   resolveGroupDmAllow,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
@@ -199,44 +199,27 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  private readonly channelQueue = new KeyedAsyncQueue();
-  private readonly listenerTimeoutMs: number;
-
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-    options?: { timeoutMs?: number },
+    _options?: { timeoutMs?: number },
   ) {
     super();
-    this.listenerTimeoutMs = normalizeDiscordListenerTimeoutMs(options?.timeoutMs);
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    const channelId = data.channel_id;
-    const context = {
-      channelId,
-      messageId: (data as { message?: { id?: string } }).message?.id,
-      guildId: (data as { guild_id?: string }).guild_id,
-    } satisfies Record<string, unknown>;
-    // Serialize messages within the same channel to preserve ordering,
-    // but allow different channels to proceed in parallel so that
-    // channel-bound agents are not blocked by each other.
-    void this.channelQueue.enqueue(channelId, () =>
-      runDiscordListenerWithSlowLog({
-        logger: this.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        timeoutMs: this.listenerTimeoutMs,
-        context,
-        run: (abortSignal) => this.handler(data, client, { abortSignal }),
-        onError: (err) => {
-          const logger = this.logger ?? discordEventQueueLog;
-          logger.error(danger(`discord handler failed: ${String(err)}`));
-        },
-      }),
-    );
+    // Fire-and-forget: hand off to the handler without blocking the
+    // Carbon listener.  Per-session ordering and run timeouts are owned
+    // by the inbound worker queue, so the listener no longer serializes
+    // or applies its own timeout.
+    void Promise.resolve()
+      .then(() => this.handler(data, client))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
   }
 }
 
@@ -312,6 +295,7 @@ async function runDiscordReactionHandler(params: {
 type DiscordReactionIngressAuthorizationParams = {
   accountId: string;
   user: User;
+  memberRoleIds: string[];
   isDirectMessage: boolean;
   isGroupDm: boolean;
   isGuildMessage: boolean;
@@ -326,7 +310,7 @@ type DiscordReactionIngressAuthorizationParams = {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
-  channelConfig?: { allowed?: boolean } | null;
+  channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
 };
 
 async function authorizeDiscordReactionIngress(
@@ -401,6 +385,20 @@ async function authorizeDiscordReactionIngress(
   if (params.channelConfig?.allowed === false) {
     return { allowed: false, reason: "guild-channel-denied" };
   }
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig: params.channelConfig,
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    sender: {
+      id: params.user.id,
+      name: params.user.username,
+      tag: formatDiscordUserTag(params.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
+  if (hasAccessRestrictions && !memberAllowed) {
+    return { allowed: false, reason: "guild-member-denied" };
+  }
   return { allowed: true };
 }
 
@@ -452,9 +450,13 @@ async function handleDiscordReactionEvent(
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => String(roleId))
+      : [];
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
+      memberRoleIds,
       isDirectMessage,
       isGroupDm,
       isGuildMessage,
@@ -470,17 +472,18 @@ async function handleDiscordReactionEvent(
       allowNameMatching: params.allowNameMatching,
       guildInfo,
     };
-    const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
-    if (!ingressAccess.allowed) {
-      logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
-      return;
+    // Guild reactions need resolved channel/thread config before member access
+    // can mirror the normal message preflight path.
+    if (!isGuildMessage) {
+      const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
+      if (!ingressAccess.allowed) {
+        logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
+        return;
+      }
     }
     let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
-      : [];
     let reactionBase: { baseText: string; contextKey: string } | null = null;
     const resolveReactionBase = () => {
       if (reactionBase) {
@@ -525,6 +528,7 @@ async function handleDiscordReactionEvent(
     const shouldNotifyReaction = (options: {
       mode: "off" | "own" | "all" | "allowlist";
       messageAuthorId?: string;
+      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
     }) =>
       shouldEmitDiscordReactionNotification({
         mode: options.mode,
@@ -533,7 +537,9 @@ async function handleDiscordReactionEvent(
         userId: user.id,
         userName: user.username,
         userTag: formatDiscordUserTag(user),
-        allowlist: guildInfo?.users,
+        channelConfig: options.channelConfig,
+        guildInfo,
+        memberRoleIds,
         allowNameMatching: params.allowNameMatching,
       });
     const emitReactionWithAuthor = (message: { author?: User } | null) => {
@@ -568,10 +574,12 @@ async function handleDiscordReactionEvent(
         ...reactionIngressBase,
         channelConfig,
       });
-    const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
+    const resolveThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
       parentId = channelInfo?.parentId;
       await loadThreadParentInfo();
-      return await authorizeReactionIngressForChannel(resolveThreadChannelConfig());
+      const channelConfig = resolveThreadChannelConfig();
+      const access = await authorizeReactionIngressForChannel(channelConfig);
+      return { access, channelConfig };
     };
 
     // Parallelize async operations for thread channels
@@ -590,16 +598,18 @@ async function handleDiscordReactionEvent(
       // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
       if (reactionMode === "all" || reactionMode === "allowlist") {
         const channelInfo = await channelInfoPromise;
-        const threadAccess = await authorizeThreadChannelAccess(channelInfo);
+        const { access: threadAccess, channelConfig: threadChannelConfig } =
+          await resolveThreadChannelAccess(channelInfo);
         if (!threadAccess.allowed) {
           return;
         }
-
-        // For allowlist mode, check if user is in allowlist first
-        if (reactionMode === "allowlist") {
-          if (!shouldNotifyReaction({ mode: reactionMode })) {
-            return;
-          }
+        if (
+          !shouldNotifyReaction({
+            mode: reactionMode,
+            channelConfig: threadChannelConfig,
+          })
+        ) {
+          return;
         }
 
         const { baseText } = resolveReactionBase();
@@ -611,13 +621,20 @@ async function handleDiscordReactionEvent(
       const messagePromise = data.message.fetch().catch(() => null);
 
       const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
-      const threadAccess = await authorizeThreadChannelAccess(channelInfo);
+      const { access: threadAccess, channelConfig: threadChannelConfig } =
+        await resolveThreadChannelAccess(channelInfo);
       if (!threadAccess.allowed) {
         return;
       }
 
       const messageAuthorId = message?.author?.id ?? undefined;
-      if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+      if (
+        !shouldNotifyReaction({
+          mode: reactionMode,
+          messageAuthorId,
+          channelConfig: threadChannelConfig,
+        })
+      ) {
         return;
       }
 
@@ -652,11 +669,8 @@ async function handleDiscordReactionEvent(
 
     // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
     if (reactionMode === "all" || reactionMode === "allowlist") {
-      // For allowlist mode, check if user is in allowlist first
-      if (reactionMode === "allowlist") {
-        if (!shouldNotifyReaction({ mode: reactionMode })) {
-          return;
-        }
+      if (!shouldNotifyReaction({ mode: reactionMode, channelConfig })) {
+        return;
       }
 
       const { baseText } = resolveReactionBase();
@@ -667,7 +681,7 @@ async function handleDiscordReactionEvent(
     // For "own" mode, we need to fetch the message to check the author
     const message = await data.message.fetch().catch(() => null);
     const messageAuthorId = message?.author?.id ?? undefined;
-    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
+    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId, channelConfig })) {
       return;
     }
 

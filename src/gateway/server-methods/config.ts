@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
-  CONFIG_PATH,
+  createConfigIO,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -10,6 +10,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
@@ -23,7 +24,7 @@ import {
   type ConfigSchemaResponse,
 } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -53,6 +54,8 @@ import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 
 function requireConfigBaseHash(
   params: unknown,
@@ -158,13 +161,27 @@ function parseValidateConfigFromRawOrRespond(
     respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
+      errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(validated.issues), {
         details: { issues: validated.issues },
       }),
     );
     return null;
   }
   return { config: validated.config, schema };
+}
+
+function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
+  const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
+  const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return "invalid config";
+  }
+  const hiddenCount = Math.max(0, issues.length - lines.length);
+  return `invalid config: ${lines.join("; ")}${
+    hiddenCount > 0 ? ` (+${hiddenCount} more issue${hiddenCount === 1 ? "" : "s"})` : ""
+  }`;
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -197,6 +214,7 @@ function buildConfigRestartSentinelPayload(params: {
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
   note: string | undefined;
 }): RestartSentinelPayload {
+  const configPath = createConfigIO().configPath;
   return {
     kind: params.kind,
     status: "ok",
@@ -208,7 +226,7 @@ function buildConfigRestartSentinelPayload(params: {
     doctorHint: formatDoctorNonInteractiveHint(),
     stats: {
       mode: params.mode,
-      root: CONFIG_PATH,
+      root: configPath,
     },
   };
 }
@@ -323,7 +341,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
       },
       undefined,
@@ -397,7 +415,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid config", {
+        errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(validated.issues), {
           details: { issues: validated.issues },
         }),
       );
@@ -440,7 +458,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {
@@ -500,7 +518,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
         restart,
         sentinel: {

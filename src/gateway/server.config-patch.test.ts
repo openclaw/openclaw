@@ -47,6 +47,63 @@ async function resetTempDir(name: string): Promise<string> {
 }
 
 describe("gateway config methods", () => {
+  it("round-trips config.set and returns the live config path", async () => {
+    const { createConfigIO } = await import("../config/config.js");
+    const current = await rpcReq<{
+      raw?: unknown;
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    expect(current.payload?.config).toBeTruthy();
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      path?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      baseHash: current.payload?.hash,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.path).toBe(createConfigIO().configPath);
+    expect(res.payload?.config).toBeTruthy();
+  });
+
+  it("returns config.set validation details in the top-level error message", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      error?: {
+        message?: string;
+      };
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify({ gateway: { bind: 123 } }),
+      baseHash: current.payload?.hash,
+    });
+    const error = res.error as
+      | {
+          message?: string;
+          details?: {
+            issues?: Array<{ path?: string; message?: string }>;
+          };
+        }
+      | undefined;
+
+    expect(res.ok).toBe(false);
+    expect(error?.message ?? "").toContain("invalid config:");
+    expect(error?.message ?? "").toContain("gateway.bind");
+    expect(error?.message ?? "").toContain("allowed:");
+    expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
+  });
+
   it("returns a path-scoped config schema lookup", async () => {
     const res = await rpcReq<{
       path: string;

@@ -173,6 +173,39 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capture.ctx?.CommandAuthorized).toBe(false);
   });
 
+  it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.dat`,
+          contentType: attachment.id === "a1" ? "image/jpeg" : undefined,
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "a1", contentType: "image/jpeg" }, { id: "a2" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/a1.dat");
+    expect(capture.ctx?.MediaType).toBe("image/jpeg");
+    expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
+    expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
+    expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+  });
+
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
     const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
     const handler = createSignalEventHandler(

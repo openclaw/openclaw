@@ -2,6 +2,7 @@ import AppKit
 import OpenClawChatUI
 import OpenClawDiscovery
 import OpenClawIPC
+import OpenClawKit
 import SwiftUI
 
 extension OnboardingView {
@@ -97,6 +98,11 @@ extension OnboardingView {
 
                     self.gatewayDiscoverySection()
 
+                    if self.shouldShowRemoteConnectionSection {
+                        Divider().padding(.vertical, 4)
+                        self.remoteConnectionSection()
+                    }
+
                     self.connectionChoiceButton(
                         title: "Configure later",
                         subtitle: "Don’t start the Gateway yet.",
@@ -108,6 +114,22 @@ extension OnboardingView {
                     self.advancedConnectionSection()
                 }
             }
+        }
+        .onChange(of: self.state.connectionMode) { _, newValue in
+            guard Self.shouldResetRemoteProbeFeedback(
+                for: newValue,
+                suppressReset: self.suppressRemoteProbeReset)
+            else { return }
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteTransport) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteTarget) { _, _ in
+            self.resetRemoteProbeFeedback()
+        }
+        .onChange(of: self.state.remoteUrl) { _, _ in
+            self.resetRemoteProbeFeedback()
         }
     }
 
@@ -268,6 +290,248 @@ extension OnboardingView {
             }
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+    }
+
+    private var shouldShowRemoteConnectionSection: Bool {
+        self.state.connectionMode == .remote ||
+            self.showAdvancedConnection ||
+            self.remoteProbeState != .idle ||
+            self.remoteAuthIssue != nil ||
+            Self.shouldShowRemoteTokenField(
+                showAdvancedConnection: self.showAdvancedConnection,
+                remoteToken: self.state.remoteToken,
+                remoteTokenUnsupported: self.state.remoteTokenUnsupported,
+                authIssue: self.remoteAuthIssue)
+    }
+
+    private var shouldShowRemoteTokenField: Bool {
+        guard self.shouldShowRemoteConnectionSection else { return false }
+        return Self.shouldShowRemoteTokenField(
+            showAdvancedConnection: self.showAdvancedConnection,
+            remoteToken: self.state.remoteToken,
+            remoteTokenUnsupported: self.state.remoteTokenUnsupported,
+            authIssue: self.remoteAuthIssue)
+    }
+
+    private var remoteProbePreflightMessage: String? {
+        switch self.state.remoteTransport {
+        case .direct:
+            let trimmedUrl = self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedUrl.isEmpty {
+                return "Select a nearby gateway or open Advanced to enter a gateway URL."
+            }
+            if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
+                return "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)."
+            }
+            return nil
+        case .ssh:
+            let trimmedTarget = self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedTarget.isEmpty {
+                return "Select a nearby gateway or open Advanced to enter an SSH target."
+            }
+            return CommandResolver.sshTargetValidationMessage(trimmedTarget)
+        }
+    }
+
+    private var canProbeRemoteConnection: Bool {
+        self.remoteProbePreflightMessage == nil && self.remoteProbeState != .checking
+    }
+
+    @ViewBuilder
+    private func remoteConnectionSection() -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Remote connection")
+                        .font(.callout.weight(.semibold))
+                    Text("Checks the real remote websocket and auth handshake.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    Task { await self.probeRemoteConnection() }
+                } label: {
+                    if self.remoteProbeState == .checking {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(minWidth: 120)
+                    } else {
+                        Text("Check connection")
+                            .frame(minWidth: 120)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!self.canProbeRemoteConnection)
+            }
+
+            if self.shouldShowRemoteTokenField {
+                self.remoteTokenField()
+            }
+
+            if let message = self.remoteProbePreflightMessage, self.remoteProbeState != .checking {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            self.remoteProbeStatusView()
+
+            if let issue = self.remoteAuthIssue {
+                self.remoteAuthPromptView(issue: issue)
+            }
+        }
+    }
+
+    private func remoteTokenField() -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Gateway token")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 110, alignment: .leading)
+                SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 320)
+            }
+            Text("Used when the remote gateway requires token auth.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if self.state.remoteTokenUnsupported {
+                Text(
+                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func remoteProbeStatusView() -> some View {
+        switch self.remoteProbeState {
+        case .idle:
+            EmptyView()
+        case .checking:
+            Text("Checking remote gateway…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case let .ok(success):
+            VStack(alignment: .leading, spacing: 2) {
+                Label(success.title, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                if let detail = success.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        case let .failed(message):
+            if self.remoteAuthIssue == nil {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func remoteAuthPromptView(issue: RemoteGatewayAuthIssue) -> some View {
+        let promptStyle = Self.remoteAuthPromptStyle(for: issue)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: promptStyle.systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(promptStyle.tint)
+                .frame(width: 16, alignment: .center)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(issue.title)
+                    .font(.caption.weight(.semibold))
+                Text(.init(issue.body))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let footnote = issue.footnote {
+                    Text(.init(footnote))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func probeRemoteConnection() async {
+        let originalMode = self.state.connectionMode
+        let shouldRestoreMode = originalMode != .remote
+        if shouldRestoreMode {
+            // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
+            self.state.connectionMode = .remote
+        }
+        self.remoteProbeState = .checking
+        self.remoteAuthIssue = nil
+        defer {
+            if shouldRestoreMode {
+                self.suppressRemoteProbeReset = true
+                self.state.connectionMode = originalMode
+                self.suppressRemoteProbeReset = false
+            }
+        }
+
+        switch await RemoteGatewayProbe.run() {
+        case let .ready(success):
+            self.remoteProbeState = .ok(success)
+        case let .authIssue(issue):
+            self.remoteAuthIssue = issue
+            self.remoteProbeState = .failed(issue.statusMessage)
+        case let .failed(message):
+            self.remoteProbeState = .failed(message)
+        }
+    }
+
+    private func resetRemoteProbeFeedback() {
+        self.remoteProbeState = .idle
+        self.remoteAuthIssue = nil
+    }
+
+    static func remoteAuthPromptStyle(
+        for issue: RemoteGatewayAuthIssue)
+        -> (systemImage: String, tint: Color)
+    {
+        switch issue {
+        case .tokenRequired:
+            return ("key.fill", .orange)
+        case .tokenMismatch:
+            return ("exclamationmark.triangle.fill", .orange)
+        case .gatewayTokenNotConfigured:
+            return ("wrench.and.screwdriver.fill", .orange)
+        case .passwordRequired:
+            return ("lock.slash.fill", .orange)
+        case .pairingRequired:
+            return ("link.badge.plus", .orange)
+        }
+    }
+
+    static func shouldShowRemoteTokenField(
+        showAdvancedConnection: Bool,
+        remoteToken: String,
+        remoteTokenUnsupported: Bool,
+        authIssue: RemoteGatewayAuthIssue?) -> Bool
+    {
+        showAdvancedConnection ||
+            remoteTokenUnsupported ||
+            !remoteToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            authIssue?.showsTokenField == true
+    }
+
+    static func shouldResetRemoteProbeFeedback(
+        for connectionMode: AppState.ConnectionMode,
+        suppressReset: Bool) -> Bool
+    {
+        !suppressReset && connectionMode != .remote
     }
 
     func gatewaySubtitle(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {

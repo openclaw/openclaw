@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
+import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -94,8 +95,10 @@ rm -f "$0"
 # Wait briefly to ensure file locks are released after update.
 sleep 1
 # Try kickstart first (works when the service is still registered).
-# If it fails (e.g. after bootout), re-register via bootstrap then kickstart.
+# If it fails (e.g. after bootout), clear any persisted disabled state,
+# then re-register via bootstrap and kickstart.
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null; then
+  launchctl enable 'gui/${uid}/${escaped}' 2>/dev/null
   launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}' 2>/dev/null
   launchctl kickstart -k 'gui/${uid}/${escaped}' 2>/dev/null || true
 fi
@@ -161,7 +164,7 @@ del "%~f0"
 export async function runRestartScript(scriptPath: string): Promise<void> {
   const isWindows = process.platform === "win32";
   const file = isWindows ? "cmd.exe" : "/bin/sh";
-  const args = isWindows ? ["/c", scriptPath] : [scriptPath];
+  const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
   const child = spawn(file, args, {
     detached: true,

@@ -14,7 +14,7 @@ struct ControlHeartbeatEvent: Codable {
     let reason: String?
 }
 
-struct ControlAgentEvent: Codable, Sendable, Identifiable {
+struct ControlAgentEvent: Codable, Identifiable {
     var id: String {
         "\(self.runId)-\(self.seq)"
     }
@@ -186,6 +186,10 @@ final class ControlChannel {
         // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
+        }
+
+        if let authIssue = RemoteGatewayAuthIssue(error: error) {
+            return authIssue.statusMessage
         }
 
         // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
