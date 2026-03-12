@@ -218,17 +218,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
-  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
-  "tools.web.search.perplexity.model": "Perplexity Model",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
-  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -319,6 +319,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
+  "agents.defaults.memorySearch.multimodal": "Memory Search Multimodal",
+  "agents.defaults.memorySearch.multimodal.enabled": "Enable Memory Search Multimodal",
+  "agents.defaults.memorySearch.multimodal.modalities": "Memory Search Multimodal Modalities",
+  "agents.defaults.memorySearch.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
@@ -331,6 +335,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs": "Remote Batch Poll Interval (ms)",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes": "Remote Batch Timeout (min)",
   "agents.defaults.memorySearch.model": "Memory Search Model",
+  "agents.defaults.memorySearch.outputDimensionality": "Memory Search Output Dimensionality",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
@@ -719,6 +724,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
+  "channels.telegram.execApprovals": "Telegram Exec Approvals",
+  "channels.telegram.execApprovals.enabled": "Telegram Exec Approvals Enabled",
+  "channels.telegram.execApprovals.approvers": "Telegram Exec Approval Approvers",
+  "channels.telegram.execApprovals.agentFilter": "Telegram Exec Approval Agent Filter",
+  "channels.telegram.execApprovals.sessionFilter": "Telegram Exec Approval Session Filter",
+  "channels.telegram.execApprovals.target": "Telegram Exec Approval Target",
   "channels.telegram.threadBindings.enabled": "Telegram Thread Binding Enabled",
   "channels.telegram.threadBindings.idleHours": "Telegram Thread Binding Idle Timeout (hours)",
   "channels.telegram.threadBindings.maxAgeHours": "Telegram Thread Binding Max Age (hours)",
