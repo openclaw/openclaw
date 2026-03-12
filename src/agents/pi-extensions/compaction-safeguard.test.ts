@@ -1851,10 +1851,12 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
-        role: "assistant",
-        content: "<b>HEARTBEAT_OK</b>",
-      } as AgentMessage),
+      __testing.hasMeaningfulConversationContent(
+        castAgentMessage({
+          role: "assistant",
+          content: "<b>HEARTBEAT_OK</b>",
+        }),
+      ),
     ).toBe(false);
   });
 });
