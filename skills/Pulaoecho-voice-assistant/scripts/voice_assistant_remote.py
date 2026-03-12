@@ -24,13 +24,13 @@ logger = logging.getLogger('VA')
 # 导入音频桥接器
 from audio_bridge import AudioBridge
 
-# 尝试导入语音识别库
+# 导入阿里云语音识别引擎
 try:
-    import speech_recognition as sr
-    has_speech_recognition = True
+    from aliyunasrengine import AliyunASREngine
+    has_aliyun_asr = True
 except ImportError:
-    has_speech_recognition = False
-    logger.warning("SpeechRecognition library not found.")
+    has_aliyun_asr = False
+    logger.warning("AliyunASREngine not found.")
 
 # 尝试导入websocket库
 try:
@@ -62,7 +62,7 @@ INTERRUPT_SIGNAL = "__INTERRUPT__"
 
 
 class SpeechRecognizer:
-    """异步语音识别器。
+    """异步语音识别器（使用阿里云ASR）。
 
     每次调用 submit() 传入一段 PCM，立刻返回 req_id。
     识别完成后在独立线程里调用 on_result(req_id, text_or_None)。
@@ -71,9 +71,18 @@ class SpeechRecognizer:
     SAMPLE_RATE  = 16000
     SAMPLE_WIDTH = 2
 
-    def __init__(self):
-        self._recognizer = sr.Recognizer() if has_speech_recognition else None
-        self._lock = threading.Lock()   # 保护 recognizer（非线程安全）
+    def __init__(self, api_key: str, model: str = "qwen3-asr-flash", hotwords: list = None, language: str = "auto"):
+        """初始化语音识别器
+        
+        Args:
+            api_key: 阿里云API密钥
+            model: 使用的模型名称
+            hotwords: 热词列表，用于提升唤醒词识别率
+            language: 识别语言 (auto/en/zh 等)
+        """
+        self._engine = AliyunASREngine(api_key, model, hotwords, language) if has_aliyun_asr else None
+        if not has_aliyun_asr:
+            logger.error("AliyunASREngine not available")
 
     def submit(self, pcm: bytes, req_id: str, on_result):
         """提交一段 PCM 进行识别。立刻返回，结果异步回调。
@@ -81,37 +90,12 @@ class SpeechRecognizer:
         on_result(req_id: str, text: str | None)
           text=None 表示未识别到语音或出错。
         """
-        if not has_speech_recognition or self._recognizer is None:
+        if not has_aliyun_asr or self._engine is None:
             on_result(req_id, None)
             return
-
-        t = threading.Thread(
-            target=self._run,
-            args=(pcm, req_id, on_result),
-            daemon=True,
-            name=f"ASR-{req_id[:8]}",
-        )
-        t.start()
-
-    def _run(self, pcm: bytes, req_id: str, on_result):
-        audio = sr.AudioData(pcm, self.SAMPLE_RATE, self.SAMPLE_WIDTH)
-        text = None
-        try:
-            with self._lock:
-                try:
-                    text = self._recognizer.recognize_google(audio, language="en-US")
-                    logger.info(f"[ASR:{req_id[:8]}] EN: {text}")
-                except sr.UnknownValueError:
-                    text = self._recognizer.recognize_google(audio, language="zh-CN")
-                    logger.info(f"[ASR:{req_id[:8]}] ZH: {text}")
-        except sr.UnknownValueError:
-            logger.debug(f"[ASR:{req_id[:8]}] No speech")
-        except sr.RequestError as e:
-            logger.error(f"[ASR:{req_id[:8]}] API error: {e}")
-        except Exception as e:
-            logger.error(f"[ASR:{req_id[:8]}] Error: {e}")
-            logger.debug(traceback.format_exc())
-        on_result(req_id, text)
+        
+        # 直接调用阿里云ASR引擎的submit方法（已经是异步的）
+        self._engine.submit(pcm, req_id, on_result)
 
 class VoiceAssistantRemote:
     """远程音频设备语音助手"""
@@ -131,6 +115,12 @@ class VoiceAssistantRemote:
             w.lower() for w in cfg.get("wakeWords", ["hi claw", "hey claw", "hi google", "hey google"])
         ]
         
+        # 阿里云ASR配置
+        _asr = cfg.get("aliyunASR", {})
+        asr_api_key = _asr.get("apiKey", "")
+        asr_model = _asr.get("model", "qwen3-asr-flash")
+        asr_language = _asr.get("language", "auto")  # auto/en/zh
+        
         # 线程间通信队列
         self.task_queue = queue.Queue()      # 录音线程 → 执行线程
         self.speak_queue = queue.Queue()     # 执行线程 → TTS线程
@@ -143,8 +133,8 @@ class VoiceAssistantRemote:
         # 全局停止
         self.stop_flag = threading.Event()
         
-        # 异步语音识别器
-        self._asr = SpeechRecognizer()
+        # 异步语音识别器（使用阿里云ASR，传入唤醒词作为热词）
+        self._asr = SpeechRecognizer(api_key=asr_api_key, model=asr_model, hotwords=self.wake_words, language=asr_language)
         # 识别结果回传队列：(req_id, text_or_None)
         self._asr_result_q: queue.Queue = queue.Queue()
         
@@ -153,6 +143,7 @@ class VoiceAssistantRemote:
         self.AWAKENED_TIMEOUT = 30  # 唤醒状态超时时间（秒）
         
         logger.info(f"[Init] ws_url={self.ws_url}, wake_words={self.wake_words}")
+        logger.info(f"[Init] AliyunASR: model={asr_model}, language={asr_language}, hotwords={self.wake_words}")
         logger.info("[Init] Remote voice assistant initialized")
 
     @staticmethod
@@ -165,9 +156,15 @@ class VoiceAssistantRemote:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            token = data.get("token") or data.get("accessToken") or data.get("apiKey")
+            # 尝试多个可能的 token 字段位置
+            token = (
+                data.get("token") or 
+                data.get("accessToken") or 
+                data.get("apiKey") or
+                (data.get("gateway", {}).get("auth", {}).get("token"))  # OpenClaw 新格式
+            )
             if token:
-                logger.info(f"[Init] Token loaded from {path}")
+                logger.info(f"[Init] Token loaded from {path}: {token[:8]}...")
                 return token
         except FileNotFoundError:
             logger.warning(f"[Init] tokenPath not found: {path}, using default token")
@@ -193,8 +190,8 @@ class VoiceAssistantRemote:
         """录音线程：VAD 切割语音片段，提交 SpeechRecognizer 异步识别，永不阻塞。"""
         logger.info("[Recording] Thread started (remote audio mode)")
 
-        if not has_speech_recognition:
-            logger.error("[Recording] SpeechRecognition not available")
+        if not has_aliyun_asr:
+            logger.error("[Recording] AliyunASR not available")
             return
 
         # ── VAD 配置 ──────────────────────────────────────────────────────
@@ -220,7 +217,7 @@ class VoiceAssistantRemote:
         frame_buf = bytearray()
 
         # 记录每个 req_id 提交时的状态快照，用于结果回调时匹配
-        # {req_id: (snapshot_state, snapshot_collected)}
+        # {req_id: (snapshot_state, snapshot_collected, device_id)}
         pending: dict[str, tuple] = {}
         pending_lock = threading.Lock()
 
@@ -230,7 +227,7 @@ class VoiceAssistantRemote:
                 snapshot = pending.pop(req_id, None)
             if snapshot is None:
                 return  # 已被唤醒打断，丢弃
-            snapshot_state, snapshot_collected = snapshot
+            snapshot_state, snapshot_collected, snapshot_device_id = snapshot
 
             if text is None:
                 if snapshot_state == "awakened" and snapshot_collected:
@@ -253,12 +250,18 @@ class VoiceAssistantRemote:
                     return
                     
                 logger.info(f"[Recording] Wake word detected: {text}")
+                
+                # 设置活动设备为发送该音频的设备（使用快照中的device_id）
+                if snapshot_device_id:
+                    self.audio_bridge.set_active_device(snapshot_device_id)
+                    logger.info(f"[Recording] Active device set to: {snapshot_device_id}")
+                
                 current_gen = self._increment_generation()
                 # 清空所有 pending 识别（旧的都失效）
                 with pending_lock:
                     pending.clear()
                 self.audio_bridge.recv_queue.clear()
-                self.audio_bridge.send_signal("wakeup")
+                self.audio_bridge.send_signal(snapshot_device_id, "wakeup")
                 self.task_queue.put(INTERRUPT_SIGNAL)
                 self.speak_queue.put(INTERRUPT_SIGNAL)
                 
@@ -285,6 +288,11 @@ class VoiceAssistantRemote:
                     self._asr_result_q.put(("awakened", []))
 
             elif snapshot_state == "awakened":
+                # 在 awakened 状态收到命令时，也要确保活动设备正确
+                if snapshot_device_id:
+                    self.audio_bridge.set_active_device(snapshot_device_id)
+                    logger.debug(f"[Recording] Active device confirmed: {snapshot_device_id}")
+                
                 new_collected = snapshot_collected + [text]
                 logger.info(f"[Recording] Collected: {text}")
                 question = " ".join(new_collected)
@@ -299,10 +307,12 @@ class VoiceAssistantRemote:
         def _submit(pcm: bytes):
             """提交一段语音给 ASR，记录 pending 状态快照。"""
             req_id = str(uuid.uuid4())
+            # 保存当前设备ID快照，确保识别结果返回时使用正确的设备
+            current_device_id = self.audio_bridge.last_audio_device_id
             with pending_lock:
-                pending[req_id] = (rec_state, list(collected_text))
+                pending[req_id] = (rec_state, list(collected_text), current_device_id)
             self._asr.submit(pcm, req_id, _on_asr_result)
-            logger.debug(f"[Recording] ASR submitted req={req_id[:8]} state={rec_state}")
+            logger.debug(f"[Recording] ASR submitted req={req_id[:8]} state={rec_state} device={current_device_id}")
 
         while not self.stop_flag.is_set():
             # ── 消费异步 ASR 结果（非阻塞）────────────────────────────
@@ -337,7 +347,12 @@ class VoiceAssistantRemote:
                 in_speech = False
                 continue
 
-            frame_buf.extend(packet)
+            # 解包 (device_id, data) 元组
+            device_id, audio_data = packet
+            # 更新 last_audio_device_id（兼容层）
+            self.audio_bridge.last_audio_device_id = device_id
+            
+            frame_buf.extend(audio_data)
 
             # ── 按 20ms 帧逐帧 VAD ─────────────────────────────────────
             while len(frame_buf) >= FRAME_BYTES:
@@ -407,8 +422,9 @@ class VoiceAssistantRemote:
                 
                 logger.info(f"[Execution] Processing question: {question}")
                 
-                # 发送process信号
-                self.audio_bridge.send_signal("process")
+                # 发送process信号（使用活动设备）
+                if self.audio_bridge.active_device_id:
+                    self.audio_bridge.send_signal(self.audio_bridge.active_device_id, "process")
                 
                 # 查询OpenClaw
                 answer = self._query_openclaw(question, my_gen)
@@ -421,8 +437,9 @@ class VoiceAssistantRemote:
                 if answer:
                     logger.info(f"[Execution] Got answer: {answer[:100]}...")
                     
-                    # 发送feedback信号
-                    self.audio_bridge.send_signal("feedback")
+                    # 发送feedback信号（使用活动设备）
+                    if self.audio_bridge.active_device_id:
+                        self.audio_bridge.send_signal(self.audio_bridge.active_device_id, "feedback")
                     
                     # 发送给TTS线程
                     self.speak_queue.put((answer, my_gen))
@@ -507,25 +524,50 @@ class VoiceAssistantRemote:
                     ws.settimeout(0.5)
                     msg = json.loads(ws.recv())
                     
-                    if msg.get("type") == "res" and msg.get("id") == agent_req_id:
+                    msg_type = msg.get("type")
+                    msg_id = msg.get("id")
+                    
+                    # 跳过心跳消息
+                    if msg_type == "heartbeat":
+                        logger.debug("[OpenClaw] Received heartbeat, skipping")
+                        continue
+                    
+                    # 只处理匹配的响应
+                    if msg_type == "res" and msg_id == agent_req_id:
                         if msg.get("ok"):
                             payload = msg.get("payload", {})
                             status = payload.get("status")
+                            
+                            logger.debug(f"[OpenClaw] Response status: {status}")
                             
                             if status == "ok" and "result" in payload:
                                 result = payload["result"]
                                 if "payloads" in result and len(result["payloads"]) > 0:
                                     response = result["payloads"][0].get("text", "")
-                                    ws.close()
-                                    self.current_ws = None
-                                    return response
+                                    if response:  # 确保响应不为空
+                                        logger.info(f"[OpenClaw] Got answer: {response[:50]}...")
+                                        ws.close()
+                                        self.current_ws = None
+                                        return response
+                                    else:
+                                        logger.warning("[OpenClaw] Empty response text")
+                                else:
+                                    logger.warning("[OpenClaw] No payloads in result")
                             elif status == "accepted":
+                                logger.debug("[OpenClaw] Request accepted, waiting for result...")
                                 continue
+                            else:
+                                logger.warning(f"[OpenClaw] Unexpected status: {status}")
                         else:
                             error = msg.get("error", {}).get("message", "Unknown error")
+                            logger.error(f"[OpenClaw] Error response: {error}")
                             ws.close()
                             self.current_ws = None
                             return f"错误: {error}"
+                    else:
+                        # 其他消息类型，记录但不处理
+                        if msg_type:
+                            logger.debug(f"[OpenClaw] Ignoring message type: {msg_type}")
                             
                 except websocket.WebSocketTimeoutException:
                     continue
@@ -605,8 +647,8 @@ class VoiceAssistantRemote:
                     # 额外等待最后一个80ms包传输完成
                     time.sleep(0.15)
                     # 再次检查generation，确保没有新的唤醒
-                    if self._get_generation() == current_gen:
-                        self.audio_bridge.send_signal("sleep")
+                    if self._get_generation() == current_gen and self.audio_bridge.active_device_id:
+                        self.audio_bridge.send_signal(self.audio_bridge.active_device_id, "sleep")
                         logger.info("[TTS] Sent sleep signal")
                     else:
                         logger.debug("[TTS] Skipping sleep signal - new wakeup detected")

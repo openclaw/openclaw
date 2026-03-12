@@ -124,42 +124,40 @@ class WebSocketAudioServer:
         """设置音频桥接器"""
         self.audio_bridge = bridge
         
-        # 设置桥接器的回调
-        bridge.set_send_callback(self._on_tts_audio)
+        # 设置桥接器的回调（新架构：所有回调都携带 device_id）
+        bridge.set_tts_callback(self._on_tts_audio)
         bridge.set_signal_callback(self._on_signal)
     
-    def _on_tts_audio(self, audio_chunk: bytes):
-        """当有TTS音频需要发送时的回调（可从任意线程调用）"""
+    def _on_tts_audio(self, device_id: str, audio_chunk: bytes):
+        """当有TTS音频需要发送时的回调（可从任意线程调用）
+        
+        新架构：直接通过 device_id 路由到对应的 WebSocket 连接
+        """
         if not self.loop:
             return
-        # 只向当前活动设备发送TTS音频
-        if self.audio_bridge and self.audio_bridge.active_device_id:
-            device_id = self.audio_bridge.active_device_id
-            if device_id in self.devices:
-                device = self.devices[device_id]
-                asyncio.run_coroutine_threadsafe(device.send_audio(audio_chunk), self.loop)
-                logger.debug(f"Sent TTS audio to active device: {device_id}")
-            else:
-                logger.warning(f"Active device not found: {device_id}")
+        
+        if device_id in self.devices:
+            device = self.devices[device_id]
+            asyncio.run_coroutine_threadsafe(device.send_audio(audio_chunk), self.loop)
+            logger.debug(f"[WS] Sent TTS audio to device: {device_id[:8]}...")
         else:
-            logger.warning("No active device set, skipping TTS audio")
+            logger.warning(f"[WS] Device not found: {device_id[:8]}...")
     
-    def _on_signal(self, signal_type: str):
-        """当需要发送信号时的回调（可从任意线程调用）"""
+    def _on_signal(self, device_id: str, signal_type: str):
+        """当需要发送信号时的回调（可从任意线程调用）
+        
+        新架构：直接通过 device_id 路由到对应的 WebSocket 连接
+        """
         if not self.loop:
             logger.warning(f"[WS] No event loop, cannot send signal: {signal_type}")
             return
-        # 只向当前活动设备发送信号
-        if self.audio_bridge and self.audio_bridge.active_device_id:
-            device_id = self.audio_bridge.active_device_id
-            if device_id in self.devices:
-                device = self.devices[device_id]
-                asyncio.run_coroutine_threadsafe(device.send_signal(signal_type), self.loop)
-                logger.info(f"[WS] Sent signal '{signal_type}' to active device: {device_id}")
-            else:
-                logger.warning(f"[WS] Active device not found: {device_id}")
+        
+        if device_id in self.devices:
+            device = self.devices[device_id]
+            asyncio.run_coroutine_threadsafe(device.send_signal(signal_type), self.loop)
+            logger.info(f"[WS] Sent signal '{signal_type}' to device: {device_id[:8]}...")
         else:
-            logger.warning("[WS] No active device set, skipping signal: {signal_type}")
+            logger.warning(f"[WS] Device not found for signal '{signal_type}': {device_id[:8]}...")
     
     async def handle_device(self, websocket):
         """处理设备连接"""
@@ -254,10 +252,9 @@ class WebSocketAudioServer:
             tx_pcm_data = base64.b64decode(tx_audio_data_b64)
             
             # 转发给voice_assistant（通过audio_bridge）
+            # 新架构：所有音频包都携带 device_id
             if self.audio_bridge:
-                # 设置当前活动设备ID
-                self.audio_bridge.set_active_device(device.device_id)
-                self.audio_bridge.write_audio(tx_pcm_data)
+                self.audio_bridge.write_audio(device.device_id, tx_pcm_data)
             
             # 处理双声道情况的rxdata（如果存在）
             if "rxdata" in msg:

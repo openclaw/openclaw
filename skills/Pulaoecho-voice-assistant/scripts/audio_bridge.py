@@ -23,7 +23,7 @@ _RECV_QUEUE_WARN_DEPTH = 100
 class AudioReceiveQueue:
     """
     音频接收队列。
-    - WebSocket线程调用 put()，每次放入一个原始包（80ms PCM）。
+    - WebSocket线程调用 put()，每次放入一个原始包（device_id, 80ms PCM）。
     - VA录音线程调用 get() 阻塞读取。
     - 队列深度超过 100 时打 WARNING（表示VA消费速度跟不上）。
     """
@@ -32,15 +32,15 @@ class AudioReceiveQueue:
         self.warn_depth = warn_depth
         self._q: queue.Queue = queue.Queue()
 
-    def put(self, data: bytes):
-        """WebSocket线程调用，放入一个音频包。"""
-        self._q.put(data)
+    def put(self, device_id: str, data: bytes):
+        """WebSocket线程调用，放入一个音频包（带设备ID）。"""
+        self._q.put((device_id, data))
         depth = self._q.qsize()
         if depth > self.warn_depth:
             logger.warning(f"[Bridge] Audio recv queue depth {depth} > {self.warn_depth}, VA may be too slow")
 
-    def get(self, timeout: float = 1.0) -> Optional[bytes]:
-        """VA录音线程调用，阻塞等待下一个音频包。"""
+    def get(self, timeout: float = 1.0) -> Optional[tuple]:
+        """VA录音线程调用，阻塞等待下一个音频包。返回 (device_id, data) 或 None"""
         try:
             return self._q.get(timeout=timeout)
         except queue.Empty:
@@ -103,88 +103,95 @@ class AudioSendQueue:
 
 
 class AudioBridge:
-    """音频桥接器，连接WebSocket和voice_assistant"""
+    """音频桥接器，连接WebSocket和voice_assistant
+    
+    新架构：所有数据都携带 device_id，不再使用全局 active_device_id
+    """
     
     def __init__(self):
-        # 音频接收队列（WebSocket → voice_assistant）每个元素 = 一个原始包
+        # 音频接收队列（WebSocket → voice_assistant）每个元素 = (device_id, audio_data)
         self.recv_queue = AudioReceiveQueue()
-        self.audio_callback: Optional[Callable[[bytes], None]] = None
         
-        # 音频发送（voice_assistant → WebSocket）
-        self.send_queue = AudioSendQueue()
-        self.send_callback: Optional[Callable[[bytes], None]] = None
+        # TTS 音频发送回调 (device_id, audio_data)
+        self.tts_callback: Optional[Callable[[str, bytes], None]] = None
         
-        # 信号发送回调
-        self.signal_callback: Optional[Callable[[str], None]] = None
+        # 信号发送回调 (device_id, signal_type)
+        self.signal_callback: Optional[Callable[[str, str], None]] = None
         
-        # 当前活动设备ID（提出问题的设备）
+        # 兼容层：为旧代码保留
         self.active_device_id: Optional[str] = None
-        
-        # 状态
+        self.last_audio_device_id: Optional[str] = None
+        self.send_queue = AudioSendQueue()
         self.running = False
         self.send_thread: Optional[threading.Thread] = None
         
-    def set_audio_callback(self, callback: Callable[[bytes], None]):
-        """设置音频数据回调（给voice_assistant）"""
-        self.audio_callback = callback
+    def set_tts_callback(self, callback: Callable[[str, bytes], None]):
+        """设置 TTS 音频回调 (device_id, audio_data)"""
+        self.tts_callback = callback
         
-    def set_send_callback(self, callback: Callable[[bytes], None]):
-        """设置发送回调（给WebSocket）"""
-        self.send_callback = callback
-        
-    def set_signal_callback(self, callback: Callable[[str], None]):
-        """设置信号回调（给WebSocket）"""
+    def set_signal_callback(self, callback: Callable[[str, str], None]):
+        """设置信号回调 (device_id, signal_type)"""
         self.signal_callback = callback
     
-    def write_audio(self, data: bytes):
-        """WebSocket线程调用：将一个音频包入队，不阻塞"""
-        self.recv_queue.put(data)
+    def write_audio(self, device_id: str, data: bytes):
+        """WebSocket线程调用：将一个音频包入队，不阻塞
+        
+        Args:
+            device_id: 发送该音频的设备ID
+            data: 音频数据
+        """
+        self.recv_queue.put(device_id, data)
 
-    def get_audio_packet(self, timeout: float = 1.0) -> Optional[bytes]:
-        """VA录音线程调用：阻塞获取下一个音频包，超时返回None"""
+    def get_audio_packet(self, timeout: float = 1.0) -> Optional[tuple]:
+        """VA录音线程调用：阻塞获取下一个音频包，返回 (device_id, data) 或 None"""
         return self.recv_queue.get(timeout=timeout)
     
-    def queue_tts_audio(self, audio_data: bytes):
-        """将TTS音频加入发送队列"""
-        self.send_queue.put(audio_data)
+    def send_tts_audio(self, device_id: str, audio_data: bytes):
+        """发送 TTS 音频到指定设备"""
+        if self.tts_callback:
+            self.tts_callback(device_id, audio_data)
     
-    def send_signal(self, signal_type: str):
-        """发送信号给设备"""
+    def send_signal(self, device_id: str, signal_type: str):
+        """发送信号给指定设备"""
         if self.signal_callback:
-            self.signal_callback(signal_type)
+            self.signal_callback(device_id, signal_type)
     
-    def clear_send_queue(self):
-        """清空发送队列（播放完成或被打断时调用）"""
-        self.send_queue.clear()
+    # ========== 兼容层方法（为旧代码保留）==========
     
     def set_active_device(self, device_id: str):
-        """设置当前活动设备ID（提出问题的设备）"""
+        """设置当前活动设备ID（兼容旧代码）"""
         self.active_device_id = device_id
-        #logger.info(f"[Bridge] Active device set to: {device_id}")
+    
+    def queue_tts_audio(self, audio_data: bytes):
+        """将TTS音频加入发送队列（兼容旧代码）"""
+        self.send_queue.put(audio_data)
+    
+    def clear_send_queue(self):
+        """清空发送队列（兼容旧代码）"""
+        self.send_queue.clear()
     
     def start_send_thread(self):
-        """启动发送线程"""
+        """启动发送线程（兼容旧代码）"""
         if self.send_thread and self.send_thread.is_alive():
             return
-        
         self.running = True
         self.send_thread = threading.Thread(target=self._send_loop, daemon=True)
         self.send_thread.start()
         logger.info("Audio send thread started")
     
     def stop_send_thread(self):
-        """停止发送线程"""
+        """停止发送线程（兼容旧代码）"""
         self.running = False
         if self.send_thread:
             self.send_thread.join(timeout=2)
         logger.info("Audio send thread stopped")
     
     def _send_loop(self):
-        """发送线程主循环"""
+        """发送线程主循环（兼容旧代码）"""
         while self.running:
-            # 从队列获取音频块
             chunk = self.send_queue.get(timeout=0.1)
-            if chunk and self.send_callback:
-                self.send_callback(chunk)
-                # 模拟80ms的播放时间
+            if chunk and self.active_device_id:
+                # 使用新架构的回调
+                if self.tts_callback:
+                    self.tts_callback(self.active_device_id, chunk)
                 time.sleep(0.08)
