@@ -58,6 +58,7 @@ export async function maybeBroadcastMessage(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      lifecycleOwnerAgentId?: string;
     },
   ) => Promise<boolean>;
 }) {
@@ -74,6 +75,12 @@ export async function maybeBroadcastMessage(params: {
 
   const agentIds = params.cfg.agents?.list?.map((agent) => normalizeAgentId(agent.id));
   const hasKnownAgents = (agentIds?.length ?? 0) > 0;
+  const knownAgents = new Set(agentIds ?? []);
+  const normalizedBroadcastAgents = broadcastAgents.map((agentId) => normalizeAgentId(agentId));
+  const validBroadcastAgents = normalizedBroadcastAgents.filter((agentId) =>
+    hasKnownAgents ? knownAgents.has(agentId) : true,
+  );
+  const lifecycleOwnerAgentId = validBroadcastAgents[0];
   const groupHistorySnapshot =
     params.msg.chatType === "group"
       ? (params.groupHistories.get(params.groupHistoryKey) ?? [])
@@ -102,6 +109,7 @@ export async function maybeBroadcastMessage(params: {
       return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {
         groupHistory: groupHistorySnapshot,
         suppressGroupHistoryClear: true,
+        lifecycleOwnerAgentId,
       });
     } catch (err) {
       whatsappInboundLog.error(`Broadcast agent ${agentId} failed: ${formatError(err)}`);

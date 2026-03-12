@@ -13,6 +13,7 @@ import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { resolveInboundSessionEnvelopeContext } from "../../../channels/session-envelope.js";
+import { createStatusReactionController } from "../../../channels/status-reactions.js";
 import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
@@ -30,13 +31,14 @@ import {
 } from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import { sendReactionWhatsApp } from "../../outbound.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
-import { maybeSendAckReaction } from "./ack-reaction.js";
+import { maybeSendAckReaction, resolveWhatsAppAckReactionDecision } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
@@ -150,6 +152,7 @@ export async function processMessage(params: {
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
+  lifecycleOwnerAgentId?: string;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
@@ -205,18 +208,72 @@ export async function processMessage(params: {
     return false;
   }
 
-  // Send ack reaction immediately upon message receipt (post-gating)
-  maybeSendAckReaction({
+  const statusReactionsConfig = params.cfg.messages?.statusReactions;
+  const statusReactionsModeEnabled = statusReactionsConfig?.enabled === true;
+  const ackDecision = resolveWhatsAppAckReactionDecision({
     cfg: params.cfg,
     msg: params.msg,
     agentId: params.route.agentId,
     sessionKey: params.route.sessionKey,
     conversationId,
-    verbose: params.verbose,
     accountId: params.route.accountId,
-    info: params.replyLogger.info.bind(params.replyLogger),
-    warn: params.replyLogger.warn.bind(params.replyLogger),
   });
+  const ackTarget = ackDecision.target;
+  const isLifecycleOwner =
+    !params.lifecycleOwnerAgentId || params.lifecycleOwnerAgentId === params.route.agentId;
+  const statusReactionsEnabled =
+    statusReactionsModeEnabled && ackDecision.shouldReact && Boolean(ackTarget) && isLifecycleOwner;
+
+  const statusReactionController =
+    statusReactionsEnabled && ackTarget
+      ? createStatusReactionController({
+          enabled: true,
+          adapter: {
+            setReaction: async (emoji) => {
+              await sendReactionWhatsApp(ackTarget.chatId, ackTarget.messageId, emoji, {
+                verbose: params.verbose,
+                fromMe: false,
+                participant: ackTarget.participant,
+                accountId: ackTarget.accountId,
+              });
+            },
+          },
+          initialEmoji: ackDecision.emoji,
+          emojis: statusReactionsConfig?.emojis,
+          timing: statusReactionsConfig?.timing,
+          onError: (err) => {
+            params.replyLogger.warn(
+              {
+                error: formatError(err),
+                chatId: ackTarget.chatId,
+                messageId: ackTarget.messageId,
+              },
+              "failed to update lifecycle status reaction",
+            );
+          },
+        })
+      : null;
+
+  if (statusReactionController) {
+    void statusReactionController.setQueued();
+  } else if (!statusReactionsModeEnabled) {
+    // Send one-shot ack reaction when lifecycle mode is disabled.
+    maybeSendAckReaction({
+      cfg: params.cfg,
+      msg: params.msg,
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      conversationId,
+      verbose: params.verbose,
+      accountId: params.route.accountId,
+      info: params.replyLogger.info.bind(params.replyLogger),
+      warn: params.replyLogger.warn.bind(params.replyLogger),
+    });
+  } else if (ackDecision.shouldReact && !isLifecycleOwner) {
+    logVerbose(
+      `Skipping lifecycle status reactions for non-owner broadcast agent ${params.route.agentId}`,
+    );
+  }
 
   const correlationId = params.msg.id ?? newConnectionId();
   params.replyLogger.info(
@@ -388,74 +445,106 @@ export async function processMessage(params: {
   });
   trackBackgroundTask(params.backgroundTasks, metaTask);
 
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: params.cfg,
-    replyResolver: params.replyResolver,
-    dispatcherOptions: {
-      ...prefixOptions,
-      responsePrefix,
-      onHeartbeatStrip: () => {
-        if (!didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
-        }
+  let queuedFinal = false;
+  let dispatchError = false;
+  let finalDeliveryError = false;
+  try {
+    ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg: params.cfg,
+      replyResolver: params.replyResolver,
+      dispatcherOptions: {
+        ...prefixOptions,
+        responsePrefix,
+        onHeartbeatStrip: () => {
+          if (!didLogHeartbeatStrip) {
+            didLogHeartbeatStrip = true;
+            logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
+          }
+        },
+        deliver: async (payload: ReplyPayload, info) => {
+          if (info.kind !== "final") {
+            // Only deliver final replies to external messaging channels (WhatsApp).
+            // Block (reasoning/thinking) and tool updates are meant for the internal
+            // web UI only; sending them here leaks chain-of-thought to end users.
+            return;
+          }
+          await deliverWebReply({
+            replyResult: payload,
+            msg: params.msg,
+            mediaLocalRoots,
+            maxMediaBytes: params.maxMediaBytes,
+            textLimit,
+            chunkMode,
+            replyLogger: params.replyLogger,
+            connectionId: params.connectionId,
+            skipLog: false,
+            tableMode,
+          });
+          didSendReply = true;
+          const shouldLog = payload.text ? true : undefined;
+          params.rememberSentText(payload.text, {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: shouldLog,
+          });
+          const fromDisplay =
+            params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+          whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+          if (shouldLogVerbose()) {
+            const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+            whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
+          }
+        },
+        onError: (err, info) => {
+          const label =
+            info.kind === "tool"
+              ? "tool update"
+              : info.kind === "block"
+                ? "block update"
+                : "auto-reply";
+          if (info.kind === "final") {
+            finalDeliveryError = true;
+          }
+          whatsappOutboundLog.error(
+            `Failed sending web ${label} to ${params.msg.from ?? conversationId}: ${formatError(err)}`,
+          );
+        },
+        onReplyStart: async () => {
+          await params.msg.sendComposing();
+          await statusReactionController?.setThinking();
+        },
       },
-      deliver: async (payload: ReplyPayload, info) => {
-        if (info.kind !== "final") {
-          // Only deliver final replies to external messaging channels (WhatsApp).
-          // Block (reasoning/thinking) and tool updates are meant for the internal
-          // web UI only; sending them here leaks chain-of-thought to end users.
-          return;
-        }
-        await deliverWebReply({
-          replyResult: payload,
-          msg: params.msg,
-          mediaLocalRoots,
-          maxMediaBytes: params.maxMediaBytes,
-          textLimit,
-          chunkMode,
-          replyLogger: params.replyLogger,
-          connectionId: params.connectionId,
-          skipLog: false,
-          tableMode,
-        });
-        didSendReply = true;
-        const shouldLog = payload.text ? true : undefined;
-        params.rememberSentText(payload.text, {
-          combinedBody,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
-        const fromDisplay =
-          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
-        if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
-          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
-        }
+      replyOptions: {
+        // WhatsApp delivery intentionally suppresses non-final payloads.
+        // Keep block streaming disabled so final replies are still produced.
+        disableBlockStreaming: true,
+        onReasoningStream: statusReactionController
+          ? async () => {
+              await statusReactionController.setThinking();
+            }
+          : undefined,
+        onToolStart: statusReactionController
+          ? async (payload) => {
+              await statusReactionController.setTool(payload.name);
+            }
+          : undefined,
+        onModelSelected,
       },
-      onError: (err, info) => {
-        const label =
-          info.kind === "tool"
-            ? "tool update"
-            : info.kind === "block"
-              ? "block update"
-              : "auto-reply";
-        whatsappOutboundLog.error(
-          `Failed sending web ${label} to ${params.msg.from ?? conversationId}: ${formatError(err)}`,
-        );
-      },
-      onReplyStart: params.msg.sendComposing,
-    },
-    replyOptions: {
-      // WhatsApp delivery intentionally suppresses non-final payloads.
-      // Keep block streaming disabled so final replies are still produced.
-      disableBlockStreaming: true,
-      onModelSelected,
-    },
-  });
+    }));
+  } catch (err) {
+    dispatchError = true;
+    throw err;
+  } finally {
+    if (statusReactionController) {
+      if (dispatchError || finalDeliveryError) {
+        await statusReactionController.setError();
+      } else {
+        await statusReactionController.setDone();
+      }
+    }
+  }
 
   if (!queuedFinal) {
     if (shouldClearGroupHistory) {
