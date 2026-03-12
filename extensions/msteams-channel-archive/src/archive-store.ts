@@ -71,11 +71,15 @@ function normalizeConversationId(value: string): string {
   return value.trim();
 }
 
-function parseJsonLine<T>(line: string, filePath: string, lineNumber: number): T {
+function parseJsonLine<T>(line: string, filePath: string, lineNumber: number): T | null {
   try {
     return JSON.parse(line) as T;
   } catch (error) {
-    throw new Error(`Invalid JSONL in ${filePath} at line ${lineNumber}: ${String(error)}`);
+    // Tolerate malformed JSONL lines so a single corrupted entry does not break all reads.
+    console.warn(
+      `msteams-channel-archive: invalid JSONL at ${filePath}:${lineNumber}: ${String(error)}`,
+    );
+    return null;
   }
 }
 
@@ -241,6 +245,8 @@ export class MSTeamsChannelArchiveStore {
   async searchMessages(params: ArchiveSearchParams): Promise<ArchiveMessageRecord[]> {
     const limit = clampLimit(params.limit);
     const conversations = await this.resolveConversations(params.conversationId);
+    // Bounded top-N accumulator: keep only the newest `limit` results in memory
+    // rather than accumulating all matches before sorting.
     const results: ArchiveMessageRecord[] = [];
 
     for (const conversationId of conversations) {
@@ -274,11 +280,21 @@ export class MSTeamsChannelArchiveStore {
         if (params.query && !includesText(`${message.text}\n${message.rawBody}`, params.query)) {
           continue;
         }
-        results.push(await this.withAttachmentStatus(message));
+        const record = await this.withAttachmentStatus(message);
+        if (results.length < limit) {
+          results.push(record);
+          if (results.length === limit) {
+            results.sort((a, b) => b.timestamp - a.timestamp);
+          }
+        } else if (record.timestamp > results[results.length - 1].timestamp) {
+          // Replace the oldest kept result and re-sort
+          results[results.length - 1] = record;
+          results.sort((a, b) => b.timestamp - a.timestamp);
+        }
       }
     }
 
-    return results.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+    return results.length < limit ? results.sort((a, b) => b.timestamp - a.timestamp) : results;
   }
 
   async searchAttachments(params: AttachmentSearchParams): Promise<
@@ -292,6 +308,7 @@ export class MSTeamsChannelArchiveStore {
   > {
     const limit = clampLimit(params.limit);
     const conversations = await this.resolveConversations(params.conversationId);
+    // Bounded top-N accumulator keyed by timestamp
     const matches: Array<{
       conversationId: string;
       messageId?: string;
@@ -319,18 +336,27 @@ export class MSTeamsChannelArchiveStore {
           ) {
             continue;
           }
-          matches.push({
+          const item = {
             conversationId: message.conversationId,
             messageId: message.messageId,
             timestamp: message.timestamp,
             sender: message.sender,
             attachment,
-          });
+          };
+          if (matches.length < limit) {
+            matches.push(item);
+            if (matches.length === limit) {
+              matches.sort((a, b) => b.timestamp - a.timestamp);
+            }
+          } else if (item.timestamp > matches[matches.length - 1].timestamp) {
+            matches[matches.length - 1] = item;
+            matches.sort((a, b) => b.timestamp - a.timestamp);
+          }
         }
       }
     }
 
-    return matches.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+    return matches.length < limit ? matches.sort((a, b) => b.timestamp - a.timestamp) : matches;
   }
 
   async listChannelArchives(): Promise<ArchiveChannelEntry[]> {
@@ -457,9 +483,10 @@ export class MSTeamsChannelArchiveStore {
     }
     const raw = await fs.promises.readFile(messageFile, "utf8");
     const lines = raw.split("\n").filter(Boolean);
-    return lines.map((line, indexLine) =>
+    const parsed = lines.map((line, indexLine) =>
       parseJsonLine<ArchiveMessageRecord>(line, messageFile, indexLine + 1),
     );
+    return parsed.filter((r): r is ArchiveMessageRecord => r !== null);
   }
 
   private async readLastMessageInFile(messageFile: string): Promise<ArchiveMessageRecord | null> {

@@ -158,6 +158,9 @@ export async function runArchiveCleanupSweep(
   let accessToken: string | null = null;
   let pruned = 0;
   let skipped = 0;
+  // Cache: runtimeTeamId/channelId → resolved Graph team GUID, shared across the whole sweep
+  // to avoid repeating a full-tenant team+channel scan for each archived channel.
+  const graphTeamIdCache = new Map<string, string | null>();
 
   for (const archive of archives) {
     if (!archive.teamId || !archive.channelId) {
@@ -173,10 +176,17 @@ export async function runArchiveCleanupSweep(
 
     try {
       accessToken ??= await getAccessToken();
-      const graphTeamId = await resolveGraphTeamId({
-        accessToken,
-        archive,
-      });
+      const cacheKey = `${archive.teamId}::${archive.channelId}`;
+      let graphTeamId: string | null;
+      if (graphTeamIdCache.has(cacheKey)) {
+        graphTeamId = graphTeamIdCache.get(cacheKey) ?? null;
+      } else {
+        graphTeamId = await resolveGraphTeamId({
+          accessToken,
+          archive,
+        });
+        graphTeamIdCache.set(cacheKey, graphTeamId);
+      }
       if (!graphTeamId) {
         skipped += 1;
         logger.warn?.(
