@@ -326,17 +326,22 @@ export function resolveContextTokensForModel(params: {
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
-    // When provider is known, check config first for an explicit contextWindow
-    // override. This avoids writing synthetic "provider/model" keys into the
-    // shared discovery cache (which would overwrite unrelated slash-containing
-    // raw model IDs such as OpenRouter's "google/gemini-2.5-pro").
-    const configuredWindow = resolveConfiguredProviderContextWindow(
-      params.cfg,
-      ref.provider,
-      ref.model,
-    );
-    if (configuredWindow !== undefined) {
-      return configuredWindow;
+    // Only do the config direct scan when the caller explicitly passed a
+    // provider. When provider is inferred from a slash in the model string
+    // (e.g. "google/gemini-2.5-pro" → ref.provider = "google"), the model ID
+    // may belong to a DIFFERENT provider (e.g. an OpenRouter session). Scanning
+    // cfg.models.providers.google in that case would return Google's configured
+    // window and misreport context limits for the OpenRouter session.
+    // See status.ts log-usage fallback which calls with only { model } set.
+    if (params.provider) {
+      const configuredWindow = resolveConfiguredProviderContextWindow(
+        params.cfg,
+        ref.provider,
+        ref.model,
+      );
+      if (configuredWindow !== undefined) {
+        return configuredWindow;
+      }
     }
   }
 

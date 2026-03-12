@@ -260,4 +260,41 @@ describe("lookupContextTokens", () => {
     });
     expect(portalResult).toBe(32_000);
   });
+
+  it("resolveContextTokensForModel(model-only) does not apply config scan for inferred provider", async () => {
+    // status.ts log-usage fallback calls resolveContextTokensForModel({ model })
+    // with no provider. When model = "google/gemini-2.5-pro" (OpenRouter ID),
+    // resolveProviderModelRef infers provider="google". Without the guard,
+    // resolveConfiguredProviderContextWindow would return Google's configured
+    // window and misreport context limits for the OpenRouter session.
+    mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
+
+    const cfg = {
+      models: {
+        providers: {
+          google: { models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }] },
+        },
+      },
+    };
+
+    const { resolveContextTokensForModel } = await import("./context.js");
+    await new Promise((r) => setTimeout(r, 0));
+
+    // model-only call (no explicit provider) must NOT apply config direct scan.
+    // Falls through to bare cache lookup: "google/gemini-2.5-pro" → 999k ✓.
+    const modelOnlyResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      model: "google/gemini-2.5-pro",
+      // no provider
+    });
+    expect(modelOnlyResult).toBe(999_000);
+
+    // Explicit provider still uses config scan ✓.
+    const explicitResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "google",
+      model: "gemini-2.5-pro",
+    });
+    expect(explicitResult).toBe(2_000_000);
+  });
 });
