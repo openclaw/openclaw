@@ -7,7 +7,6 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { validateAnthropicTurns } from "./pi-embedded-helpers.js";
-import { isAnthropicBedrockModel } from "./pi-embedded-runner/anthropic-stream-wrappers.js";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 
 const ZERO_USAGE: Usage = {
@@ -144,14 +143,11 @@ function shouldValidateAnthropicReplayTarget(target: {
   provider: string;
   modelId: string;
 }): boolean {
-  if (target.provider === "anthropic" || target.modelApi === "anthropic-messages") {
-    return true;
-  }
-  return target.modelApi === "bedrock-converse-stream" && isAnthropicBedrockModel(target.modelId);
+  return target.provider === "anthropic" || target.modelApi === "anthropic-messages";
 }
 
 describe("anthropic thinking replay", () => {
-  it("drops synthetic assistant transcript mirrors before replay so thinking signatures stay intact", async () => {
+  it("drops duplicated delivery-mirror assistant shadows before replay so thinking signatures stay intact", async () => {
     const sessionFile = path.join(tempRoot, `session-${Date.now()}.jsonl`);
     const thinkingSignature = "sig-thinking-123";
     const redactedSignature = "sig-redacted-456";
@@ -277,78 +273,14 @@ describe("anthropic thinking replay", () => {
     });
   });
 
-  it("drops delivery-mirror assistant entries for bedrock claude replay", async () => {
-    const sessionFile = path.join(tempRoot, `session-${Date.now()}-bedrock-claude.jsonl`);
-    const modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0";
+  it("keeps delivery-mirror assistant entries when they are the only assistant history", async () => {
+    const sessionFile = path.join(tempRoot, `session-${Date.now()}-mirror-only.jsonl`);
 
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage({
       role: "user",
       content: "hello",
       timestamp: Date.now(),
-    });
-    sessionManager.appendMessage({
-      role: "assistant",
-      api: "bedrock-converse-stream",
-      provider: "amazon-bedrock",
-      model: modelId,
-      usage: ZERO_USAGE,
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "bedrock reply" }],
-    });
-    sessionManager.appendMessage({
-      role: "assistant",
-      api: "openai-responses",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      usage: ZERO_USAGE,
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "mirrored outbound reply" }],
-    });
-    sessionManager.appendMessage({
-      role: "user",
-      content: "continue",
-      timestamp: Date.now(),
-    });
-
-    const replayable = await getReplayableMessagesForTarget(sessionFile, {
-      modelApi: "bedrock-converse-stream",
-      provider: "amazon-bedrock",
-      modelId,
-    });
-
-    expect(replayable.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
-    expect(
-      replayable.some(
-        (message) =>
-          message.role === "assistant" &&
-          message.provider === "openclaw" &&
-          message.model === "delivery-mirror",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps delivery-mirror assistant entries for non-anthropic bedrock replay", async () => {
-    const sessionFile = path.join(tempRoot, `session-${Date.now()}-bedrock-nova.jsonl`);
-    const modelId = "amazon.nova-pro-v1:0";
-
-    const sessionManager = SessionManager.open(sessionFile);
-    sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: Date.now(),
-    });
-    sessionManager.appendMessage({
-      role: "assistant",
-      api: "bedrock-converse-stream",
-      provider: "amazon-bedrock",
-      model: modelId,
-      usage: ZERO_USAGE,
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "nova reply" }],
     });
     sessionManager.appendMessage({
       role: "assistant",
@@ -366,19 +298,10 @@ describe("anthropic thinking replay", () => {
       timestamp: Date.now(),
     });
 
-    const replayable = await getReplayableMessagesForTarget(sessionFile, {
-      modelApi: "bedrock-converse-stream",
-      provider: "amazon-bedrock",
-      modelId,
-    });
+    const replayable = await getReplayableMessages(sessionFile);
 
-    expect(replayable.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "assistant",
-      "user",
-    ]);
-    expect(replayable[2]).toMatchObject({
+    expect(replayable.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(replayable[1]).toMatchObject({
       role: "assistant",
       provider: "openclaw",
       model: "delivery-mirror",
