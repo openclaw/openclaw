@@ -1,13 +1,8 @@
 import fs from "node:fs";
-import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { SkillCommandSpec } from "../agents/skills.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import type { CommandCategory } from "./commands-registry.types.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   buildModelAliasIndex,
   resolveConfiguredModelRef,
@@ -15,9 +10,11 @@ import {
   resolveReasoningDefault,
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -27,6 +24,7 @@ import {
 } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
+import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
@@ -49,8 +47,10 @@ import {
   listChatCommandsForConfig,
   type ChatCommandDefinition,
 } from "./commands-registry.js";
+import type { CommandCategory } from "./commands-registry.types.js";
 import { resolveActiveFallbackState } from "./fallback-state.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -519,7 +519,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.resolvedReasoning ??
     args.sessionEntry?.reasoningLevel ??
     (args.config
-      ? resolveReasoningDefault({ cfg: args.config, provider, model, catalog: args.catalog })
+      ? resolveReasoningDefault({
+          cfg: args.config,
+          provider: selectedProvider,
+          model: selectedModel,
+          catalog: args.catalog,
+        })
       : "off");
   const elevatedLevel =
     args.resolvedElevated ??

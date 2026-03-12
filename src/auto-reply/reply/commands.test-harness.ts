@@ -42,6 +42,7 @@ export function buildCommandTestParams(
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
+    resolveDefaultReasoningLevel: async () => "off",
     provider: "whatsapp",
     model: "test-model",
     contextTokens: 0,

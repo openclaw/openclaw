@@ -75,6 +75,7 @@ const createHandleInlineActionsInput = (params: {
     resolvedReasoningLevel: "off",
     resolvedElevatedLevel: "off",
     resolveDefaultThinkingLevel: async () => "off",
+    resolveDefaultReasoningLevel: async () => "off",
     provider: "openai",
     model: "gpt-4o-mini",
     contextTokens: 0,
