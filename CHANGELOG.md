@@ -22,7 +22,7 @@ Docs: https://docs.openclaw.ai
 - Security/LINE webhook: require signatures for empty-event POST probes too so unsigned requests no longer confirm webhook reachability with a `200` response. (`GHSA-mhxh-9pjm-w7q5`)(#44090) Thanks @TerminalsandCoffee and @vincentkoc.
 - Security/Zalo webhook: rate limit invalid secret guesses before auth so weak webhook secrets cannot be brute-forced through unauthenticated churned requests without pre-auth `429` responses. (`GHSA-5m9r-p9g7-679c`)(#44173) Thanks @zpbrent and @vincentkoc.
 - Security/plugins: disable implicit workspace plugin auto-load so cloned repositories cannot execute workspace plugin code without an explicit trust decision. (`GHSA-99qw-6mr3-36qr`)(#44174) Thanks @lintsinghua and @vincentkoc.
-- Security/exec approvals: fail closed for ambiguous inline loader and shell-payload script execution, bind the real script after POSIX shell value-taking flags, and unwrap `pnpm`/`npm exec`/`npx` script runners before approval binding. (`GHSA-57jw-9722-6rf2`)(#44247) (`GHSA-jvqh-rfmh-jh27`)(#44247) (`GHSA-x7pp-23xv-mmr4`)(#44247) (`GHSA-jc5j-vg4r-j5jx`)(#44247) Thanks @tdjackey.
+- Security/exec approvals: fail closed for ambiguous inline loader and shell-payload script execution, bind the real script after POSIX shell value-taking flags, and unwrap `pnpm`/`npm exec`/`npx` script runners before approval binding. (`GHSA-57jw-9722-6rf2`)(`GHSA-jvqh-rfmh-jh27`)(`GHSA-x7pp-23xv-mmr4`)(`GHSA-jc5j-vg4r-j5jx`)(#44247) Thanks @tdjackey and @vincentkoc.
 
 ### Changes
 
