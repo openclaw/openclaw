@@ -1,9 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveAgentModelConfigPath,
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
+
+describe("resolveAgentModelConfigPath", () => {
+  it("uses agents.defaults.model for the default agent", () => {
+    expect(resolveAgentModelConfigPath("main", "main", 0)).toEqual(["agents", "defaults", "model"]);
+  });
+
+  it("uses agents.list[index].model for non-default agents", () => {
+    expect(resolveAgentModelConfigPath("writer", "main", 2)).toEqual([
+      "agents",
+      "list",
+      2,
+      "model",
+    ]);
+  });
+});
 
 describe("resolveEffectiveModelFallbacks", () => {
   it("inherits defaults when no entry fallbacks are configured", () => {
