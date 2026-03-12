@@ -34,6 +34,7 @@ import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { applyGlobalProxyDispatcher } from "../infra/net/global-proxy.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
@@ -268,6 +269,11 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // When HTTP_PROXY / HTTPS_PROXY / ALL_PROXY are set, make globalThis.fetch
+  // proxy-aware so that LLM inference requests (which use globalThis.fetch
+  // internally via @mariozechner/pi-ai) honour the proxy configuration.
+  applyGlobalProxyDispatcher();
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
