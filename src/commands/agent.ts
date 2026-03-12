@@ -1207,7 +1207,7 @@ async function agentCommandInternal(
     }
 
     const usage = result.meta.agentMeta?.usage;
-    if (sessionKey && isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
@@ -1223,7 +1223,7 @@ async function agentCommandInternal(
       });
       emitDiagnosticEvent({
         type: "model.usage",
-        sessionKey,
+        sessionKey: sessionKey ?? sessionId,
         sessionId,
         channel: messageChannel?.channel,
         provider: providerUsed,

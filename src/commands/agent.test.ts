@@ -630,6 +630,76 @@ describe("agentCommand", () => {
     });
   });
 
+  it("emits model.usage using sessionId as fallback when no sessionKey is available", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      configSpy.mockReturnValue({
+        diagnostics: { enabled: true },
+        models: { providers: {} },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            contextTokens: 4_096,
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "reply" }],
+        meta: {
+          durationMs: 10,
+          agentMeta: {
+            sessionId: "session-no-key-fallback",
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            usage: { input: 50, output: 20, total: 70 },
+          },
+        },
+      } as never);
+
+      const events: Array<{ type: string; [key: string]: unknown }> = [];
+      resetDiagnosticEventsForTest();
+      const stop = onDiagnosticEvent((evt) => {
+        events.push(evt as { type: string; [key: string]: unknown });
+      });
+
+      try {
+        await agentCommand(
+          {
+            message: "no key run",
+            sessionId: "session-no-key-fallback",
+            // no sessionKey provided
+          },
+          runtime,
+        );
+      } finally {
+        stop();
+      }
+
+      const usageEvents = events.filter((evt) => evt.type === "model.usage");
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]).toEqual(
+        expect.objectContaining({
+          type: "model.usage",
+          sessionKey: "session-no-key-fallback",
+          sessionId: "session-no-key-fallback",
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          usage: expect.objectContaining({
+            input: 50,
+            output: 20,
+            total: 70,
+          }),
+        }),
+      );
+
+      resetDiagnosticEventsForTest();
+    });
+  });
+
   it("uses provider/model from agents.defaults.model.primary", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
