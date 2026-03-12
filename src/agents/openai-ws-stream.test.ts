@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { reconcileLiveAssistantCommentary } from "./assistant-output.js";
 import type { ResponseObject } from "./openai-ws-connection.js";
 import {
   buildAssistantMessageFromResponse,
@@ -435,7 +436,7 @@ describe("convertMessagesToInputItems", () => {
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
       "commentary",
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     const textItem = items.find((i) => i.type === "message");
@@ -464,7 +465,7 @@ describe("convertMessagesToInputItems", () => {
       usage: {},
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
@@ -546,7 +547,7 @@ describe("convertMessagesToInputItems", () => {
 
   it("handles assistant messages with only tool calls (no text)", () => {
     const msg = assistantMsg([], [{ id: "call_2", name: "read", args: { path: "/etc/hosts" } }]);
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
@@ -555,7 +556,7 @@ describe("convertMessagesToInputItems", () => {
 
   it("drops assistant tool calls with empty ids", () => {
     const msg = assistantMsg([], [{ id: "   ", name: "read", args: { path: "/tmp/a" } }]);
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toEqual([]);
@@ -575,7 +576,7 @@ describe("convertMessagesToInputItems", () => {
       usage: {},
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
@@ -604,7 +605,7 @@ describe("convertMessagesToInputItems", () => {
       usage: {},
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
@@ -635,7 +636,7 @@ describe("convertMessagesToInputItems", () => {
       timestamp: 0,
     };
 
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(2);
@@ -793,6 +794,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
+    releaseWsSession("sess-ws-commentary");
     releaseWsSession("sess-max-tokens-zero");
   });
 
@@ -984,6 +986,96 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | undefined;
     expect(doneEvent?.message.phase).toBe("commentary");
     expect(doneEvent?.message.stopReason).toBe("toolUse");
+  });
+
+  it("attaches phase and signature metadata to websocket text deltas", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-ws-commentary");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: unknown[] = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_commentary",
+        role: "assistant",
+        content: [],
+        phase: "commentary",
+        status: "in_progress",
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_commentary",
+      output_index: 0,
+      content_index: 0,
+      delta: "Checking status",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject(
+        "resp_ws_commentary",
+        "Checking status",
+        undefined,
+        "commentary",
+      ),
+    });
+
+    await done;
+
+    const deltaEvent = events.find((event) => (event as { type?: string }).type === "text_delta") as
+      | {
+          partial?: {
+            content?: Array<{
+              type?: string;
+              text?: string;
+              phase?: string;
+              textSignature?: string;
+            }>;
+          };
+        }
+      | undefined;
+    expect(deltaEvent?.partial?.content?.[0]).toMatchObject({
+      type: "text",
+      text: "Checking status",
+      phase: "commentary",
+    });
+    expect(deltaEvent?.partial?.content?.[0]?.textSignature).toContain("item_commentary");
+
+    const liveCommentary = await reconcileLiveAssistantCommentary({
+      message: {
+        ...deltaEvent?.partial,
+        content: [
+          ...(deltaEvent?.partial?.content ?? []),
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      } as unknown as Parameters<typeof reconcileLiveAssistantCommentary>[0]["message"],
+      seenSegmentIds: new Set<string>(),
+    });
+    expect(liveCommentary.newOutputs).toEqual([
+      {
+        segmentId: "item_commentary",
+        text: "Checking status",
+        phase: "commentary",
+      },
+    ]);
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {

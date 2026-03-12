@@ -121,7 +121,10 @@ function readAssistantTextPhase(block: unknown): OpenAIResponsesAssistantPhase |
     return undefined;
   }
   const record = block as { phase?: unknown; textSignature?: unknown };
-  return normalizeAssistantPhase(record.phase) ?? parseAssistantTextSignature(record.textSignature)?.phase;
+  return (
+    normalizeAssistantPhase(record.phase) ??
+    parseAssistantTextSignature(record.textSignature)?.phase
+  );
 }
 
 function encodeAssistantTextSignature(params: {
@@ -870,6 +873,7 @@ export function createOpenAIWebSocketStreamFn(
       const capturedContextLength = context.messages.length;
 
       await new Promise<void>((resolve, reject) => {
+        const assistantPhaseByItemId = new Map<string, OpenAIResponsesAssistantPhase>();
         // Honour abort signal
         const abortHandler = () => {
           cleanup();
@@ -891,6 +895,7 @@ export function createOpenAIWebSocketStreamFn(
         session.manager.on("close", closeHandler);
 
         const cleanup = () => {
+          assistantPhaseByItemId.clear();
           signal?.removeEventListener("abort", abortHandler);
           session.manager.off("close", closeHandler);
           unsubscribe();
@@ -918,16 +923,32 @@ export function createOpenAIWebSocketStreamFn(
           } else if (event.type === "error") {
             cleanup();
             reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+          } else if (
+            (event.type === "response.output_item.added" ||
+              event.type === "response.output_item.done") &&
+            event.item.type === "message"
+          ) {
+            const assistantPhase = normalizeAssistantPhase(event.item.phase);
+            if (assistantPhase) {
+              assistantPhaseByItemId.set(event.item.id, assistantPhase);
+            }
           } else if (event.type === "response.output_text.delta") {
             // Stream partial text updates for responsive UI
             const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
               model,
-              content: [{ type: "text", text: event.delta }],
+              content: [
+                buildAssistantTextBlock({
+                  itemId: event.item_id,
+                  text: event.delta,
+                  phase: assistantPhaseByItemId.get(event.item_id),
+                  contentIndex: event.content_index,
+                }),
+              ],
               stopReason: "stop",
             });
             eventStream.push({
               type: "text_delta",
-              contentIndex: 0,
+              contentIndex: event.content_index,
               delta: event.delta,
               partial: partialMsg,
             });

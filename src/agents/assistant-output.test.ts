@@ -76,6 +76,65 @@ describe("assistant output extraction", () => {
       }),
     ]);
   });
+
+  it("does not rewrite successful assistant text when stale error metadata is present", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      errorMessage: "background tool failed",
+      content: [{ type: "text", text: "Payment required errors should be handled by the API." }],
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const segments = extractAssistantOutputSegments(message as any);
+
+    expect(segments).toEqual([
+      expect.objectContaining({
+        text: "Payment required errors should be handled by the API.",
+      }),
+    ]);
+  });
+
+  it("splits signed text segments across non-text boundaries", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        {
+          type: "text",
+          text: "Step 1.",
+          textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+        {
+          type: "text",
+          text: "Step 2.",
+          textSignature: JSON.stringify({ id: "sig-2", phase: "commentary" }),
+        },
+      ],
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const segments = extractAssistantOutputSegments(message as any);
+
+    expect(segments).toEqual([
+      {
+        segmentId: "sig-1",
+        text: "Step 1.",
+        phase: "commentary",
+      },
+      {
+        segmentId: "sig-2",
+        text: "Step 2.",
+        phase: "commentary",
+      },
+    ]);
+  });
 });
 
 describe("assistant output reconciliation", () => {
@@ -367,7 +426,7 @@ describe("assistant output reconciliation", () => {
 
   it("skips retained pre-prompt assistant messages when a stale cursor rewinds after compaction", async () => {
     const seenSegmentIds = new Set<string>();
-    const historyBeforePrompt: AgentMessage[] = [
+    const historyBeforePrompt = [
       {
         role: "user",
         content: [{ type: "text", text: "Old user prompt." }],
@@ -377,8 +436,8 @@ describe("assistant output reconciliation", () => {
         stopReason: "stop",
         content: [{ type: "text", text: "Old finalized assistant output." }],
       },
-    ];
-    const messages: AgentMessage[] = [
+    ] as AgentMessage[];
+    const messages = [
       historyBeforePrompt[1],
       {
         role: "user",
@@ -389,7 +448,7 @@ describe("assistant output reconciliation", () => {
         stopReason: "stop",
         content: [{ type: "text", text: "Current finalized assistant output." }],
       },
-    ];
+    ] as AgentMessage[];
 
     const result = await reconcileAssistantOutputs({
       messages,
@@ -406,6 +465,133 @@ describe("assistant output reconciliation", () => {
     );
     expect(result.newOutputs[0]?.segmentId).toMatch(/^assistant:stream-\d+:segment:0$/);
     expect(result.nextStartIndex).toBe(3);
+  });
+
+  it("rewinds to the shifted prompt boundary even when the stale cursor stays in range", async () => {
+    const seenSegmentIds = new Set<string>();
+    const historyBeforePrompt = [
+      { role: "user", content: [{ type: "text", text: "Old prompt 1." }] },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Old answer 1." }],
+      },
+      { role: "user", content: [{ type: "text", text: "Old prompt 2." }] },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Old answer 2." }],
+      },
+    ] as AgentMessage[];
+    const messages = [
+      historyBeforePrompt[2],
+      historyBeforePrompt[3],
+      { role: "user", content: [{ type: "text", text: "Current prompt." }] },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Current finalized assistant output." }],
+      },
+    ] as AgentMessage[];
+
+    const result = await reconcileAssistantOutputs({
+      messages,
+      historyBeforePrompt,
+      startIndex: 4,
+      seenSegmentIds,
+    });
+
+    expect(result.newOutputs).toHaveLength(1);
+    expect(result.newOutputs[0]).toEqual(
+      expect.objectContaining({
+        text: "Current finalized assistant output.",
+      }),
+    );
+    expect(result.nextStartIndex).toBe(4);
+  });
+
+  it("keeps an in-range cursor when the retained pre-prompt suffix cannot be recovered", async () => {
+    const seenSegmentIds = new Set<string>(["already-seen"]);
+    const historyBeforePrompt = [
+      { role: "user", content: [{ type: "text", text: "Old prompt." }] },
+      {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Old answer." }],
+      },
+    ] as AgentMessage[];
+    const messages = [
+      {
+        role: "assistant",
+        id: "already-seen",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Retained answer we must not revisit." }],
+      },
+      { role: "user", content: [{ type: "text", text: "Current prompt." }] },
+      {
+        role: "assistant",
+        id: "current-final",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Current finalized assistant output." }],
+      },
+    ] as AgentMessage[];
+
+    const result = await reconcileAssistantOutputs({
+      messages,
+      historyBeforePrompt,
+      startIndex: 2,
+      seenSegmentIds,
+    });
+
+    expect(result.newOutputs).toEqual([
+      expect.objectContaining({
+        segmentId: "assistant:current-final:segment:0",
+        text: "Current finalized assistant output.",
+      }),
+    ]);
+    expect(result.nextStartIndex).toBe(3);
+  });
+
+  it("reuses fallback segment ids for equivalent unsigned live and finalized messages", async () => {
+    const seenSegmentIds = new Set<string>();
+    const liveMessage = {
+      role: "assistant",
+      phase: "commentary",
+      timestamp: 1234,
+      content: [
+        {
+          type: "text",
+          text: "Checking the repo.",
+          phase: "commentary",
+        },
+        {
+          type: "toolCall",
+          toolCallId: "call-1",
+          toolName: "exec",
+          args: "{}",
+        },
+      ],
+    };
+
+    const liveResult = await reconcileLiveAssistantCommentary({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      message: liveMessage as any,
+      seenSegmentIds,
+    });
+    const finalizedResult = await reconcileAssistantOutputs({
+      messages: [
+        {
+          ...liveMessage,
+          stopReason: "toolUse",
+        },
+      ] as AgentMessage[],
+      startIndex: 0,
+      seenSegmentIds: new Set<string>(),
+    });
+
+    expect(liveResult.newOutputs).toHaveLength(1);
+    expect(finalizedResult.newOutputs).toHaveLength(1);
+    expect(finalizedResult.newOutputs[0]?.segmentId).toBe(liveResult.newOutputs[0]?.segmentId);
   });
 
   it("falls back to assistant message id and segment ordinal when no signature id exists", async () => {

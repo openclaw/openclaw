@@ -22,6 +22,7 @@ type AssistantOutputCandidate = AssistantOutputEntry & {
 };
 
 const liveAssistantFallbackMessageIds = new WeakMap<object, string>();
+const liveAssistantFallbackMessageIdsByFingerprint = new Map<string, string>();
 let nextLiveAssistantFallbackMessageId = 0;
 
 export function normalizeAssistantMessagePhase(value: unknown): AssistantMessagePhase | null {
@@ -97,12 +98,128 @@ function resolveLiveAssistantFallbackMessageId(message: AgentMessage) {
   }
   const existingId = liveAssistantFallbackMessageIds.get(message as object);
   if (existingId) {
+    liveAssistantFallbackMessageIdsByFingerprint.set(
+      buildAssistantFallbackFingerprint(message),
+      existingId,
+    );
     return existingId;
+  }
+  const fingerprint = buildAssistantFallbackFingerprint(message);
+  const fingerprintMatch = liveAssistantFallbackMessageIdsByFingerprint.get(fingerprint);
+  if (fingerprintMatch) {
+    liveAssistantFallbackMessageIds.set(message as object, fingerprintMatch);
+    return fingerprintMatch;
   }
   const id = `stream-${nextLiveAssistantFallbackMessageId}`;
   nextLiveAssistantFallbackMessageId += 1;
   liveAssistantFallbackMessageIds.set(message as object, id);
+  liveAssistantFallbackMessageIdsByFingerprint.set(fingerprint, id);
   return id;
+}
+
+function buildAssistantFallbackFingerprint(message: AgentMessage) {
+  return hashAssistantIdentityKey(
+    JSON.stringify(
+      buildComparableMessageRecord(message, {
+        includeTimestamp: false,
+        includeStopReason: false,
+      }),
+    ),
+  );
+}
+
+function hashAssistantIdentityKey(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `stream-${(hash >>> 0).toString(36)}`;
+}
+
+function toOptionalTrimmedString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeAssistantContentForComparison(
+  content: unknown,
+  options?: { assistantDefaultPhase?: AssistantMessagePhase | null },
+) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  return content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return null;
+    }
+    const record = block as Record<string, unknown>;
+    const type = toOptionalTrimmedString(record.type) ?? "unknown";
+    if (type === "text") {
+      return {
+        type,
+        text: typeof record.text === "string" ? record.text : "",
+        phase: resolveAssistantTextBlockPhase(record, options?.assistantDefaultPhase) ?? null,
+        textSignatureId: resolveAssistantTextBlockSignatureId(record) ?? null,
+      };
+    }
+    if (type === "toolCall") {
+      return {
+        type,
+        id: toOptionalTrimmedString(record.id ?? record.toolCallId) ?? null,
+        name: toOptionalTrimmedString(record.name ?? record.toolName) ?? null,
+        arguments:
+          typeof record.arguments === "string"
+            ? record.arguments
+            : JSON.stringify(record.arguments ?? record.args ?? null),
+      };
+    }
+    if (type === "thinking") {
+      return {
+        type,
+        thinking: typeof record.thinking === "string" ? record.thinking : "",
+        thinkingSignature: toOptionalTrimmedString(record.thinkingSignature) ?? null,
+      };
+    }
+    return {
+      type,
+      id: toOptionalTrimmedString(record.id) ?? null,
+      name: toOptionalTrimmedString(record.name) ?? null,
+      text: typeof record.text === "string" ? record.text : null,
+    };
+  });
+}
+
+function buildComparableMessageRecord(
+  message: AgentMessage,
+  options?: { includeTimestamp?: boolean; includeStopReason?: boolean },
+) {
+  const messageRecord =
+    message && typeof message === "object" ? (message as unknown as Record<string, unknown>) : {};
+  const defaultPhase = normalizeAssistantMessagePhase(messageRecord.phase);
+  return {
+    role: toOptionalTrimmedString(messageRecord.role) ?? null,
+    id: toOptionalTrimmedString(messageRecord.id) ?? null,
+    api: toOptionalTrimmedString(messageRecord.api) ?? null,
+    provider: toOptionalTrimmedString(messageRecord.provider) ?? null,
+    model: toOptionalTrimmedString(messageRecord.model) ?? null,
+    phase: defaultPhase ?? null,
+    ...(options?.includeTimestamp && typeof messageRecord.timestamp === "number"
+      ? { timestamp: messageRecord.timestamp }
+      : {}),
+    ...(options?.includeStopReason
+      ? { stopReason: toOptionalTrimmedString(messageRecord.stopReason) ?? null }
+      : {}),
+    toolCallId: toOptionalTrimmedString(messageRecord.toolCallId) ?? null,
+    toolUseId: toOptionalTrimmedString(messageRecord.toolUseId) ?? null,
+    toolName: toOptionalTrimmedString(messageRecord.toolName) ?? null,
+    isError: typeof messageRecord.isError === "boolean" ? messageRecord.isError : null,
+    content: normalizeAssistantContentForComparison(messageRecord.content, {
+      assistantDefaultPhase: defaultPhase,
+    }),
+  };
 }
 
 function extractAssistantOutputCandidates(
@@ -113,13 +230,10 @@ function extractAssistantOutputCandidates(
     msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
   const messageStableId = resolveAssistantMessageStableId(
     messageRecord,
-    options?.fallbackMessageStableId,
+    options?.fallbackMessageStableId ?? resolveLiveAssistantFallbackMessageId(msg),
   );
   const defaultPhase = normalizeAssistantMessagePhase(messageRecord?.phase);
-  const errorContext =
-    messageRecord?.stopReason === "error" ||
-    (typeof messageRecord?.errorMessage === "string" &&
-      messageRecord.errorMessage.trim().length > 0);
+  const errorContext = messageRecord?.stopReason === "error";
   const content = Array.isArray(messageRecord?.content)
     ? (messageRecord.content as Array<Record<string, unknown>>)
     : null;
@@ -138,33 +252,48 @@ function extractAssistantOutputCandidates(
       : [];
   }
 
-  const groupedSegments: Array<AssistantOutputCandidate & { signatureIds?: string[] }> = [];
+  const groupedSegments: AssistantOutputCandidate[] = [];
+  let pendingUnsignedSegment: AssistantOutputCandidate | null = null;
+  let unsignedSegmentOrdinal = 0;
+  const flushPendingUnsignedSegment = () => {
+    if (!pendingUnsignedSegment) {
+      return;
+    }
+    groupedSegments.push(pendingUnsignedSegment);
+    pendingUnsignedSegment = null;
+  };
   for (const [index, block] of content.entries()) {
     if (block.type !== "text" || typeof block.text !== "string") {
+      flushPendingUnsignedSegment();
       continue;
     }
     const phase = resolveAssistantTextBlockPhase(block, defaultPhase);
     const signatureId = resolveAssistantTextBlockSignatureId(block);
-    const lastGroup = groupedSegments.at(-1);
-    if (!lastGroup || (lastGroup.phase ?? null) !== (phase ?? null)) {
+    if (signatureId) {
+      flushPendingUnsignedSegment();
       groupedSegments.push({
-        segmentId: signatureId ?? `assistant:${messageStableId}:segment:${groupedSegments.length}`,
+        segmentId: signatureId,
         text: block.text,
         isTerminal: index === content.length - 1,
         ...(phase ? { phase } : {}),
-        ...(signatureId ? { signatureIds: [signatureId] } : {}),
       });
       continue;
     }
-    lastGroup.text += block.text;
-    lastGroup.isTerminal = index === content.length - 1;
-    if (signatureId) {
-      lastGroup.signatureIds = [...(lastGroup.signatureIds ?? []), signatureId];
-      lastGroup.segmentId = lastGroup.signatureIds.join(",");
-    } else if (!lastGroup.segmentId) {
-      lastGroup.segmentId = `assistant:${messageStableId}:segment:${index}`;
+    if (!pendingUnsignedSegment || (pendingUnsignedSegment.phase ?? null) !== (phase ?? null)) {
+      flushPendingUnsignedSegment();
+      pendingUnsignedSegment = {
+        segmentId: `assistant:${messageStableId}:segment:${unsignedSegmentOrdinal}`,
+        text: block.text,
+        isTerminal: index === content.length - 1,
+        ...(phase ? { phase } : {}),
+      };
+      unsignedSegmentOrdinal += 1;
+      continue;
     }
+    pendingUnsignedSegment.text += block.text;
+    pendingUnsignedSegment.isTerminal = index === content.length - 1;
   }
+  flushPendingUnsignedSegment();
 
   return groupedSegments
     .map<AssistantOutputCandidate | null>((segment) => {
@@ -230,10 +359,18 @@ export async function reconcileAssistantOutputs(params: {
   historyBeforePrompt?: AgentMessage[];
 }) {
   const newOutputs: AssistantOutputEntry[] = [];
-  const normalizedStartIndex =
+  const recoveredPromptBoundaryIndex =
+    params.historyBeforePrompt && params.historyBeforePrompt.length > 0
+      ? resolveCompactedPromptBoundaryIndex(params.messages, params.historyBeforePrompt)
+      : undefined;
+  const candidateStartIndex =
     params.startIndex >= 0 && params.startIndex <= params.messages.length
       ? params.startIndex
-      : resolveCompactedPromptBoundaryIndex(params.messages, params.historyBeforePrompt);
+      : (recoveredPromptBoundaryIndex ?? 0);
+  const normalizedStartIndex =
+    typeof recoveredPromptBoundaryIndex === "number"
+      ? Math.min(candidateStartIndex, recoveredPromptBoundaryIndex)
+      : candidateStartIndex;
   let nextStartIndex = params.messages.length;
 
   for (const [index, msg] of params.messages.slice(normalizedStartIndex).entries()) {
@@ -266,7 +403,7 @@ function resolveCompactedPromptBoundaryIndex(
   historyBeforePrompt?: AgentMessage[],
 ) {
   if (!historyBeforePrompt || historyBeforePrompt.length === 0 || messages.length === 0) {
-    return 0;
+    return undefined;
   }
 
   const maxRetainedPrefixLength = Math.min(historyBeforePrompt.length, messages.length);
@@ -290,7 +427,7 @@ function resolveCompactedPromptBoundaryIndex(
     }
   }
 
-  return 0;
+  return undefined;
 }
 
 function assistantHistoryMessagesMatch(
@@ -304,7 +441,18 @@ function assistantHistoryMessagesMatch(
     return false;
   }
   try {
-    return JSON.stringify(left) === JSON.stringify(right);
+    return (
+      JSON.stringify(
+        buildComparableMessageRecord(left, {
+          includeStopReason: true,
+        }),
+      ) ===
+      JSON.stringify(
+        buildComparableMessageRecord(right, {
+          includeStopReason: true,
+        }),
+      )
+    );
   } catch {
     return false;
   }

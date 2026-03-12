@@ -255,13 +255,16 @@ export function buildEmbeddedRunPayloads(params: {
   const deliveredCommentarySegmentIds = new Set(params.deliveredCommentarySegmentIds ?? []);
   const resolvedAssistantTexts = (() => {
     if (params.assistantOutputs && params.assistantOutputs.length > 0) {
-      return params.assistantOutputs
+      const filteredAssistantOutputs = params.assistantOutputs
         .filter((segment) => {
           return !(
             segment.phase === "commentary" && deliveredCommentarySegmentIds.has(segment.segmentId)
           );
         })
         .map((segment) => segment.text);
+      if (filteredAssistantOutputs.length > 0) {
+        return filteredAssistantOutputs;
+      }
     }
     return params.assistantTexts.length
       ? params.assistantTexts

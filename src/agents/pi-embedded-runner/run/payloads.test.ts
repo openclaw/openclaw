@@ -119,4 +119,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       "Lint passed cleanly.",
     ]);
   });
+
+  it("falls back to assistantTexts when delivered commentary strips all assistantOutputs", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      assistantTexts: ["Lint passed cleanly."],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Lint passed cleanly.");
+  });
 });

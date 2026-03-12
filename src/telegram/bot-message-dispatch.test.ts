@@ -219,10 +219,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
-    const [{ replyOptions }] = dispatchReplyWithBufferedBlockDispatcher.mock.calls as Array<
-      [{ replyOptions?: { onCommentaryReply?: unknown } }]
-    >;
-    expect(replyOptions?.onCommentaryReply).toBeUndefined();
+    const firstCall = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as
+      | { replyOptions?: { onCommentaryReply?: unknown } }
+      | undefined;
+    expect(firstCall?.replyOptions?.onCommentaryReply).toBeUndefined();
   });
 
   it("does not inject approval buttons in local dispatch once the monitor owns approvals", async () => {
