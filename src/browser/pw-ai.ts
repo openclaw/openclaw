@@ -1,9 +1,14 @@
+import { markPwAiLoaded } from "./pw-ai-state.js";
+
+markPwAiLoaded();
+
 export {
   type BrowserConsoleMessage,
   closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
   ensurePageState,
+  forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,

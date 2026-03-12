@@ -1,7 +1,18 @@
 import { Type } from "@sinclair/typebox";
-import { runZca, parseJsonOutput } from "./zca.js";
+import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import {
+  checkZaloAuthenticated,
+  getZaloUserInfo,
+  listZaloFriendsMatching,
+  listZaloGroupsMatching,
+} from "./zalo-js.js";
 
 const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
+
+type AgentToolResult = {
+  content: Array<{ type: string; text: string }>;
+  details?: unknown;
+};
 
 function stringEnum<T extends readonly string[]>(
   values: T,
@@ -14,7 +25,6 @@ function stringEnum<T extends readonly string[]>(
   });
 }
 
-// Tool schema - avoiding Type.Union per tool schema guardrails
 export const ZalouserToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
@@ -38,12 +48,7 @@ type ToolParams = {
   url?: string;
 };
 
-type ToolResult = {
-  content: Array<{ type: string; text: string }>;
-  details: unknown;
-};
-
-function json(payload: unknown): ToolResult {
+function json(payload: unknown): AgentToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     details: payload,
@@ -53,22 +58,23 @@ function json(payload: unknown): ToolResult {
 export async function executeZalouserTool(
   _toolCallId: string,
   params: ToolParams,
-): Promise<ToolResult> {
+  _signal?: AbortSignal,
+  _onUpdate?: unknown,
+): Promise<AgentToolResult> {
   try {
     switch (params.action) {
       case "send": {
         if (!params.threadId || !params.message) {
           throw new Error("threadId and message required for send action");
         }
-        const args = ["msg", "send", params.threadId, params.message];
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendMessageZalouser(params.threadId, params.message, {
+          profile: params.profile,
+          isGroup: params.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send message");
+          throw new Error(result.error || "Failed to send message");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "image": {
@@ -78,74 +84,52 @@ export async function executeZalouserTool(
         if (!params.url) {
           throw new Error("url required for image action");
         }
-        const args = ["msg", "image", params.threadId, "-u", params.url];
-        if (params.message) {
-          args.push("-m", params.message);
-        }
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendImageZalouser(params.threadId, params.url, {
+          profile: params.profile,
+          caption: params.message,
+          isGroup: params.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send image");
+          throw new Error(result.error || "Failed to send image");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "link": {
         if (!params.threadId || !params.url) {
           throw new Error("threadId and url required for link action");
         }
-        const args = ["msg", "link", params.threadId, params.url];
-        if (params.isGroup) {
-          args.push("-g");
-        }
-        const result = await runZca(args, { profile: params.profile });
+        const result = await sendLinkZalouser(params.threadId, params.url, {
+          profile: params.profile,
+          caption: params.message,
+          isGroup: params.isGroup,
+        });
         if (!result.ok) {
-          throw new Error(result.stderr || "Failed to send link");
+          throw new Error(result.error || "Failed to send link");
         }
-        return json({ success: true, output: result.stdout });
+        return json({ success: true, messageId: result.messageId });
       }
 
       case "friends": {
-        const args = params.query ? ["friend", "find", params.query] : ["friend", "list", "-j"];
-        const result = await runZca(args, { profile: params.profile });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get friends");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const rows = await listZaloFriendsMatching(params.profile, params.query);
+        return json(rows);
       }
 
       case "groups": {
-        const result = await runZca(["group", "list", "-j"], {
-          profile: params.profile,
-        });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get groups");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const rows = await listZaloGroupsMatching(params.profile, params.query);
+        return json(rows);
       }
 
       case "me": {
-        const result = await runZca(["me", "info", "-j"], {
-          profile: params.profile,
-        });
-        if (!result.ok) {
-          throw new Error(result.stderr || "Failed to get profile");
-        }
-        const parsed = parseJsonOutput(result.stdout);
-        return json(parsed ?? { raw: result.stdout });
+        const info = await getZaloUserInfo(params.profile);
+        return json(info ?? { error: "Not authenticated" });
       }
 
       case "status": {
-        const result = await runZca(["auth", "status"], {
-          profile: params.profile,
-        });
+        const authenticated = await checkZaloAuthenticated(params.profile);
         return json({
-          authenticated: result.ok,
-          output: result.stdout || result.stderr,
+          authenticated,
+          output: authenticated ? "authenticated" : "not authenticated",
         });
       }
 

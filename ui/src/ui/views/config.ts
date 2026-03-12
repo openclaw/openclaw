@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
-import type { ConfigUiHints } from "../types";
-import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
+import type { ConfigUiHints } from "../types.ts";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import { getTagFilters, replaceTagFilters } from "./config-search.ts";
 
 export type ConfigProps = {
   raw: string;
@@ -13,7 +14,7 @@ export type ConfigProps = {
   applying: boolean;
   updating: boolean;
   connected: boolean;
-  schema: unknown | null;
+  schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
   formMode: "form" | "raw";
@@ -33,6 +34,24 @@ export type ConfigProps = {
   onApply: () => void;
   onUpdate: () => void;
 };
+
+const TAG_SEARCH_PRESETS = [
+  "security",
+  "auth",
+  "network",
+  "access",
+  "privacy",
+  "observability",
+  "performance",
+  "reliability",
+  "storage",
+  "models",
+  "media",
+  "automation",
+  "channels",
+  "tools",
+  "advanced",
+] as const;
 
 // SVG Icons for sidebar (Lucide-style)
 const sidebarIcons = {
@@ -299,7 +318,9 @@ function resolveSectionMeta(
   description?: string;
 } {
   const meta = SECTION_META[key];
-  if (meta) return meta;
+  if (meta) {
+    return meta;
+  }
   return {
     label: schema?.title ?? humanize(key),
     description: schema?.description ?? "",
@@ -312,7 +333,9 @@ function resolveSubsections(params: {
   uiHints: ConfigUiHints;
 }): SubsectionEntry[] {
   const { key, schema, uiHints } = params;
-  if (!schema || schemaType(schema) !== "object" || !schema.properties) return [];
+  if (!schema || schemaType(schema) !== "object" || !schema.properties) {
+    return [];
+  }
   const entries = Object.entries(schema.properties).map(([subKey, node]) => {
     const hint = hintForPath([key, subKey], uiHints);
     const label = hint?.label ?? node.title ?? humanize(subKey);
@@ -328,11 +351,15 @@ function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
 ): Array<{ path: string; from: unknown; to: unknown }> {
-  if (!original || !current) return [];
+  if (!original || !current) {
+    return [];
+  }
   const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
 
   function compare(orig: unknown, curr: unknown, path: string) {
-    if (orig === curr) return;
+    if (orig === curr) {
+      return;
+    }
     if (typeof orig !== typeof curr) {
       changes.push({ path, from: orig, to: curr });
       return;
@@ -369,7 +396,9 @@ function truncateValue(value: unknown, maxLen = 40): string {
   } catch {
     str = String(value);
   }
-  if (str.length <= maxLen) return str;
+  if (str.length <= maxLen) {
+    return str;
+  }
   return str.slice(0, maxLen - 3) + "...";
 }
 
@@ -392,7 +421,7 @@ export function renderConfig(props: ConfigProps) {
 
   const activeSectionSchema =
     props.activeSection && analysis.schema && schemaType(analysis.schema) === "object"
-      ? (analysis.schema.properties?.[props.activeSection] as JsonSchema | undefined)
+      ? analysis.schema.properties?.[props.activeSection]
       : undefined;
   const activeSectionMeta = props.activeSection
     ? resolveSectionMeta(props.activeSection, activeSectionSchema)
@@ -433,6 +462,7 @@ export function renderConfig(props: ConfigProps) {
     hasChanges &&
     (props.formMode === "raw" ? true : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
+  const selectedTags = new Set(getTagFilters(props.searchQuery));
 
   return html`
     <div class="config-layout">
@@ -440,32 +470,101 @@ export function renderConfig(props: ConfigProps) {
       <aside class="config-sidebar">
         <div class="config-sidebar__header">
           <div class="config-sidebar__title">Settings</div>
-          <span class="pill pill--sm ${validity === "valid" ? "pill--ok" : validity === "invalid" ? "pill--danger" : ""}">${validity}</span>
+          <span
+            class="pill pill--sm ${
+              validity === "valid" ? "pill--ok" : validity === "invalid" ? "pill--danger" : ""
+            }"
+            >${validity}</span
+          >
         </div>
 
         <!-- Search -->
         <div class="config-search">
-          <svg class="config-search__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="11" cy="11" r="8"></circle>
-            <path d="M21 21l-4.35-4.35"></path>
-          </svg>
-          <input
-            type="text"
-            class="config-search__input"
-            placeholder="Search settings..."
-            .value=${props.searchQuery}
-            @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
-          />
-          ${
-            props.searchQuery
-              ? html`
-            <button
-              class="config-search__clear"
-              @click=${() => props.onSearchChange("")}
-            >×</button>
-          `
-              : nothing
-          }
+          <div class="config-search__input-row">
+            <svg
+              class="config-search__icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="M21 21l-4.35-4.35"></path>
+            </svg>
+            <input
+              type="text"
+              class="config-search__input"
+              placeholder="Search settings..."
+              .value=${props.searchQuery}
+              @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+            />
+            ${
+              props.searchQuery
+                ? html`
+                  <button
+                    class="config-search__clear"
+                    @click=${() => props.onSearchChange("")}
+                  >
+                    ×
+                  </button>
+                `
+                : nothing
+            }
+          </div>
+          <div class="config-search__hint">
+            <span class="config-search__hint-label" id="config-tag-filter-label">Tag filters:</span>
+            <details class="config-search__tag-picker">
+              <summary class="config-search__tag-trigger" aria-labelledby="config-tag-filter-label">
+                ${
+                  selectedTags.size === 0
+                    ? html`
+                        <span class="config-search__tag-placeholder">Add tags</span>
+                      `
+                    : html`
+                        <div class="config-search__tag-chips">
+                          ${Array.from(selectedTags)
+                            .slice(0, 2)
+                            .map(
+                              (tag) =>
+                                html`<span class="config-search__tag-chip">tag:${tag}</span>`,
+                            )}
+                          ${
+                            selectedTags.size > 2
+                              ? html`
+                                  <span class="config-search__tag-chip config-search__tag-chip--count"
+                                    >+${selectedTags.size - 2}</span
+                                  >
+                                `
+                              : nothing
+                          }
+                        </div>
+                      `
+                }
+                <span class="config-search__tag-caret" aria-hidden="true">▾</span>
+              </summary>
+              <div class="config-search__tag-menu">
+                ${TAG_SEARCH_PRESETS.map((tag) => {
+                  const active = selectedTags.has(tag);
+                  return html`
+                    <button
+                      type="button"
+                      class="config-search__tag-option ${active ? "active" : ""}"
+                      data-tag="${tag}"
+                      aria-pressed=${active ? "true" : "false"}
+                      @click=${() => {
+                        const nextTags = active
+                          ? Array.from(selectedTags).filter((value) => value !== tag)
+                          : [...selectedTags, tag];
+                        props.onSearchChange(replaceTagFilters(props.searchQuery, nextTags));
+                      }}
+                    >
+                      tag:${tag}
+                    </button>
+                  `;
+                })}
+              </div>
+            </details>
+          </div>
         </div>
 
         <!-- Section nav -->
@@ -479,14 +578,16 @@ export function renderConfig(props: ConfigProps) {
           </button>
           ${allSections.map(
             (section) => html`
-            <button
-              class="config-nav__item ${props.activeSection === section.key ? "active" : ""}"
-              @click=${() => props.onSectionChange(section.key)}
-            >
-              <span class="config-nav__icon">${getSectionIcon(section.key)}</span>
-              <span class="config-nav__label">${section.label}</span>
-            </button>
-          `,
+              <button
+                class="config-nav__item ${props.activeSection === section.key ? "active" : ""}"
+                @click=${() => props.onSectionChange(section.key)}
+              >
+                <span class="config-nav__icon"
+                  >${getSectionIcon(section.key)}</span
+                >
+                <span class="config-nav__label">${section.label}</span>
+              </button>
+            `,
           )}
         </nav>
 
@@ -518,15 +619,25 @@ export function renderConfig(props: ConfigProps) {
             ${
               hasChanges
                 ? html`
-              <span class="config-changes-badge">${props.formMode === "raw" ? "Unsaved changes" : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span>
-            `
+                  <span class="config-changes-badge"
+                    >${
+                      props.formMode === "raw"
+                        ? "Unsaved changes"
+                        : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`
+                    }</span
+                  >
+                `
                 : html`
                     <span class="config-status muted">No changes</span>
                   `
             }
           </div>
           <div class="config-actions__right">
-            <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+            <button
+              class="btn btn--sm"
+              ?disabled=${props.loading}
+              @click=${props.onReload}
+            >
               ${props.loading ? "Loading…" : "Reload"}
             </button>
             <button
@@ -557,42 +668,60 @@ export function renderConfig(props: ConfigProps) {
         ${
           hasChanges && props.formMode === "form"
             ? html`
-          <details class="config-diff">
-            <summary class="config-diff__summary">
-              <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
-              <svg class="config-diff__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 12 15 18 9"></polyline>
-              </svg>
-            </summary>
-            <div class="config-diff__content">
-              ${diff.map(
-                (change) => html`
-                <div class="config-diff__item">
-                  <div class="config-diff__path">${change.path}</div>
-                  <div class="config-diff__values">
-                    <span class="config-diff__from">${truncateValue(change.from)}</span>
-                    <span class="config-diff__arrow">→</span>
-                    <span class="config-diff__to">${truncateValue(change.to)}</span>
-                  </div>
+              <details class="config-diff">
+                <summary class="config-diff__summary">
+                  <span
+                    >View ${diff.length} pending
+                    change${diff.length !== 1 ? "s" : ""}</span
+                  >
+                  <svg
+                    class="config-diff__chevron"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </summary>
+                <div class="config-diff__content">
+                  ${diff.map(
+                    (change) => html`
+                      <div class="config-diff__item">
+                        <div class="config-diff__path">${change.path}</div>
+                        <div class="config-diff__values">
+                          <span class="config-diff__from"
+                            >${truncateValue(change.from)}</span
+                          >
+                          <span class="config-diff__arrow">→</span>
+                          <span class="config-diff__to"
+                            >${truncateValue(change.to)}</span
+                          >
+                        </div>
+                      </div>
+                    `,
+                  )}
                 </div>
-              `,
-              )}
-            </div>
-          </details>
-        `
+              </details>
+            `
             : nothing
         }
-
         ${
           activeSectionMeta && props.formMode === "form"
             ? html`
               <div class="config-section-hero">
-                <div class="config-section-hero__icon">${getSectionIcon(props.activeSection ?? "")}</div>
+                <div class="config-section-hero__icon">
+                  ${getSectionIcon(props.activeSection ?? "")}
+                </div>
                 <div class="config-section-hero__text">
-                  <div class="config-section-hero__title">${activeSectionMeta.label}</div>
+                  <div class="config-section-hero__title">
+                    ${activeSectionMeta.label}
+                  </div>
                   ${
                     activeSectionMeta.description
-                      ? html`<div class="config-section-hero__desc">${activeSectionMeta.description}</div>`
+                      ? html`<div class="config-section-hero__desc">
+                        ${activeSectionMeta.description}
+                      </div>`
                       : nothing
                   }
                 </div>
@@ -600,7 +729,6 @@ export function renderConfig(props: ConfigProps) {
             `
             : nothing
         }
-
         ${
           allowSubnav
             ? html`
@@ -680,7 +808,9 @@ export function renderConfig(props: ConfigProps) {
         ${
           props.issues.length > 0
             ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+              <pre class="code-block">
+${JSON.stringify(props.issues, null, 2)}</pre
+              >
             </div>`
             : nothing
         }

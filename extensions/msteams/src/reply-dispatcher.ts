@@ -1,31 +1,34 @@
 import {
-  createReplyPrefixContext,
+  createReplyPrefixOptions,
   createTypingCallbacks,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
   type MSTeamsReplyStyle,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
 import {
+  buildConversationReference,
   type MSTeamsAdapter,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
+import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   adapter: MSTeamsAdapter;
@@ -41,31 +44,59 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
+
+  /**
+   * Send a typing indicator.
+   *
+   * First tries the live turn context (cheapest path).  When the context has
+   * been revoked (debounced messages) we fall back to proactive messaging via
+   * the stored conversation reference so the user still sees the "…" bubble.
+   */
   const sendTypingIndicator = async () => {
-    await params.context.sendActivity({ type: "typing" });
+    await withRevokedProxyFallback({
+      run: async () => {
+        await params.context.sendActivity({ type: "typing" });
+      },
+      onRevoked: async () => {
+        const baseRef = buildConversationReference(params.conversationRef);
+        await params.adapter.continueConversation(
+          params.appId,
+          { ...baseRef, activityId: undefined },
+          async (ctx) => {
+            await ctx.sendActivity({ type: "typing" });
+          },
+        );
+      },
+      onRevokedLog: () => {
+        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+      },
+    });
   };
+
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
     onStartError: (err) => {
       logTypingFailure({
-        log: (message) => params.log.debug(message),
+        log: (message) => params.log.debug?.(message),
         channel: "msteams",
         action: "start",
         error: err,
       });
     },
   });
-  const prefixContext = createReplyPrefixContext({
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.agentId,
+    channel: "msteams",
+    accountId: params.accountId,
   });
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+      typingCallbacks,
       deliver: async (payload) => {
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg: params.cfg,
@@ -92,7 +123,7 @@ export function createMSTeamsReplyDispatcher(params: {
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},
           onRetry: (event) => {
-            params.log.debug("retrying send", {
+            params.log.debug?.("retrying send", {
               replyStyle: params.replyStyle,
               ...event,
             });
@@ -119,12 +150,11 @@ export function createMSTeamsReplyDispatcher(params: {
           hint,
         });
       },
-      onReplyStart: typingCallbacks.onReplyStart,
     });
 
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected: prefixContext.onModelSelected },
+    replyOptions: { ...replyOptions, onModelSelected },
     markDispatchIdle,
   };
 }

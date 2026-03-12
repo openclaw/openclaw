@@ -16,6 +16,7 @@ import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
+import { formatHelpExamples } from "./help-format.js";
 
 const optionNamesAdd = [
   "channel",
@@ -70,11 +71,19 @@ export function registerChannelsCli(program: Command) {
   const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
-    .description("Manage chat channel accounts")
+    .description("Manage connected chat channels and accounts")
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw channels list", "List configured channels and auth profiles."],
+          ["openclaw channels status --probe", "Run channel status checks and probes."],
+          [
+            "openclaw channels add --channel telegram --token <token>",
+            "Add or update a channel account non-interactively.",
+          ],
+          ["openclaw channels login --channel whatsapp", "Link a WhatsApp Web account."],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/channels",
           "docs.openclaw.ai/cli/channels",
         )}\n`,
@@ -212,7 +221,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("login")
     .description("Link a channel account (if supported)")
-    .option("--channel <channel>", "Channel alias (default: whatsapp)")
+    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
     .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
     .action(async (opts) => {
@@ -231,7 +240,7 @@ export function registerChannelsCli(program: Command) {
   channels
     .command("logout")
     .description("Log out of a channel session (if supported)")
-    .option("--channel <channel>", "Channel alias (default: whatsapp)")
+    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
     .option("--account <id>", "Account id (accountId)")
     .action(async (opts) => {
       await runChannelsCommandWithDanger(async () => {

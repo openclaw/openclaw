@@ -25,12 +25,14 @@ openclaw onboard --zai-api-key "$ZAI_API_KEY"
 ```json5
 {
   env: { ZAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
+  agents: { defaults: { model: { primary: "zai/glm-5" } } },
 }
 ```
 
 ## Notes
 
-- GLM models are available as `zai/<model>` (example: `zai/glm-4.7`).
+- GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+- `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
+  `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 - See [/providers/glm](/providers/glm) for the model family overview.
 - Z.AI uses Bearer auth with your API key.

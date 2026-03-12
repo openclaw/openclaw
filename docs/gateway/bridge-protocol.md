@@ -35,7 +35,9 @@ Legacy `bridge.*` config keys are no longer part of the config schema.
 - Legacy default listener port was `18790` (current builds do not start a TCP bridge).
 
 When TLS is enabled, discovery TXT records include `bridgeTls=1` plus
-`bridgeTlsSha256` so nodes can pin the certificate.
+`bridgeTlsSha256` as a non-secret hint. Note that Bonjour/mDNS TXT records are
+unauthenticated; clients must not treat the advertised fingerprint as an
+authoritative pin without explicit user intent or other out-of-band verification.
 
 ## Handshake + pairing
 

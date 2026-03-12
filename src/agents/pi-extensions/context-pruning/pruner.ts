@@ -5,9 +5,8 @@ import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-// We currently skip pruning tool results that contain images. Still, we count them (approx.) so
-// we start trimming prunable tool results earlier when image-heavy context is consuming the window.
 const IMAGE_CHAR_ESTIMATE = 8_000;
+const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
 function asText(text: string): TextContent {
   return { type: "text", text };
@@ -18,6 +17,22 @@ function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>)
   for (const block of content) {
     if (block.type === "text") {
       parts.push(block.text);
+    }
+  }
+  return parts;
+}
+
+function collectPrunableToolResultSegments(
+  content: ReadonlyArray<TextContent | ImageContent>,
+): string[] {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push(block.text);
+      continue;
+    }
+    if (block.type === "image") {
+      parts.push(PRUNED_CONTEXT_IMAGE_MARKER);
     }
   }
   return parts;
@@ -96,31 +111,38 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
   return false;
 }
 
+function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "text") {
+      chars += block.text.length;
+    }
+    if (block.type === "image") {
+      chars += IMAGE_CHAR_ESTIMATE;
+    }
+  }
+  return chars;
+}
+
 function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
       return content.length;
     }
-    let chars = 0;
-    for (const b of content) {
-      if (b.type === "text") {
-        chars += b.text.length;
-      }
-      if (b.type === "image") {
-        chars += IMAGE_CHAR_ESTIMATE;
-      }
-    }
-    return chars;
+    return estimateTextAndImageChars(content);
   }
 
   if (message.role === "assistant") {
     let chars = 0;
     for (const b of message.content) {
-      if (b.type === "text") {
+      if (!b || typeof b !== "object") {
+        continue;
+      }
+      if (b.type === "text" && typeof b.text === "string") {
         chars += b.text.length;
       }
-      if (b.type === "thinking") {
+      if (b.type === "thinking" && typeof b.thinking === "string") {
         chars += b.thinking.length;
       }
       if (b.type === "toolCall") {
@@ -135,16 +157,7 @@ function estimateMessageChars(message: AgentMessage): number {
   }
 
   if (message.role === "toolResult") {
-    let chars = 0;
-    for (const b of message.content) {
-      if (b.type === "text") {
-        chars += b.text.length;
-      }
-      if (b.type === "image") {
-        chars += IMAGE_CHAR_ESTIMATE;
-      }
-    }
-    return chars;
+    return estimateTextAndImageChars(message.content);
   }
 
   return 256;
@@ -192,21 +205,25 @@ function softTrimToolResultMessage(params: {
   settings: EffectiveContextPruningSettings;
 }): ToolResultMessage | null {
   const { msg, settings } = params;
-  // Ignore image tool results for now: these are often directly relevant and hard to partially prune safely.
-  if (hasImageBlocks(msg.content)) {
-    return null;
-  }
-
-  const parts = collectTextSegments(msg.content);
+  const hasImages = hasImageBlocks(msg.content);
+  const parts = hasImages
+    ? collectPrunableToolResultSegments(msg.content)
+    : collectTextSegments(msg.content);
   const rawLen = estimateJoinedTextLength(parts);
   if (rawLen <= settings.softTrim.maxChars) {
-    return null;
+    if (!hasImages) {
+      return null;
+    }
+    return { ...msg, content: [asText(parts.join("\n"))] };
   }
 
   const headChars = Math.max(0, settings.softTrim.headChars);
   const tailChars = Math.max(0, settings.softTrim.tailChars);
   if (headChars + tailChars >= rawLen) {
-    return null;
+    if (!hasImages) {
+      return null;
+    }
+    return { ...msg, content: [asText(parts.join("\n"))] };
   }
 
   const head = takeHeadFromJoinedText(parts, headChars);
@@ -274,9 +291,6 @@ export function pruneContextMessages(params: {
       continue;
     }
     if (!isToolPrunable(msg.toolName)) {
-      continue;
-    }
-    if (hasImageBlocks(msg.content)) {
       continue;
     }
     prunableToolIndexes.push(i);

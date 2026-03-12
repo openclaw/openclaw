@@ -2,7 +2,27 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-function resolvePowerShellPath(): string {
+export function resolvePowerShellPath(): string {
+  // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
+  const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
+  const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
+  if (fs.existsSync(pwsh7)) {
+    return pwsh7;
+  }
+
+  const programW6432 = process.env.ProgramW6432;
+  if (programW6432 && programW6432 !== programFiles) {
+    const pwsh7Alt = path.join(programW6432, "PowerShell", "7", "pwsh.exe");
+    if (fs.existsSync(pwsh7Alt)) {
+      return pwsh7Alt;
+    }
+  }
+
+  const pwshInPath = resolveShellFromPath("pwsh");
+  if (pwshInPath) {
+    return pwshInPath;
+  }
+
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   if (systemRoot) {
     const candidate = path.join(
@@ -49,7 +69,7 @@ export function getShellConfig(): { shell: string; args: string[] } {
   return { shell, args: ["-c"] };
 }
 
-function resolveShellFromPath(name: string): string | undefined {
+export function resolveShellFromPath(name: string): string | undefined {
   const envPath = process.env.PATH ?? "";
   if (!envPath) {
     return undefined;
@@ -64,6 +84,63 @@ function resolveShellFromPath(name: string): string | undefined {
       // ignore missing or non-executable entries
     }
   }
+  return undefined;
+}
+
+function normalizeShellName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return path
+    .basename(trimmed)
+    .replace(/\.(exe|cmd|bat)$/i, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+export function detectRuntimeShell(): string | undefined {
+  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  if (overrideShell) {
+    const name = normalizeShellName(overrideShell);
+    if (name) {
+      return name;
+    }
+  }
+
+  if (process.platform === "win32") {
+    if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
+      return "pwsh";
+    }
+    return "powershell";
+  }
+
+  const envShell = process.env.SHELL?.trim();
+  if (envShell) {
+    const name = normalizeShellName(envShell);
+    if (name) {
+      return name;
+    }
+  }
+
+  if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
+    return "pwsh";
+  }
+  if (process.env.BASH_VERSION) {
+    return "bash";
+  }
+  if (process.env.ZSH_VERSION) {
+    return "zsh";
+  }
+  if (process.env.FISH_VERSION) {
+    return "fish";
+  }
+  if (process.env.KSH_VERSION) {
+    return "ksh";
+  }
+  if (process.env.NU_VERSION || process.env.NUSHELL_VERSION) {
+    return "nu";
+  }
+
   return undefined;
 }
 

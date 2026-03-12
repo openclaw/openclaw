@@ -15,8 +15,8 @@ import { createTelegramMessageProcessor } from "./bot-message.js";
 
 describe("telegram bot message processor", () => {
   beforeEach(() => {
-    buildTelegramMessageContext.mockReset();
-    dispatchTelegramMessage.mockReset();
+    buildTelegramMessageContext.mockClear();
+    dispatchTelegramMessage.mockClear();
   });
 
   const baseDeps = {
@@ -36,17 +36,32 @@ describe("telegram bot message processor", () => {
     resolveTelegramGroupConfig: () => ({}),
     runtime: {},
     replyToMode: "auto",
-    streamMode: "auto",
+    streamMode: "partial",
     textLimit: 4096,
     opts: {},
-    resolveBotTopicsEnabled: () => false,
-  };
+  } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
+
+  async function processSampleMessage(
+    processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+  ) {
+    await processMessage(
+      {
+        message: {
+          chat: { id: 123, type: "private", title: "chat" },
+          message_id: 456,
+        },
+      } as unknown as Parameters<typeof processMessage>[0],
+      [],
+      [],
+      {},
+    );
+  }
 
   it("dispatches when context is available", async () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
+    await processSampleMessage(processMessage);
 
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
@@ -54,7 +69,56 @@ describe("telegram bot message processor", () => {
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processMessage({ message: { chat: { id: 123 }, message_id: 456 } }, [], [], {});
+    await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends user-visible fallback when dispatch throws", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      threadSpec: { id: 456 },
+      route: { sessionKey: "agent:main:main" },
+    });
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      { message_thread_id: 456 },
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+  });
+
+  it("swallows fallback delivery failures after dispatch throws", async () => {
+    const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      route: { sessionKey: "agent:main:main" },
+    });
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      123,
+      "Something went wrong while processing your request. Please try again.",
+      undefined,
+    );
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
 });

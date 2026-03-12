@@ -1,12 +1,13 @@
 import { html } from "lit";
-import type { ConfigUiHints } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form";
+import type { ConfigUiHints } from "../types.ts";
+import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form.ts";
 
 type ChannelConfigFormProps = {
   channelId: string;
   configValue: Record<string, unknown> | null;
-  schema: unknown | null;
+  schema: unknown;
   uiHints: ConfigUiHints;
   disabled: boolean;
   onPatch: (path: Array<string | number>, value: unknown) => void;
@@ -18,7 +19,9 @@ function resolveSchemaNode(
 ): JsonSchema | null {
   let current = schema;
   for (const key of path) {
-    if (!current) return null;
+    if (!current) {
+      return null;
+    }
     const type = schemaType(current);
     if (type === "object") {
       const properties = current.properties ?? {};
@@ -28,13 +31,15 @@ function resolveSchemaNode(
       }
       const additional = current.additionalProperties;
       if (typeof key === "string" && additional && typeof additional === "object") {
-        current = additional as JsonSchema;
+        current = additional;
         continue;
       }
       return null;
     }
     if (type === "array") {
-      if (typeof key !== "number") return null;
+      if (typeof key !== "number") {
+        return null;
+      }
       const items = Array.isArray(current.items) ? current.items[0] : current.items;
       current = items ?? null;
       continue;
@@ -48,15 +53,33 @@ function resolveChannelValue(
   config: Record<string, unknown>,
   channelId: string,
 ): Record<string, unknown> {
-  const channels = (config.channels ?? {}) as Record<string, unknown>;
-  const fromChannels = channels[channelId];
-  const fallback = config[channelId];
-  const resolved =
-    (fromChannels && typeof fromChannels === "object"
-      ? (fromChannels as Record<string, unknown>)
-      : null) ??
-    (fallback && typeof fallback === "object" ? (fallback as Record<string, unknown>) : null);
-  return resolved ?? {};
+  return resolveChannelConfigValue(config, channelId) ?? {};
+}
+
+const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
+
+function renderExtraChannelFields(value: Record<string, unknown>) {
+  const entries = EXTRA_CHANNEL_FIELDS.flatMap((field) => {
+    if (!(field in value)) {
+      return [];
+    }
+    return [[field, value[field]]] as Array<[string, unknown]>;
+  });
+  if (entries.length === 0) {
+    return null;
+  }
+  return html`
+    <div class="status-list" style="margin-top: 12px;">
+      ${entries.map(
+        ([field, raw]) => html`
+          <div>
+            <span class="label">${field}</span>
+            <span>${formatChannelExtraValue(raw)}</span>
+          </div>
+        `,
+      )}
+    </div>
+  `;
 }
 
 export function renderChannelConfigForm(props: ChannelConfigFormProps) {
@@ -88,6 +111,7 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
         onPatch: props.onPatch,
       })}
     </div>
+    ${renderExtraChannelFields(value)}
   `;
 }
 

@@ -1,4 +1,4 @@
-import { pathKey, schemaType, type JsonSchema } from "./config-form.shared";
+import { pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigSchemaAnalysis = {
   schema: JsonSchema | null;
@@ -41,7 +41,9 @@ function normalizeSchemaNode(
 
   if (schema.anyOf || schema.oneOf || schema.allOf) {
     const union = normalizeUnion(schema, path);
-    if (union) return union;
+    if (union) {
+      return union;
+    }
     return { schema, unsupportedPaths: [pathLabel] };
   }
 
@@ -54,8 +56,12 @@ function normalizeSchemaNode(
   if (normalized.enum) {
     const { enumValues, nullable: enumNullable } = normalizeEnum(normalized.enum);
     normalized.enum = enumValues;
-    if (enumNullable) normalized.nullable = true;
-    if (enumValues.length === 0) unsupported.add(pathLabel);
+    if (enumNullable) {
+      normalized.nullable = true;
+    }
+    if (enumValues.length === 0) {
+      unsupported.add(pathLabel);
+    }
   }
 
   if (type === "object") {
@@ -63,20 +69,27 @@ function normalizeSchemaNode(
     const normalizedProps: Record<string, JsonSchema> = {};
     for (const [key, value] of Object.entries(properties)) {
       const res = normalizeSchemaNode(value, [...path, key]);
-      if (res.schema) normalizedProps[key] = res.schema;
-      for (const entry of res.unsupportedPaths) unsupported.add(entry);
+      if (res.schema) {
+        normalizedProps[key] = res.schema;
+      }
+      for (const entry of res.unsupportedPaths) {
+        unsupported.add(entry);
+      }
     }
     normalized.properties = normalizedProps;
 
     if (schema.additionalProperties === true) {
-      unsupported.add(pathLabel);
+      // Treat `true` as an untyped map schema so dynamic object keys can still be edited.
+      normalized.additionalProperties = {};
     } else if (schema.additionalProperties === false) {
       normalized.additionalProperties = false;
     } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-      if (!isAnySchema(schema.additionalProperties as JsonSchema)) {
-        const res = normalizeSchemaNode(schema.additionalProperties as JsonSchema, [...path, "*"]);
-        normalized.additionalProperties = res.schema ?? (schema.additionalProperties as JsonSchema);
-        if (res.unsupportedPaths.length > 0) unsupported.add(pathLabel);
+      if (!isAnySchema(schema.additionalProperties)) {
+        const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
+        normalized.additionalProperties = res.schema ?? schema.additionalProperties;
+        if (res.unsupportedPaths.length > 0) {
+          unsupported.add(pathLabel);
+        }
       }
     }
   } else if (type === "array") {
@@ -86,7 +99,9 @@ function normalizeSchemaNode(
     } else {
       const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
       normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) unsupported.add(pathLabel);
+      if (res.unsupportedPaths.length > 0) {
+        unsupported.add(pathLabel);
+      }
     }
   } else if (
     type !== "string" &&
@@ -104,24 +119,84 @@ function normalizeSchemaNode(
   };
 }
 
+function isSecretRefVariant(entry: JsonSchema): boolean {
+  if (schemaType(entry) !== "object") {
+    return false;
+  }
+  const source = entry.properties?.source;
+  const provider = entry.properties?.provider;
+  const id = entry.properties?.id;
+  if (!source || !provider || !id) {
+    return false;
+  }
+  return (
+    typeof source.const === "string" &&
+    schemaType(provider) === "string" &&
+    schemaType(id) === "string"
+  );
+}
+
+function isSecretRefUnion(entry: JsonSchema): boolean {
+  const variants = entry.oneOf ?? entry.anyOf;
+  if (!variants || variants.length === 0) {
+    return false;
+  }
+  return variants.every((variant) => isSecretRefVariant(variant));
+}
+
+function normalizeSecretInputUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  remaining: JsonSchema[],
+  nullable: boolean,
+): ConfigSchemaAnalysis | null {
+  const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
+  if (stringIndex < 0) {
+    return null;
+  }
+  const nonString = remaining.filter((_, index) => index !== stringIndex);
+  if (nonString.length !== 1 || !isSecretRefUnion(nonString[0])) {
+    return null;
+  }
+  return normalizeSchemaNode(
+    {
+      ...schema,
+      ...remaining[stringIndex],
+      nullable,
+      anyOf: undefined,
+      oneOf: undefined,
+      allOf: undefined,
+    },
+    path,
+  );
+}
+
 function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
-  if (schema.allOf) return null;
+  if (schema.allOf) {
+    return null;
+  }
   const union = schema.anyOf ?? schema.oneOf;
-  if (!union) return null;
+  if (!union) {
+    return null;
+  }
 
   const literals: unknown[] = [];
   const remaining: JsonSchema[] = [];
   let nullable = false;
 
   for (const entry of union) {
-    if (!entry || typeof entry !== "object") return null;
+    if (!entry || typeof entry !== "object") {
+      return null;
+    }
     if (Array.isArray(entry.enum)) {
       const { enumValues, nullable: enumNullable } = normalizeEnum(entry.enum);
       literals.push(...enumValues);
-      if (enumNullable) nullable = true;
+      if (enumNullable) {
+        nullable = true;
+      }
       continue;
     }
     if ("const" in entry) {
@@ -137,6 +212,13 @@ function normalizeUnion(
       continue;
     }
     remaining.push(entry);
+  }
+
+  // Config secrets accept either a raw key string or a structured secret ref object.
+  // The form only supports editing the string path for now.
+  const secretInput = normalizeSecretInputUnion(schema, path, remaining, nullable);
+  if (secretInput) {
+    return secretInput;
   }
 
   if (literals.length > 0 && remaining.length === 0) {
@@ -167,11 +249,11 @@ function normalizeUnion(
     return res;
   }
 
-  const primitiveTypes = ["string", "number", "integer", "boolean"];
+  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
-    remaining.every((entry) => entry.type && primitiveTypes.includes(String(entry.type)))
+    remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
   ) {
     return {
       schema: {

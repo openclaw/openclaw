@@ -1,52 +1,50 @@
-import type { CronJob } from "../types.js";
-import type { CronServiceState } from "./state.js";
-import { migrateLegacyCronPayload } from "../payload-migration.js";
+import fs from "node:fs";
+import { normalizeStoredCronJobs } from "../store-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
+import type { CronJob } from "../types.js";
+import { recomputeNextRuns } from "./jobs.js";
+import type { CronServiceState } from "./state.js";
 
-const storeCache = new Map<string, { version: 1; jobs: CronJob[] }>();
+async function getFileMtimeMs(path: string): Promise<number | null> {
+  try {
+    const stats = await fs.promises.stat(path);
+    return stats.mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
-export async function ensureLoaded(state: CronServiceState) {
-  if (state.store) {
+export async function ensureLoaded(
+  state: CronServiceState,
+  opts?: {
+    forceReload?: boolean;
+    /** Skip recomputing nextRunAtMs after load so the caller can run due
+     *  jobs against the persisted values first (see onTimer). */
+    skipRecompute?: boolean;
+  },
+) {
+  // Fast path: store is already in memory. Other callers (add, list, run, …)
+  // trust the in-memory copy to avoid a stat syscall on every operation.
+  if (state.store && !opts?.forceReload) {
     return;
   }
-  const cached = storeCache.get(state.deps.storePath);
-  if (cached) {
-    state.store = cached;
-    return;
-  }
+  // Force reload always re-reads the file to avoid missing cross-service
+  // edits on filesystems with coarse mtime resolution.
+
+  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
-  let mutated = false;
-  for (const raw of jobs) {
-    const nameRaw = raw.name;
-    if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
-      raw.name = inferLegacyName({
-        schedule: raw.schedule as never,
-        payload: raw.payload as never,
-      });
-      mutated = true;
-    } else {
-      raw.name = nameRaw.trim();
-    }
-
-    const desc = normalizeOptionalText(raw.description);
-    if (raw.description !== desc) {
-      raw.description = desc;
-      mutated = true;
-    }
-
-    const payload = raw.payload;
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      if (migrateLegacyCronPayload(payload as Record<string, unknown>)) {
-        mutated = true;
-      }
-    }
-  }
+  const { mutated } = normalizeStoredCronJobs(jobs);
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
-  storeCache.set(state.deps.storePath, state.store);
+  state.storeLoadedAtMs = state.deps.nowMs();
+  state.storeFileMtimeMs = fileMtimeMs;
+
+  if (!opts?.skipRecompute) {
+    recomputeNextRuns(state);
+  }
+
   if (mutated) {
-    await persist(state);
+    await persist(state, { skipBackup: true });
   }
 }
 
@@ -64,9 +62,11 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState) {
+export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store);
+  await saveCronStore(state.deps.storePath, state.store, opts);
+  // Update file mtime after save to prevent immediate reload
+  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

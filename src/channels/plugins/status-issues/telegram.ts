@@ -1,5 +1,10 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { appendMatchMetadata, asString, isRecord } from "./shared.js";
+import {
+  appendMatchMetadata,
+  asString,
+  isRecord,
+  resolveEnabledConfiguredAccountId,
+} from "./shared.js";
 
 type TelegramAccountStatus = {
   accountId?: unknown;
@@ -81,10 +86,8 @@ export function collectTelegramStatusIssues(
     if (!account) {
       continue;
     }
-    const accountId = asString(account.accountId) ?? "default";
-    const enabled = account.enabled !== false;
-    const configured = account.configured === true;
-    if (!enabled || !configured) {
+    const accountId = resolveEnabledConfiguredAccountId(account);
+    if (!accountId) {
       continue;
     }
 

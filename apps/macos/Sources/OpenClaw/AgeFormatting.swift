@@ -1,6 +1,6 @@
 import Foundation
 
-// Human-friendly age string (e.g., "2m ago").
+/// Human-friendly age string (e.g., "2m ago").
 func age(from date: Date, now: Date = .init()) -> String {
     let seconds = max(0, Int(now.timeIntervalSince(date)))
     let minutes = seconds / 60

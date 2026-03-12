@@ -1,13 +1,13 @@
-import type { OpenClawApp } from "./app";
-import type { NostrProfile } from "./types";
+import type { OpenClawApp } from "./app.ts";
 import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
   waitWhatsAppLogin,
-} from "./controllers/channels";
-import { loadConfig, saveConfig } from "./controllers/config";
-import { createNostrProfileFormState } from "./views/channels.nostr-profile-form";
+} from "./controllers/channels.ts";
+import { loadConfig, saveConfig } from "./controllers/config.ts";
+import type { NostrProfile } from "./types.ts";
+import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
@@ -36,15 +36,23 @@ export async function handleChannelConfigReload(host: OpenClawApp) {
 }
 
 function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) return {};
+  if (!Array.isArray(details)) {
+    return {};
+  }
   const errors: Record<string, string> = {};
   for (const entry of details) {
-    if (typeof entry !== "string") continue;
+    if (typeof entry !== "string") {
+      continue;
+    }
     const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) continue;
+    if (!rawField || rest.length === 0) {
+      continue;
+    }
     const field = rawField.trim();
     const message = rest.join(":").trim();
-    if (field && message) errors[field] = message;
+    if (field && message) {
+      errors[field] = message;
+    }
   }
   return errors;
 }
@@ -56,6 +64,27 @@ function resolveNostrAccountId(host: OpenClawApp): string {
 
 function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
+}
+
+function resolveGatewayHttpAuthHeader(host: OpenClawApp): string | null {
+  const deviceToken = host.hello?.auth?.deviceToken?.trim();
+  if (deviceToken) {
+    return `Bearer ${deviceToken}`;
+  }
+  const token = host.settings.token.trim();
+  if (token) {
+    return `Bearer ${token}`;
+  }
+  const password = host.password.trim();
+  if (password) {
+    return `Bearer ${password}`;
+  }
+  return null;
+}
+
+function buildGatewayHttpHeaders(host: OpenClawApp): Record<string, string> {
+  const authorization = resolveGatewayHttpAuthHeader(host);
+  return authorization ? { Authorization: authorization } : {};
 }
 
 export function handleNostrProfileEdit(
@@ -78,7 +107,9 @@ export function handleNostrProfileFieldChange(
   value: string,
 ) {
   const state = host.nostrProfileFormState;
-  if (!state) return;
+  if (!state) {
+    return;
+  }
   host.nostrProfileFormState = {
     ...state,
     values: {
@@ -94,7 +125,9 @@ export function handleNostrProfileFieldChange(
 
 export function handleNostrProfileToggleAdvanced(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state) return;
+  if (!state) {
+    return;
+  }
   host.nostrProfileFormState = {
     ...state,
     showAdvanced: !state.showAdvanced,
@@ -103,7 +136,9 @@ export function handleNostrProfileToggleAdvanced(host: OpenClawApp) {
 
 export async function handleNostrProfileSave(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state || state.saving) return;
+  if (!state || state.saving) {
+    return;
+  }
   const accountId = resolveNostrAccountId(host);
 
   host.nostrProfileFormState = {
@@ -119,6 +154,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify(state.values),
     });
@@ -172,7 +208,9 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
 
 export async function handleNostrProfileImport(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state || state.importing) return;
+  if (!state || state.importing) {
+    return;
+  }
   const accountId = resolveNostrAccountId(host);
 
   host.nostrProfileFormState = {
@@ -187,6 +225,7 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify({ autoMerge: true }),
     });

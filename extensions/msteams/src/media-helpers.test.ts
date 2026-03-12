@@ -145,6 +145,19 @@ describe("msteams media-helpers", () => {
       expect(isLocalPath("~/Downloads/image.png")).toBe(true);
     });
 
+    it("returns true for Windows absolute drive paths", () => {
+      expect(isLocalPath("C:\\Users\\test\\image.png")).toBe(true);
+      expect(isLocalPath("D:/data/photo.jpg")).toBe(true);
+    });
+
+    it("returns true for Windows UNC paths", () => {
+      expect(isLocalPath("\\\\server\\share\\image.png")).toBe(true);
+    });
+
+    it("returns true for Windows rooted paths", () => {
+      expect(isLocalPath("\\tmp\\openclaw\\file.txt")).toBe(true);
+    });
+
     it("returns false for http URLs", () => {
       expect(isLocalPath("http://example.com/image.png")).toBe(false);
       expect(isLocalPath("https://example.com/image.png")).toBe(false);

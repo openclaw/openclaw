@@ -1,7 +1,26 @@
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
+
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    getOAuthApiKey: () => undefined,
+    getOAuthProviders: () => [],
+    loginOpenAICodex: vi.fn(),
+  };
+});
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+// Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
+// repeated filesystem discovery across suites/workers.
+process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
+// Vitest vm forks can load transitive lockfile helpers many times per worker.
+// Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
+const TEST_PROCESS_MAX_LISTENERS = 128;
+if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {
+  process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
+}
 
 import type {
   ChannelId,
@@ -10,15 +29,24 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
-import { installProcessWarningFilter } from "../src/infra/warnings.js";
-import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
-import { withIsolatedTestHome } from "./test-env";
+import { withIsolatedTestHome } from "./test-env.js";
+
+// Set HOME/state isolation before importing any runtime OpenClaw modules.
+const testEnv = withIsolatedTestHome();
+afterAll(() => testEnv.cleanup());
+
+const [
+  { installProcessWarningFilter },
+  { getActivePluginRegistry, setActivePluginRegistry },
+  { createTestRegistry },
+] = await Promise.all([
+  import("../src/infra/warning-filter.js"),
+  import("../src/plugins/runtime.js"),
+  import("../src/test-utils/channel-plugins.js"),
+]);
 
 installProcessWarningFilter();
 
-const testEnv = withIsolatedTestHome();
-afterAll(() => testEnv.cleanup());
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   switch (id) {
     case "discord":
@@ -46,7 +74,8 @@ const createStubOutbound = (
   sendText: async ({ deps, to, text }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      const result = await send(to, text, {});
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const result = await send(to, text, { verbose: false } as any);
       return { channel: id, ...result };
     }
     return { channel: id, messageId: "test" };
@@ -54,7 +83,8 @@ const createStubOutbound = (
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      const result = await send(to, text, { mediaUrl });
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const result = await send(to, text, { verbose: false, mediaUrl } as any);
       return { channel: id, ...result };
     }
     return { channel: id, messageId: "test" };
@@ -90,14 +120,14 @@ const createStubPlugin = (params: {
       const ids = accounts ? Object.keys(accounts).filter(Boolean) : [];
       return ids.length > 0 ? ids : ["default"];
     },
-    resolveAccount: (cfg: OpenClawConfig, accountId: string) => {
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => {
       const channels = cfg.channels as Record<string, unknown> | undefined;
       const entry = channels?.[params.id];
       if (!entry || typeof entry !== "object") {
         return {};
       }
       const accounts = (entry as { accounts?: Record<string, unknown> }).accounts;
-      const match = accounts?.[accountId];
+      const match = accountId ? accounts?.[accountId] : undefined;
       return (match && typeof match === "object") || typeof match === "string" ? match : entry;
     },
     isConfigured: async (_account, cfg: OpenClawConfig) => {
@@ -155,12 +185,20 @@ const createDefaultRegistry = () =>
     },
   ]);
 
-beforeEach(() => {
-  setActivePluginRegistry(createDefaultRegistry());
+// Creating a fresh registry before every test is measurable overhead.
+// The registry is immutable by default; tests that override it are restored in afterEach.
+const DEFAULT_PLUGIN_REGISTRY = createDefaultRegistry();
+
+beforeAll(() => {
+  setActivePluginRegistry(DEFAULT_PLUGIN_REGISTRY);
 });
 
 afterEach(() => {
-  setActivePluginRegistry(createDefaultRegistry());
+  if (getActivePluginRegistry() !== DEFAULT_PLUGIN_REGISTRY) {
+    setActivePluginRegistry(DEFAULT_PLUGIN_REGISTRY);
+  }
   // Guard against leaked fake timers across test files/workers.
-  vi.useRealTimers();
+  if (vi.isFakeTimers()) {
+    vi.useRealTimers();
+  }
 });

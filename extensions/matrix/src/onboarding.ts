@@ -1,16 +1,24 @@
+import type { DmPolicy } from "openclaw/plugin-sdk/matrix";
 import {
   addWildcardAllowFrom,
+  buildSingleChannelSecretPromptState,
+  formatResolvedUnresolvedNote,
   formatDocsLink,
+  hasConfiguredSecretInput,
+  mergeAllowFromEntries,
+  promptSingleChannelSecretInput,
   promptChannelAccessConfig,
+  setTopLevelChannelGroupPolicy,
+  type SecretInput,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
-import type { CoreConfig, DmPolicy } from "./types.js";
+} from "openclaw/plugin-sdk/matrix";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
-import { listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
 
@@ -65,14 +73,16 @@ async function promptMatrixAllowFrom(params: {
 
   while (true) {
     const entry = await prompter.text({
-      message: "Matrix allowFrom (username or user id)",
+      message: "Matrix allowFrom (full @user:server; display name only if unique)",
       placeholder: "@user:server",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
     const parts = parseInput(String(entry));
     const resolvedIds: string[] = [];
-    let unresolved: string[] = [];
+    const pending: string[] = [];
+    const unresolved: string[] = [];
+    const unresolvedNotes: string[] = [];
 
     for (const part of parts) {
       if (isFullUserId(part)) {
@@ -83,39 +93,39 @@ async function promptMatrixAllowFrom(params: {
         unresolved.push(part);
         continue;
       }
-      const results = await listMatrixDirectoryPeersLive({
+      pending.push(part);
+    }
+
+    if (pending.length > 0) {
+      const results = await resolveMatrixTargets({
         cfg,
-        query: part,
-        limit: 5,
+        inputs: pending,
+        kind: "user",
       }).catch(() => []);
-      const match = results.find((result) => result.id);
-      if (match?.id) {
-        resolvedIds.push(match.id);
-        if (results.length > 1) {
-          await prompter.note(
-            `Multiple matches for "${part}", using ${match.id}.`,
-            "Matrix allowlist",
-          );
+      for (const result of results) {
+        if (result?.resolved && result.id) {
+          resolvedIds.push(result.id);
+          continue;
         }
-      } else {
-        unresolved.push(part);
+        if (result?.input) {
+          unresolved.push(result.input);
+          if (result.note) {
+            unresolvedNotes.push(`${result.input}: ${result.note}`);
+          }
+        }
       }
     }
 
     if (unresolved.length > 0) {
+      const details = unresolvedNotes.length > 0 ? unresolvedNotes : unresolved;
       await prompter.note(
-        `Could not resolve: ${unresolved.join(", ")}. Use full @user:server IDs.`,
+        `Could not resolve:\n${details.join("\n")}\nUse full @user:server IDs.`,
         "Matrix allowlist",
       );
       continue;
     }
 
-    const unique = [
-      ...new Set([
-        ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-        ...resolvedIds,
-      ]),
-    ];
+    const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
     return {
       ...cfg,
       channels: {
@@ -135,17 +145,12 @@ async function promptMatrixAllowFrom(params: {
 }
 
 function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...cfg.channels?.matrix,
-        enabled: true,
-        groupPolicy,
-      },
-    },
-  };
+  return setTopLevelChannelGroupPolicy({
+    cfg,
+    channel: "matrix",
+    groupPolicy,
+    enabled: true,
+  }) as CoreConfig;
 }
 
 function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[]) {
@@ -261,22 +266,24 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     ).trim();
 
     let accessToken = existing.accessToken ?? "";
-    let password = existing.password ?? "";
+    let password: SecretInput | undefined = existing.password;
     let userId = existing.userId ?? "";
+    const existingPasswordConfigured = hasConfiguredSecretInput(existing.password);
+    const passwordConfigured = () => hasConfiguredSecretInput(password);
 
-    if (accessToken || password) {
+    if (accessToken || passwordConfigured()) {
       const keep = await prompter.confirm({
         message: "Matrix credentials already configured. Keep them?",
         initialValue: true,
       });
       if (!keep) {
         accessToken = "";
-        password = "";
+        password = undefined;
         userId = "";
       }
     }
 
-    if (!accessToken && !password) {
+    if (!accessToken && !passwordConfigured()) {
       // Ask auth method FIRST before asking for user ID
       const authMode = await prompter.select({
         message: "Matrix auth method",
@@ -317,12 +324,31 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             },
           }),
         ).trim();
-        password = String(
-          await prompter.text({
-            message: "Matrix password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        const passwordPromptState = buildSingleChannelSecretPromptState({
+          accountConfigured: Boolean(existingPasswordConfigured),
+          hasConfigToken: existingPasswordConfigured,
+          allowEnv: true,
+          envValue: envPassword,
+        });
+        const passwordResult = await promptSingleChannelSecretInput({
+          cfg: next,
+          prompter,
+          providerHint: "matrix",
+          credentialLabel: "password",
+          accountConfigured: passwordPromptState.accountConfigured,
+          canUseEnv: passwordPromptState.canUseEnv,
+          hasConfigToken: passwordPromptState.hasConfigToken,
+          envPrompt: "MATRIX_PASSWORD detected. Use env var?",
+          keepPrompt: "Matrix password already configured. Keep it?",
+          inputPrompt: "Matrix password",
+          preferredEnvVar: "MATRIX_PASSWORD",
+        });
+        if (passwordResult.action === "set") {
+          password = passwordResult.value;
+        }
+        if (passwordResult.action === "use-env") {
+          password = undefined;
+        }
       }
     }
 
@@ -349,7 +375,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
           homeserver,
           userId: userId || undefined,
           accessToken: accessToken || undefined,
-          password: password || undefined,
+          password: password,
           deviceName: deviceName || undefined,
           encryption: enableEncryption || undefined,
         },
@@ -404,18 +430,12 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
               }
             }
             roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
-            if (resolvedIds.length > 0 || unresolved.length > 0) {
-              await prompter.note(
-                [
-                  resolvedIds.length > 0 ? `Resolved: ${resolvedIds.join(", ")}` : undefined,
-                  unresolved.length > 0
-                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
-                    : undefined,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-                "Matrix rooms",
-              );
+            const resolution = formatResolvedUnresolvedNote({
+              resolved: resolvedIds,
+              unresolved,
+            });
+            if (resolution) {
+              await prompter.note(resolution, "Matrix rooms");
             }
           } catch (err) {
             await prompter.note(

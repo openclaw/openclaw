@@ -1,12 +1,12 @@
-import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
+import { hashTextSha256 } from "./hash.js";
 
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
-  const hash = crypto.createHash("sha1").update(trimmed).digest("hex").slice(0, 8);
+  const hash = hashTextSha256(trimmed).slice(0, 8);
   const safe = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
