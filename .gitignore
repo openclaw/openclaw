@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+.fly-secrets
 docker-compose.extra.yml
 dist
 *.bun-build
@@ -74,6 +75,7 @@ USER.md
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
+.local-data/
 .agent/*.json
 !.agent/workflows/
 .vercel

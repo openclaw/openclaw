@@ -15,6 +15,7 @@ import { registerMaintenanceCommands } from "./register.maintenance.js";
 import { registerMessageCommands } from "./register.message.js";
 import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand } from "./register.setup.js";
+import { registerStagingCommands } from "./register.staging.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
@@ -156,6 +157,10 @@ export const commandRegistry: CommandRegistration[] = [
     id: "status-health-sessions",
     register: ({ program }) => registerStatusHealthSessionsCommands(program),
     routes: [routeHealth, routeStatus, routeSessions],
+  },
+  {
+    id: "staging",
+    register: ({ program }) => registerStagingCommands(program),
   },
   {
     id: "browser",

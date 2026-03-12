@@ -137,8 +137,8 @@ export function renderApp(state: AppViewState) {
               <img src=${basePath ? `${basePath}/favicon.ico` : "/favicon.ico"} alt="JHS Digital Consulting Logo" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">Larry Lawbstah</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-title">JHS Digital Consulting</div>
+              <div class="brand-sub">OpenClaw Gateway Dashboard</div>
             </div>
           </div>
         </div>
