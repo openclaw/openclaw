@@ -151,8 +151,8 @@ private object SystemMotionDataSource : MotionDataSource {
               override fun onSensorChanged(event: SensorEvent?) {
                 val value = event?.values?.firstOrNull()
                 val token = cont.tryResume(value) ?: return
-                sensorManager.unregisterListener(this)
                 cont.completeResume(token)
+                sensorManager.unregisterListener(this)
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -197,8 +197,8 @@ private object SystemMotionDataSource : MotionDataSource {
                     averageDelta = sumDelta / count,
                   )
                   val token = cont.tryResume(result) ?: return
-                  sensorManager.unregisterListener(this)
                   cont.completeResume(token)
+                  sensorManager.unregisterListener(this)
                 }
               }
 
