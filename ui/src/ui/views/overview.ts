@@ -1,5 +1,6 @@
 import { html } from "lit";
 import type { GatewayHelloOk } from "../gateway.ts";
+import type { Tab } from "../navigation.ts";
 import type { UiSettings } from "../storage.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import { formatNextRun } from "../presenter.ts";
@@ -15,6 +16,7 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  onNavigateTab: (tab: Tab) => void;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -23,6 +25,14 @@ export type OverviewProps = {
 };
 
 export function renderOverview(props: OverviewProps) {
+  const onCardKeydown = (event: KeyboardEvent, tab: Tab) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    props.onNavigateTab(tab);
+  };
+
   const snapshot = props.hello?.snapshot as
     | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
     | undefined;
@@ -219,22 +229,46 @@ export function renderOverview(props: OverviewProps) {
     </section>
 
     <section class="grid grid-cols-3" style="margin-top: 18px;">
-      <div class="card stat-card">
+      <div
+        class="card stat-card card--interactive"
+        role="button"
+        tabindex="0"
+        aria-label="Open Instances tab"
+        @click=${() => props.onNavigateTab("instances")}
+        @keydown=${(event: KeyboardEvent) => onCardKeydown(event, "instances")}
+      >
         <div class="stat-label">Instances</div>
         <div class="stat-value">${props.presenceCount}</div>
         <div class="muted">Presence beacons in the last 5 minutes.</div>
+        <div class="stat-card__action">Open Instances</div>
       </div>
-      <div class="card stat-card">
+      <div
+        class="card stat-card card--interactive"
+        role="button"
+        tabindex="0"
+        aria-label="Open Sessions tab"
+        @click=${() => props.onNavigateTab("sessions")}
+        @keydown=${(event: KeyboardEvent) => onCardKeydown(event, "sessions")}
+      >
         <div class="stat-label">Sessions</div>
         <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
         <div class="muted">Recent session keys tracked by the gateway.</div>
+        <div class="stat-card__action">Open Sessions</div>
       </div>
-      <div class="card stat-card">
+      <div
+        class="card stat-card card--interactive"
+        role="button"
+        tabindex="0"
+        aria-label="Open Cron tab"
+        @click=${() => props.onNavigateTab("cron")}
+        @keydown=${(event: KeyboardEvent) => onCardKeydown(event, "cron")}
+      >
         <div class="stat-label">Cron</div>
         <div class="stat-value">
           ${props.cronEnabled == null ? "n/a" : props.cronEnabled ? "Enabled" : "Disabled"}
         </div>
         <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
+        <div class="stat-card__action">Open Scheduler</div>
       </div>
     </section>
 

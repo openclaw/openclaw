@@ -19,11 +19,26 @@
     inset 0 1px 0 var(--card-highlight);
 }
 
-.card:hover {
+.card--interactive {
+  cursor: pointer;
+  user-select: none;
+}
+
+.card--interactive:hover {
   border-color: var(--border-strong);
   box-shadow:
     var(--shadow-md),
     inset 0 1px 0 var(--card-highlight);
+  transform: translateY(-1px);
+}
+
+.card--interactive:active {
+  transform: translateY(0);
+}
+
+.card--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .card-title {
@@ -55,13 +70,6 @@
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-.stat:hover {
-  border-color: var(--border-strong);
-  box-shadow:
-    var(--shadow-sm),
-    inset 0 1px 0 var(--card-highlight);
-}
-
 .stat-label {
   color: var(--muted);
   font-size: 11px;
@@ -89,6 +97,13 @@
 .stat-card {
   display: grid;
   gap: 6px;
+}
+
+.stat-card__action {
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .note-title {
@@ -135,11 +150,29 @@
   border-radius: var(--radius-md);
   padding: 12px;
   background: var(--bg-elevated);
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
 }
 
-.account-card:hover {
+.account-card--interactive {
+  cursor: pointer;
+}
+
+.account-card--interactive:hover {
   border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.account-card--interactive:active {
+  transform: translateY(0);
+}
+
+.account-card--interactive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .account-card-header {
