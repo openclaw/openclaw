@@ -370,10 +370,31 @@ async function resolveKeyEntry(params: {
     }
   };
 
+  const resolvePreferredImageModel = async (
+    providerId: string,
+    requestedModel?: string,
+  ): Promise<string | undefined> => {
+    const requested = requestedModel?.trim();
+    if (!requested) {
+      return DEFAULT_IMAGE_MODELS[providerId];
+    }
+
+    const catalog = await loadModelCatalog({ config: cfg });
+    const entry = findModelInCatalog(catalog, providerId, requested);
+    if (entry && !modelSupportsVision(entry)) {
+      return DEFAULT_IMAGE_MODELS[providerId];
+    }
+    return requested;
+  };
+
   if (capability === "image") {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
+      const activeModel = await resolvePreferredImageModel(
+        activeProvider,
+        params.activeModel?.model,
+      );
+      const activeEntry = await checkProvider(activeProvider, activeModel);
       if (activeEntry) {
         return activeEntry;
       }
@@ -553,6 +574,21 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
+  let resolvedModel = params.activeModel?.model;
+  if (params.capability === "image") {
+    const requestedModel = params.activeModel?.model?.trim();
+    if (!requestedModel) {
+      resolvedModel = DEFAULT_IMAGE_MODELS[providerId];
+    } else {
+      const catalog = await loadModelCatalog({ config: params.cfg });
+      const entry = findModelInCatalog(catalog, providerId, requestedModel);
+      if (entry && !modelSupportsVision(entry)) {
+        resolvedModel = DEFAULT_IMAGE_MODELS[providerId];
+      } else {
+        resolvedModel = requestedModel;
+      }
+    }
+  }
   try {
     await resolveApiKeyForProvider({
       provider: providerId,
@@ -565,7 +601,7 @@ async function resolveActiveModelEntry(params: {
   return {
     type: "provider",
     provider: providerId,
-    model: params.activeModel?.model,
+    model: resolvedModel,
   };
 }
 
