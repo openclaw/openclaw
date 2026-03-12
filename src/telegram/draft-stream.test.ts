@@ -435,6 +435,46 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
+  it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(true);
+  });
+
+  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    );
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+
+  it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
+    );
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({

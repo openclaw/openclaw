@@ -19,8 +19,16 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
-import { resolveChannelConfigWrites } from "./config-writes.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveExplicitConfigWriteTarget,
+  resolveChannelConfigWrites,
+  resolveConfigWriteTargetFromPath,
+} from "./config-writes.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -322,6 +330,98 @@ describe("resolveChannelConfigWrites", () => {
   it("matches account ids case-insensitively", () => {
     const cfg = makeSlackConfigWritesCfg("Work");
     expect(resolveChannelConfigWrites({ cfg, channelId: "slack", accountId: "work" })).toBe(false);
+  });
+});
+
+describe("authorizeConfigWrite", () => {
+  it("blocks when a target account disables writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "target-disabled",
+      blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+    });
+  });
+
+  it("blocks when the origin account disables writes", () => {
+    const cfg = makeSlackConfigWritesCfg("default");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "origin-disabled",
+      blockedScope: { kind: "origin", scope: { channelId: "slack", accountId: "default" } },
+    });
+  });
+
+  it("allows bypass for internal operator.admin writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
+        allowBypass: canBypassConfigWritePolicy({
+          channel: INTERNAL_MESSAGE_CHANNEL,
+          gatewayClientScopes: ["operator.admin"],
+        }),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("treats non-channel config paths as global writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveConfigWriteTargetFromPath(["messages", "ackReaction"]),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("rejects ambiguous channel collection writes", () => {
+    expect(resolveConfigWriteTargetFromPath(["channels", "telegram"])).toEqual({
+      kind: "ambiguous",
+      scopes: [{ channelId: "telegram" }],
+    });
+    expect(resolveConfigWriteTargetFromPath(["channels", "telegram", "accounts"])).toEqual({
+      kind: "ambiguous",
+      scopes: [{ channelId: "telegram" }],
+    });
+  });
+
+  it("resolves explicit channel and account targets", () => {
+    expect(resolveExplicitConfigWriteTarget({ channelId: "slack" })).toEqual({
+      kind: "channel",
+      scope: { channelId: "slack" },
+    });
+    expect(resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" })).toEqual({
+      kind: "account",
+      scope: { channelId: "slack", accountId: "work" },
+    });
+  });
+
+  it("formats denied messages consistently", () => {
+    expect(
+      formatConfigWriteDeniedMessage({
+        result: {
+          allowed: false,
+          reason: "target-disabled",
+          blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+        },
+      }),
+    ).toContain("channels.slack.accounts.work.configWrites=true");
   });
 });
 
