@@ -186,7 +186,7 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** If false, disable remote credential fallback surfaces. */
+  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
   enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
