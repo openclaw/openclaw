@@ -157,6 +157,33 @@ describe("writeOAuthCredentials", () => {
     ).rejects.toThrow();
   });
 
+  it("uses explicit OAuth profile alias when provided", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-alias-");
+    lifecycle.setStateDir(env.stateDir);
+
+    const creds = {
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+      email: "same-account@example.com",
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, env.agentDir, {
+      profileName: "Team Billing",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:team-billing"]).toMatchObject({
+      refresh: "refresh-token",
+      access: "access-token",
+      email: "same-account@example.com",
+      type: "oauth",
+    });
+    expect(parsed.profiles?.["openai-codex:same-account@example.com"]).toBeUndefined();
+  });
+
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;

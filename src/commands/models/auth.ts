@@ -262,6 +262,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileAlias?: string;
   setDefault?: boolean;
 };
 
@@ -318,6 +319,7 @@ async function runBuiltInOpenAICodexLogin(params: {
 
   const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
     syncSiblingAgents: true,
+    ...(params.opts.profileAlias?.trim() ? { profileName: params.opts.profileAlias.trim() } : {}),
   });
   await updateConfig((cfg) => {
     let next = applyAuthProfileConfig(cfg, {
