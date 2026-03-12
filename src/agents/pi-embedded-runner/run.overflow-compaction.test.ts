@@ -11,6 +11,7 @@ import {
 } from "./run.overflow-compaction.fixture.js";
 import { mockedGlobalHookRunner } from "./run.overflow-compaction.mocks.shared.js";
 import {
+  mockedContextEngine,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -22,6 +23,25 @@ const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedRunEmbeddedAttempt.mockReset();
+    mockedCompactDirect.mockReset();
+    mockedSessionLikelyHasOversizedToolResults.mockReset();
+    mockedTruncateOversizedToolResultsInSession.mockReset();
+    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
+    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
+    mockedGlobalHookRunner.runAfterCompaction.mockReset();
+    mockedContextEngine.info.ownsCompaction = false;
+    mockedCompactDirect.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
+      truncated: false,
+      truncatedCount: 0,
+      reason: "no oversized tool results",
+    });
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -81,8 +101,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).toHaveBeenCalledWith(
       expect.objectContaining({
-        trigger: "overflow",
-        authProfileId: "test-profile",
+        sessionId: "test-session",
+        sessionFile: "/tmp/session.json",
+        runtimeContext: expect.objectContaining({
+          trigger: "overflow",
+          authProfileId: "test-profile",
+        }),
       }),
     );
   });
@@ -130,6 +154,63 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
     expect(result.meta.error?.kind).toBe("context_overflow");
+  });
+
+  it("fires compaction hooks during overflow recovery for ownsCompaction engines", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine-owned compaction",
+        tokensAfter: 50,
+      },
+    });
+
+    await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: "/tmp/session.json" },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
+    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      {
+        messageCount: -1,
+        compactedCount: -1,
+        tokenCount: 50,
+        sessionFile: "/tmp/session.json",
+      },
+      expect.objectContaining({
+        sessionKey: "test-key",
+      }),
+    );
+  });
+
+  it("guards thrown engine-owned overflow compaction attempts", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: makeOverflowError() }),
+    );
+    mockedCompactDirect.mockRejectedValueOnce(new Error("engine boom"));
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledTimes(1);
+    expect(mockedGlobalHookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {
