@@ -207,6 +207,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async (finalText?: string) => {
+    if (finalText !== undefined) {
+      // Preserve final payload for retry paths if close fails before cleanup.
+      streamText = finalText;
+    }
     if (streamingStartPromise) {
       await streamingStartPromise;
     }

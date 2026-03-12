@@ -315,6 +315,50 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("retries streaming close with preserved final text after initial close failure", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    const closeMock = streamingInstances[0].close;
+    closeMock.mockImplementationOnce(async () => {
+      throw new Error("close failed");
+    });
+
+    const finalText = "```md\n最终完整回复\n```";
+    let deliverError: unknown;
+    try {
+      await options.deliver({ text: finalText }, { kind: "final" });
+    } catch (error) {
+      deliverError = error;
+    }
+
+    expect(deliverError).toBeInstanceOf(Error);
+    await options.onError?.(deliverError as Error, { kind: "final" });
+
+    expect(closeMock).toHaveBeenCalledTimes(2);
+    expect(closeMock).toHaveBeenNthCalledWith(1, finalText);
+    expect(closeMock).toHaveBeenNthCalledWith(2, finalText);
+  });
+
   it("skips exact duplicate final text after streaming close", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,
