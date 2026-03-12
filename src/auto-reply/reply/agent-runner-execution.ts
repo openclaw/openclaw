@@ -260,18 +260,15 @@ export async function runAgentTurnWithFallback(params: {
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
-              let sessionClone: EphemeralSessionFileClone | null = null;
               let lifecycleTerminalEmitted = false;
               try {
-                sessionClone = params.isHeartbeat
-                  ? await createEphemeralSessionFileClone(params.followupRun.run.sessionFile)
-                  : null;
-                const sessionFile = sessionClone?.sessionFile ?? params.followupRun.run.sessionFile;
+                // CLI backends currently do not read or write session transcripts, so
+                // heartbeat transcript isolation only applies to the embedded path below.
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
-                  sessionFile,
+                  sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: params.followupRun.run.config,
                   prompt: params.commandBody,
@@ -346,10 +343,6 @@ export async function runAgentTurnWithFallback(params: {
                     },
                   });
                 }
-                await cleanupEphemeralSessionFileClone({
-                  sessionClone,
-                  label: "cli",
-                });
               }
             })();
           }

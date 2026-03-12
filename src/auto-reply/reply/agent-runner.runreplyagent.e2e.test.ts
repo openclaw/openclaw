@@ -437,39 +437,49 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     });
   });
 
-  it("isolates heartbeat transcript writes for CLI providers too", async () => {
+  it("does not create heartbeat transcript clones for CLI providers", async () => {
     await withTempSessionFile("seed", async (sessionFile, seeded) => {
-      const appendedText = "cli heartbeat transcript write";
-      state.runCliAgentMock.mockImplementationOnce(async (params: { sessionFile?: string }) => {
-        await fs.appendFile(
-          String(params.sessionFile),
-          makeTranscriptMessageLine(appendedText),
-          "utf-8",
-        );
-        return { payloads: [{ text: "ok" }], meta: {} };
+      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(new Error("mkdtemp failed"));
+      const phases: string[] = [];
+      const off = onAgentEvent((evt) => {
+        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+        if (evt.stream === "lifecycle" && phase) {
+          phases.push(phase);
+        }
+      });
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
       });
 
-      const { run } = createMinimalRun({
-        opts: { isHeartbeat: true },
-        runOverrides: {
-          sessionFile,
-          provider: "claude-cli",
-          model: "sonnet",
-        },
-      });
+      try {
+        const { run } = createMinimalRun({
+          opts: { isHeartbeat: true },
+          runOverrides: {
+            sessionFile,
+            provider: "claude-cli",
+            model: "sonnet",
+          },
+        });
 
-      await run();
+        const result = await run();
+        const payload = Array.isArray(result)
+          ? (result[0] as { text?: string } | undefined)
+          : (result as { text?: string } | undefined);
 
-      const liveRaw = await fs.readFile(sessionFile, "utf-8");
-      expect(liveRaw).toBe(seeded);
-      expect(liveRaw).not.toContain(appendedText);
+        expect(payload?.text).toBe("ok");
+        expect(await fs.readFile(sessionFile, "utf-8")).toBe(seeded);
+        expect(mkdtempSpy).not.toHaveBeenCalled();
+        expect(phases).toEqual(["start", "end"]);
 
-      const cliCall = state.runCliAgentMock.mock.calls.at(-1)?.[0] as
-        | { sessionFile?: string }
-        | undefined;
-      expect(cliCall?.sessionFile).toBeDefined();
-      expect(cliCall?.sessionFile).not.toBe(sessionFile);
-      expect(await pathExists(String(cliCall?.sessionFile))).toBe(false);
+        const cliCall = state.runCliAgentMock.mock.calls.at(-1)?.[0] as
+          | { sessionFile?: string }
+          | undefined;
+        expect(cliCall?.sessionFile).toBe(sessionFile);
+      } finally {
+        off();
+        mkdtempSpy.mockRestore();
+      }
     });
   });
 
@@ -508,91 +518,6 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
       } finally {
         logVerboseSpy.mockRestore();
         rmSpy.mockRestore();
-      }
-    });
-  });
-
-  it("does not fail a successful CLI heartbeat run when clone cleanup fails", async () => {
-    await withTempSessionFile("seed", async (sessionFile, seeded) => {
-      const realRm = fs.rm.bind(fs);
-      const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-        if (String(target).includes("openclaw-heartbeat-session-")) {
-          throw new Error("cleanup failed");
-        }
-        return await realRm(target, options);
-      });
-      const globals = await import("../../globals.js");
-      const logVerboseSpy = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-      state.runCliAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: {},
-      });
-
-      try {
-        const { run } = createMinimalRun({
-          opts: { isHeartbeat: true },
-          runOverrides: {
-            sessionFile,
-            provider: "claude-cli",
-            model: "sonnet",
-          },
-        });
-
-        const result = await run();
-        const payload = Array.isArray(result)
-          ? (result[0] as { text?: string } | undefined)
-          : (result as { text?: string } | undefined);
-
-        expect(payload?.text).toBe("ok");
-        expect(await fs.readFile(sessionFile, "utf-8")).toBe(seeded);
-        expect(logVerboseSpy).toHaveBeenCalledWith(
-          expect.stringContaining("heartbeat session clone cleanup failed (cli)"),
-        );
-      } finally {
-        logVerboseSpy.mockRestore();
-        rmSpy.mockRestore();
-      }
-    });
-  });
-
-  it("emits a terminal lifecycle error when CLI heartbeat clone creation fails", async () => {
-    await withTempSessionFile("seed", async (sessionFile) => {
-      const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockRejectedValueOnce(new Error("mkdtemp failed"));
-      const phases: string[] = [];
-      const lifecycleErrors: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream !== "lifecycle" || !phase) {
-          return;
-        }
-        phases.push(phase);
-        if (phase === "error" && typeof evt.data.error === "string") {
-          lifecycleErrors.push(evt.data.error);
-        }
-      });
-
-      try {
-        const { run } = createMinimalRun({
-          opts: { isHeartbeat: true },
-          runOverrides: {
-            sessionFile,
-            provider: "claude-cli",
-            model: "sonnet",
-          },
-        });
-
-        const result = await run();
-        const payload = Array.isArray(result)
-          ? (result[0] as { text?: string } | undefined)
-          : (result as { text?: string } | undefined);
-
-        expect(state.runCliAgentMock).not.toHaveBeenCalled();
-        expect(payload?.text).toContain("mkdtemp failed");
-        expect(phases).toEqual(["start", "error"]);
-        expect(lifecycleErrors).toContain("Error: mkdtemp failed");
-      } finally {
-        off();
-        mkdtempSpy.mockRestore();
       }
     });
   });
