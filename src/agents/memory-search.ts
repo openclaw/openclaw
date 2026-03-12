@@ -12,6 +12,14 @@ import {
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
+export type ResolvedMemoryRecallBeforeResponseConfig = {
+  enabled: boolean;
+  mode: "advisory" | "enforce";
+  maxResults: number;
+  minScore: number;
+  maxChars: number;
+};
+
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
@@ -85,6 +93,7 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  recallBeforeResponse: ResolvedMemoryRecallBeforeResponseConfig;
 };
 
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
@@ -109,6 +118,58 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_RECALL_BEFORE_RESPONSE_MODE: "advisory" | "enforce" = "advisory";
+const DEFAULT_RECALL_BEFORE_RESPONSE_MAX_RESULTS = 6;
+const DEFAULT_RECALL_BEFORE_RESPONSE_MIN_SCORE = 0.35;
+const DEFAULT_RECALL_BEFORE_RESPONSE_MAX_CHARS = 3000;
+
+function mergeRecallBeforeResponseConfig(params: {
+  defaults?: MemorySearchConfig;
+  overrides?: MemorySearchConfig;
+}): ResolvedMemoryRecallBeforeResponseConfig {
+  const recallDefaults = params.defaults?.recallBeforeResponse;
+  const recallOverrides = params.overrides?.recallBeforeResponse;
+  const rawRecallMode = recallOverrides?.mode ?? recallDefaults?.mode;
+  const recallMode = rawRecallMode === "enforce" ? "enforce" : DEFAULT_RECALL_BEFORE_RESPONSE_MODE;
+  const rawQueryMaxResults =
+    params.overrides?.query?.maxResults ??
+    params.defaults?.query?.maxResults ??
+    DEFAULT_MAX_RESULTS;
+  const rawQueryMinScore =
+    params.overrides?.query?.minScore ?? params.defaults?.query?.minScore ?? DEFAULT_MIN_SCORE;
+
+  const recallMaxResults = clampInt(
+    recallOverrides?.maxResults ??
+      recallDefaults?.maxResults ??
+      rawQueryMaxResults ??
+      DEFAULT_RECALL_BEFORE_RESPONSE_MAX_RESULTS,
+    1,
+    20,
+  );
+  const recallMinScore = clampNumber(
+    recallOverrides?.minScore ??
+      recallDefaults?.minScore ??
+      rawQueryMinScore ??
+      DEFAULT_RECALL_BEFORE_RESPONSE_MIN_SCORE,
+    0,
+    1,
+  );
+  const recallMaxChars = clampInt(
+    recallOverrides?.maxChars ??
+      recallDefaults?.maxChars ??
+      DEFAULT_RECALL_BEFORE_RESPONSE_MAX_CHARS,
+    256,
+    12000,
+  );
+
+  return {
+    enabled: Boolean(recallOverrides?.enabled ?? recallDefaults?.enabled ?? false),
+    mode: recallMode,
+    maxResults: recallMaxResults,
+    minScore: recallMinScore,
+    maxChars: recallMaxChars,
+  };
+}
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -296,6 +357,7 @@ function mergeConfig(
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
+  const recallBeforeResponse = mergeRecallBeforeResponseConfig({ defaults, overrides });
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
@@ -315,6 +377,7 @@ function mergeConfig(
   );
   const deltaBytes = clampInt(sync.sessions.deltaBytes, 0, Number.MAX_SAFE_INTEGER);
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
+
   return {
     enabled,
     sources,
@@ -365,6 +428,7 @@ function mergeConfig(
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
     },
+    recallBeforeResponse,
   };
 }
 
@@ -396,4 +460,13 @@ export function resolveMemorySearchConfig(
     );
   }
   return resolved;
+}
+
+export function resolveMemoryRecallBeforeResponseConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): ResolvedMemoryRecallBeforeResponseConfig {
+  const defaults = cfg.agents?.defaults?.memorySearch;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  return mergeRecallBeforeResponseConfig({ defaults, overrides });
 }

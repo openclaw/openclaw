@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemorySearchConfig } from "./memory-search.js";
+import {
+  resolveMemoryRecallBeforeResponseConfig,
+  resolveMemorySearchConfig,
+} from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
@@ -408,5 +411,91 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
+  });
+
+  it("defaults runtime recall-before-response to disabled advisory mode", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.recallBeforeResponse).toEqual({
+      enabled: false,
+      mode: "advisory",
+      maxResults: 6,
+      minScore: 0.35,
+      maxChars: 3000,
+    });
+  });
+
+  it("merges recall-before-response defaults with per-agent overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            query: { maxResults: 9, minScore: 0.4 },
+            recallBeforeResponse: {
+              enabled: true,
+              mode: "advisory",
+              maxChars: 2800,
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              recallBeforeResponse: {
+                mode: "enforce",
+                maxResults: 3,
+                minScore: 0.8,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.recallBeforeResponse).toEqual({
+      enabled: true,
+      mode: "enforce",
+      maxResults: 3,
+      minScore: 0.8,
+      maxChars: 2800,
+    });
+  });
+
+  it("resolves recall-before-response config even when memory search is disabled", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: false,
+            recallBeforeResponse: {
+              enabled: true,
+              mode: "enforce",
+              maxResults: 4,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchConfig(cfg, "main")).toBeNull();
+    expect(resolveMemoryRecallBeforeResponseConfig(cfg, "main")).toEqual({
+      enabled: true,
+      mode: "enforce",
+      maxResults: 4,
+      minScore: 0.35,
+      maxChars: 3000,
+    });
   });
 });

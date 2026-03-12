@@ -789,6 +789,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
+  "agents.defaults.memorySearch.recallBeforeResponse":
+    "Runtime pre-response recall guard. When enabled, OpenClaw performs memory search before each model response and injects recalled snippets into system context for stronger rule adherence.",
+  "agents.defaults.memorySearch.recallBeforeResponse.enabled":
+    "Enable runtime memory recall before each response (default: false). Keep off for legacy behavior; enable when you need deterministic rule-checking before generation.",
+  "agents.defaults.memorySearch.recallBeforeResponse.mode":
+    'Recall failure policy: "advisory" logs and continues, while "enforce" blocks the turn if recall fails. Use enforce for strict workflow/rule compliance.',
+  "agents.defaults.memorySearch.recallBeforeResponse.maxResults":
+    "Override how many recalled snippets are injected per turn. Increase for broader policy coverage, or lower to keep prompts tighter.",
+  "agents.defaults.memorySearch.recallBeforeResponse.minScore":
+    "Minimum relevance score (0-1) required for recalled snippets before injection. Raise to reduce weak matches, or lower for broader recall.",
+  "agents.defaults.memorySearch.recallBeforeResponse.maxChars":
+    "Maximum characters injected from runtime recall snippets into system context per turn. Tune this to balance rule coverage vs prompt budget.",
   "agents.defaults.memorySearch.provider":
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":

@@ -440,6 +440,23 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Runtime-enforced recall injection before each model response. */
+  recallBeforeResponse?: {
+    /** Enable runtime memory recall before generating a response (default: false). */
+    enabled?: boolean;
+    /**
+     * Enforcement mode:
+     * - advisory: log failures and continue without injected recall (default)
+     * - enforce: block the turn when recall cannot be performed
+     */
+    mode?: "advisory" | "enforce";
+    /** Optional override for recall search max results. */
+    maxResults?: number;
+    /** Optional override for recall search min score (0-1). */
+    minScore?: number;
+    /** Max characters injected into system prompt from recalled snippets. */
+    maxChars?: number;
+  };
 };
 
 export type ToolsConfig = {
