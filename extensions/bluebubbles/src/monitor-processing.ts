@@ -38,6 +38,10 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
+import {
+  hasBlueBubblesSelfChatCopy,
+  rememberBlueBubblesSelfChatCopy,
+} from "./monitor-self-chat-cache.js";
 import type {
   BlueBubblesCoreRuntime,
   BlueBubblesRuntimeEnv,
@@ -47,7 +51,12 @@ import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
-import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
+import {
+  extractHandleFromChatGuid,
+  formatBlueBubblesChatTarget,
+  isAllowedBlueBubblesSender,
+  normalizeBlueBubblesHandle,
+} from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
 const invalidAckReactions = new Set<string>();
@@ -78,6 +87,19 @@ function trimOrUndefined(value?: string | null): string | undefined {
 
 function normalizeSnippet(value: string): string {
   return stripMarkdown(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function isBlueBubblesSelfChatMessage(
+  message: NormalizedWebhookMessage,
+  isGroup: boolean,
+): boolean {
+  if (isGroup || !message.senderIdExplicit) {
+    return false;
+  }
+  const chatHandle =
+    (message.chatGuid ? extractHandleFromChatGuid(message.chatGuid) : null) ??
+    normalizeBlueBubblesHandle(message.chatIdentifier ?? "");
+  return Boolean(chatHandle) && chatHandle === message.senderId;
 }
 
 function prunePendingOutboundMessageIds(now = Date.now()): void {
@@ -453,6 +475,16 @@ export async function processMessage(
       ? `removed ${tapbackParsed.emoji} reaction`
       : `reacted with ${tapbackParsed.emoji}`
     : text || placeholder;
+  const isSelfChatMessage = isBlueBubblesSelfChatMessage(message, isGroup);
+  const selfChatLookup = {
+    accountId: account.accountId,
+    chatGuid: message.chatGuid,
+    chatIdentifier: message.chatIdentifier,
+    chatId: message.chatId,
+    senderId: message.senderId,
+    body: rawBody,
+    timestamp: message.timestamp,
+  };
 
   const cacheMessageId = message.messageId?.trim();
   let messageShortId: string | undefined;
@@ -485,6 +517,9 @@ export async function processMessage(
         body: rawBody,
       });
       if (pending) {
+        if (isSelfChatMessage) {
+          rememberBlueBubblesSelfChatCopy(selfChatLookup);
+        }
         const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
         const previewSource = pending.snippetRaw || rawBody;
         const preview = previewSource
@@ -496,6 +531,11 @@ export async function processMessage(
         });
       }
     }
+    return;
+  }
+
+  if (isSelfChatMessage && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
+    logVerbose(core, runtime, `drop: reflected self-chat duplicate sender=${message.senderId}`);
     return;
   }
 
