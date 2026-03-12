@@ -434,6 +434,38 @@ describe("setupRescueWatchdog", () => {
     });
   });
 
+  it("does not treat stopped runtime as metadata-unavailable readiness", async () => {
+    process.env.HOME = tempHome;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    process.env.OPENCLAW_PROFILE = "work";
+
+    gatewayReadRuntime.mockResolvedValue({
+      status: "stopped",
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 19_789,
+      status: "unknown",
+      listeners: [],
+      hints: [],
+      errors: [],
+    });
+
+    await expect(
+      setupRescueWatchdog({
+        sourceConfig: {
+          tools: { profile: "coding" },
+        },
+        workspaceDir: path.join(tempHome, "workspace-work"),
+        mainPort: 18_789,
+        monitoredProfile: "work",
+        runtime: "node",
+        output: {
+          log: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow("failed to prove ownership of loopback port");
+  });
+
   it("reinstalls the rescue service when the installed command drifts", async () => {
     process.env.HOME = tempHome;
     process.env.OPENCLAW_TEST_FAST = "1";

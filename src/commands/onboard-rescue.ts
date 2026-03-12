@@ -351,6 +351,7 @@ async function waitForRescueGatewayIdentity(params: {
     // Some supervisors can start a healthy gateway before exposing stable
     // runtime/PID metadata. Accept a probe-confirmed gateway in that case.
     const ownershipMetadataUnavailable =
+      runtime.status !== "stopped" &&
       (runtime.status === "unknown" || runtime.pid == null) &&
       (portUsage.status !== "busy" || portUsage.listeners.length === 0);
 
