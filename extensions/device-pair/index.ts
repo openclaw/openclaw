@@ -405,14 +405,7 @@ export default function register(api: OpenClawPluginApi) {
 
       const payload: SetupPayload = {
         url: urlResult.url,
-        bootstrapToken: (
-          await issueDeviceBootstrapToken({
-            channel: ctx.channel,
-            senderId: ctx.senderId ?? ctx.from ?? ctx.to,
-            accountId: ctx.accountId,
-            threadId: ctx.messageThreadId != null ? String(ctx.messageThreadId) : undefined,
-          })
-        ).token,
+        bootstrapToken: (await issueDeviceBootstrapToken()).token,
       };
 
       if (action === "qr") {

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -94,5 +94,21 @@ describe("device bootstrap tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+  });
+
+  it("persists only token state that verification actually consumes", async () => {
+    const baseDir = await createBaseDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const raw = await readFile(join(baseDir, "devices", "bootstrap.json"), "utf8");
+    const state = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    const record = state[issued.token];
+
+    expect(record).toMatchObject({
+      token: issued.token,
+    });
+    expect(record).not.toHaveProperty("channel");
+    expect(record).not.toHaveProperty("senderId");
+    expect(record).not.toHaveProperty("accountId");
+    expect(record).not.toHaveProperty("threadId");
   });
 });
