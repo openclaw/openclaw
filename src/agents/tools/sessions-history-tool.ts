@@ -189,7 +189,6 @@ export function createSessionsHistoryTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
-          agentId: requesterAgentId,
           sandboxed: opts?.sandboxed,
         });
       const resolvedSession = await resolveSessionReference({

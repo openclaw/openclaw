@@ -54,7 +54,6 @@ export function createSessionsSendTool(opts?: {
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
-          agentId: requesterAgentId,
           sandboxed: opts?.sandboxed,
         });
 
