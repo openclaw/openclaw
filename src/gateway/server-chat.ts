@@ -89,22 +89,26 @@ function isSilentReplyLeadFragment(text: string): boolean {
   return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
-function appendUniqueSuffix(base: string, suffix: string): string {
+export function appendUniqueSuffix(base: string, suffix: string): string {
   if (!suffix) {
     return base;
   }
   if (!base) {
     return suffix;
   }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
+  // Streaming deltas are incremental tokens — just concatenate.
+  //
+  // The previous implementation tried to detect overlapping text between the
+  // tail of `base` and the head of `suffix` and deduplicate the overlap.
+  // This is incorrect for repeated characters: when streaming "999999" one
+  // digit at a time, each "9" delta was detected as "overlapping" the
+  // previous "9" and swallowed, causing the TUI to display only "9".
+  //
+  // Providers (OpenAI-compatible, Anthropic, etc.) emit purely incremental
+  // deltas that never overlap with previously emitted content. The overlap
+  // detection was a defensive measure that caused more harm than good.
+  //
+  // Fixes #43828.
   return base + suffix;
 }
 
