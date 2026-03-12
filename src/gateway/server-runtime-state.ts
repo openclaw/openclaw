@@ -35,6 +35,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createVoiceConnectWss } from "./voice-connect-ws.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -187,10 +188,13 @@ export async function createGatewayRuntimeState(params: {
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
+  const voiceConnectWss = createVoiceConnectWss({ maxPayloadBytes: MAX_PAYLOAD_BYTES }).wss;
+
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
       httpServer: server,
       wss,
+      voiceConnectWss,
       canvasHost,
       clients,
       resolvedAuth: params.resolvedAuth,
