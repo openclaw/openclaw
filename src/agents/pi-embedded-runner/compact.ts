@@ -991,6 +991,7 @@ export async function compactEmbeddedPiSession(
         }
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
           tokenBudget: ceCtxInfo.tokens,
           currentTokenCount: params.currentTokenCount,
