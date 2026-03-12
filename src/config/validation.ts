@@ -223,6 +223,125 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 }
 
 /**
+ * Validates memorySearch provider configuration.
+ * Checks that required fields are present for each provider type.
+ */
+function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const memorySearch = config.agents?.defaults?.memorySearch;
+
+  if (!memorySearch || typeof memorySearch !== "object") {
+    return [];
+  }
+
+  const provider = memorySearch.provider;
+  const model = memorySearch.model;
+  const remote = memorySearch.remote;
+
+  // Validate openai provider
+  if (provider === "openai") {
+    if (!remote?.apiKey) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=openai requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "Example: agents.defaults.memorySearch.remote.apiKey: $OPENAI_API_KEY",
+      });
+    }
+    if (!model) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=openai requires agents.defaults.memorySearch.model to be set. " +
+          "Example: agents.defaults.memorySearch.model: text-embedding-3-small",
+      });
+    }
+  }
+
+  // Validate ollama provider
+  if (provider === "ollama") {
+    if (!remote?.baseUrl) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=ollama requires agents.defaults.memorySearch.remote.baseUrl to be set. " +
+          "Example: agents.defaults.memorySearch.remote.baseUrl: http://localhost:11434",
+      });
+    }
+    if (!model) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=ollama requires agents.defaults.memorySearch.model to be set. " +
+          "Example: agents.defaults.memorySearch.model: nomic-embed-text",
+      });
+    }
+  }
+
+  // Validate gemini provider
+  if (provider === "gemini") {
+    if (!remote?.apiKey) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=gemini requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "Example: agents.defaults.memorySearch.remote.apiKey: $GEMINI_API_KEY",
+      });
+    }
+    if (!model) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=gemini requires agents.defaults.memorySearch.model to be set. " +
+          "Example: agents.defaults.memorySearch.model: gemini-embedding-001",
+      });
+    }
+  }
+
+  // Validate voyage provider
+  if (provider === "voyage") {
+    if (!remote?.apiKey) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=voyage requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "Example: agents.defaults.memorySearch.remote.apiKey: $VOYAGE_API_KEY",
+      });
+    }
+    if (!model) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=voyage requires agents.defaults.memorySearch.model to be set. " +
+          "Example: agents.defaults.memorySearch.model: voyage-3",
+      });
+    }
+  }
+
+  // Validate mistral provider
+  if (provider === "mistral") {
+    if (!remote?.apiKey) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=mistral requires agents.defaults.memorySearch.remote.apiKey to be set. " +
+          "Example: agents.defaults.memorySearch.remote.apiKey: $MISTRAL_API_KEY",
+      });
+    }
+    if (!model) {
+      issues.push({
+        path: "agents.defaults.memorySearch",
+        message:
+          "memorySearch.provider=mistral requires agents.defaults.memorySearch.model to be set. " +
+          "Example: agents.defaults.memorySearch.model: mistral-embed",
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
@@ -265,6 +384,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const memorySearchIssues = validateMemorySearchConfig(validated.data as OpenClawConfig);
+  if (memorySearchIssues.length > 0) {
+    return { ok: false, issues: memorySearchIssues };
   }
   return {
     ok: true,

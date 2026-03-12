@@ -1,0 +1,192 @@
+import { describe, it, expect } from "vitest";
+import { validateConfigObject } from "./config.js";
+
+describe("validateConfigObject - memorySearch", () => {
+  it("accepts valid openai configuration", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            remote: {
+              apiKey: "sk-test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts valid ollama configuration", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+            remote: {
+              baseUrl: "http://localhost:11434",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts valid local configuration", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts configuration without provider (uses default)", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {},
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects openai provider without apiKey", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("apiKey");
+  });
+
+  it("rejects openai provider without model", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              apiKey: "sk-test-key",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("model");
+  });
+
+  it("rejects openai provider without apiKey and model", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(2);
+  });
+
+  it("rejects ollama provider without baseUrl", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("baseUrl");
+  });
+
+  it("rejects ollama provider without model", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            remote: {
+              baseUrl: "http://localhost:11434",
+            },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("model");
+  });
+
+  it("rejects gemini provider without apiKey", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-001",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("apiKey");
+  });
+
+  it("rejects voyage provider without apiKey", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "voyage",
+            model: "voyage-3",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("apiKey");
+  });
+
+  it("rejects mistral provider without apiKey", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "mistral",
+            model: "mistral-embed",
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toContain("apiKey");
+  });
+});
