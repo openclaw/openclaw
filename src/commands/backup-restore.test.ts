@@ -698,6 +698,50 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects config-only restore when OPENCLAW_CONFIG_PATH points to an existing directory", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const configDir = path.join(tempHome.home, "Documents");
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configDir;
+      await fs.mkdir(path.join(rootDir, "assets"), { recursive: true });
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(rootDir, "assets", "config.json"), "{}\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "config-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "config",
+                sourcePath: path.join(tempHome.home, ".openclaw", "openclaw.json"),
+                archivePath: "archive-root/assets/config.json",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(
+        /Refusing config-only restore: OPENCLAW_CONFIG_PATH resolves to an existing directory/,
+      );
+    } finally {
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");

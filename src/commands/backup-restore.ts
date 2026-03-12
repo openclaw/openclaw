@@ -454,6 +454,35 @@ function isNotFoundError(error: unknown): boolean {
   );
 }
 
+async function assertSafeConfigRestoreTarget(params: {
+  targetPath: string;
+  mode: "config-only" | "full-host";
+}): Promise<void> {
+  const resolved = await canonicalizePathForContainment(params.targetPath);
+  const homeDir = resolveHomeDir();
+  const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
+  if (isUnsafeRestoreTarget(resolved, canonicalHomeDir)) {
+    throw new Error(
+      `Refusing ${params.mode} restore: OPENCLAW_CONFIG_PATH resolves to ${resolved}, which is too broad. ` +
+        "Set it to a dedicated file path before restoring.",
+    );
+  }
+
+  try {
+    const stat = await fs.lstat(params.targetPath);
+    if (stat.isDirectory()) {
+      throw new Error(
+        `Refusing ${params.mode} restore: OPENCLAW_CONFIG_PATH resolves to an existing directory (${resolved}). ` +
+          "Set it to a dedicated file path before restoring.",
+      );
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
 async function assertSafeWorkspaceRestoreTarget(params: {
   targetPath: string;
   stateDir: string;
@@ -518,6 +547,10 @@ export async function buildRestoreOperations(params: {
   );
 
   if (params.mode === "config-only") {
+    await assertSafeConfigRestoreTarget({
+      targetPath: configPath,
+      mode: "config-only",
+    });
     const configSourcePath =
       (configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
       tryResolveExtractedConfigPath({
@@ -542,9 +575,12 @@ export async function buildRestoreOperations(params: {
     // (e.g. $HOME or /) that would clobber unrelated user data on restore.
     const homeDir = resolveHomeDir();
     const canonicalHomeDir = homeDir ? await canonicalizePathForContainment(homeDir) : undefined;
+    await assertSafeConfigRestoreTarget({
+      targetPath: configPath,
+      mode: "full-host",
+    });
     for (const [label, targetPath] of [
       ["OPENCLAW_STATE_DIR", stateDir],
-      ["OPENCLAW_CONFIG_PATH", configPath],
       ["OPENCLAW_OAUTH_DIR", oauthDir],
     ] as const) {
       const resolved = await canonicalizePathForContainment(targetPath);
