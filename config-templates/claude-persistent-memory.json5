@@ -1,0 +1,167 @@
+// OpenClaw Configuration Template
+// Claude-based Persistent Memory Workflows
+//
+// Copy to ~/.openclaw/openclaw.json and customize
+// Documentation: https://docs.openclaw.ai/integrations/persistent-memory-workflows
+
+{
+  // Gateway configuration
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "auth": {
+      "enabled": false, // Enable for production
+      // "token": "${OPENCLAW_AUTH_TOKEN}"
+    }
+  },
+
+  // Memory system configuration
+  "memory": {
+    "enabled": true,
+
+    // Backend configuration (qmd for vector search)
+    "backend": {
+      "type": "qmd",
+      "path": "~/.openclaw/memory"
+    },
+
+    // Embedding configuration for semantic search
+    "embedding": {
+      // Options: voyage, openai, gemini, mistral, local
+      "provider": "voyage",
+      "model": "voyage-3",
+      // Fallback if primary fails
+      "fallback": {
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      }
+    },
+
+    // Semantic memory (long-term knowledge)
+    "semantic": {
+      "enabled": true,
+      "threshold": 0.75,
+      "maxResults": 10,
+      "contextWindow": 8000
+    },
+
+    // Episodic memory (session history)
+    "episodic": {
+      "enabled": true,
+      "retention": "30d",
+      "maxTokens": 100000
+    },
+
+    // Sync settings
+    "sync": {
+      "auto": true,
+      "interval": "5m",
+      "onShutdown": true
+    },
+
+    // Memory hygiene
+    "hygiene": {
+      "enabled": true,
+      "pruneAfter": "90d",
+      "deduplication": "weekly"
+    },
+
+    // Privacy filters
+    "filters": {
+      "exclude": ["password", "secret", "api_key", "token"],
+      "piiDetection": false,
+      "anonymize": false
+    }
+  },
+
+  // Agent configuration
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "name": "Primary Agent",
+
+        // Model configuration
+        "model": {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4-6",
+          "fallback": [
+            { "provider": "anthropic", "model": "claude-haiku-4-5" }
+          ]
+        },
+
+        // Memory search integration
+        "memorySearch": {
+          "enabled": true,
+          "autoInject": true,
+          "contextWindow": 8000,
+          "threshold": 0.7
+        },
+
+        // Subagent configuration
+        "subagents": {
+          "enabled": true,
+          "maxConcurrent": 3,
+          "memorySharing": true,
+          "defaultModel": "claude-sonnet-4-6"
+        },
+
+        // Workspace configuration
+        "workspace": "~/.openclaw/workspace",
+
+        // Skills enabled for this agent
+        "skills": {
+          "enabled": true,
+          "allow": ["*"],
+          "deny": []
+        }
+      }
+    ]
+  },
+
+  // MCP server configuration
+  "mcp": {
+    "enabled": true,
+
+    // Stdio transport (default for Claude Code)
+    "stdio": {
+      "enabled": true
+    },
+
+    // Browser transport (for web clients)
+    "browser": {
+      "enabled": true,
+      "port": 8765,
+      "host": "127.0.0.1",
+      "cors": {
+        "origin": ["http://localhost:*", "http://127.0.0.1:*"],
+        "credentials": false
+      }
+    },
+
+    // Workspace sandboxing
+    "workspace": {
+      "root": "~/.openclaw/workspace",
+      "allowEscape": false
+    }
+  },
+
+  // Browser control (optional)
+  "browser": {
+    "enabled": false, // Enable if needed
+    "controlPort": 9222,
+    "profiles": {
+      "default": {
+        "headless": true
+      }
+    }
+  },
+
+  // Logging configuration
+  "logging": {
+    "level": "info",
+    "file": "~/.openclaw/logs/openclaw.log",
+    "maxSize": "10m",
+    "maxFiles": 5
+  }
+}
