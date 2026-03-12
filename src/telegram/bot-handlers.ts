@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -1397,26 +1398,13 @@ export const registerTelegramHandlers = ({
               agentId: sessionState.agentId,
             });
 
-            const agentConfig = cfg.agents?.list?.find((a) => a.id === sessionState.agentId);
-            const agentModelConfig = agentConfig?.model ?? cfg.agents?.defaults?.model;
-            const rawModelRef =
-              typeof agentModelConfig === "string" ? agentModelConfig : agentModelConfig?.primary;
-
-            let resolvedDefaultRef = sessionState.model;
-            if (rawModelRef) {
-              const trimmed = rawModelRef.trim();
-              if (trimmed.includes("/")) {
-                resolvedDefaultRef = trimmed;
-              } else {
-                const currentProvider = sessionState.model?.split("/")[0];
-                resolvedDefaultRef = currentProvider
-                  ? `${currentProvider}/${trimmed}`
-                  : sessionState.model;
-              }
-            }
-
+            const resolvedDefault = resolveDefaultModelForAgent({
+              cfg,
+              agentId: sessionState.agentId,
+            });
             const isDefaultSelection =
-              `${selection.provider}/${selection.model}` === resolvedDefaultRef;
+              selection.provider === resolvedDefault.provider &&
+              selection.model === resolvedDefault.model;
 
             await updateSessionStore(storePath, (store) => {
               const sessionKey = sessionState.sessionKey;
