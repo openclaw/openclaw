@@ -6,6 +6,7 @@ import {
   normalizeCommandBody,
 } from "./commands-registry.js";
 import { isAbortTrigger } from "./reply/abort.js";
+import { normalizeThinkLevel } from "./thinking.js";
 
 export function hasControlCommand(
   text?: string,
@@ -45,6 +46,27 @@ export function hasControlCommand(
   return false;
 }
 
+/**
+ * Detect one-shot think messages: `/think <level> <body>`.
+ * These should NOT be treated as control commands — they carry a message body
+ * that needs AI processing, with the think level applied for that single message only.
+ */
+export function isOneShotThinkMessage(text?: string, options?: CommandNormalizeOptions): boolean {
+  if (!text) {
+    return false;
+  }
+  const body = normalizeCommandBody(text.trim(), options);
+  if (!body) {
+    return false;
+  }
+  // normalizeCommandBody resolves aliases (/t, /thinking → /think), so only match canonical form.
+  const match = body.match(/^\/think\s+(\S+)\s+\S/i);
+  if (!match) {
+    return false;
+  }
+  return normalizeThinkLevel(match[1]) !== undefined;
+}
+
 export function isControlCommandMessage(
   text?: string,
   cfg?: OpenClawConfig,
@@ -58,6 +80,10 @@ export function isControlCommandMessage(
     return false;
   }
   if (hasControlCommand(trimmed, cfg, options)) {
+    // One-shot think: /think <level> <body> routes to AI reply path, not command path.
+    if (isOneShotThinkMessage(trimmed, options)) {
+      return false;
+    }
     return true;
   }
   const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();

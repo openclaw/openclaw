@@ -244,14 +244,20 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        // Preserve think level as one-shot when clearing directives due to body text.
+        // This enables `/think <level> <body>` to apply the level for one message only.
+        const oneShotThinkLevel = parsedDirectives.hasThinkDirective
+          ? parsedDirectives.thinkLevel
+          : undefined;
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
         parsedDirectives = allowInlineStatus
           ? {
               ...clearInlineDirectives(parsedDirectives.cleaned),
               hasStatusDirective: true,
+              oneShotThinkLevel,
             }
-          : clearInlineDirectives(parsedDirectives.cleaned);
+          : { ...clearInlineDirectives(parsedDirectives.cleaned), oneShotThinkLevel };
       }
     }
   }
@@ -262,6 +268,7 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        oneShotThinkLevel: undefined,
         hasVerboseDirective: false,
         hasFastDirective: false,
         hasReasoningDirective: false,
@@ -342,8 +349,13 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  // thinkLevel: session-persistent directive (pure `/think <level>` command).
+  // oneShotThinkLevel: non-persistent, set when `/think <level> <body>` has message text.
+  // In one-shot path, thinkLevel is cleared by clearInlineDirectives; oneShotThinkLevel carries it.
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    directives.thinkLevel ??
+    directives.oneShotThinkLevel ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedFastMode =
     directives.fastMode ??
     resolveFastModeState({
