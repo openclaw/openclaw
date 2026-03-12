@@ -9,6 +9,9 @@ const {
   triggerInternalHook,
   sanitizeSessionHistoryMock,
   contextEngineCompactMock,
+  getMemorySearchManagerMock,
+  resolveMemorySearchConfigMock,
+  resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   hookRunner: {
     hasHooks: vi.fn(),
@@ -38,6 +41,20 @@ const {
       | { summary: string; tokensAfter: number }
       | undefined,
   })),
+  getMemorySearchManagerMock: vi.fn(async () => ({
+    manager: {
+      sync: vi.fn(async () => {}),
+    },
+  })),
+  resolveMemorySearchConfigMock: vi.fn(() => ({
+    sources: ["sessions"],
+    sync: {
+      sessions: {
+        postCompactionForce: true,
+      },
+    },
+  })),
+  resolveSessionAgentIdMock: vi.fn(() => "main"),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -211,7 +228,16 @@ vi.mock("../agent-paths.js", () => ({
 }));
 
 vi.mock("../agent-scope.js", () => ({
+  resolveSessionAgentId: resolveSessionAgentIdMock,
   resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
+}));
+
+vi.mock("../memory-search.js", () => ({
+  resolveMemorySearchConfig: resolveMemorySearchConfigMock,
+}));
+
+vi.mock("../../memory/index.js", () => ({
+  getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
 vi.mock("../date-time.js", () => ({
@@ -314,6 +340,23 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
       return params.messages;
     });
+    getMemorySearchManagerMock.mockReset();
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: {
+        sync: vi.fn(async () => {}),
+      },
+    });
+    resolveMemorySearchConfigMock.mockReset();
+    resolveMemorySearchConfigMock.mockReturnValue({
+      sources: ["sessions"],
+      sync: {
+        sessions: {
+          postCompactionForce: true,
+        },
+      },
+    });
+    resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdMock.mockReturnValue("main");
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -450,6 +493,47 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("awaits post-compaction memory sync with the resolved force flag", async () => {
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    resolveMemorySearchConfigMock.mockReturnValue({
+      sources: ["sessions"],
+      sync: {
+        sessions: {
+          postCompactionForce: false,
+        },
+      },
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              postIndexSync: "await",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
+      sessionKey: "agent:main:session-1",
+      config: expect.any(Object),
+    });
+    expect(sync).toHaveBeenCalledWith({
+      reason: "post-compaction",
+      force: false,
+      sessionFiles: ["/tmp/session.jsonl"],
+    });
   });
 
   it("registers the Ollama api provider before compaction", async () => {

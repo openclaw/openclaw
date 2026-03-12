@@ -281,6 +281,7 @@ function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "a
 async function syncPostCompactionSessionMemory(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  sessionFile: string;
   mode: "off" | "async" | "await";
 }): Promise<void> {
   if (params.mode === "off" || !params.config) {
@@ -305,6 +306,7 @@ async function syncPostCompactionSessionMemory(params: {
     const syncTask = manager.sync({
       reason: "post-compaction",
       force: resolvedMemory.sync.sessions.postCompactionForce,
+      sessionFiles: [params.sessionFile],
     });
     if (params.mode === "await") {
       await syncTask;
@@ -863,6 +865,7 @@ export async function compactEmbeddedPiSessionDirect(
         await syncPostCompactionSessionMemory({
           config: params.config,
           sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
           mode: resolvePostCompactionIndexSyncMode(params.config),
         });
         // Estimate tokens after compaction by summing token estimates for remaining messages

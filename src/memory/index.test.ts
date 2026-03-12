@@ -461,6 +461,97 @@ describe("memory index", () => {
     }
   });
 
+  it("targets explicit session files during forced sync", async () => {
+    const stateDir = path.join(fixtureRoot, `state-targeted-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const firstSessionPath = path.join(sessionDir, "targeted-first.jsonl");
+    const secondSessionPath = path.join(sessionDir, "targeted-second.jsonl");
+    const storePath = path.join(workspaceDir, `index-targeted-${randomUUID()}.sqlite`);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      firstSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "first transcript v1" }] },
+      })}\n`,
+    );
+    await fs.writeFile(
+      secondSessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "second transcript v1" }] },
+      })}\n`,
+    );
+
+    try {
+      const result = await getMemorySearchManager({
+        cfg: createCfg({
+          storePath,
+          sources: ["sessions"],
+          sessionMemory: true,
+        }),
+        agentId: "main",
+      });
+      const manager = requireManager(result);
+      await manager.sync?.({ reason: "test" });
+
+      const db = (manager as unknown as {
+        db: {
+          prepare: (
+            sql: string,
+          ) => { get: (path: string, source: string) => { hash: string } | undefined };
+        };
+      }).db;
+      const getSessionHash = (sessionPath: string) =>
+        db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`).get(sessionPath, "sessions")
+          ?.hash;
+
+      const firstOriginalHash = getSessionHash("sessions/targeted-first.jsonl");
+      const secondOriginalHash = getSessionHash("sessions/targeted-second.jsonl");
+
+      await fs.writeFile(
+        firstSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "first transcript v2 after compaction" }],
+          },
+        })}\n`,
+      );
+      await fs.writeFile(
+        secondSessionPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "second transcript v2 should stay untouched" }],
+          },
+        })}\n`,
+      );
+
+      await manager.sync?.({
+        reason: "post-compaction",
+        force: true,
+        sessionFiles: [firstSessionPath],
+      });
+
+      expect(getSessionHash("sessions/targeted-first.jsonl")).not.toBe(firstOriginalHash);
+      expect(getSessionHash("sessions/targeted-second.jsonl")).toBe(secondOriginalHash);
+      await manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reindexes when the embedding model changes", async () => {
     const base = createCfg({ storePath: indexModelPath });
     const baseAgents = base.agents!;
