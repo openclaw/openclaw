@@ -199,15 +199,16 @@ export async function sendPollMatrix(
 export async function sendTypingMatrix(
   roomId: string,
   typing: boolean,
-  timeoutMs?: number,
+  opts?: { typingTimeoutMs?: number; clientTimeoutMs?: number },
   client?: MatrixClient,
 ): Promise<void> {
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
     client,
-    timeoutMs,
+    timeoutMs: opts?.clientTimeoutMs,
   });
   try {
-    const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
+    const resolvedTimeoutMs =
+      typeof opts?.typingTimeoutMs === "number" ? opts.typingTimeoutMs : 30_000;
     await resolved.setTyping(roomId, typing, resolvedTimeoutMs);
   } finally {
     if (stopOnDone) {

@@ -346,6 +346,19 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 30_000);
   });
 
+  it("supports a custom typing timeout without changing the API meaning", async () => {
+    const setTyping = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      setTyping,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+
+    await sendTypingMatrix("!room:example.org", true, { typingTimeoutMs: 5_000 }, client);
+
+    expect(setTyping).toHaveBeenCalledTimes(1);
+    expect(setTyping).toHaveBeenCalledWith("!room:example.org", true, 5_000);
+  });
+
   it("uses sdk typing stop semantics", async () => {
     const setTyping = vi.fn().mockResolvedValue(undefined);
     const client = {
