@@ -299,10 +299,12 @@ export async function finalizeOnboardingWizard(
   }
 
   if (rescueWatchdogEnabled && !primaryManagedServiceReady) {
-    await prompter.note(
-      "Rescue watchdog requires a healthy primary managed service. Gateway service install failed during onboarding, so rescue watchdog was skipped.",
-      "Rescue watchdog",
-    );
+    const skipMessage =
+      "Rescue watchdog requires a healthy primary managed service. Gateway service install failed during onboarding, so rescue watchdog was skipped.";
+    await prompter.note(skipMessage, "Rescue watchdog");
+    if (explicitRescueWatchdog) {
+      throw new Error(skipMessage);
+    }
   } else if (rescueWatchdogEnabled) {
     try {
       await setupRescueWatchdog({

@@ -492,8 +492,15 @@ async function loadExistingRescueConfig(
   }
   try {
     await fs.access(configPath);
-  } catch {
-    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return undefined;
+    }
+    throw new Error(
+      `Rescue watchdog setup failed: existing rescue profile config at "${configPath}" could not be accessed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
   const io = createConfigIO({ env });
   try {

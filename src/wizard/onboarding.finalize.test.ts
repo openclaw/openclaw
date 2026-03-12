@@ -380,7 +380,7 @@ describe("finalizeOnboardingWizard", () => {
     );
   });
 
-  it("skips rescue watchdog when the primary managed service install fails", async () => {
+  it("fails when explicit --rescue-watchdog is skipped after primary managed service install fails", async () => {
     gatewayServiceInstall.mockRejectedValueOnce(new Error("boom"));
     const note = vi.fn(async () => {});
     const prompter = buildWizardPrompter({
@@ -394,37 +394,41 @@ describe("finalizeOnboardingWizard", () => {
       note: note as never,
     });
 
-    await finalizeOnboardingWizard({
-      flow: "advanced",
-      opts: {
-        acceptRisk: true,
-        authChoice: "skip",
-        installDaemon: false,
-        rescueWatchdog: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      baseConfig: {},
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "session-token",
+    await expect(
+      finalizeOnboardingWizard({
+        flow: "advanced",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          rescueWatchdog: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        baseConfig: {},
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "session-token",
+            },
           },
         },
-      },
-      workspaceDir: "/tmp",
-      settings: {
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        gatewayToken: "session-token",
-        tailscaleMode: "off",
-        tailscaleResetOnExit: false,
-      },
-      prompter,
-      runtime: createRuntime(),
-    });
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "session-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow(
+      "Rescue watchdog requires a healthy primary managed service. Gateway service install failed during onboarding, so rescue watchdog was skipped.",
+    );
 
     expect(setupRescueWatchdog).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
