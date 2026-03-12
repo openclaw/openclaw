@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/zalouser",
-  "version": "2026.3.9",
+  "version": "2026.3.10",
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
   "type": "module",
   "dependencies": {
