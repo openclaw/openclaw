@@ -452,7 +452,13 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
         const aptResult = await runCommandSafely(cmd, { timeoutMs });
         if (aptResult.code === 0) {
           return withWarnings(
-            { ok: true, message: `Installed ${spec.formula} via apt-get (brew unavailable)` },
+            {
+              ok: true,
+              message: `Installed ${spec.formula} via apt-get (brew unavailable)`,
+              stdout: aptResult.stdout.trim(),
+              stderr: aptResult.stderr.trim(),
+              code: aptResult.code,
+            },
             warnings,
           );
         }
