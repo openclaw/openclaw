@@ -2198,7 +2198,7 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
           {
             id: "hf:MiniMaxAI/MiniMax-M2.5",
             name: "MiniMax M2.5",
-            reasoning: false,
+            reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 192000,
@@ -2238,7 +2238,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
           {
             id: "MiniMax-M2.5",
             name: "MiniMax M2.5",
-            reasoning: false,
+            reasoning: true,
             input: ["text"],
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,
