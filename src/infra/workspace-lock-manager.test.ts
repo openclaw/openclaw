@@ -252,7 +252,7 @@ describe("workspace lock manager", () => {
     openSpy.mockRestore();
   });
 
-  it("canonicalizes file lock aliases through symlinked parent paths", async () => {
+  it("blocks same-process alias contention on the same canonical file", async () => {
     const dir = await makeCaseDir();
     const realDir = path.join(dir, "real");
     const aliasDir = path.join(dir, "alias");
@@ -269,17 +269,24 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
+    await expect(
+      acquireWorkspaceLock(aliasTarget, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    await lockA.release();
+
     const lockB = await acquireWorkspaceLock(aliasTarget, {
       kind: "file",
-      timeoutMs: 25,
+      timeoutMs: 100,
       pollIntervalMs: 5,
       ttlMs: 5_000,
     });
-
-    expect(lockA.lockPath).toBe(lockB.lockPath);
-
     await lockB.release();
-    await lockA.release();
   });
 
   it("canonicalizes file path casing when realpath provides canonical case", async () => {
@@ -308,17 +315,25 @@ describe("workspace lock manager", () => {
         pollIntervalMs: 5,
         ttlMs: 5_000,
       });
+
+      await expect(
+        acquireWorkspaceLock(mixedCaseAlias, {
+          kind: "file",
+          timeoutMs: 25,
+          pollIntervalMs: 5,
+          ttlMs: 5_000,
+        }),
+      ).rejects.toThrow(/workspace lock timeout/);
+
+      await lockA.release();
+
       const lockB = await acquireWorkspaceLock(mixedCaseAlias, {
         kind: "file",
         timeoutMs: 100,
         pollIntervalMs: 5,
         ttlMs: 5_000,
       });
-
-      expect(lockA.lockPath).toBe(lockB.lockPath);
-
       await lockB.release();
-      await lockA.release();
     } finally {
       realpathSpy.mockRestore();
     }
@@ -353,6 +368,18 @@ describe("workspace lock manager", () => {
 
     await fs.mkdir(path.dirname(target), { recursive: true });
 
+    await expect(
+      acquireWorkspaceLock(target, {
+        kind: "file",
+        timeoutMs: 25,
+        pollIntervalMs: 5,
+        ttlMs: 5_000,
+      }),
+    ).rejects.toThrow(/workspace lock timeout/);
+
+    const firstPath = lockA.lockPath;
+    await lockA.release();
+
     const lockB = await acquireWorkspaceLock(target, {
       kind: "file",
       timeoutMs: 100,
@@ -360,10 +387,8 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
-    expect(lockA.lockPath).toBe(lockB.lockPath);
-
+    expect(firstPath).toBe(lockB.lockPath);
     await lockB.release();
-    await lockA.release();
   });
 
   it("backs off when stale lock deletion fails", async () => {

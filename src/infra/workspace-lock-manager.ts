@@ -28,7 +28,6 @@ type LockPayload = {
 };
 
 type HeldLock = {
-  count: number;
   lockPath: string;
   token: string;
   ttlMs: number;
@@ -169,11 +168,6 @@ async function releaseLock(mapKey: string): Promise<void> {
     return;
   }
 
-  held.count -= 1;
-  if (held.count > 0) {
-    return;
-  }
-
   HELD_WORKSPACE_LOCKS.delete(mapKey);
   const payload = await readPayload(held.lockPath);
   if (!payload || payload.token !== held.token) {
@@ -196,15 +190,8 @@ export async function acquireWorkspaceLock(
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   const mapKey = lockMapKey(kind, normalizedTarget);
 
-  const held = HELD_WORKSPACE_LOCKS.get(mapKey);
-  if (held) {
-    held.count += 1;
-    return {
-      lockPath,
-      release: () => releaseLock(mapKey),
-      refresh: () => refreshLock(mapKey),
-    };
-  }
+  // Do not allow implicit same-process reentrancy here. Callers must serialize
+  // before acquisition (e.g. via per-target queues) so critical sections remain exclusive.
 
   const startedAt = Date.now();
   const sleep = async (ms: number): Promise<void> => {
@@ -233,7 +220,7 @@ export async function acquireWorkspaceLock(
       }
 
       await handle.close();
-      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath, token: payload.token, ttlMs });
+      HELD_WORKSPACE_LOCKS.set(mapKey, { lockPath, token: payload.token, ttlMs });
       return {
         lockPath,
         release: () => releaseLock(mapKey),
