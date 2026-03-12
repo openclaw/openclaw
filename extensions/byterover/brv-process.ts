@@ -36,15 +36,6 @@ export type BrvQueryResult = {
   error?: string;
 };
 
-export type BrvStatusResult = {
-  cliVersion?: string;
-  authStatus: "logged_in" | "not_logged_in" | "expired" | "unknown";
-  userEmail?: string;
-  currentDirectory?: string;
-  contextTreeStatus?: "has_changes" | "no_changes" | "not_initialized" | "unknown";
-  error?: string;
-};
-
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -70,6 +61,7 @@ function runBrv(params: {
   cwd: string;
   timeoutMs: number;
   logger: PluginLogger;
+  signal?: AbortSignal;
   maxOutputChars?: number;
 }): Promise<{ stdout: string; stderr: string }> {
   const maxOutput = params.maxOutputChars ?? 512_000;
@@ -79,6 +71,22 @@ function runBrv(params: {
   );
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+
+    function settle(
+      outcome: "resolve" | "reject",
+      value: { stdout: string; stderr: string } | Error,
+    ) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (outcome === "resolve") {
+        resolve(value as { stdout: string; stderr: string });
+      } else {
+        reject(value);
+      }
+    }
+
     const child = spawn(params.brvPath, params.args, {
       cwd: params.cwd,
       env: process.env,
@@ -90,14 +98,31 @@ function runBrv(params: {
 
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`brv ${params.args[0]} timed out after ${params.timeoutMs}ms`));
+      settle("reject", new Error(`brv ${params.args[0]} timed out after ${params.timeoutMs}ms`));
     }, params.timeoutMs);
+
+    // External cancellation via AbortSignal (used by assemble deadline)
+    if (params.signal) {
+      if (params.signal.aborted) {
+        child.kill("SIGKILL");
+        settle("reject", new Error(`brv ${params.args[0]} aborted`));
+      } else {
+        params.signal.addEventListener(
+          "abort",
+          () => {
+            child.kill("SIGKILL");
+            settle("reject", new Error(`brv ${params.args[0]} aborted`));
+          },
+          { once: true },
+        );
+      }
+    }
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       if (stdout.length > maxOutput) {
         child.kill("SIGKILL");
-        reject(new Error(`brv ${params.args[0]} output exceeded ${maxOutput} chars`));
+        settle("reject", new Error(`brv ${params.args[0]} output exceeded ${maxOutput} chars`));
       }
     });
 
@@ -106,9 +131,9 @@ function runBrv(params: {
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        reject(
+        settle(
+          "reject",
           new Error(
             `ByteRover CLI not found at "${params.brvPath}". ` +
               `Install it (https://www.byterover.dev) or set brvPath in plugin config.`,
@@ -117,20 +142,19 @@ function runBrv(params: {
         return;
       }
       params.logger.warn(`spawn error: ${err.message}`);
-      reject(err);
+      settle("reject", err);
     });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
       if (code === 0) {
         params.logger.debug?.(
           `exit 0 (stdout=${stdout.length} chars, stderr=${stderr.length} chars)`,
         );
-        resolve({ stdout, stderr });
+        settle("resolve", { stdout, stderr });
       } else {
         const errMsg = `brv ${params.args[0]} failed (exit ${code}): ${stderr || stdout}`;
         params.logger.warn(errMsg);
-        reject(new Error(errMsg));
+        settle("reject", new Error(errMsg));
       }
     });
   });
@@ -196,6 +220,7 @@ export async function brvQuery(params: {
   config: BrvProcessConfig;
   logger: PluginLogger;
   query: string;
+  signal?: AbortSignal;
 }): Promise<BrvJsonResponse<BrvQueryResult>> {
   const brvPath = params.config.brvPath ?? "brv";
   const cwd = params.config.cwd ?? process.cwd();
@@ -204,22 +229,13 @@ export async function brvQuery(params: {
   // "--" terminates flags so user text starting with "-" isn't parsed as a brv option
   const args = ["query", "--format", "json", "--", params.query];
 
-  const { stdout } = await runBrv({ brvPath, args, cwd, timeoutMs, logger: params.logger });
+  const { stdout } = await runBrv({
+    brvPath,
+    args,
+    cwd,
+    timeoutMs,
+    logger: params.logger,
+    signal: params.signal,
+  });
   return parseLastJsonLine<BrvQueryResult>(stdout);
-}
-
-/**
- * Run `brv status` to check CLI health and context tree state.
- */
-export async function brvStatus(params: {
-  config: BrvProcessConfig;
-  logger: PluginLogger;
-}): Promise<BrvJsonResponse<BrvStatusResult>> {
-  const brvPath = params.config.brvPath ?? "brv";
-  const cwd = params.config.cwd ?? process.cwd();
-
-  const args = ["status", "--format", "json"];
-
-  const { stdout } = await runBrv({ brvPath, args, cwd, timeoutMs: 10_000, logger: params.logger });
-  return parseLastJsonLine<BrvStatusResult>(stdout);
 }
