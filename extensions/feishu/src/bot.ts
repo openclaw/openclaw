@@ -306,7 +306,7 @@ function resolveFeishuGroupSession(params: {
   };
 }
 
-function parseInteractiveCardContent(parsed: unknown, rawContent: string): string {
+function parseInteractiveCardContent(parsed: unknown): string {
   if (!parsed || typeof parsed !== "object") {
     return "[Interactive Card]";
   }
@@ -314,7 +314,6 @@ function parseInteractiveCardContent(parsed: unknown, rawContent: string): strin
   const card = parsed as {
     header?: { title?: { content?: unknown } };
     elements?: unknown;
-    body?: { elements?: unknown };
   };
 
   const texts: string[] = [];
@@ -322,21 +321,10 @@ function parseInteractiveCardContent(parsed: unknown, rawContent: string): strin
   const headerTitle = card.header?.title?.content;
   if (typeof headerTitle === "string" && headerTitle.trim()) {
     texts.push(headerTitle.trim());
-  } else if (headerTitle && typeof headerTitle === "object") {
-    const maybeHeaderContent = (headerTitle as { content?: unknown }).content;
-    if (typeof maybeHeaderContent === "string" && maybeHeaderContent.trim()) {
-      texts.push(maybeHeaderContent.trim());
-    }
   }
 
-  const elements = Array.isArray(card.elements)
-    ? card.elements
-    : Array.isArray(card.body?.elements)
-      ? card.body?.elements
-      : null;
-
-  if (elements) {
-    for (const element of elements) {
+  if (Array.isArray(card.elements)) {
+    for (const element of card.elements) {
       if (!element || typeof element !== "object") continue;
       const item = element as {
         tag?: string;
@@ -368,13 +356,7 @@ function parseInteractiveCardContent(parsed: unknown, rawContent: string): strin
     }
   }
 
-  const text = texts.join("\n").trim();
-  if (text) return text;
-
-  const fallback = rawContent.trim();
-  if (fallback) return fallback;
-
-  return "[Interactive Card]";
+  return texts.join("\n").trim() || "[Interactive Card]";
 }
 
 function parseMessageContent(content: string, messageType: string): string {
@@ -391,7 +373,7 @@ function parseMessageContent(content: string, messageType: string): string {
     }
     if (messageType === "interactive" || messageType === "interactive_card") {
       // Convert interactive card JSON into readable text.
-      return parseInteractiveCardContent(parsed, content);
+      return parseInteractiveCardContent(parsed);
     }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.
@@ -518,7 +500,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "interactive":
       case "interactive_card":
-        return parseInteractiveCardContent(parsed, content);
+        return parseInteractiveCardContent(parsed);
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
