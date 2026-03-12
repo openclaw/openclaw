@@ -81,6 +81,14 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "venv",
   ".tox",
   "__pycache__",
+  "dist",
+  "build",
+  ".cache",
+  "target",
+  ".next",
+  ".nuxt",
+  "coverage",
+  ".turbo",
 ]);
 
 const log = createSubsystemLogger("memory");
