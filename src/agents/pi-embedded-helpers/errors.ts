@@ -431,7 +431,7 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 529) {
     return "overloaded";
   }
-  if (status === 400) {
+  if (status === 400 || status === 422) {
     // Some providers return quota/balance errors under HTTP 400, so do not
     // let the generic format fallback mask an explicit billing signal.
     if (message && isBillingErrorMessage(message)) {

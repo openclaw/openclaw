@@ -69,6 +69,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
+    expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
     // Keep the status-only path behavior-preserving and conservative.
     expect(resolveFailoverReasonFromError({ status: 500 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
@@ -158,6 +159,44 @@ describe("failover-error", () => {
       resolveFailoverReasonFromError({
         status: 400,
         message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+  });
+
+  it("treats HTTP 422 as format error", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+      }),
+    ).toBe("format");
+  });
+
+  it("treats 422 with billing message as billing instead of format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
+  });
+
+  it("classifies OpenRouter 'requires more credits' text as billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "This model requires more credits to use",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 402,
+        message: "This model require more credits",
       }),
     ).toBe("billing");
   });
