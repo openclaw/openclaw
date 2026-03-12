@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+import type { UiSettings } from "../storage.ts";
 import { shouldShowPairingHint } from "./overview-hints.ts";
+import { updateOverviewGatewayUrl } from "./overview-settings.ts";
+
+function createSettings(overrides: Partial<UiSettings> = {}): UiSettings {
+  return {
+    gatewayUrl: "ws://127.0.0.1:18789",
+    token: "abc123",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "system",
+    chatFocusMode: false,
+    chatShowThinking: true,
+    splitRatio: 0.6,
+    navCollapsed: false,
+    navGroupsCollapsed: {},
+    ...overrides,
+  };
+}
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {
@@ -35,5 +53,16 @@ describe("shouldShowPairingHint", () => {
         ConnectErrorDetailCodes.PAIRING_REQUIRED,
       ),
     ).toBe(true);
+  });
+});
+
+describe("updateOverviewGatewayUrl", () => {
+  it("preserves the current token while editing the gateway URL", () => {
+    expect(
+      updateOverviewGatewayUrl(createSettings(), "wss://other-gateway.example/openclaw"),
+    ).toMatchObject({
+      gatewayUrl: "wss://other-gateway.example/openclaw",
+      token: "abc123",
+    });
   });
 });
