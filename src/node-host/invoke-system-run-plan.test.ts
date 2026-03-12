@@ -364,6 +364,13 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 2,
     },
     {
+      name: "bunx tsx file",
+      argv: ["bunx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
       name: "npm exec tsx file",
       argv: ["npm", "exec", "--", "tsx", "./run.ts"],
       scriptName: "run.ts",
@@ -374,7 +381,9 @@ describe("hardenApprovedExecutionPaths", () => {
 
   for (const runtimeCase of mutableOperandCases) {
     it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
-      const binNames = runtimeCase.binName ? [runtimeCase.binName] : ["pnpm", "npm", "npx", "tsx"];
+      const binNames = runtimeCase.binName
+        ? [runtimeCase.binName]
+        : ["bunx", "pnpm", "npm", "npx", "tsx"];
       withFakeRuntimeBins({
         binNames,
         run: () => {
