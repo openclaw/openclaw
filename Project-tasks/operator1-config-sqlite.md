@@ -2,7 +2,7 @@
 
 **Status:** Implementation Guide (Approved Direction)
 **Created:** 2026-03-05
-**Updated:** 2026-03-11
+**Updated:** 2026-03-12
 **Author:** Operator1 (from Rohit's request)
 
 ---
@@ -771,46 +771,48 @@ Gateway RPC → UI / CLI / Agents
 > **Safety-first:** The export/rollback CLI is built before any data migration, so every
 > subsequent phase has a tested rollback path from day one.
 
-- [ ] Create `src/infra/state-db/connection.ts` — singleton `DatabaseSync` (node:sqlite), WAL mode, `synchronous=NORMAL`, `busy_timeout=5000`, `wal_autocheckpoint=1000`
-- [ ] Create `src/infra/state-db/schema.ts` — schema version tracking + all P0 table definitions (prefixed names)
-- [ ] Create `src/infra/state-db/integrity.ts` — `PRAGMA integrity_check` on startup; if corrupt, log error, rename corrupt DB, create fresh empty DB
-- [ ] Create `src/infra/state-db/retention.ts` — scheduled cleanup for cron_runs, audit tables, delivery_queue
-- [ ] Create `src/infra/state-db/index.ts` — `getStateDb()` export, auto-create on first access
-- [ ] DB location: `~/.openclaw/operator1.db`
-- [ ] `openclaw state export --format json` — dump DB to JSON files (rollback safety net)
-- [ ] `openclaw state info` — show DB location, size, table stats, integrity status
-- [ ] Tests for DB creation, WAL mode, schema versioning, integrity check, export
+- [x] Create `src/infra/state-db/connection.ts` — singleton `DatabaseSync` (node:sqlite), WAL mode, `synchronous=NORMAL`, `busy_timeout=5000`, `wal_autocheckpoint=1000`
+- [x] Create `src/infra/state-db/schema.ts` — schema version tracking + all P0 table definitions (prefixed names)
+- [x] Create `src/infra/state-db/integrity.ts` — `PRAGMA integrity_check` on startup; if corrupt, log error, rename corrupt DB, create fresh empty DB
+- [x] Create `src/infra/state-db/retention.ts` — scheduled cleanup for cron_runs, audit tables, delivery_queue
+- [x] Create `src/infra/state-db/index.ts` — `getStateDb()` export, auto-create on first access
+- [x] DB location: `~/.openclaw/operator1.db`
+- [x] `openclaw state export --format json` — dump DB to JSON files (rollback safety net)
+- [x] `openclaw state info` — show DB location, size, table stats, integrity status
+- [x] Tests for DB creation, WAL mode, schema versioning, integrity check, export
 
 ### Phase 1: Sessions → SQLite (P0, 2-3 days)
 
-- [ ] Rewrite `src/config/sessions/store.ts` — replace JSON file I/O with SQLite `session_entries` table
-- [ ] Keep the same exported function signatures (`loadSessionStore`, `saveSessionStore`, `updateSessionStore`) but backed by SQLite
-- [ ] Replace pruning/capping with `DELETE FROM session_entries WHERE updated_at < ?`
-- [ ] Eliminate in-process lock queue (SQLite WAL handles read concurrency; see Technical Notes for write contention)
-- [ ] Create `store-migrate.ts` — one-shot JSON → SQLite migration for existing session files
-- [ ] All existing session tests pass
+- [x] Rewrite `src/config/sessions/store.ts` — replace JSON file I/O with SQLite `session_entries` table
+- [x] Keep the same exported function signatures (`loadSessionStore`, `saveSessionStore`, `updateSessionStore`) but backed by SQLite
+- [x] Replace pruning/capping with `DELETE FROM session_entries WHERE updated_at < ?`
+- [x] Retain in-process lock queue for async serialization (SQLite WAL handles read concurrency; lock queue serializes async write operations)
+- [x] Create `store-migrate.ts` — one-shot JSON → SQLite migration for existing session files
+- [x] All existing session tests pass (48 tests across 6 test files)
 
 **Phase 1 cleanup:**
 
-- [ ] Remove all JSON file read/write/lock logic from `store.ts` (no fallback to JSON)
-- [ ] Delete `src/config/sessions/store-migrate.ts` after migration runs successfully (or keep as a CLI-only utility)
-- [ ] Delete migrated `agents/{id}/sessions/sessions.json` files after successful migration
-- [ ] Remove any file-lock utilities that were only used by the session store (check for other consumers first)
+- [x] Remove all JSON file read/write/lock logic from `store.ts` (no fallback to JSON)
+- [x] Keep `store-migrate.ts` as startup migration (runs at gateway startup via `server-startup.ts`)
+- [x] Delete migrated `agents/{id}/sessions/sessions.json` files after successful migration (handled by `store-migrate.ts`)
+- [x] Remove file-based session cache (`store-cache.ts` deleted, `sessions.cache.test.ts` deleted)
+- [x] Update 14 downstream test files to use SQLite-backed session store (`useSessionStoreTestDb()` + `saveSessionEntriesToDb()`)
 
-### Phase 2: Delivery Queue + Teams → SQLite (P0, 2-3 days)
+### Phase 2: Delivery Queue + Teams → SQLite ✅ (completed 2026-03-12)
 
-- [ ] Rewrite `src/infra/outbound/delivery-queue.ts` — replace file-per-message with `delivery_queue` table
-- [ ] Implement retry backoff using `next_attempt_at` column (poll: `WHERE status = 'pending' AND next_attempt_at <= unixepoch()`)
-- [ ] Rewrite `src/teams/team-store.ts` — replace `teams.json` with normalized SQLite tables
-- [ ] Normalize teams into `op1_team_registry` + `op1_team_members` + `op1_team_tasks` + `op1_team_messages` tables
-- [ ] One-shot migration: read existing `delivery-queue/*.json` + `teams/teams.json` → insert into SQLite
-
-**Phase 2 cleanup:**
-
-- [ ] Remove all file-based delivery queue logic (file creation, scanning, cleanup, globbing)
-- [ ] Remove `teams/teams.json` file I/O from `team-store.ts`
-- [ ] Delete migrated `delivery-queue/*.json` files and `teams/teams.json` after successful migration
-- [ ] Remove ephemeral delivery-queue file cleanup logic (retention.ts replaces it)
+- [x] Create `delivery-queue-sqlite.ts` SQLite adapter (enqueue, ack, fail, move-to-failed, load, delete)
+- [x] Rewrite `delivery-queue.ts` — all functions now delegate to SQLite; file I/O removed; `stateDir` param kept in signatures but ignored
+- [x] Create `delivery-queue-migrate.ts` — one-shot migration from `delivery-queue/*.json` + `failed/*.json` → SQLite
+- [x] Create `test-helpers.delivery-queue.ts` — per-test in-memory DB with `useDeliveryQueueTestDb()`
+- [x] Update `outbound.test.ts` delivery-queue tests to use SQLite-backed assertions instead of filesystem checks
+- [x] Create `team-store-sqlite.ts` SQLite adapter — 4 tables (registry, members, tasks, messages) with full CRUD
+- [x] Rewrite `team-store.ts`, `team-task-store.ts`, `team-message-store.ts` — all now use SQLite adapter directly; `teams.json` file I/O removed
+- [x] Create `team-store-migrate.ts` — one-shot migration from `teams/teams.json` → SQLite
+- [x] Create `test-helpers.team-store.ts` — per-test in-memory DB with `useTeamStoreTestDb()`
+- [x] Rewrite 3 team test files — removed ~265 lines of `vi.mock()` blocks, replaced with `useTeamStoreTestDb()`
+- [x] Schema migration v2: extend team tables (leader, leader_session, completed_at, session_key, state, description, blocked_by_json, message_id, from_agent, to_agent, read_by_json); recreate `op1_team_members` with AUTOINCREMENT PK (duplicate agentId per team allowed)
+- [x] Wire both migrations into `server-startup.ts` (run after session migration)
+- [x] 136 tests passing across 5 test files (59 delivery + 59 team + 18 state-db)
 
 ### Phase 3: Auth, Pairing, Thread Bindings → SQLite (P1, 2-3 days)
 

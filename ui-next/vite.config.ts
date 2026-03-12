@@ -31,6 +31,15 @@ export default defineConfig({
       "@": path.resolve(here, "src"),
     },
   },
+  optimizeDeps: {
+    exclude: [
+      "langium",
+      "vscode-languageserver-types",
+      "vscode-languageserver-protocol",
+      "vscode-jsonrpc",
+      "@chevrotain/regexp-to-ast",
+    ],
+  },
   build: {
     outDir: path.resolve(here, "../dist/control-ui-next"),
     emptyOutDir: true,

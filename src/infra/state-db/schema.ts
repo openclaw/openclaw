@@ -134,6 +134,47 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 2,
+    description: "P2: extend team tables with missing columns for TypeScript types",
+    up(db) {
+      // op1_team_registry: add leader, leader_session, completed_at
+      db.exec("ALTER TABLE op1_team_registry ADD COLUMN leader TEXT");
+      db.exec("ALTER TABLE op1_team_registry ADD COLUMN leader_session TEXT");
+      db.exec("ALTER TABLE op1_team_registry ADD COLUMN completed_at INTEGER");
+
+      // op1_team_members: recreate to drop PRIMARY KEY (team_id, agent_id) —
+      // duplicate agent_id per team is allowed (multiple sessions).
+      db.exec("ALTER TABLE op1_team_members RENAME TO op1_team_members_old");
+      db.exec(`
+        CREATE TABLE op1_team_members (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          role TEXT,
+          joined_at INTEGER,
+          session_key TEXT,
+          state TEXT DEFAULT 'idle',
+          FOREIGN KEY (team_id) REFERENCES op1_team_registry(team_id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`
+        INSERT INTO op1_team_members (team_id, agent_id, role, joined_at)
+        SELECT team_id, agent_id, role, joined_at FROM op1_team_members_old
+      `);
+      db.exec("DROP TABLE op1_team_members_old");
+
+      // op1_team_tasks: add description, blocked_by_json
+      db.exec("ALTER TABLE op1_team_tasks ADD COLUMN description TEXT");
+      db.exec("ALTER TABLE op1_team_tasks ADD COLUMN blocked_by_json TEXT");
+
+      // op1_team_messages: add message_id (UUID), from_agent, to_agent, read_by_json
+      db.exec("ALTER TABLE op1_team_messages ADD COLUMN message_id TEXT");
+      db.exec("ALTER TABLE op1_team_messages ADD COLUMN from_agent TEXT");
+      db.exec("ALTER TABLE op1_team_messages ADD COLUMN to_agent TEXT");
+      db.exec("ALTER TABLE op1_team_messages ADD COLUMN read_by_json TEXT");
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

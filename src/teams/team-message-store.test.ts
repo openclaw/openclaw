@@ -1,80 +1,10 @@
-import fsp from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TeamMember, TeamStoreData } from "./types.js";
-
-let tmpDir: string;
-let storePath: string;
-
-// Full-module mock: replace loadTeamStore/saveTeamStore so they target the
-// test's temp storePath. The message store module imports these, so it will
-// transparently use the mock.
-vi.mock("./team-store.js", async () => {
-  const { randomUUID } = await import("node:crypto");
-  const nodeFs = await import("node:fs");
-  const nodePath = await import("node:path");
-
-  function resolveTeamStorePath(): string {
-    return storePath;
-  }
-
-  function loadTeamStore(): TeamStoreData {
-    try {
-      const raw = nodeFs.readFileSync(resolveTeamStorePath(), "utf-8");
-      return JSON.parse(raw) as TeamStoreData;
-    } catch {
-      return { runs: {}, tasks: {}, messages: {} };
-    }
-  }
-
-  function saveTeamStore(data: TeamStoreData): void {
-    const filePath = resolveTeamStorePath();
-    const dir = nodePath.dirname(filePath);
-    if (!nodeFs.existsSync(dir)) {
-      nodeFs.mkdirSync(dir, { recursive: true });
-    }
-    const tmp = `${filePath}.tmp`;
-    nodeFs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
-    nodeFs.renameSync(tmp, filePath);
-  }
-
-  return {
-    resolveTeamStorePath,
-    loadTeamStore,
-    saveTeamStore,
-    createTeamRun(opts: { name: string; leader: string; leaderSession: string }) {
-      const store = loadTeamStore();
-      const now = Date.now();
-      const run = {
-        id: randomUUID(),
-        name: opts.name,
-        leader: opts.leader,
-        leaderSession: opts.leaderSession,
-        members: [] as TeamMember[],
-        state: "active" as const,
-        createdAt: now,
-        updatedAt: now,
-      };
-      store.runs[run.id] = run;
-      saveTeamStore(store);
-      return run;
-    },
-  };
-});
-
-const { createTeamRun } = await import("./team-store.js");
-const { sendTeamMessage, listTeamMessages } = await import("./team-message-store.js");
+import { describe, expect, it } from "vitest";
+import { sendTeamMessage, listTeamMessages } from "./team-message-store.js";
+import { createTeamRun } from "./team-store.js";
+import { useTeamStoreTestDb } from "./test-helpers.team-store.js";
 
 describe("team-message-store", () => {
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "team-msg-store-test-"));
-    storePath = path.join(tmpDir, "teams.json");
-  });
-
-  afterEach(async () => {
-    await fsp.rm(tmpDir, { recursive: true, force: true });
-  });
+  useTeamStoreTestDb();
 
   // ── sendTeamMessage ───────────────────────────────────────────────
 
@@ -124,7 +54,7 @@ describe("team-message-store", () => {
       expect(msg.to).toBe("broadcast");
     });
 
-    it("persists messages to disk", () => {
+    it("persists messages", () => {
       const run = createTeamRun({ name: "team", leader: "l", leaderSession: "s" });
       sendTeamMessage({ teamRunId: run.id, from: "a", to: "b", content: "hi" });
       const msgs = listTeamMessages(run.id);

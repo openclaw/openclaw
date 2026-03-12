@@ -1,6 +1,5 @@
 /**
- * Team run store — simple JSON-file-backed CRUD for team runs and members.
- * Reads/writes on every call (no caching, no locking).
+ * Team run store — SQLite-backed CRUD for team runs and members.
  */
 
 import { randomUUID } from "node:crypto";
@@ -8,38 +7,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { emitTeamEvent } from "./team-events.js";
+import {
+  deleteTeamRunFromDb,
+  listTeamRunsFromDb,
+  loadFullTeamStoreFromDb,
+  loadTeamRunFromDb,
+  saveTeamRunToDb,
+} from "./team-store-sqlite.js";
 import type { TeamMember, TeamRun, TeamRunState, TeamStoreData } from "./types.js";
 
 // ─── Sweep constants ──────────────────────────────────────────────────
 /** Mark active runs as failed if not updated within this window. */
 const TEAM_RUN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-/** Resolve the teams store file path. */
-export function resolveTeamStorePath(): string {
-  return path.join(os.homedir(), ".openclaw", "teams", "teams.json");
-}
-
-/** Load the full store from disk (returns empty store if file missing). */
+/** Load the full store from SQLite (compat wrapper). */
 export function loadTeamStore(): TeamStoreData {
-  const filePath = resolveTeamStorePath();
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    return JSON.parse(raw) as TeamStoreData;
-  } catch {
-    return { runs: {}, tasks: {}, messages: {} };
-  }
+  return loadFullTeamStoreFromDb();
 }
 
-/** Write the full store to disk atomically (write to .tmp, rename). */
+/** Save the full store to SQLite (compat wrapper — saves only runs). */
 export function saveTeamStore(data: TeamStoreData): void {
-  const filePath = resolveTeamStorePath();
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  // Save all runs (which includes their members via saveTeamRunToDb)
+  for (const run of Object.values(data.runs)) {
+    saveTeamRunToDb(run);
   }
-  const tmp = `${filePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
-  fs.renameSync(tmp, filePath);
 }
 
 /** Create a new team run. */
@@ -48,7 +39,6 @@ export function createTeamRun(opts: {
   leader: string;
   leaderSession: string;
 }): TeamRun {
-  const store = loadTeamStore();
   const now = Date.now();
   const run: TeamRun = {
     id: randomUUID(),
@@ -60,8 +50,7 @@ export function createTeamRun(opts: {
     createdAt: now,
     updatedAt: now,
   };
-  store.runs[run.id] = run;
-  saveTeamStore(store);
+  saveTeamRunToDb(run);
   emitTeamEvent({
     type: "team_run_created",
     teamRunId: run.id,
@@ -73,8 +62,7 @@ export function createTeamRun(opts: {
 
 /** Get a team run by ID. */
 export function getTeamRun(id: string): TeamRun | null {
-  const store = loadTeamStore();
-  return store.runs[id] ?? null;
+  return loadTeamRunFromDb(id);
 }
 
 /** List team runs with optional filters. */
@@ -83,20 +71,7 @@ export function listTeamRuns(filter?: {
   state?: TeamRunState;
   limit?: number;
 }): TeamRun[] {
-  const store = loadTeamStore();
-  let runs = Object.values(store.runs);
-
-  if (filter?.leader) {
-    runs = runs.filter((r) => r.leader === filter.leader);
-  }
-  if (filter?.state) {
-    runs = runs.filter((r) => r.state === filter.state);
-  }
-  runs.sort((a, b) => b.createdAt - a.createdAt); // most recent first
-  if (filter?.limit && filter.limit > 0) {
-    runs = runs.slice(0, filter.limit);
-  }
-  return runs;
+  return listTeamRunsFromDb(filter);
 }
 
 /** Add a member to a team run. */
@@ -104,8 +79,7 @@ export function addTeamMember(
   teamRunId: string,
   member: { agentId: string; sessionKey: string; role?: string },
 ): TeamMember | null {
-  const store = loadTeamStore();
-  const run = store.runs[teamRunId];
+  const run = loadTeamRunFromDb(teamRunId);
   if (!run) {
     return null;
   }
@@ -119,7 +93,7 @@ export function addTeamMember(
   };
   run.members.push(entry);
   run.updatedAt = Date.now();
-  saveTeamStore(store);
+  saveTeamRunToDb(run);
   emitTeamEvent({
     type: "team_member_joined",
     teamRunId,
@@ -135,8 +109,7 @@ export function updateMemberState(
   agentId: string,
   state: "idle" | "running" | "done",
 ): boolean {
-  const store = loadTeamStore();
-  const run = store.runs[teamRunId];
+  const run = loadTeamRunFromDb(teamRunId);
   if (!run) {
     return false;
   }
@@ -148,15 +121,14 @@ export function updateMemberState(
 
   member.state = state;
   run.updatedAt = Date.now();
-  saveTeamStore(store);
+  saveTeamRunToDb(run);
   emitTeamEvent({ type: "team_member_state_changed", teamRunId, agentId, state });
   return true;
 }
 
 /** Complete or fail a team run. */
 export function completeTeamRun(id: string, state: "completed" | "failed"): TeamRun | null {
-  const store = loadTeamStore();
-  const run = store.runs[id];
+  const run = loadTeamRunFromDb(id);
   if (!run) {
     return null;
   }
@@ -170,21 +142,18 @@ export function completeTeamRun(id: string, state: "completed" | "failed"): Team
     member.state = "done";
   }
 
-  saveTeamStore(store);
+  saveTeamRunToDb(run);
   emitTeamEvent({ type: "team_run_completed", teamRunId: id, state });
   return run;
 }
 
 /** Delete a team run and all associated tasks/messages. */
 export function deleteTeamRun(id: string): boolean {
-  const store = loadTeamStore();
-  if (!store.runs[id]) {
+  const exists = loadTeamRunFromDb(id);
+  if (!exists) {
     return false;
   }
-  delete store.runs[id];
-  delete store.tasks[id];
-  delete store.messages[id];
-  saveTeamStore(store);
+  deleteTeamRunFromDb(id);
   emitTeamEvent({ type: "team_run_completed", teamRunId: id, state: "failed" });
   return true;
 }
@@ -200,15 +169,11 @@ export function deleteTeamRun(id: string): boolean {
  * Returns the number of runs swept.
  */
 export function sweepStaleTeamRuns(): number {
-  const store = loadTeamStore();
+  const runs = listTeamRunsFromDb({ state: "active" });
   const now = Date.now();
   let swept = 0;
 
-  for (const run of Object.values(store.runs)) {
-    if (run.state !== "active") {
-      continue;
-    }
-
+  for (const run of runs) {
     let reason: string | null = null;
 
     // 1. TTL check
@@ -219,7 +184,6 @@ export function sweepStaleTeamRuns(): number {
     // 2. Orphan check — leader session transcript must exist
     if (!reason) {
       const agentId = run.leader;
-      // Resolve transcript path: ~/.openclaw/agents/<agentId>/sessions/<leaderSession>.jsonl
       const sessionsDir = path.join(os.homedir(), ".openclaw", "agents", agentId, "sessions");
       const transcriptPath = path.join(sessionsDir, `${run.leaderSession}.jsonl`);
       if (!fs.existsSync(transcriptPath)) {
@@ -234,12 +198,9 @@ export function sweepStaleTeamRuns(): number {
       for (const member of run.members) {
         member.state = "done";
       }
+      saveTeamRunToDb(run);
       swept++;
     }
-  }
-
-  if (swept > 0) {
-    saveTeamStore(store);
   }
 
   return swept;

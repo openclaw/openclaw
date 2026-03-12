@@ -1,140 +1,5 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TeamMember, TeamStoreData } from "./types.js";
-
-let tmpDir: string;
-let storePath: string;
-
-// We must replace the entire module because the original functions capture
-// resolveTeamStorePath as a local binding. Overriding only the export
-// does not affect internal callers. We re-implement loadTeamStore and
-// saveTeamStore to point at the test's temp storePath, then re-implement
-// all higher-level functions identically to the source (they are small).
-vi.mock("./team-store.js", async () => {
-  const { randomUUID } = await import("node:crypto");
-  const nodeFs = await import("node:fs");
-  const nodePath = await import("node:path");
-
-  function resolveTeamStorePath(): string {
-    return storePath;
-  }
-
-  function loadTeamStore(): TeamStoreData {
-    try {
-      const raw = nodeFs.readFileSync(resolveTeamStorePath(), "utf-8");
-      return JSON.parse(raw) as TeamStoreData;
-    } catch {
-      return { runs: {}, tasks: {}, messages: {} };
-    }
-  }
-
-  function saveTeamStore(data: TeamStoreData): void {
-    const filePath = resolveTeamStorePath();
-    const dir = nodePath.dirname(filePath);
-    if (!nodeFs.existsSync(dir)) {
-      nodeFs.mkdirSync(dir, { recursive: true });
-    }
-    const tmp = `${filePath}.tmp`;
-    nodeFs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
-    nodeFs.renameSync(tmp, filePath);
-  }
-
-  return {
-    resolveTeamStorePath,
-    loadTeamStore,
-    saveTeamStore,
-    createTeamRun(opts: { name: string; leader: string; leaderSession: string }) {
-      const store = loadTeamStore();
-      const now = Date.now();
-      const run = {
-        id: randomUUID(),
-        name: opts.name,
-        leader: opts.leader,
-        leaderSession: opts.leaderSession,
-        members: [] as TeamMember[],
-        state: "active" as const,
-        createdAt: now,
-        updatedAt: now,
-      };
-      store.runs[run.id] = run;
-      saveTeamStore(store);
-      return run;
-    },
-    getTeamRun(id: string) {
-      return loadTeamStore().runs[id] ?? null;
-    },
-    listTeamRuns(filter?: { leader?: string; state?: string; limit?: number }) {
-      let runs = Object.values(loadTeamStore().runs);
-      if (filter?.leader) {
-        runs = runs.filter((r) => r.leader === filter.leader);
-      }
-      if (filter?.state) {
-        runs = runs.filter((r) => r.state === filter.state);
-      }
-      runs.sort((a, b) => b.createdAt - a.createdAt);
-      if (filter?.limit && filter.limit > 0) {
-        runs = runs.slice(0, filter.limit);
-      }
-      return runs;
-    },
-    addTeamMember(
-      teamRunId: string,
-      member: { agentId: string; sessionKey: string; role?: string },
-    ) {
-      const store = loadTeamStore();
-      const run = store.runs[teamRunId];
-      if (!run) {
-        return null;
-      }
-      const entry = {
-        agentId: member.agentId,
-        sessionKey: member.sessionKey,
-        role: member.role,
-        state: "idle" as const,
-        joinedAt: Date.now(),
-      };
-      run.members.push(entry);
-      run.updatedAt = Date.now();
-      saveTeamStore(store);
-      return entry;
-    },
-    updateMemberState(teamRunId: string, agentId: string, state: "idle" | "running" | "done") {
-      const store = loadTeamStore();
-      const run = store.runs[teamRunId];
-      if (!run) {
-        return false;
-      }
-      const member = run.members.find((m: TeamMember) => m.agentId === agentId);
-      if (!member) {
-        return false;
-      }
-      member.state = state;
-      run.updatedAt = Date.now();
-      saveTeamStore(store);
-      return true;
-    },
-    completeTeamRun(id: string, state: "completed" | "failed") {
-      const store = loadTeamStore();
-      const run = store.runs[id];
-      if (!run) {
-        return null;
-      }
-      run.state = state;
-      run.completedAt = Date.now();
-      run.updatedAt = Date.now();
-      for (const member of run.members) {
-        member.state = "done";
-      }
-      saveTeamStore(store);
-      return run;
-    },
-  };
-});
-
-const {
+import { describe, expect, it } from "vitest";
+import {
   createTeamRun,
   getTeamRun,
   listTeamRuns,
@@ -142,33 +7,18 @@ const {
   updateMemberState,
   completeTeamRun,
   loadTeamStore,
-  saveTeamStore,
-} = await import("./team-store.js");
+} from "./team-store.js";
+import { useTeamStoreTestDb } from "./test-helpers.team-store.js";
 
 describe("team-store", () => {
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "team-store-test-"));
-    storePath = path.join(tmpDir, "teams.json");
-  });
+  useTeamStoreTestDb();
 
-  afterEach(async () => {
-    await fsp.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  // ── loadTeamStore / saveTeamStore ──────────────────────────────────
+  // ── loadTeamStore ──────────────────────────────────────────────────
 
   describe("loadTeamStore", () => {
-    it("returns empty store when file does not exist", () => {
+    it("returns empty store when no data exists", () => {
       const store = loadTeamStore();
       expect(store).toEqual({ runs: {}, tasks: {}, messages: {} });
-    });
-  });
-
-  describe("saveTeamStore", () => {
-    it("creates parent directories and writes JSON", () => {
-      saveTeamStore({ runs: {}, tasks: {}, messages: {} });
-      const raw = fs.readFileSync(storePath, "utf-8");
-      expect(JSON.parse(raw)).toEqual({ runs: {}, tasks: {}, messages: {} });
     });
   });
 
@@ -198,7 +48,7 @@ describe("team-store", () => {
       expect(run1.id).not.toBe(run2.id);
     });
 
-    it("persists to disk", () => {
+    it("persists to database", () => {
       const run = createTeamRun({
         name: "persist-check",
         leader: "neo",
@@ -383,7 +233,7 @@ describe("team-store", () => {
       expect(completeTeamRun("no-such-id", "completed")).toBeNull();
     });
 
-    it("persists the completed state to disk", () => {
+    it("persists the completed state", () => {
       const run = createTeamRun({ name: "team", leader: "l", leaderSession: "s" });
       completeTeamRun(run.id, "completed");
       const fetched = getTeamRun(run.id);

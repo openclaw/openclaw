@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { emitTeamEvent } from "./team-events.js";
-import { loadTeamStore, saveTeamStore } from "./team-store.js";
+import {
+  deleteTeamTaskFromDb,
+  loadTeamTaskByIdFromDb,
+  loadTeamTasksFromDb,
+  saveTeamTaskToDb,
+} from "./team-store-sqlite.js";
 import type { TeamTask, TeamTaskStatus } from "./types.js";
 
 /** Create a new task in a team run. */
@@ -9,7 +14,6 @@ export function createTeamTask(opts: {
   subject: string;
   description: string;
 }): TeamTask {
-  const store = loadTeamStore();
   const task: TeamTask = {
     id: randomUUID(),
     teamRunId: opts.teamRunId,
@@ -20,10 +24,7 @@ export function createTeamTask(opts: {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
-  const list = store.tasks[opts.teamRunId] ?? [];
-  list.push(task);
-  store.tasks[opts.teamRunId] = list;
-  saveTeamStore(store);
+  saveTeamTaskToDb(task);
   emitTeamEvent({
     type: "team_task_updated",
     teamRunId: task.teamRunId,
@@ -35,8 +36,7 @@ export function createTeamTask(opts: {
 
 /** List all tasks for a team run. */
 export function listTeamTasks(teamRunId: string): TeamTask[] {
-  const store = loadTeamStore();
-  return store.tasks[teamRunId] ?? [];
+  return loadTeamTasksFromDb(teamRunId);
 }
 
 /** Update a task (owner, status, subject, description, blockedBy). */
@@ -51,12 +51,7 @@ export function updateTeamTask(
     blockedBy?: string[];
   },
 ): TeamTask | null {
-  const store = loadTeamStore();
-  const list = store.tasks[teamRunId];
-  if (!list) {
-    return null;
-  }
-  const task = list.find((t) => t.id === taskId);
+  const task = loadTeamTaskByIdFromDb(teamRunId, taskId);
   if (!task) {
     return null;
   }
@@ -78,41 +73,28 @@ export function updateTeamTask(
   }
   task.updatedAt = Date.now();
 
-  saveTeamStore(store);
+  saveTeamTaskToDb(task);
   emitTeamEvent({ type: "team_task_updated", teamRunId, taskId: task.id, status: task.status });
   return task;
 }
 
 /** Delete a task from a team run. */
 export function deleteTeamTask(teamRunId: string, taskId: string): boolean {
-  const store = loadTeamStore();
-  const list = store.tasks[teamRunId];
-  if (!list) {
-    return false;
+  const deleted = deleteTeamTaskFromDb(teamRunId, taskId);
+  if (deleted) {
+    emitTeamEvent({ type: "team_task_updated", teamRunId, taskId, status: "deleted" });
   }
-  const idx = list.findIndex((t) => t.id === taskId);
-  if (idx === -1) {
-    return false;
-  }
-  list.splice(idx, 1);
-  saveTeamStore(store);
-  emitTeamEvent({ type: "team_task_updated", teamRunId, taskId, status: "deleted" });
-  return true;
+  return deleted;
 }
 
 /** Check if a task is blocked (any blockedBy task is not "completed"). */
 export function isTaskBlocked(teamRunId: string, taskId: string): boolean {
-  const store = loadTeamStore();
-  const list = store.tasks[teamRunId];
-  if (!list) {
-    return false;
-  }
-  const task = list.find((t) => t.id === taskId);
+  const task = loadTeamTaskByIdFromDb(teamRunId, taskId);
   if (!task || task.blockedBy.length === 0) {
     return false;
   }
   return task.blockedBy.some((depId) => {
-    const dep = list.find((t) => t.id === depId);
+    const dep = loadTeamTaskByIdFromDb(teamRunId, depId);
     return !dep || dep.status !== "completed";
   });
 }

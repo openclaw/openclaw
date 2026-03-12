@@ -73,6 +73,39 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`[state-db] Session JSON→SQLite migration failed: ${String(err)}`);
   }
 
+  // One-shot migration: delivery queue JSON files → SQLite.
+  try {
+    const { migrateDeliveryQueueToSqlite } =
+      await import("../infra/outbound/delivery-queue-migrate.js");
+    const result = migrateDeliveryQueueToSqlite();
+    if (result.pendingCount > 0 || result.failedCount > 0) {
+      params.log.info(
+        `[state-db] Migrated delivery queue: ${result.pendingCount} pending, ${result.failedCount} failed entries`,
+      );
+    }
+    if (!result.migrated) {
+      params.log.warn(`[state-db] Delivery queue migration failed: ${result.error}`);
+    }
+  } catch (err) {
+    params.log.warn(`[state-db] Delivery queue JSON→SQLite migration failed: ${String(err)}`);
+  }
+
+  // One-shot migration: teams.json → SQLite.
+  try {
+    const { migrateTeamStoreToSqlite } = await import("../teams/team-store-migrate.js");
+    const result = migrateTeamStoreToSqlite();
+    if (result.runsCount > 0) {
+      params.log.info(
+        `[state-db] Migrated teams: ${result.runsCount} runs, ${result.tasksCount} tasks, ${result.messagesCount} messages`,
+      );
+    }
+    if (!result.migrated) {
+      params.log.warn(`[state-db] Teams migration failed: ${result.error}`);
+    }
+  } catch (err) {
+    params.log.warn(`[state-db] Teams JSON→SQLite migration failed: ${String(err)}`);
+  }
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
