@@ -139,6 +139,14 @@ backtest:
   commissionRate: 0.001 # 手续费率 0.1%
   slippageRate: 0.0005 # 滑点率 0.05%
   dataSource: synthetic # synthetic | datahub | csv
+
+# ── 分类 (必填) ──────────────────────────────────────────
+classification:
+  archetype: systematic # systematic | discretionary | hybrid
+  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
+  assetClasses: [crypto]
+  frequency: daily # daily | weekly | monthly
+  riskProfile: medium # low | medium | high
 ```
 
 ### Version Increment Rule
@@ -182,7 +190,7 @@ backtest:
 - `createdAt`: `"2025-01-01"` (YYYY-MM-DD)
 - `updatedAt`: `"2025-06-01"` (YYYY-MM-DD)
 
-### Classification (可选)
+### Classification (必填)
 
 ```yaml
 classification:
@@ -197,11 +205,11 @@ classification:
 
 | 字段 | 类型 | 必填 | 可选值 | 说明 |
 |------|------|------|--------|------|
-| `archetype` | string | 否 | `systematic` \| `discretionary` \| `hybrid` | 策略类型：系统化/主观/混合 |
-| `market` | string | 否 | `Crypto` \| `US` \| `CN` \| `HK` \| `Forex` \| `Commodity` | 目标市场 |
-| `assetClasses` | string[] | 否 | `[crypto]`, `[equity]`, `[forex]`, `[commodity]` | 资产类别数组 |
-| `frequency` | string | 否 | `daily` \| `weekly` \| `monthly` | 交易频率 |
-| `riskProfile` | string | 否 | `low` \| `medium` \| `high` | 风险等级（可被 `risk.riskLevel` 覆盖） |
+| `archetype` | string | 是 | `systematic` \| `discretionary` \| `hybrid` | 策略类型：系统化/主观/混合 |
+| `market` | string | 是 | `Crypto` \| `US` \| `CN` \| `HK` \| `Forex` \| `Commodity` | 目标市场 |
+| `assetClasses` | string[] | 是 | `[crypto]`, `[equity]`, `[forex]`, `[commodity]` | 资产类别数组 |
+| `frequency` | string | 是 | `daily` \| `weekly` \| `monthly` | 交易频率 |
+| `riskProfile` | string | 是 | `low` \| `medium` \| `high` | 风险等级（可被 `risk.riskLevel` 覆盖） |
 
 ### Parameters (可选)
 
@@ -325,7 +333,7 @@ Generate:
    - **identity** (必填): id, type, name, version, style, visibility, summary, license, author (对象格式，必须包含 name), changelog (至少一条记录)
    - **technical** (必填): language, entryPoint
    - **backtest** (必填): defaultPeriod, frequencyDays, initialCapital, currency, benchmark, commissionRate, slippageRate, dataSource
-   - **classification** (可选): archetype, market, assetClasses, frequency, riskProfile
+   - **classification** (必填): archetype, market, assetClasses, frequency, riskProfile
    - **parameters** (可选): 策略参数数组
    - **risk** (可选但推荐): 风控配置
    - **agent** (仅 L2): L2 Agent 配置
@@ -340,6 +348,12 @@ Generate:
    - `backtest.commissionRate` 默认 `0.001` (0.1%)
    - `backtest.slippageRate` 默认 `0.0005` (0.05%)
    - `backtest.dataSource` 默认 `"synthetic"`
+   - **classification 默认值：**
+     - `archetype`: 默认 `systematic`（除非用户明确需要主观判断）
+     - `market`: 根据标的自动推断（BTC/ETH → `Crypto`，AAPL → `US` 等）
+     - `assetClasses`: 根据标的自动推断（BTC/ETH → `[crypto]`，AAPL → `[equity]`）
+     - `frequency`: 默认 `daily`（日频）
+     - `riskProfile`: 默认 `medium`
    - **版本递增规则：** 如果策略 `id` 已存在（用户修改现有策略），必须递增 `identity.version`
      - Semver 格式 `X.Y.Z` 递增 `Z`（patch），双部分 `X.Y` 递增 `Y`，纯数字递增自身
      - 示例：`1.0.0` → `1.0.1`（参数调整），`1.1.0`（新指标），`2.0.0`（逻辑重构）
@@ -364,6 +378,7 @@ Present the package structure and wait for confirmation before validation.
    - `identity`: id, type, name, version, style, visibility, summary, license (全部必填)
    - `identity.author`: name (必填), wallet (可选)
    - `identity.changelog`: 至少包含一条版本记录 (必填)
+   - `classification`: archetype, market, assetClasses, frequency, riskProfile (全部必填)
    - `technical`: language, entryPoint (必填)
    - `backtest`: defaultPeriod (startDate/endDate), frequencyDays, initialCapital, currency, benchmark, commissionRate, slippageRate, dataSource (全部必填)
 3. **strategy.py:** Defines `compute(data)`; return dict has `action`, `amount`, `price`, `reason`; no forbidden imports.
