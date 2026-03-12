@@ -51,6 +51,7 @@ function createRuntimeEnv(): RuntimeEnv {
 
 function installRuntime(params: {
   commandAuthorized?: boolean;
+  replyPayload?: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
   resolveCommandAuthorizedFromAuthorizers?: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
@@ -58,6 +59,9 @@ function installRuntime(params: {
 }) {
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions, ctx }) => {
     await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+    if (params.replyPayload) {
+      await dispatcherOptions.deliver(params.replyPayload);
+    }
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 }, ctx };
   });
   const resolveCommandAuthorizedFromAuthorizers = vi.fn(
@@ -166,7 +170,8 @@ function installRuntime(params: {
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),
         convertMarkdownTables: vi.fn((text: string) => text),
-        resolveChunkMode: vi.fn(() => "line"),
+        resolveChunkMode: vi.fn(() => "length"),
+        resolveTextChunkLimit: vi.fn(() => 1200),
         chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
       },
     },
@@ -302,6 +307,42 @@ describe("zalouser monitor group mention gating", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
     expect(callArg?.ctx?.WasMentioned).toBe(true);
+  });
+
+  it("passes long markdown replies through once so formatting happens before chunking", async () => {
+    const replyText = `**${"a".repeat(2501)}**`;
+    installRuntime({
+      commandAuthorized: false,
+      replyPayload: { text: replyText },
+    });
+
+    await __testing.processMessage({
+      message: createDmMessage({
+        content: "hello",
+      }),
+      account: {
+        ...createAccount(),
+        config: {
+          ...createAccount().config,
+          dmPolicy: "open",
+        },
+      },
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(sendMessageZalouserMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageZalouserMock).toHaveBeenCalledWith(
+      "u-1",
+      replyText,
+      expect.objectContaining({
+        isGroup: false,
+        profile: "default",
+        textMode: "markdown",
+        textChunkMode: "length",
+        textChunkLimit: 1200,
+      }),
+    );
   });
 
   it("uses commandContent for mention-prefixed control commands", async () => {
