@@ -2248,4 +2248,64 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, { messages: [] }, {});
     expect(calls[0]?.temperature).toBe(0.3);
   });
+
+  it("does not apply dynamic temperature when thinkingEnabled is true", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", {
+      availableToolNames: new Set(["web_search"]),
+      thinkingEnabled: true,
+    });
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when reasoning is enabled", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o1-preview", {
+      availableToolNames: new Set(["web_search"]),
+      reasoning: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o1-preview",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when reasoning_effort is high", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o3-mini", {
+      availableToolNames: new Set(["web_search"]),
+      reasoning_effort: "high",
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o3-mini",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
+
+  it("does not apply dynamic temperature when effort is high", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(agent, undefined, "openai", "o3-mini", {
+      availableToolNames: new Set(["web_search"]),
+      effort: "high",
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "o3-mini",
+    } as Model<"openai-responses">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
 });
