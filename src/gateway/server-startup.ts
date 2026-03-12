@@ -176,6 +176,25 @@ export async function startGatewaySidecars(params: {
     );
   }
 
+  // One-shot migration: Phase 4C channel state + credentials JSON files → SQLite.
+  try {
+    const { migrateChannelStateToSqlite } =
+      await import("../infra/state-db/migrate-channel-state.js");
+    const results = migrateChannelStateToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.count > 0);
+    for (const r of migrated) {
+      params.log.info(`[state-db] Migrated ${r.store}: ${r.count} entries from JSON to SQLite`);
+    }
+    const failed = results.filter((r) => r.error);
+    for (const r of failed) {
+      params.log.warn(`[state-db] ${r.store} migration failed: ${r.error}`);
+    }
+  } catch (err) {
+    params.log.warn(
+      `[state-db] Phase 4C channel state JSON→SQLite migration failed: ${String(err)}`,
+    );
+  }
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);

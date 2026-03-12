@@ -1,6 +1,7 @@
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import {
+  getAuthCredentialsFromDb,
+  setAuthCredentialsInDb,
+} from "../infra/state-db/auth-credentials-sqlite.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -11,10 +12,6 @@ export type CachedCopilotToken = {
   /** milliseconds since epoch */
   updatedAt: number;
 };
-
-function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
-  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
-}
 
 function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
   // Keep a small safety margin when checking expiry.
@@ -91,17 +88,14 @@ export async function resolveCopilotApiToken(params: {
   source: string;
   baseUrl: string;
 }> {
-  const env = params.env ?? process.env;
-  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
-  const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
-  const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
-  const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
+  // Check SQLite cache first
+  const cached = getAuthCredentialsFromDb<CachedCopilotToken>("github-copilot");
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     if (isTokenUsable(cached)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
-        source: `cache:${cachePath}`,
+        source: "cache:sqlite",
         baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
       };
     }
@@ -126,7 +120,7 @@ export async function resolveCopilotApiToken(params: {
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
   };
-  saveJsonFileFn(cachePath, payload);
+  setAuthCredentialsInDb("github-copilot", "", payload, payload.expiresAt);
 
   return {
     token: payload.token,

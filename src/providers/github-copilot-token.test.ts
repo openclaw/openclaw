@@ -1,20 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setAuthCredentialsInDb } from "../infra/state-db/auth-credentials-sqlite.js";
+import { useAuthCredentialsTestDb } from "../infra/state-db/test-helpers.auth-credentials.js";
 import {
+  type CachedCopilotToken,
   deriveCopilotApiBaseUrlFromToken,
   resolveCopilotApiToken,
 } from "./github-copilot-token.js";
 
 describe("github-copilot token", () => {
-  const loadJsonFile = vi.fn();
-  const saveJsonFile = vi.fn();
-  const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
+  useAuthCredentialsTestDb();
 
-  beforeEach(() => {
-    loadJsonFile.mockClear();
-    saveJsonFile.mockClear();
-  });
-
-  it("derives baseUrl from token", async () => {
+  it("derives baseUrl from token", () => {
     expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
       "https://api.example.com",
     );
@@ -25,18 +21,16 @@ describe("github-copilot token", () => {
 
   it("uses cache when token is still valid", async () => {
     const now = Date.now();
-    loadJsonFile.mockReturnValue({
+    const cached: CachedCopilotToken = {
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
-    });
+    };
+    setAuthCredentialsInDb("github-copilot", "", cached, cached.expiresAt);
 
     const fetchImpl = vi.fn();
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
-      cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
@@ -47,8 +41,6 @@ describe("github-copilot token", () => {
   });
 
   it("fetches and stores token when cache is missing", async () => {
-    loadJsonFile.mockReturnValue(undefined);
-
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -58,18 +50,13 @@ describe("github-copilot token", () => {
       }),
     });
 
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
-
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
-      cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
-    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

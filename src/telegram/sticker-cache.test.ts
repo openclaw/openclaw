@@ -1,6 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { useChannelStateTestDb } from "../infra/state-db/test-helpers.channel-state.js";
 import {
   cacheSticker,
   getAllCachedStickers,
@@ -9,32 +8,8 @@ import {
   searchStickers,
 } from "./sticker-cache.js";
 
-// Mock the state directory to use a temp location
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
-  };
-});
-
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
-const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
-
 describe("sticker-cache", () => {
-  beforeEach(() => {
-    // Clean up before each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
-  });
-
-  afterEach(() => {
-    // Clean up after each test
-    if (fs.existsSync(TEST_CACHE_FILE)) {
-      fs.unlinkSync(TEST_CACHE_FILE);
-    }
-  });
+  useChannelStateTestDb();
 
   describe("getCachedSticker", () => {
     it("returns null for unknown ID", () => {
@@ -56,23 +31,6 @@ describe("sticker-cache", () => {
       const result = getCachedSticker("unique123");
 
       expect(result).toEqual(sticker);
-    });
-
-    it("returns null after cache is cleared", () => {
-      const sticker = {
-        fileId: "file123",
-        fileUniqueId: "unique123",
-        description: "test",
-        cachedAt: "2026-01-26T12:00:00.000Z",
-      };
-
-      cacheSticker(sticker);
-      expect(getCachedSticker("unique123")).not.toBeNull();
-
-      // Manually clear the cache file
-      fs.unlinkSync(TEST_CACHE_FILE);
-
-      expect(getCachedSticker("unique123")).toBeNull();
     });
   });
 
@@ -117,7 +75,6 @@ describe("sticker-cache", () => {
 
   describe("searchStickers", () => {
     beforeEach(() => {
-      // Seed cache with test stickers
       cacheSticker({
         fileId: "fox1",
         fileUniqueId: "fox-unique-1",
@@ -176,7 +133,6 @@ describe("sticker-cache", () => {
     });
 
     it("ranks exact matches higher", () => {
-      // "waving" appears in "fox waving hello" - should be ranked first
       const results = searchStickers("waving");
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("fox-unique-1");

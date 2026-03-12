@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
@@ -9,14 +8,10 @@ import {
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { STATE_DIR } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { getTgStateFromDb, setTgStateInDb } from "../infra/state-db/channel-tg-state-sqlite.js";
 import { AUTO_IMAGE_KEY_PROVIDERS, DEFAULT_IMAGE_MODELS } from "../media-understanding/defaults.js";
 import { resolveAutoImageModel } from "../media-understanding/runner.js";
-
-const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
-const CACHE_VERSION = 1;
 
 export interface CachedSticker {
   fileId: string;
@@ -28,54 +23,45 @@ export interface CachedSticker {
   receivedFrom?: string;
 }
 
-interface StickerCache {
-  version: number;
-  stickers: Record<string, CachedSticker>;
+const TG_STICKER_ACCOUNT = "global";
+const TG_STICKER_KEY = "sticker_cache";
+
+type StickerCacheData = Record<string, CachedSticker>;
+
+function loadCache(): StickerCacheData {
+  return getTgStateFromDb<StickerCacheData>(TG_STICKER_ACCOUNT, TG_STICKER_KEY) ?? {};
 }
 
-function loadCache(): StickerCache {
-  const data = loadJsonFile(CACHE_FILE);
-  if (!data || typeof data !== "object") {
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  const cache = data as StickerCache;
-  if (cache.version !== CACHE_VERSION) {
-    // Future: handle migration if needed
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  return cache;
-}
-
-function saveCache(cache: StickerCache): void {
-  saveJsonFile(CACHE_FILE, cache);
+function saveCache(stickers: StickerCacheData): void {
+  setTgStateInDb(TG_STICKER_ACCOUNT, TG_STICKER_KEY, stickers);
 }
 
 /**
  * Get a cached sticker by its unique ID.
  */
 export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
-  const cache = loadCache();
-  return cache.stickers[fileUniqueId] ?? null;
+  const stickers = loadCache();
+  return stickers[fileUniqueId] ?? null;
 }
 
 /**
  * Add or update a sticker in the cache.
  */
 export function cacheSticker(sticker: CachedSticker): void {
-  const cache = loadCache();
-  cache.stickers[sticker.fileUniqueId] = sticker;
-  saveCache(cache);
+  const stickers = loadCache();
+  stickers[sticker.fileUniqueId] = sticker;
+  saveCache(stickers);
 }
 
 /**
  * Search cached stickers by text query (fuzzy match on description + emoji + setName).
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
-  const cache = loadCache();
+  const stickers = loadCache();
   const queryLower = query.toLowerCase();
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
-  for (const sticker of Object.values(cache.stickers)) {
+  for (const sticker of Object.values(stickers)) {
     let score = 0;
     const descLower = sticker.description.toLowerCase();
 
@@ -118,16 +104,14 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
  * Get all cached stickers (for debugging/listing).
  */
 export function getAllCachedStickers(): CachedSticker[] {
-  const cache = loadCache();
-  return Object.values(cache.stickers);
+  return Object.values(loadCache());
 }
 
 /**
  * Get cache statistics.
  */
 export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
-  const cache = loadCache();
-  const stickers = Object.values(cache.stickers);
+  const stickers = Object.values(loadCache());
   if (stickers.length === 0) {
     return { count: 0 };
   }
