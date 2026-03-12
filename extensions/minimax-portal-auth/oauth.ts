@@ -87,6 +87,7 @@ async function requestOAuthCode(params: {
   } catch (err) {
     throw new Error(
       `MiniMax OAuth authorization failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 
@@ -130,11 +131,11 @@ async function pollOAuthToken(params: {
       }),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch (err) {
-    return {
-      status: "error" as const,
-      message: `MiniMax token poll failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+  } catch {
+    // Network or timeout error on a single poll should not abort the
+    // entire device-auth flow — treat it as "pending" so the caller
+    // retries on the next interval.
+    return { status: "pending" as const };
   }
 
   const text = await response.text();

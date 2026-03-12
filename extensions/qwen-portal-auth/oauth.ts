@@ -55,6 +55,7 @@ async function requestDeviceCode(params: { challenge: string }): Promise<QwenDev
   } catch (err) {
     throw new Error(
       `Qwen device authorization failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 
@@ -93,11 +94,11 @@ async function pollDeviceToken(params: {
       }),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch (err) {
-    return {
-      status: "error" as const,
-      message: `Qwen token poll failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+  } catch {
+    // Network or timeout error on a single poll should not abort the
+    // entire device-auth flow — treat it as "pending" so the caller
+    // retries on the next interval.
+    return { status: "pending" as const };
   }
 
   if (!response.ok) {
