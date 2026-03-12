@@ -1,4 +1,4 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
@@ -26,7 +26,6 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
@@ -195,9 +194,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         OriginatingTo: originatingTo,
       });
 
-      const agentId = resolveSessionAgentId({
+      const { sessionAgentId: agentId } = resolveSessionAgentIds({
         sessionKey,
         config: cfg,
+        agentId: params.targetAgentId,
       });
       const storePath = resolveStorePath(cfg.session?.store, { agentId });
       await recordInboundSession({
