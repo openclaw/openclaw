@@ -32,6 +32,8 @@ Runtime model: the container assumes a shared repo root. Start with
 - `references/rewards-provider-incident-playbook.md`
   Rewards/APR incidents where upstream provider data, campaign TVL, or consumer
   code-path fanout may be the trigger.
+- `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
+  Consumer wallet / approval / permit failure playbook. Use when a workaround already narrows scope to the offchain path.
 - `notion-postmortem-index.md`
   First-party postmortem index from Notion workspace sources.
 - `morpho-infra/docs/operations/incident-response.md`
@@ -93,6 +95,8 @@ investigation.
   Start `morpho-infra/docs/guides/observability-stack-onboarding.md`, `morpho-infra/docs/architecture/alerting.md`, `morpho-infra/docs/operations/critical-monitoring.md`.
 - Consumer app frontend / JS error / replay / conversion drop:
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
+- Consumer wallet / approval / permit / repay failure:
+  Start `consumer-bug-preflight.sh`, then `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`, then matching PostHog/Sentry probes, then Linear / GitHub known-issue search, then Foundry/Tenderly checks.
 - DB pressure / CNPG:
   Start `morpho-infra/docs/operations/incident-response.md`, `morpho-infra/docs/operations/kubernetes-database-ops.md`,
   `openclaw-sre/skills/morpho-sre/change-checklist-db-rightsizing.md`, relevant postmortem or dossier.

@@ -45,7 +45,7 @@ jq -e '
     .schedule.expr == "0 */12 * * *" and
     .schedule.tz == "UTC" and
     .sessionTarget == "isolated" and
-    .wakeMode == "next-heartbeat" and
+    .wakeMode == "now" and
     .payload.kind == "agentTurn" and
     .payload.lightContext == true and
     .delivery.mode == "announce" and
@@ -54,3 +54,35 @@ jq -e '
   any(.jobs[]; .id == "sre-12h-platform-monitoring" and .delivery.to == "channel:#platform-monitoring") and
   any(.jobs[]; .id == "sre-12h-staging-monitoring" and .delivery.to == "channel:#staging-infra-monitoring")
 ' "$STATE_DIR/cron/jobs.json" >/dev/null
+
+platform_created_at="$(jq -r '.jobs[] | select(.id == "sre-12h-platform-monitoring").createdAtMs' "$STATE_DIR/cron/jobs.json")"
+staging_created_at="$(jq -r '.jobs[] | select(.id == "sre-12h-staging-monitoring").createdAtMs' "$STATE_DIR/cron/jobs.json")"
+
+tmp_jobs="$(mktemp)"
+trap 'rm -f "$tmp_jobs"; rm -rf "$TMP_ROOT"' EXIT
+jq '
+  .jobs |= map(
+    if .id == "sre-12h-platform-monitoring" then
+      .state = {"status":"paused"} | .createdAtMs = 111
+    elif .id == "sre-12h-staging-monitoring" then
+      .state = {"status":"running"} | .createdAtMs = 222
+    else
+      .
+    end
+  )
+' "$STATE_DIR/cron/jobs.json" >"$tmp_jobs"
+mv "$tmp_jobs" "$STATE_DIR/cron/jobs.json"
+
+OPENCLAW_SRE_RUNTIME_REPO_DIR="$RUNTIME_REPO" \
+OPENCLAW_STATE_DIR="$STATE_DIR" \
+OPENCLAW_CONFIG_PATH="$STATE_DIR/openclaw.json" \
+bash "$REPO_ROOT/scripts/sre-runtime/seed-state.sh" >/dev/null
+
+jq -e '
+  (.jobs | length) == 2 and
+  any(.jobs[]; .id == "sre-12h-platform-monitoring" and .createdAtMs == 111 and .state.status == "paused" and .wakeMode == "now") and
+  any(.jobs[]; .id == "sre-12h-staging-monitoring" and .createdAtMs == 222 and .state.status == "running" and .wakeMode == "now")
+' "$STATE_DIR/cron/jobs.json" >/dev/null
+
+test "$platform_created_at" != "111"
+test "$staging_created_at" != "222"

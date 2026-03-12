@@ -44,6 +44,12 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - Mandatory: run a live Linear mutation attempt before replying.
   - Never answer with “can’t directly edit Linear” without executing a live command.
   - On failure: include exact failing command + exact error text + next unblock step.
+- Consumer frontend tx bug guardrail:
+  - Trigger: consumer app / wallet / permit / approval / allowance / repay failure.
+  - Preserve the strongest thread clue or workaround. If a user says disabling offchain approval or using onchain approval works, keep the offchain path as the primary scope until disproven.
+  - Mandatory order: `consumer-bug-preflight.sh` -> telemetry + Linear known-issue search -> Foundry/Tenderly/onchain checks.
+  - Never answer with “no access” for Sentry, PostHog, Linear, or Foundry without a live probe and the exact error.
+  - Never promote a secondary symptom (for example a later direct Etherscan revert or empty balance after workaround txs) to “root cause confirmed” unless it also explains the original in-app failure.
 
 ## Paths
 
@@ -57,6 +63,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Auto PR helper: `/home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh`
 - Grafana API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh`
 - BetterStack API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`
+- Consumer bug preflight helper: `/home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh`
 - Frontend project resolver: `/home/node/.openclaw/skills/morpho-sre/scripts/frontend-project-resolver.sh`
 - PostHog MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh`
 - eRPC API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/erpc-api.sh`
@@ -85,6 +92,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Use `incident-dossier-blue-api-db-downsizing-2026-02-04.md` for a concrete known failure pattern.
 - Use `incident-dossier-blue-api-rewards-merkl-apr-2026-03-12.md` for the
   stacked-cause rewards incident pattern.
+- Use `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
+  for consumer wallet / approval / permit regressions where the workaround narrows scope.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `wiz-mcp.sh`
@@ -633,6 +642,12 @@ EOF
 
 ## Consumer Frontend Investigation
 
+- Start with the consolidated probe for consumer tx bugs:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh prd "USDT repay fails unless offchain approval is disabled"
+```
+
 - First infer likely projects from the user question:
 
 ```bash
@@ -679,6 +694,29 @@ Default frontend triage order:
 3. Sentry: what error or release caused it
 4. Grafana / CloudWatch: whether infra or edge behavior also moved
 5. CI / deploy history: what changed in the same window
+
+For wallet / approval / permit / repay failures:
+
+- Preserve user workaround clues from the thread; if onchain approval works, treat that as evidence against the offchain path, not as proof the app bug is gone.
+- Run `consumer-bug-preflight.sh` before any capability disclaimer.
+- Search recent matches in Linear / GitHub before inventing a new theory:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh probe-auth
+gh search issues --repo morpho-org/consumer-monorepo --match title,body --limit 10 -- "permit2 nonce approval"
+gh search prs --repo morpho-org/consumer-monorepo --match title,body --limit 10 -- "permit2 nonce approval"
+```
+
+- Check `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md` for the known issue families:
+  - `API-900`, `VMV1-3435`, `VMV1-4299` for USDT-like approval reset paths
+  - `VMV1-4786` for Permit2 nonce / allowance failures
+  - `VMV1-4693`, `VMV1-4719` for stale permit nonce failures
+  - `VMV1-4140`, `VMV1-4147` for the offchain-signature toggle/workaround
+- In the final reply, separate:
+  1. primary app/offchain failure
+  2. secondary user state found onchain
+  3. workaround status
+  4. matching issue ids / owner
 
 ## BetterStack Incident API
 

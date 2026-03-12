@@ -271,6 +271,27 @@ cmd_probe_write() {
   printf 'probe_ok\t%s\n' "${identifier:-$issue_ref}"
 }
 
+cmd_probe_auth() {
+  local response viewer_id viewer_name viewer_email
+
+  response="$(linear_graphql 'query { viewer { id name email } }')"
+  viewer_id="$(printf '%s\n' "$response" | jq -r '.data.viewer.id // empty')"
+  [[ -n "$viewer_id" ]] || die "viewer probe returned no viewer id"
+  viewer_name="$(printf '%s\n' "$response" | jq -r '.data.viewer.name // empty')"
+  viewer_email="$(printf '%s\n' "$response" | jq -r '.data.viewer.email // empty')"
+
+  jq -nc \
+    --arg viewerId "$viewer_id" \
+    --arg viewerName "$viewer_name" \
+    --arg viewerEmail "$viewer_email" \
+    '{
+      ok: true,
+      viewerId: $viewerId,
+      viewerName: (if $viewerName == "" then null else $viewerName end),
+      viewerEmail: (if $viewerEmail == "" then null else $viewerEmail end)
+    }'
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -279,6 +300,7 @@ Usage:
   linear-ticket-api.sh issue update-description <issue-ref> (--file <path> | --text <text> | --stdin)
   linear-ticket-api.sh issue add-comment <issue-ref> (--file <path> | --text <text> | --stdin)
   linear-ticket-api.sh issue ensure-label <issue-ref> <label-name>
+  linear-ticket-api.sh probe-auth
   linear-ticket-api.sh probe-write <issue-ref>
 
 Compatibility:
@@ -349,6 +371,10 @@ main() {
     probe-write)
       [[ "$#" -eq 2 ]] || die "usage: probe-write <issue-ref>"
       cmd_probe_write "$2"
+      ;;
+    probe-auth)
+      [[ "$#" -eq 1 ]] || die "usage: probe-auth"
+      cmd_probe_auth
       ;;
     -h|--help|help)
       usage

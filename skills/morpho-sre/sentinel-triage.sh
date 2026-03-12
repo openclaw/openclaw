@@ -434,10 +434,12 @@ compute_dedup_key() {
 normalize_json_compact_or() {
   local raw="${1:-}"
   local fallback="${2:-null}"
-  if [[ -n "$raw" ]] && printf '%s\n' "$raw" | jq -ce . >/dev/null 2>&1; then
-    printf '%s\n' "$raw" | jq -c .
+  local compact
+  if [[ -n "$raw" ]] && compact="$(printf '%s\n' "$raw" | jq -ce . 2>/dev/null)"; then
+    printf '%s\n' "$compact"
     return 0
   fi
+  [[ -n "$raw" ]] && echo "sentinel-triage:warn normalize_json_compact_or invalid JSON input; using fallback" >&2
   printf '%s\n' "$fallback" | jq -c .
 }
 
@@ -448,6 +450,7 @@ normalize_json_number_or() {
     printf '%s\n' "$raw"
     return 0
   fi
+  [[ -n "$raw" ]] && echo "sentinel-triage:warn normalize_json_number_or invalid input; using fallback" >&2
   printf '%s\n' "$fallback"
 }
 

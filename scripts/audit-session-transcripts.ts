@@ -57,6 +57,8 @@ export type TranscriptAudit = {
     usedRepoRootModel: boolean;
     usedIncidentDossier: boolean;
     usedNotionPostmortemIndex: boolean;
+    usedFrontendResolver: boolean;
+    usedKnownIssueSearch: boolean;
   };
   delegation: {
     score: number;
@@ -84,6 +86,10 @@ export type TranscriptAudit = {
     blockedReplyHasNextChecks: boolean;
     blockedReplyHasSpeculation: boolean;
     blockedReplyIsLong: boolean;
+    consumerTxBugContext: boolean;
+    falseAccessClaim: boolean;
+    workaroundScopeIgnored: boolean;
+    certaintyWithoutKnownIssueSearch: boolean;
   };
 };
 
@@ -106,6 +112,10 @@ export type TranscriptAuditSummary = {
     sessionsWithDelegation: number;
     sessionsWithLargeTranscripts: number;
     sessionsWithHugeTranscripts: number;
+    sessionsWithFrontendResolver: number;
+    sessionsWithKnownIssueSearch: number;
+    sessionsWithFalseAccessClaim: number;
+    sessionsWithWorkaroundScopeIgnored: number;
   };
   skills: Array<{ name: string; count: number }>;
   recommendations: string[];
@@ -138,6 +148,12 @@ const RETRIEVAL_PATH_RULES = [
 ] as const;
 const LARGE_TRANSCRIPT_BYTES = 1_000_000;
 const HUGE_TRANSCRIPT_BYTES = 5_000_000;
+const ISSUE_ID_RE = /\b(?:VMV1|API|SDK)-\d+\b/;
+const NO_ACCESS_RE =
+  /\b(?:i\s+(?:do\s+not|don't)\s+have|i\s+(?:cannot|can't))\b[^.\n]{0,80}\b(?:access|credentials?)\b/i;
+const CONSUMER_TX_BUG_RE = /\b(offchain|permit2?|approval|allowance|usdt|repay|wallet)\b/i;
+const WORKAROUND_CLUE_RE =
+  /\b(toggle(?:d|ing)?\s+off|offchain approval|on-?chain approval|works?\s+by performing approval onchain|succeeded to interact|workaround)\b/i;
 
 type SessionMetadata = {
   model?: string;
@@ -259,6 +275,60 @@ function listMissingChecks(satisfied: Set<PreflightCheckKey>): PreflightCheckKey
   return PRELUDE_CHECKS.map((entry) => entry.key).filter((key) => !satisfied.has(key));
 }
 
+function getExecCommand(call: TranscriptToolCall): string | undefined {
+  const command = call.arguments?.command;
+  return typeof command === "string" && command.trim() ? command.trim() : undefined;
+}
+
+function detectFalseAccessClaim(params: {
+  assistantTexts: TranscriptAssistantText[];
+  execCalls: TranscriptToolCall[];
+}): boolean {
+  const surfaces = [
+    {
+      claimRe: /\blinear\b/i,
+      successTextRe: /\b(?:VMV1|API|SDK)-\d+\b|\bLinear\b/i,
+      successCommandRe: /linear-ticket-api\.sh\b|gh\s+search\s+(?:issues|prs)\b/i,
+    },
+    {
+      claimRe: /\bposthog\b/i,
+      successTextRe: /\bPostHog\b/i,
+      successCommandRe: /posthog-mcp\.sh\b/i,
+    },
+    {
+      claimRe: /\bsentry\b/i,
+      successTextRe: /\bSentry\b/i,
+      successCommandRe: /sentry-(?:api|cli)\.sh\b/i,
+    },
+    {
+      claimRe: /\b(?:foundry|cast|anvil)\b/i,
+      successTextRe: /\b(?:Foundry|cast|anvil)\b/i,
+      successCommandRe: /\b(?:cast|anvil|forge)\b/i,
+    },
+  ] as const;
+
+  return surfaces.some((surface) => {
+    const claim = params.assistantTexts.find(
+      (entry) => NO_ACCESS_RE.test(entry.text) && surface.claimRe.test(entry.text),
+    );
+    if (!claim) {
+      return false;
+    }
+    return (
+      params.assistantTexts.some(
+        (entry) => entry.line > claim.line && surface.successTextRe.test(entry.text),
+      ) ||
+      params.execCalls.some((call) => {
+        if (call.line <= claim.line) {
+          return false;
+        }
+        const command = getExecCommand(call);
+        return Boolean(command && surface.successCommandRe.test(command));
+      })
+    );
+  });
+}
+
 function hasExactErrorReference(text: string, errorText: string): boolean {
   const candidates = errorText
     .split(/\n+/)
@@ -291,6 +361,7 @@ export function analyzeTranscriptRecords(
   const toolCalls: TranscriptToolCall[] = [];
   const toolResults: TranscriptToolResult[] = [];
   const readPaths: string[] = [];
+  const userTexts: string[] = [];
   const delegationCounts = new Map<string, number>();
   const execFailureCounts = new Map<string, number>();
   let userTurns = 0;
@@ -308,6 +379,10 @@ export function analyzeTranscriptRecords(
     const role = typedMessage.role;
     if (role === "user") {
       userTurns += 1;
+      const text = getTextBlocks(typedMessage.content).join("\n").trim();
+      if (text) {
+        userTexts.push(text);
+      }
       continue;
     }
     if (role === "assistant") {
@@ -363,6 +438,7 @@ export function analyzeTranscriptRecords(
 
   const toolResultById = new Map(toolResults.map((result) => [result.toolCallId, result]));
   const execCalls = toolCalls.filter((call) => call.name === "exec");
+  const execCommands = execCalls.map((call) => ({ call, command: getExecCommand(call) }));
   const skillReads = Array.from(
     new Set(
       toolCalls
@@ -399,12 +475,11 @@ export function analyzeTranscriptRecords(
 
   const firstAnalysisLine = assistantTexts[0]?.line;
   const preflightSatisfied = new Set<PreflightCheckKey>();
-  for (const call of execCalls) {
+  for (const { call, command } of execCommands) {
     if (firstAnalysisLine && call.line >= firstAnalysisLine) {
       break;
     }
-    const command = call.arguments?.command;
-    if (typeof command !== "string") {
+    if (!command) {
       continue;
     }
     for (const key of inspectCommandForPreflight(command)) {
@@ -449,6 +524,31 @@ export function analyzeTranscriptRecords(
   const blockedReplyHasNextChecks = blockedReply ? NEXT_CHECKS_RE.test(blockedReply.text) : false;
   const blockedReplyHasSpeculation = blockedReply ? SPECULATION_RE.test(blockedReply.text) : false;
   const blockedReplyIsLong = blockedReply ? countNonEmptyLines(blockedReply.text) > 12 : false;
+  const combinedUserText = userTexts.join("\n");
+  const consumerTxBugContext = CONSUMER_TX_BUG_RE.test(combinedUserText);
+  const hasWorkaroundClue = WORKAROUND_CLUE_RE.test(combinedUserText);
+  const usedFrontendResolver = execCommands.some(({ command }) =>
+    Boolean(command && /(?:consumer-bug-preflight|frontend-project-resolver)\.sh\b/.test(command)),
+  );
+  const usedKnownIssueSearch =
+    execCommands.some(({ command }) =>
+      Boolean(command && /linear-ticket-api\.sh\b|gh\s+search\s+(?:issues|prs)\b/i.test(command)),
+    ) || assistantTexts.some((entry) => ISSUE_ID_RE.test(entry.text));
+  const falseAccessClaim = detectFalseAccessClaim({ assistantTexts, execCalls });
+  const workaroundScopeIgnored =
+    consumerTxBugContext &&
+    hasWorkaroundClue &&
+    assistantTexts.some(
+      (entry) =>
+        /\broot cause(?:\s+confirmed)?\b/i.test(entry.text) &&
+        !/(offchain|permit2?|workaround|on-?chain approval|primary app bug|secondary user state)/i.test(
+          entry.text,
+        ),
+    );
+  const certaintyWithoutKnownIssueSearch =
+    consumerTxBugContext &&
+    assistantTexts.some((entry) => /\broot cause(?:\s+confirmed)?\b/i.test(entry.text)) &&
+    !usedKnownIssueSearch;
 
   return {
     path: pathLabel,
@@ -476,6 +576,8 @@ export function analyzeTranscriptRecords(
       usedNotionPostmortemIndex: retrievalReads.some((entry) =>
         /notion-postmortem-index\.md$/i.test(entry),
       ),
+      usedFrontendResolver,
+      usedKnownIssueSearch,
     },
     delegation: {
       score: [...delegationCounts.values()].reduce((sum, count) => sum + count, 0),
@@ -505,6 +607,10 @@ export function analyzeTranscriptRecords(
       blockedReplyHasNextChecks,
       blockedReplyHasSpeculation,
       blockedReplyIsLong,
+      consumerTxBugContext,
+      falseAccessClaim,
+      workaroundScopeIgnored,
+      certaintyWithoutKnownIssueSearch,
     },
   };
 }
@@ -645,6 +751,18 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
     (entry) => entry.bloat.largeTranscript,
   ).length;
   const sessionsWithHugeTranscripts = sessions.filter((entry) => entry.bloat.hugeTranscript).length;
+  const sessionsWithFrontendResolver = sessions.filter(
+    (entry) => entry.retrieval.usedFrontendResolver,
+  ).length;
+  const sessionsWithKnownIssueSearch = sessions.filter(
+    (entry) => entry.retrieval.usedKnownIssueSearch,
+  ).length;
+  const sessionsWithFalseAccessClaim = sessions.filter(
+    (entry) => entry.discussion.falseAccessClaim,
+  ).length;
+  const sessionsWithWorkaroundScopeIgnored = sessions.filter(
+    (entry) => entry.discussion.workaroundScopeIgnored,
+  ).length;
 
   if (sessionsWithConfiguredSkills > 0 && sessionsWithPreflight < sessionsWithConfiguredSkills) {
     recommendations.push(
@@ -693,6 +811,21 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
       "Control transcript bloat: summarize repeated tool output, cap repeated failures, and stop re-running the same blocked checks.",
     );
   }
+  if (sessionsWithFalseAccessClaim > 0) {
+    recommendations.push(
+      "Probe Sentry/PostHog/Linear/Foundry before capability disclaimers and flag contradictory no-access claims in self-audit.",
+    );
+  }
+  if (sessions.some((entry) => entry.discussion.certaintyWithoutKnownIssueSearch)) {
+    recommendations.push(
+      "For consumer approval / permit bugs, require known-issue search before root-cause claims.",
+    );
+  }
+  if (sessionsWithWorkaroundScopeIgnored > 0) {
+    recommendations.push(
+      "Keep consumer tx investigations anchored on workaround clues and separate the primary app bug from secondary user state.",
+    );
+  }
 
   return {
     scannedPaths: pathsToScan.length > 0 ? pathsToScan : [path.join("~", ".openclaw", "agents")],
@@ -713,6 +846,10 @@ export async function auditTranscriptPaths(pathsToScan: string[]): Promise<Trans
       sessionsWithDelegation,
       sessionsWithLargeTranscripts,
       sessionsWithHugeTranscripts,
+      sessionsWithFrontendResolver,
+      sessionsWithKnownIssueSearch,
+      sessionsWithFalseAccessClaim,
+      sessionsWithWorkaroundScopeIgnored,
     },
     skills: [...skillCounts.entries()]
       .map(([name, count]) => ({ name, count }))
@@ -741,9 +878,19 @@ function formatSummary(summary: TranscriptAuditSummary): string {
   lines.push(`Sessions with retrieval reads: ${summary.aggregate.sessionsWithRetrieval}`);
   lines.push(`Sessions with delegation: ${summary.aggregate.sessionsWithDelegation}`);
   lines.push(
+    `Sessions with frontend resolver/preflight: ${summary.aggregate.sessionsWithFrontendResolver}`,
+  );
+  lines.push(`Sessions with known issue search: ${summary.aggregate.sessionsWithKnownIssueSearch}`);
+  lines.push(
     `Sessions with speculation before evidence: ${summary.aggregate.sessionsWithSpeculationBeforeEvidence}`,
   );
   lines.push(`Sessions with blocked replies: ${summary.aggregate.sessionsWithBlockedReplies}`);
+  lines.push(
+    `Sessions with false access claims: ${summary.aggregate.sessionsWithFalseAccessClaim}`,
+  );
+  lines.push(
+    `Sessions with workaround scope ignored: ${summary.aggregate.sessionsWithWorkaroundScopeIgnored}`,
+  );
   lines.push(`Sessions with large transcripts: ${summary.aggregate.sessionsWithLargeTranscripts}`);
   lines.push(`Sessions with huge transcripts: ${summary.aggregate.sessionsWithHugeTranscripts}`);
   lines.push("");

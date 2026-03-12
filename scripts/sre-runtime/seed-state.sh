@@ -128,11 +128,16 @@ seed_managed_cron_jobs() {
   staging_message="$(build_managed_cron_prompt "#staging-infra-monitoring")"
 
   existing_json='{"version":1,"jobs":[]}'
-  if [ -f "$CRON_STORE_PATH" ] && jq -e . "$CRON_STORE_PATH" >/dev/null 2>&1; then
-    existing_json="$(cat "$CRON_STORE_PATH")"
+  if [ -f "$CRON_STORE_PATH" ]; then
+    if jq -e . "$CRON_STORE_PATH" >/dev/null 2>&1; then
+      existing_json="$(cat "$CRON_STORE_PATH")"
+    else
+      echo "seed-state:warn existing cron store is invalid JSON, resetting" >&2
+    fi
   fi
 
   tmp_store="$(mktemp "${CRON_STORE_PATH}.tmp.XXXXXX")"
+  trap 'rm -f "$tmp_store"' EXIT
   jq -n \
     --argjson existing "$existing_json" \
     --argjson now_ms "$now_ms" \
@@ -169,7 +174,7 @@ seed_managed_cron_jobs() {
                     updatedAtMs: $now_ms,
                     schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
                     sessionTarget: "isolated",
-                    wakeMode: "next-heartbeat",
+                    wakeMode: "now",
                     payload: {
                       kind: "agentTurn",
                       message: $platform_message,
@@ -194,7 +199,7 @@ seed_managed_cron_jobs() {
                     updatedAtMs: $now_ms,
                     schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
                     sessionTarget: "isolated",
-                    wakeMode: "next-heartbeat",
+                    wakeMode: "now",
                     payload: {
                       kind: "agentTurn",
                       message: $staging_message,
@@ -210,8 +215,20 @@ seed_managed_cron_jobs() {
             )
         }
     ' >"$tmp_store"
+  jq -e '
+    .version == 1 and
+    (.jobs | type == "array") and
+    (.jobs | length) >= 2 and
+    any(.jobs[]; .id == "sre-12h-platform-monitoring") and
+    any(.jobs[]; .id == "sre-12h-staging-monitoring")
+  ' "$tmp_store" >/dev/null || {
+    rm -f "$tmp_store"
+    echo "seed-state:error produced invalid cron store" >&2
+    exit 1
+  }
   chmod 600 "$tmp_store" || true
   mv "$tmp_store" "$CRON_STORE_PATH"
+  trap - EXIT
 }
 
 mkdir -p \

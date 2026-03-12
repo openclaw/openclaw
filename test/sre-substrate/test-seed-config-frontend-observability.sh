@@ -17,8 +17,17 @@ jq -e '
   .plugins.entries.acpx.config.mcpServers["posthog-dev-vmv1"].args == ["dev","--project-key","vmv1"]
 ' "$CONFIG" >/dev/null
 
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("/home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, or Foundry access")
+' "$CONFIG" >/dev/null
+
 test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"
 test -f "$ROOT/sentry-cli.sh"
 test -f "$ROOT/sentry-api.sh"
+test -f "$ROOT/consumer-bug-preflight.sh"
 test -f "$ROOT/wiz-mcp.sh"

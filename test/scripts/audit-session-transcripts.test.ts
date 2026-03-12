@@ -101,4 +101,23 @@ describe("audit-session-transcripts", () => {
     expect(audit.bloat.cappedReadMarkers).toBe(1);
     expect(audit.bloat.repeatedExecFailures).toBe(1);
   });
+
+  it("flags consumer approval failures that drift scope and contradict no-access claims", () => {
+    const audit = analyze(`
+{"type":"session","id":"s5"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"user succeeded to interact by toggling off the offchain approval on the app. seems there might be an issue with the offchain approval. investigate with Sentry PostHog and Foundry."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I don't have credentials or API access to Sentry or PostHog from this environment."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"I don't have access to Linear, so I can only recap this thread."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause confirmed: The user has 0 USDT balance."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Checked both — here's what Sentry and PostHog show. Sentry (morpho-consumer): unrelated event. PostHog (vmv1): user not tracked."}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Here's the consolidated recap from Linear + this investigation: VMV1-4786, VMV1-4693, VMV1-4299."}]}}
+`);
+
+    expect(audit.retrieval.usedFrontendResolver).toBe(false);
+    expect(audit.retrieval.usedKnownIssueSearch).toBe(true);
+    expect(audit.discussion.consumerTxBugContext).toBe(true);
+    expect(audit.discussion.falseAccessClaim).toBe(true);
+    expect(audit.discussion.workaroundScopeIgnored).toBe(true);
+    expect(audit.discussion.certaintyWithoutKnownIssueSearch).toBe(false);
+  });
 });
