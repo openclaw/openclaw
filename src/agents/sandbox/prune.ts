@@ -66,6 +66,19 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
     if (params.cleanupWorkspace && params.cfg.scope !== "shared") {
       try {
         const scopeKey = resolveSandboxScopeKey(params.cfg.scope, entry.sessionKey);
+        // For agent scope, verify no other sessions are using the same workspace
+        if (params.cfg.scope === "agent") {
+          const registry = await params.read();
+          const otherSessionsActive = registry.entries.some(
+            (e) =>
+              e.containerName !== entry.containerName &&
+              resolveSandboxScopeKey(params.cfg.scope, e.sessionKey) === scopeKey,
+          );
+          if (otherSessionsActive) {
+            // Skip workspace cleanup - other sessions still using this workspace
+            continue;
+          }
+        }
         const workspaceDir = resolveSandboxWorkspaceDir(params.cfg.workspaceRoot, scopeKey);
         await fs.rm(workspaceDir, { recursive: true, force: true });
       } catch {
