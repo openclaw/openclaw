@@ -23,7 +23,7 @@ import {
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
 export type HookInstallLogger = {
@@ -96,7 +96,7 @@ function validateHookId(hookId: string): string | null {
 }
 
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
-  const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
+  const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(resolveConfigDir(), "hooks");
   const hookIdError = validateHookId(hookId);
   if (hookIdError) {
     throw new Error(hookIdError);
@@ -128,7 +128,9 @@ async function resolveInstallTargetDir(
   id: string,
   hooksDir?: string,
 ): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
-  const baseHooksDir = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
+  const baseHooksDir = hooksDir
+    ? resolveUserPath(hooksDir)
+    : path.join(resolveConfigDir(), "hooks");
   return await resolveCanonicalInstallTarget({
     baseDir: baseHooksDir,
     id,
