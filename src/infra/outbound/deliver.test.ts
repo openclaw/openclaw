@@ -474,6 +474,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("merges channel-configured mediaLocalRoots into outbound delivery", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const channelMediaRoot = path.resolve("/tmp/channel-media");
 
     await deliverTelegramPayload({
       sendTelegram,
@@ -491,13 +492,14 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining(["/tmp/channel-media"]),
+        mediaLocalRoots: expect.arrayContaining([channelMediaRoot]),
       }),
     );
   });
 
   it("includes account-configured mediaLocalRoots in outbound delivery", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const accountMediaRoot = path.resolve("/tmp/account-media");
 
     await deliverTelegramPayload({
       sendTelegram,
@@ -520,13 +522,15 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining(["/tmp/account-media"]),
+        mediaLocalRoots: expect.arrayContaining([accountMediaRoot]),
       }),
     );
   });
 
   it("merges channel and account mediaLocalRoots together in outbound delivery", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const channelMediaRoot = path.resolve("/tmp/channel-media");
+    const accountMediaRoot = path.resolve("/tmp/account-media");
 
     await deliverTelegramPayload({
       sendTelegram,
@@ -550,7 +554,7 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining(["/tmp/channel-media", "/tmp/account-media"]),
+        mediaLocalRoots: expect.arrayContaining([channelMediaRoot, accountMediaRoot]),
       }),
     );
   });
