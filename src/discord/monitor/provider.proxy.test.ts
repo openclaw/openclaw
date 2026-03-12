@@ -255,4 +255,30 @@ describe("createDiscordGatewayPlugin", () => {
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("maps body read failures to fetch failed", async () => {
+    const runtime = createRuntime();
+    globalFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new Error("body stream closed");
+      },
+    } as unknown as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    await expect(
+      (
+        plugin as unknown as {
+          registerClient: (client: { options: { token: string } }) => Promise<void>;
+        }
+      ).registerClient({
+        options: { token: "token-123" },
+      }),
+    ).rejects.toThrow("Failed to get gateway information from Discord: fetch failed");
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+  });
 });

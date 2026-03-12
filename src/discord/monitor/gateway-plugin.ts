@@ -11,9 +11,12 @@ const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
+type DiscordGatewayFetchInit = Record<string, unknown> & {
+  headers?: Record<string, string>;
+};
 type DiscordGatewayFetch = (
   input: string,
-  init?: Record<string, unknown>,
+  init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 export function resolveDiscordGatewayIntents(
@@ -74,15 +77,16 @@ function createGatewayMetadataError(params: {
 async function fetchDiscordGatewayInfo(params: {
   token: string;
   fetchImpl: DiscordGatewayFetch;
-  fetchInit?: Record<string, unknown>;
+  fetchInit?: DiscordGatewayFetchInit;
 }): Promise<APIGatewayBotInfo> {
   let response: DiscordGatewayMetadataResponse;
   try {
     response = await params.fetchImpl(DISCORD_GATEWAY_BOT_URL, {
+      ...params.fetchInit,
       headers: {
+        ...params.fetchInit?.headers,
         Authorization: `Bot ${params.token}`,
       },
-      ...params.fetchInit,
     });
   } catch (error) {
     throw createGatewayMetadataError({
@@ -92,7 +96,16 @@ async function fetchDiscordGatewayInfo(params: {
     });
   }
 
-  const body = await response.text();
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (error) {
+    throw createGatewayMetadataError({
+      detail: error instanceof Error ? error.message : String(error),
+      transient: true,
+      cause: error,
+    });
+  }
   const summary = summarizeGatewayResponseBody(body);
   const transient = isTransientDiscordGatewayResponse(response.status, body);
 
@@ -128,7 +141,7 @@ function createGatewayPlugin(params: {
     autoInteractions: boolean;
   };
   fetchImpl: DiscordGatewayFetch;
-  fetchInit?: Record<string, unknown>;
+  fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: HttpsProxyAgent<string>;
 }): GatewayPlugin {
   class SafeGatewayPlugin extends GatewayPlugin {
