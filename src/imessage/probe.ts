@@ -100,10 +100,10 @@ export async function probeIMessage(
   } catch (err) {
     const msg = String(err);
     // Detect macOS Full Disk Access denial so the user gets an actionable hint.
-    // Narrow the match: require both a permission keyword AND a chat.db/Messages/tccd
-    // reference so non-FDA EPERMs (e.g. IPC socket issues) don't trigger a misleading hint.
+    // Require a real permission keyword AND a chat.db/Messages/tccd reference so
+    // transient TCC daemon errors don't trigger a misleading fatal hint.
     if (
-      (msg.includes("Operation not permitted") || msg.includes("EPERM") || msg.includes("tccd")) &&
+      (msg.includes("Operation not permitted") || msg.includes("EPERM")) &&
       (msg.includes("chat.db") || msg.includes("Messages") || msg.includes("tccd"))
     ) {
       return {
