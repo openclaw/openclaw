@@ -136,6 +136,12 @@ export async function startWebLoginWithQr(
 
   await resetActiveLogin(account.accountId);
 
+  // Clear stale on-disk credentials before creating a new socket,
+  // otherwise Baileys loads old creds.json and gets stuck at "logging in".
+  if (opts.force && hasWeb) {
+    await logoutWeb({ authDir: account.authDir, isLegacyAuthDir: account.isLegacyAuthDir });
+  }
+
   let resolveQr: ((qr: string) => void) | null = null;
   let rejectQr: ((err: Error) => void) | null = null;
   const qrPromise = new Promise<string>((resolve, reject) => {
