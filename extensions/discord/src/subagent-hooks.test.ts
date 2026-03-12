@@ -409,10 +409,12 @@ describe("discord subagent hook handlers", () => {
   });
 
   it("keeps original routing when delivery target is ambiguous", () => {
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-      { accountId: "work", threadId: "888" },
-    ]);
+    hookMocks.listThreadBindingsBySessionKey
+      .mockReturnValueOnce([
+        { accountId: "work", threadId: "777" },
+        { accountId: "work", threadId: "888" },
+      ])
+      .mockReturnValueOnce([]);
     const handlers = registerHandlersForTest();
     const handler = getRequiredHandler(handlers, "subagent_delivery_target");
 

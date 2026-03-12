@@ -91,15 +91,13 @@ function resolveBoundThreadBinding(params: {
 }): DiscordThreadBindingLookupRecord | undefined {
   const sessionKey = params.sessionKey?.trim();
   const targetChannelId = resolveTargetChannelId(params.target);
-  if (!params.threadBindings || !targetChannelId) {
+  if (!params.threadBindings || !targetChannelId || !sessionKey) {
     return undefined;
   }
-  if (sessionKey) {
-    const bindings = params.threadBindings.listBySessionKey(sessionKey);
-    const matched = bindings.find((entry) => entry.threadId === targetChannelId);
-    if (matched) {
-      return matched;
-    }
+  const bindings = params.threadBindings.listBySessionKey(sessionKey);
+  const matched = bindings.find((entry) => entry.threadId === targetChannelId);
+  if (matched) {
+    return matched;
   }
   if (
     "getByThreadId" in params.threadBindings &&
