@@ -291,11 +291,46 @@ function isExtensionFile(filePath: string): boolean {
   return !filePath.endsWith(".d.ts");
 }
 
+/**
+ * Directories that cannot contain valid plugins and should be skipped during
+ * recursive discovery scans. This prevents FD exhaustion when workspace skills
+ * contain large dependency trees (e.g. node_modules with thousands of packages).
+ *
+ * Aligns with DEFAULT_SKILLS_WATCH_IGNORED in refresh.ts and
+ * IGNORED_MEMORY_WATCH_DIR_NAMES in manager-sync-ops.ts.
+ */
+const IGNORED_SCAN_DIRECTORIES = new Set([
+  // Package managers and dependencies
+  "node_modules",
+  ".pnpm-store",
+  // Version control
+  ".git",
+  // Build outputs
+  "dist",
+  "build",
+  // Python virtual environments and caches
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  // General caches
+  ".cache",
+  // Browser automation data (Playwright, Puppeteer)
+  "browser_data",
+  ".browser_data",
+]);
+
 function shouldIgnoreScannedDirectory(dirName: string): boolean {
   const normalized = dirName.trim().toLowerCase();
   if (!normalized) {
     return true;
   }
+  // Check against known non-plugin directories
+  if (IGNORED_SCAN_DIRECTORIES.has(normalized)) {
+    return true;
+  }
+  // Legacy patterns for backup/disabled directories
   if (normalized.endsWith(".bak")) {
     return true;
   }

@@ -146,6 +146,34 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).not.toContain("discord.bak");
   });
 
+  it("ignores node_modules and other non-plugin directories to prevent FD exhaustion", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+
+    // Create a skill with nested node_modules (mimics real-world scenario from #43813)
+    const skillDir = path.join(globalExt, "memory-lancedb-pro");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, "index.ts"), "export default function () {}", "utf-8");
+
+    // These directories should NOT be scanned (would cause FD exhaustion)
+    const ignoredDirs = ["node_modules", ".git", "dist", ".venv", "browser_data", ".cache"];
+    for (const dirName of ignoredDirs) {
+      const nestedDir = path.join(skillDir, dirName, "deeply", "nested", "fake-plugin");
+      fs.mkdirSync(nestedDir, { recursive: true });
+      fs.writeFileSync(path.join(nestedDir, "index.ts"), "export default function () {}", "utf-8");
+    }
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((candidate) => candidate.idHint);
+    // Should find the real skill
+    expect(ids).toContain("memory-lancedb-pro");
+    // Should NOT find any fake plugins inside ignored directories
+    expect(ids).not.toContain("fake-plugin");
+    expect(ids.filter((id) => id === "fake-plugin")).toHaveLength(0);
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
