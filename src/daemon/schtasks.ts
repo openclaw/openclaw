@@ -367,14 +367,20 @@ async function readScheduledTaskPort(taskName: string): Promise<number> {
 
   const output = res.stdout || res.stderr || "";
   
-  // Extract the task script path (the .cmd file)
-  const taskPathMatch = output.match(/Run As User\s+:.*?\r?\nTask To Run\s+:.*?\r?\nStart In\s+:.*?\r?\nComment\s+:.*?\r?\nStatus\s+:.*?\r?\nLast Run Time\s+:.*?\r?\nLast Result\s+:.*?\r?\nAuthor\s+:.*?\r?\nSchedule To Run\s+:.*?\r?\nSchedule\s+:.*?\r?\nSchedule Type\s+:.*?\r?\nModifying User\s+:.*?\r?\nSecurity Options\s+:.*?\r?\nPower Management\s+:.*?\r?\nRun As User\s+:.*?\r?\nTask To Run\s+: (.+?)\r?\n/);
-  
-  // Alternative: look for the .cmd path in the output
-  const cmdPathMatch = output.match(/(.*?gateway\.cmd)/i);
-  
-  if (cmdPathMatch) {
-    const scriptPath = cmdPathMatch[1].trim();
+  // Parse the "Task To Run" field value from schtasks output
+  // Format: "Task To Run: C:\path\to\gateway.cmd"
+  const taskToRunMatch = output.match(/Task To Run\s*:\s*(.+?)(?:\r?\n|$)/i);
+  if (!taskToRunMatch) {
+    return 18789;
+  }
+
+  const taskToRun = taskToRunMatch[1].trim();
+
+  // Extract the .cmd script path (may be quoted or unquoted)
+  const scriptPathMatch = taskToRun.match(/"([^"]+)"|(\S+)/);
+  const scriptPath = scriptPathMatch ? (scriptPathMatch[1] || scriptPathMatch[2]) : taskToRun;
+
+  if (scriptPath) {
     try {
       // Read the script file and extract --port argument
       const scriptContent = await fs.readFile(scriptPath, "utf8");
