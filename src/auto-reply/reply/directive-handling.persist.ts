@@ -66,6 +66,41 @@ export async function persistInlineDirectives(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, activeAgentId);
+  const modelDirective =
+    directives.hasModelDirective && params.effectiveModelDirective
+      ? params.effectiveModelDirective
+      : undefined;
+  if (modelDirective && sessionEntry) {
+    const resolved = resolveModelRefFromString({
+      raw: modelDirective,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      if (
+        (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) &&
+        maybeBlockOversizedModelSwitch({
+          cfg,
+          sessionEntry,
+          currentProvider: provider,
+          currentModel: model,
+          targetProvider: resolved.ref.provider,
+          targetModel: resolved.ref.model,
+        })
+      ) {
+        // Mixed-message flows already surfaced the blocked switch to the user in
+        // the fast lane. Keep persistence aligned by skipping all inline state
+        // writes for the same blocked model switch.
+        return {
+          provider,
+          model,
+          contextTokens:
+            agentCfg?.contextTokens ?? lookupContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+        };
+      }
+    }
+  }
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -135,10 +170,6 @@ export async function persistInlineDirectives(params: {
       }
     }
 
-    const modelDirective =
-      directives.hasModelDirective && params.effectiveModelDirective
-        ? params.effectiveModelDirective
-        : undefined;
     if (modelDirective) {
       const resolved = resolveModelRefFromString({
         raw: modelDirective,

@@ -386,4 +386,40 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
   });
+
+  it("does not persist other inline directive side effects when the model switch is blocked", async () => {
+    const directives = parseInlineDirectives("please continue /model openai/gpt-4o /think high");
+    const sessionEntry = createSessionEntry({
+      totalTokens: 150_000,
+      totalTokensFresh: true,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: "openai/gpt-4o",
+      cfg: configWithContextWindows(),
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: configWithContextWindows().agents?.defaults,
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+  });
 });
