@@ -178,13 +178,15 @@ function buildSendSchema(options: {
     ),
     media: Type.Optional(
       Type.String({
-        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+        description:
+          "Media URL or local path. For action=send, use media/path/filePath. If you need a base64 or data: payload, use action=sendAttachment with buffer.",
       }),
     ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
-        description: "Base64 payload for attachments (optionally a data: URL).",
+        description:
+          "Base64 payload for attachment-style actions such as sendAttachment (optionally a data: URL). action=send ignores this field.",
       }),
     ),
     contentType: Type.Optional(Type.String()),

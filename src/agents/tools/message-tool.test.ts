@@ -252,6 +252,33 @@ describe("message tool schema scoping", () => {
     expect(actionEnum).toContain("poll");
   });
 
+  it("documents buffer as a sendAttachment-only payload field", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    const mediaDescription = (
+      properties.media as {
+        description?: string;
+      }
+    )?.description;
+    const bufferDescription = (
+      properties.buffer as {
+        description?: string;
+      }
+    )?.description;
+
+    expect(mediaDescription).toContain("For action=send, use media/path/filePath.");
+    expect(mediaDescription).toContain("use action=sendAttachment with buffer");
+    expect(bufferDescription).toContain("sendAttachment");
+    expect(bufferDescription).toContain("action=send ignores this field");
+  });
+
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
     const telegramPluginWithConfig = createChannelPlugin({
       id: "telegram",

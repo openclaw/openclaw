@@ -229,7 +229,7 @@ describe("buildAgentSystemPrompt", () => {
       "To attach media in the current reply, put `MEDIA:<path-or-url>` on its own line.",
     );
     expect(prompt).toContain(
-      "For `action=send` attachments, use `media` (URL/path) or `filePath`/`buffer` instead of calling provider APIs directly.",
+      "For `action=send` attachments, use `media` (URL/path) or `path`/`filePath`; use `action=sendAttachment` when you need `buffer`/`filename` payloads.",
     );
   });
 
