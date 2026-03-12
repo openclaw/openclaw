@@ -63,6 +63,7 @@ import {
   requestHeartbeatNow,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
+  setInFlightRetryMs,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
@@ -1096,6 +1097,12 @@ export function startHeartbeatRunner(opts: {
 
     state.cfg = cfg;
     state.agents = nextAgents;
+    // Apply configured retry delay for requests-in-flight skips to the
+    // wake layer so it backs off instead of retrying after ~1 second.
+    const retryDelayMs = cfg.agents?.defaults?.heartbeat?.retryDelayMs;
+    if (typeof retryDelayMs === "number") {
+      setInFlightRetryMs(retryDelayMs);
+    }
     const nextEnabled = nextAgents.size > 0;
     if (!initialized) {
       if (!nextEnabled) {
