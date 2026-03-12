@@ -459,7 +459,7 @@ export async function runOnboardingWizard(
     await prompter.note(
       [
         "No API key configured. Your agent won't respond until you add one.",
-        `Run ${formatCliCommand("openclaw configure --section auth")} to configure API credentials later.`,
+        `Run ${formatCliCommand("openclaw configure --section model")} to configure API credentials later.`,
       ].join("\n"),
       "Auth skipped",
     );
