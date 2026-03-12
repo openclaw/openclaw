@@ -111,9 +111,16 @@ identity:
   name: "DCA Basic Test Strategy" # 策略显示名称
   version: "1.0.0" # 语义化版本号
   style: dca # trend | mean_reversion | dca | momentum | swing | hybrid
+  visibility: private # public | private | unlisted（默认 private）
+  license: MIT # MIT | CC-BY-4.0 | proprietary（默认 MIT）
   author:
     name: "OpenFinClaw" # 默认作者
+    wallet: "0x..." # 可选：收益分配地址
   summary: "Simple DCA strategy for BTC"
+  changelog:
+    - version: "1.0.0"
+      date: "2025-01-01"
+      changes: "Initial release"
 
 # ── 技术配置 (必填) ───────────────────────────────────────
 technical:
@@ -123,8 +130,8 @@ technical:
 # ── 回测配置 (必填) ───────────────────────────────────────
 backtest:
   defaultPeriod:
-    startDate: "2024-01-01"
-    endDate: "2024-12-31"
+    startDate: "2025-01-01"
+    endDate: "2025-12-31"
   frequencyDays: 1 # 回测频率（天）
   initialCapital: 10000 # 初始资金 (USD)
   currency: USD # 货币类型
@@ -150,41 +157,51 @@ backtest:
 - `type`: `strategy` | `indicator` | `connector`
 - `name`: 策略显示名称
 - `version`: 语义化版本号（例如 `"1.0.0"`）
-
-**可选字段：**
-
 - `style`: `trend` | `mean_reversion` | `dca` | `momentum` | `swing` | `hybrid`
-- `visibility`: `public` | `private` | `unlisted`
+- `visibility`: `public` | `private` | `unlisted`（默认 `private`）
 - `summary`: 一句话策略描述
-- `description`: 详细策略说明（支持 Markdown）
-- `tags`: **字符串数组**，必须使用**行内数组格式**：`tags: [dca, btc, adaptive, crypto]`
-- `license`: `MIT` | `CC-BY-4.0` | `proprietary`
-- `author`: 对象格式
+- `license`: `MIT` | `CC-BY-4.0` | `proprietary`（默认 `MIT`）
+- `author`: 对象格式（必须包含 `name`）
   ```yaml
   author:
-    name: "OpenFinClaw" # 默认作者名
+    name: "OpenFinClaw" # 必填：作者名
     wallet: "0x..." # 可选：收益分配地址
   ```
-- `createdAt`: `"2024-01-01"` (YYYY-MM-DD)
-- `updatedAt`: `"2024-06-01"` (YYYY-MM-DD)
-- `changelog`: 变更日志数组
+- `changelog`: 变更日志数组（至少包含一条初始版本记录）
   ```yaml
   changelog:
     - version: "1.0.0"
-      date: "2024-01-01"
+      date: "2025-01-01"
       changes: "Initial release"
   ```
+
+**可选字段：**
+
+- `description`: 详细策略说明（支持 Markdown）
+- `tags`: **字符串数组**，必须使用**行内数组格式**：`tags: [dca, btc, adaptive, crypto]`
+- `createdAt`: `"2025-01-01"` (YYYY-MM-DD)
+- `updatedAt`: `"2025-06-01"` (YYYY-MM-DD)
 
 ### Classification (可选)
 
 ```yaml
 classification:
-  archetype: systematic # systematic | discretionary | hybrid
-  market: Crypto # Crypto | US | CN | HK | Forex | Commodity
+  archetype: systematic           # systematic | discretionary | hybrid
+  market: Crypto                  # Crypto | US | CN | HK | Forex | Commodity
   assetClasses: [crypto]
-  frequency: weekly # daily | weekly | monthly
-  riskProfile: medium # low | medium | high (fallback for risk.riskLevel)
+  frequency: weekly               # daily | weekly | monthly
+  riskProfile: medium             # low | medium | high (fallback for risk.riskLevel)
 ```
+
+**字段说明：**
+
+| 字段 | 类型 | 必填 | 可选值 | 说明 |
+|------|------|------|--------|------|
+| `archetype` | string | 否 | `systematic` \| `discretionary` \| `hybrid` | 策略类型：系统化/主观/混合 |
+| `market` | string | 否 | `Crypto` \| `US` \| `CN` \| `HK` \| `Forex` \| `Commodity` | 目标市场 |
+| `assetClasses` | string[] | 否 | `[crypto]`, `[equity]`, `[forex]`, `[commodity]` | 资产类别数组 |
+| `frequency` | string | 否 | `daily` \| `weekly` \| `monthly` | 交易频率 |
+| `riskProfile` | string | 否 | `low` \| `medium` \| `high` | 风险等级（可被 `risk.riskLevel` 覆盖） |
 
 ### Parameters (可选)
 
@@ -291,7 +308,7 @@ Extract key dimensions:
 | Core idea      | buy dips, trend follow, grid, DCA |
 | Capital        | $10,000                           |
 | Risk tolerance | 25% max drawdown                  |
-| Time horizon   | 2024-01-01 to 2024-12-31          |
+| Time horizon   | 2025-01-01 to 2025-12-31          |
 | Market         | Crypto, US, CN, HK                |
 
 Ask clarifying questions if the idea is vague (e.g. "buy when cheap" → RSI oversold? below MA? fixed schedule?).
@@ -305,7 +322,7 @@ Propose: strategy archetype (DCA, trend, mean-reversion, momentum, grid), indica
 Generate:
 
 1. **fep.yaml** — `fep: "1.2"`, 包含以下部分：
-   - **identity** (必填): id, type, name, version, author (对象格式), style (可选)
+   - **identity** (必填): id, type, name, version, style, visibility, summary, license, author (对象格式，必须包含 name), changelog (至少一条记录)
    - **technical** (必填): language, entryPoint
    - **backtest** (必填): defaultPeriod, frequencyDays, initialCapital, currency, benchmark, commissionRate, slippageRate, dataSource
    - **classification** (可选): archetype, market, assetClasses, frequency, riskProfile
@@ -327,7 +344,11 @@ Generate:
      - Semver 格式 `X.Y.Z` 递增 `Z`（patch），双部分 `X.Y` 递增 `Y`，纯数字递增自身
      - 示例：`1.0.0` → `1.0.1`（参数调整），`1.1.0`（新指标），`2.0.0`（逻辑重构）
    - **默认作者：** `identity.author.name` 默认为 `"OpenFinClaw"`，除非用户指定其他作者
+   - **默认可见性：** `identity.visibility` 默认为 `"private"`（私有策略）
+   - **默认许可证：** `identity.license` 默认为 `"MIT"`
+   - **默认风格：** `identity.style` 根据策略类型自动选择（DCA 策略用 `dca`，趋势跟踪用 `trend` 等）
    - **tags 格式：** 必须使用行内数组 `tags: [dca, btc, crypto]`，禁止多行列表或单一字符串
+   - **changelog 位置：** `changelog` 必须放在 `identity` 节点下，不能放在根级别；初始版本必须包含至少一条记录
 
 2. **scripts/strategy.py** — Must define `compute(data)` returning `{"action", "amount", "price", "reason"}`. Use only allowed imports; no os/subprocess/socket/eval/exec/open/requests/urllib/**import**/importlib.
 
@@ -340,7 +361,9 @@ Present the package structure and wait for confirmation before validation.
 1. **Structure:** Required files exist: `fep.yaml`, `scripts/strategy.py`.
 2. **fep.yaml:**
    - Valid YAML, top-level key `fep: "1.2"`
-   - `identity`: id, type, name, version (必填), author.name (必填)
+   - `identity`: id, type, name, version, style, visibility, summary, license (全部必填)
+   - `identity.author`: name (必填), wallet (可选)
+   - `identity.changelog`: 至少包含一条版本记录 (必填)
    - `technical`: language, entryPoint (必填)
    - `backtest`: defaultPeriod (startDate/endDate), frequencyDays, initialCapital, currency, benchmark, commissionRate, slippageRate, dataSource (全部必填)
 3. **strategy.py:** Defines `compute(data)`; return dict has `action`, `amount`, `price`, `reason`; no forbidden imports.
