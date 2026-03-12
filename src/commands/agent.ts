@@ -42,6 +42,7 @@ import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { hasNonzeroUsage } from "../agents/usage.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
@@ -79,6 +80,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -1198,6 +1200,32 @@ async function agentCommandInternal(
         fallbackProvider,
         fallbackModel,
         result,
+      });
+    }
+
+    const usage = result.meta.agentMeta?.usage;
+    if (sessionKey && isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+      const input = usage.input ?? 0;
+      const output = usage.output ?? 0;
+      const cacheRead = usage.cacheRead ?? 0;
+      const cacheWrite = usage.cacheWrite ?? 0;
+      const promptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? promptTokens + output;
+      emitDiagnosticEvent({
+        type: "model.usage",
+        sessionKey,
+        sessionId,
+        provider: result.meta.agentMeta?.provider ?? fallbackProvider ?? provider,
+        model: result.meta.agentMeta?.model ?? fallbackModel ?? model,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          promptTokens,
+          total: totalTokens,
+        },
+        lastCallUsage: result.meta.agentMeta?.lastCallUsage,
       });
     }
 
