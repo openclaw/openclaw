@@ -68,7 +68,25 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
-function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+function createTavilySearchTool(tavilyConfig?: { apiKey?: string; baseUrl?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "tavily",
+            ...(tavilyConfig ? { tavily: tavilyConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
+function createProviderSearchTool(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "tavily",
+) {
   const searchConfig =
     provider === "perplexity"
       ? { provider, perplexity: { apiKey: "pplx-config-test" } } // pragma: allowlist secret
@@ -78,7 +96,9 @@ function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "g
           ? { provider, gemini: { apiKey: "gemini-config-test" } } // pragma: allowlist secret
           : provider === "kimi"
             ? { provider, kimi: { apiKey: "moonshot-config-test" } } // pragma: allowlist secret
-            : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
+            : provider === "tavily"
+              ? { provider, tavily: { apiKey: "tvly-config-test" } } // pragma: allowlist secret
+              : { provider, apiKey: "brave-config-test" }; // pragma: allowlist secret
   return createWebSearchTool({
     config: {
       tools: {
@@ -123,7 +143,7 @@ function installPerplexityChatFetch(payload?: Record<string, unknown>) {
 }
 
 function createProviderSuccessPayload(
-  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "tavily",
 ) {
   if (provider === "brave") {
     return { web: { results: [] } };
@@ -140,6 +160,19 @@ function createProviderSuccessPayload(
         {
           content: { parts: [{ text: "ok" }] },
           groundingMetadata: { groundingChunks: [] },
+        },
+      ],
+    };
+  }
+  if (provider === "tavily") {
+    return {
+      query: "test",
+      results: [
+        {
+          title: "Test Result",
+          url: "https://example.com",
+          content: "Test content snippet",
+          score: 0.95,
         },
       ],
     };
@@ -305,7 +338,7 @@ describe("web_search provider proxy dispatch", () => {
     global.fetch = priorFetch;
   });
 
-  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi", "tavily"] as const)(
     "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
     async (provider) => {
       vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
@@ -774,6 +807,195 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search tavily provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+    webSearchTesting.SEARCH_CACHE.clear();
+  });
+
+  function installTavilyFetch(payload: Record<string, unknown>) {
+    const mockFetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    return mockFetch;
+  }
+
+  function parseTavilyRequestBody(mockFetch: ReturnType<typeof installTavilyFetch>) {
+    const request = mockFetch.mock.calls[0]?.[1];
+    const requestBody = request?.body;
+    return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it("returns a setup hint when Tavily key is missing", async () => {
+    vi.stubEnv("TAVILY_API_KEY", "");
+    const tool = createTavilySearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_tavily_api_key" });
+  });
+
+  it("runs a basic Tavily search and returns structured results", async () => {
+    const mockFetch = installTavilyFetch({
+      query: "openclaw release",
+      results: [
+        {
+          title: "OpenClaw Release Notes",
+          url: "https://openclaw.ai/changelog",
+          content: "Latest release notes for OpenClaw.",
+          score: 0.98,
+        },
+        {
+          title: "OpenClaw GitHub",
+          url: "https://github.com/openclaw/openclaw",
+          content: "OpenClaw open-source repository.",
+          score: 0.85,
+        },
+      ],
+    });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const result = await tool?.execute?.("call-1", { query: "openclaw release" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0] as string).toBe("https://api.tavily.com/search");
+    const requestInit = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(requestInit.method).toBe("POST");
+    const headers = requestInit.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer tvly-config-key");
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.query).toBe("openclaw release");
+
+    const details = result?.details as {
+      provider?: string;
+      count?: number;
+      results?: Array<{ title?: string; url?: string; snippet?: string; score?: number }>;
+      externalContent?: { untrusted?: boolean; wrapped?: boolean };
+    };
+    expect(details.provider).toBe("tavily");
+    expect(details.count).toBe(2);
+    expect(details.results).toHaveLength(2);
+    expect(details.results?.[0]?.url).toBe("https://openclaw.ai/changelog");
+    expect(details.results?.[0]?.title).toContain("OpenClaw Release Notes");
+    expect(details.results?.[0]?.snippet).toContain("Latest release notes");
+    expect(details.externalContent).toMatchObject({ untrusted: true, wrapped: true });
+  });
+
+  it("includes AI answer when include_answer is true", async () => {
+    const mockFetch = installTavilyFetch({
+      query: "what is openclaw",
+      answer: "OpenClaw is an AI-powered coding assistant.",
+      results: [
+        {
+          title: "OpenClaw",
+          url: "https://openclaw.ai",
+          content: "OpenClaw homepage.",
+          score: 0.99,
+        },
+      ],
+    });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const result = await tool?.execute?.("call-1", {
+      query: "what is openclaw",
+      include_answer: true,
+    });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.include_answer).toBe(true);
+
+    const details = result?.details as { answer?: string };
+    expect(details.answer).toContain("OpenClaw is an AI-powered coding assistant");
+  });
+
+  it("passes search_depth to Tavily API", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", { query: "test", search_depth: "advanced" });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.search_depth).toBe("advanced");
+  });
+
+  it("rejects invalid search_depth values", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const result = await tool?.execute?.("call-1", { query: "test", search_depth: "deep" });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ error: "invalid_search_depth" });
+  });
+
+  it("passes freshness as time_range to Tavily API", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", { query: "test", freshness: "week" });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.time_range).toBe("week");
+  });
+
+  it("passes domain_filter as include_domains to Tavily API", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: ["nature.com", "science.org"],
+    });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.include_domains).toEqual(["nature.com", "science.org"]);
+  });
+
+  it("passes domain_filter denylist as exclude_domains to Tavily API", async () => {
+    const mockFetch = installTavilyFetch({ query: "test", results: [] });
+
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    await tool?.execute?.("call-1", {
+      query: "test",
+      domain_filter: ["-reddit.com", "-pinterest.com"],
+    });
+
+    const body = parseTavilyRequestBody(mockFetch);
+    expect(body.exclude_domains).toEqual(["reddit.com", "pinterest.com"]);
+    expect(body.include_domains).toBeUndefined();
+  });
+
+  it("exposes Tavily-specific schema params", () => {
+    const tool = createTavilySearchTool({ apiKey: "tvly-config-key" }); // pragma: allowlist secret
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.query).toBeDefined();
+    expect(properties?.freshness).toBeDefined();
+    expect(properties?.date_after).toBeDefined();
+    expect(properties?.date_before).toBeDefined();
+    expect(properties?.search_depth).toBeDefined();
+    expect(properties?.include_answer).toBeDefined();
+    expect(properties?.domain_filter).toBeDefined();
+    // Tavily should not have Perplexity/Brave-only params
+    expect(properties?.country).toBeUndefined();
+    expect(properties?.language).toBeUndefined();
+    expect(properties?.ui_lang).toBeUndefined();
+    expect(properties?.max_tokens).toBeUndefined();
+    expect(properties?.max_tokens_per_page).toBeUndefined();
   });
 });
 

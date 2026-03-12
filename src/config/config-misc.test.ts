@@ -108,6 +108,34 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts tavily provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "tavily",
+        providerConfig: {
+          apiKey: "tvly-test-key", // pragma: allowlist secret
+          baseUrl: "https://api.tavily.com",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown fields in tavily config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "tavily",
+        providerConfig: {
+          apiKey: "tvly-test-key", // pragma: allowlist secret
+          unknownField: "should-fail",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("talk.voiceAliases", () => {

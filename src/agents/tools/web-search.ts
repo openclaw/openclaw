@@ -299,8 +299,7 @@ function createWebSearchSchema(params: {
       ),
       include_answer: Type.Optional(
         Type.Boolean({
-          description:
-            "Include an AI-generated answer summary in the response (default: false).",
+          description: "Include an AI-generated answer summary in the response (default: false).",
         }),
       ),
       domain_filter: Type.Optional(
@@ -1200,7 +1199,7 @@ function normalizeFreshness(
   }
 
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "tavily" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
 
   // Brave date range support
@@ -1931,13 +1930,9 @@ async function runWebSearch(params: {
 
   if (params.provider === "tavily") {
     // Split domain_filter into include/exclude lists (same convention as Perplexity)
-    const includeDomains = params.searchDomainFilter
-      ?.filter((d) => !d.startsWith("-"))
-      ?? [];
-    const excludeDomains = params.searchDomainFilter
-      ?.filter((d) => d.startsWith("-"))
-      .map((d) => d.slice(1))
-      ?? [];
+    const includeDomains = params.searchDomainFilter?.filter((d) => !d.startsWith("-")) ?? [];
+    const excludeDomains =
+      params.searchDomainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1)) ?? [];
 
     const tavilyResult = await runTavilySearch({
       query: params.query,
@@ -2388,7 +2383,15 @@ export function createWebSearchTool(options?: {
         }
       }
 
-      const searchDepth = provider === "tavily" ? readStringParam(params, "search_depth") : undefined;
+      const searchDepth =
+        provider === "tavily" ? readStringParam(params, "search_depth") : undefined;
+      if (searchDepth && searchDepth !== "basic" && searchDepth !== "advanced") {
+        return jsonResult({
+          error: "invalid_search_depth",
+          message: 'search_depth must be "basic" or "advanced".',
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
       const includeAnswer =
         provider === "tavily" && params.include_answer === true ? true : undefined;
 
