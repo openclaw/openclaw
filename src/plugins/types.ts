@@ -119,6 +119,59 @@ export type ProviderAuthMethod = {
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
 };
 
+export type ProviderDiscoveryOrder = "simple" | "profile" | "paired" | "late";
+
+export type ProviderDiscoveryContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  resolveProviderApiKey: (providerId?: string) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+  };
+};
+
+export type ProviderDiscoveryResult =
+  | { provider: ModelProviderConfig }
+  | { providers: Record<string, ModelProviderConfig> }
+  | null
+  | undefined;
+
+export type ProviderPluginDiscovery = {
+  order?: ProviderDiscoveryOrder;
+  run: (ctx: ProviderDiscoveryContext) => Promise<ProviderDiscoveryResult>;
+};
+
+export type ProviderPluginWizardOnboarding = {
+  choiceId?: string;
+  choiceLabel?: string;
+  choiceHint?: string;
+  groupId?: string;
+  groupLabel?: string;
+  groupHint?: string;
+  methodId?: string;
+};
+
+export type ProviderPluginWizardModelPicker = {
+  label?: string;
+  hint?: string;
+  methodId?: string;
+};
+
+export type ProviderPluginWizard = {
+  onboarding?: ProviderPluginWizardOnboarding;
+  modelPicker?: ProviderPluginWizardModelPicker;
+};
+
+export type ProviderModelSelectedContext = {
+  config: OpenClawConfig;
+  model: string;
+  prompter: WizardPrompter;
+  agentDir?: string;
+  workspaceDir?: string;
+};
+
 export type ProviderPlugin = {
   id: string;
   label: string;
@@ -127,8 +180,11 @@ export type ProviderPlugin = {
   envVars?: string[];
   models?: ModelProviderConfig;
   auth: ProviderAuthMethod[];
+  discovery?: ProviderPluginDiscovery;
+  wizard?: ProviderPluginWizard;
   formatApiKey?: (cred: AuthProfileCredential) => string;
   refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
 export type OpenClawPluginGatewayMethod = {

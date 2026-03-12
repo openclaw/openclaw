@@ -382,6 +382,40 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("matches prefixed OpenRouter native ids in configured fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("openrouter/healer-alpha"),
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 262144,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openrouter", "openrouter/healer-alpha", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/healer-alpha",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+  });
+
   it("prefers configured provider api metadata over discovered registry model", () => {
     mockDiscoveredModel({
       provider: "onehub",
@@ -878,6 +912,43 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "X-Custom-Auth": "token-123",
+    });
+  });
+
+  it("lets provider config override registry-found kimi user agent headers", () => {
+    mockDiscoveredModel({
+      provider: "kimi-coding",
+      modelId: "k2p5",
+      templateModel: {
+        ...buildForwardCompatTemplate({
+          id: "k2p5",
+          name: "Kimi for Coding",
+          provider: "kimi-coding",
+          api: "anthropic-messages",
+          baseUrl: "https://api.kimi.com/coding/",
+        }),
+        headers: { "User-Agent": "claude-code/0.1.0" },
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "kimi-coding": {
+            headers: {
+              "User-Agent": "custom-kimi-client/1.0",
+              "X-Kimi-Tenant": "tenant-a",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("kimi-coding", "k2p5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "User-Agent": "custom-kimi-client/1.0",
+      "X-Kimi-Tenant": "tenant-a",
     });
   });
 
