@@ -1,8 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuCardToolSchema, type FeishuCardToolParams } from "./card-schema.js";
-import { resolveToolsConfig } from "./tools-config.js";
 import { sendCardFeishu, updateCardFeishu } from "./send.js";
+import { resolveToolsConfig } from "./tools-config.js";
 
 function json(data: unknown) {
   return {
