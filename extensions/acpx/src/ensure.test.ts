@@ -77,6 +77,7 @@ describe("acpx ensure", () => {
       command: "/plugin/node_modules/.bin/acpx",
       args: ["--version"],
       cwd: "/plugin",
+      stripProviderAuthEnvVars: undefined,
     });
   });
 
@@ -148,6 +149,30 @@ describe("acpx ensure", () => {
       command: "/custom/acpx",
       args: ["--help"],
       cwd: "/custom",
+      stripProviderAuthEnvVars: undefined,
+    });
+  });
+
+  it("forwards stripProviderAuthEnvVars to version checks", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "Usage: acpx [options]\n",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    await checkAcpxVersion({
+      command: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      expectedVersion: undefined,
+      stripProviderAuthEnvVars: true,
+    });
+
+    expect(spawnAndCollectMock).toHaveBeenCalledWith({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--help"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
     });
   });
 
@@ -183,6 +208,54 @@ describe("acpx ensure", () => {
       command: "npm",
       args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
       cwd: "/plugin",
+    });
+  });
+
+  it("threads stripProviderAuthEnvVars through version probes and install", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "added 1 package\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: `acpx ${ACPX_PINNED_VERSION}\n`,
+        stderr: "",
+        code: 0,
+        error: null,
+      });
+
+    await ensureAcpx({
+      command: "/plugin/node_modules/.bin/acpx",
+      pluginRoot: "/plugin",
+      expectedVersion: ACPX_PINNED_VERSION,
+      stripProviderAuthEnvVars: true,
+    });
+
+    expect(spawnAndCollectMock.mock.calls[0]?.[0]).toMatchObject({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--version"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
+    });
+    expect(spawnAndCollectMock.mock.calls[1]?.[0]).toMatchObject({
+      command: "npm",
+      args: ["install", "--omit=dev", "--no-save", `acpx@${ACPX_PINNED_VERSION}`],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
+    });
+    expect(spawnAndCollectMock.mock.calls[2]?.[0]).toMatchObject({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--version"],
+      cwd: "/plugin",
+      stripProviderAuthEnvVars: true,
     });
   });
 

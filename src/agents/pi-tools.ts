@@ -24,7 +24,7 @@ import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveSubagentToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import {
   assertRequiredParams,
@@ -45,7 +45,6 @@ import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.sc
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { isXaiProvider } from "./schema/clean-for-xai.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -215,6 +214,13 @@ export function createOpenClawCodingTools(options?: {
   memoryFlushWritePath?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /**
+   * Workspace directory that spawned subagents should inherit.
+   * When sandboxing uses a copied workspace (`ro` or `none`), workspaceDir is the
+   * sandbox copy but subagents should inherit the real agent workspace instead.
+   * Defaults to workspaceDir when not set.
+   */
+  spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
@@ -314,10 +320,7 @@ export function createOpenClawCodingTools(options?: {
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicy(
-          options.config,
-          getSubagentDepthFromSessionStore(options.sessionKey, { cfg: options.config }),
-        )
+      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey)
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -499,6 +502,9 @@ export function createOpenClawCodingTools(options?: {
       sandboxFsBridge,
       fsPolicy,
       workspaceDir: workspaceRoot,
+      spawnWorkspaceDir: options?.spawnWorkspaceDir
+        ? resolveWorkspaceRoot(options.spawnWorkspaceDir)
+        : undefined,
       sandboxed: !!sandbox,
       config: options?.config,
       pluginToolAllowlist: collectExplicitAllowlist([
