@@ -251,8 +251,8 @@ Designed for environments where you want everything under a local prefix (defaul
   <Step title="Ensure PowerShell + Windows environment">
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure Node.js 22+">
-    If missing, attempts install via winget, then Chocolatey, then Scoop.
+  <Step title="Ensure Node.js 24 by default">
+    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.16+`, remains supported for compatibility.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`

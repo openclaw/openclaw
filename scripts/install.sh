@@ -1380,7 +1380,7 @@ ensure_default_node_active_shell() {
         echo "Then open a new shell and rerun:"
         echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
     else
-        echo "Install/select Node.js 22+ and ensure it is first on PATH, then rerun installer."
+        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} (or Node ${NODE_MIN_VERSION}+ minimum) and ensure it is first on PATH, then rerun installer."
     fi
 
     return 1
@@ -1477,7 +1477,7 @@ install_node() {
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js 22+ manually: https://nodejs.org"
+            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually (or Node ${NODE_MIN_VERSION}+ minimum): https://nodejs.org"
             exit 1
         fi
 
