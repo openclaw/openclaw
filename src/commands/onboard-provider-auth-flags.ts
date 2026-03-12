@@ -16,6 +16,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xiaomiApiKey"
   | "minimaxApiKey"
   | "syntheticApiKey"
+  | "chutesApiKey"
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
@@ -130,6 +131,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--minimax-api-key",
     cliOption: "--minimax-api-key <key>",
     description: "MiniMax API key",
+  },
+  {
+    optionKey: "chutesApiKey",
+    authChoice: "chutes-api-key",
+    cliFlag: "--chutes-api-key",
+    cliOption: "--chutes-api-key <key>",
+    description: "Chutes API key",
   },
   {
     optionKey: "syntheticApiKey",

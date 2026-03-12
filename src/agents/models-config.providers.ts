@@ -13,6 +13,7 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import {
+  buildChutesProvider,
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
   buildOllamaProvider,
@@ -58,6 +59,7 @@ export {
   XIAOMI_DEFAULT_MODEL_ID,
 } from "./models-config.providers.static.js";
 import {
+  CHUTES_OAUTH_MARKER,
   MINIMAX_OAUTH_MARKER,
   OLLAMA_LOCAL_AUTH_MARKER,
   QWEN_OAUTH_MARKER,
@@ -708,6 +710,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildKilocodeProviderWithDiscovery()),
     apiKey,
   })),
+  withApiKey("chutes", async ({ apiKey, discoveryApiKey }) => ({
+    ...(await buildChutesProvider(discoveryApiKey)),
+    apiKey,
+  })),
 ];
 
 const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
@@ -729,6 +735,36 @@ const PROFILE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     apiKey: QWEN_OAUTH_MARKER,
   })),
   withProfilePresence("openai-codex", async () => buildOpenAICodexProvider()),
+  // Only fire for OAuth profiles — api_key profiles are handled by the SIMPLE
+  // loader above. Triggering on api_key profiles would overwrite the real API
+  // key with CHUTES_OAUTH_MARKER (PROFILE loaders run after SIMPLE loaders and
+  // mergeImplicitProviderSet unconditionally overwrites).
+  async (ctx) => {
+    // Preserve API-key precedence in mixed-profile stores: if any API-key-like
+    // source currently resolves for Chutes, keep the SIMPLE loader output and
+    // skip the OAuth marker path.
+    if (ctx.resolveProviderApiKey("chutes").apiKey) {
+      return undefined;
+    }
+
+    const oauthProfileId = listProfilesForProvider(ctx.authStore, "chutes").find(
+      (id) => ctx.authStore.profiles[id]?.type === "oauth",
+    );
+    if (!oauthProfileId) {
+      return undefined;
+    }
+    // Pass the stored access token so authenticated discovery can see private/
+    // token-scoped models. discoverChutesModels retries without auth on 401,
+    // so an expired token degrades gracefully to the public catalog.
+    const oauthCred = ctx.authStore.profiles[oauthProfileId];
+    const accessToken = oauthCred?.type === "oauth" ? oauthCred.access : undefined;
+    return {
+      chutes: {
+        ...(await buildChutesProvider(accessToken)),
+        apiKey: CHUTES_OAUTH_MARKER,
+      },
+    };
+  },
 ];
 
 const PAIRED_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [

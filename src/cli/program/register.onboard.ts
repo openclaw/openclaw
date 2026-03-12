@@ -163,6 +163,7 @@ export function registerOnboardCommand(program: Command) {
           modelstudioApiKeyCn: opts.modelstudioApiKeyCn as string | undefined,
           modelstudioApiKey: opts.modelstudioApiKey as string | undefined,
           minimaxApiKey: opts.minimaxApiKey as string | undefined,
+          chutesApiKey: opts.chutesApiKey as string | undefined,
           syntheticApiKey: opts.syntheticApiKey as string | undefined,
           veniceApiKey: opts.veniceApiKey as string | undefined,
           togetherApiKey: opts.togetherApiKey as string | undefined,

@@ -27,6 +27,7 @@ import {
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
+  applyChutesConfig,
   applyVeniceConfig,
   applyTogetherConfig,
   applyHuggingfaceConfig,
@@ -55,6 +56,7 @@ import {
   setSyntheticApiKey,
   setVolcengineApiKey,
   setXaiApiKey,
+  setChutesApiKey,
   setVeniceApiKey,
   setTogetherApiKey,
   setHuggingfaceApiKey,
@@ -833,6 +835,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applySyntheticConfig(nextConfig);
+  }
+
+  if (authChoice === "chutes-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "chutes",
+      cfg: baseConfig,
+      flagValue: opts.chutesApiKey,
+      flagName: "--chutes-api-key",
+      envVar: "CHUTES_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setChutesApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "chutes:default",
+      provider: "chutes",
+      mode: "api_key",
+    });
+    return applyChutesConfig(nextConfig);
   }
 
   if (authChoice === "venice-api-key") {

@@ -15,6 +15,7 @@ import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./onboard-types.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
+export { CHUTES_DEFAULT_MODEL_REF } from "../agents/chutes-models.js";
 export {
   MISTRAL_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -329,6 +330,19 @@ export async function setVeniceApiKey(
   upsertAuthProfile({
     profileId: "venice:default",
     credential: buildApiKeyCredential("venice", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setChutesApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "chutes:default",
+    credential: buildApiKeyCredential("chutes", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

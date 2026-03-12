@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { discoverChutesModels, CHUTES_BASE_URL } from "./chutes-models.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -195,6 +196,20 @@ export async function buildVllmProvider(params?: {
   const models = await discoverVllmModels(baseUrl, params?.apiKey);
   return {
     baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
+/**
+ * Build the Chutes provider with dynamic model discovery.
+ * Falls back to the static catalog on failure. Accepts an optional access
+ * token (API key or OAuth access token) for authenticated discovery.
+ */
+export async function buildChutesProvider(accessToken?: string): Promise<ProviderConfig> {
+  const models = await discoverChutesModels(accessToken);
+  return {
+    baseUrl: CHUTES_BASE_URL,
     api: "openai-completions",
     models,
   };

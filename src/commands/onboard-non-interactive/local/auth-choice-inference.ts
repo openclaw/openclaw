@@ -20,6 +20,7 @@ type AuthChoiceFlagOptions = Pick<
   | "moonshotApiKey"
   | "kimiCodeApiKey"
   | "syntheticApiKey"
+  | "chutesApiKey"
   | "veniceApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"

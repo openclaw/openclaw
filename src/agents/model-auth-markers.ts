@@ -1,6 +1,7 @@
 import type { SecretRefSource } from "../config/types.secrets.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
+export const CHUTES_OAUTH_MARKER = "chutes-oauth";
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
@@ -68,6 +69,7 @@ export function isNonSecretApiKeyMarker(
     return false;
   }
   const isKnownMarker =
+    trimmed === CHUTES_OAUTH_MARKER ||
     trimmed === MINIMAX_OAUTH_MARKER ||
     trimmed === QWEN_OAUTH_MARKER ||
     trimmed === OLLAMA_LOCAL_AUTH_MARKER ||

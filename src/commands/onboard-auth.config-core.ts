@@ -1,4 +1,10 @@
 import {
+  buildChutesModelDefinition,
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_REF,
+  CHUTES_MODEL_CATALOG,
+} from "../agents/chutes-models.js";
+import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -299,6 +305,63 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyXiaomiProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, XIAOMI_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Chutes provider configuration without changing the default model.
+ */
+export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  // Add ALL available models to the allowlist (mirror init.sh logic)
+  CHUTES_MODEL_CATALOG.forEach((m) => {
+    models[`chutes/${m.id}`] = {
+      ...models[`chutes/${m.id}`],
+    };
+  });
+
+  // Add specific model entries for those without a slash if needed,
+  // but init.sh uses 'chutes/' + m.id.
+
+  // Add aliases from init.sh
+  models["chutes-fast"] = { alias: "chutes/zai-org/GLM-4.7-FP8" };
+  models["chutes-vision"] = { alias: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506" };
+  models["chutes-pro"] = { alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" };
+
+  const chutesModels = CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "chutes",
+    api: "openai-completions",
+    baseUrl: CHUTES_BASE_URL,
+    catalogModels: chutesModels,
+  });
+}
+
+/**
+ * Apply Chutes provider configuration AND set Chutes as the default model.
+ */
+export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyChutesProviderConfig(cfg);
+
+  // Mirror init.sh: set primary model, fallbacks, and image model
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          primary: CHUTES_DEFAULT_MODEL_REF,
+          fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/Qwen/Qwen3-32B"],
+        },
+        imageModel: {
+          primary: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+          // Mistral-Small-3.1 supports text+image; Qwen3-32B is text-only so cannot be an image fallback
+          fallbacks: ["chutes/chutesai/Mistral-Small-3.1-24B-Instruct-2503"],
+        },
+      },
+    },
+  };
 }
 
 /**

@@ -2,7 +2,12 @@ import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice
 import { loginChutes } from "./chutes-oauth.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  applyChutesConfig,
+  applyChutesProviderConfig,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 
 export async function applyAuthChoiceOAuth(
@@ -74,6 +79,14 @@ export async function applyAuthChoiceOAuth(
         provider: "chutes",
         mode: "oauth",
       });
+
+      // Register provider models and set default if this is the primary auth choice.
+      // This ensures the model picker shows a Chutes model pre-selected as current.
+      if (params.setDefaultModel) {
+        nextConfig = applyChutesConfig(nextConfig);
+      } else {
+        nextConfig = applyChutesProviderConfig(nextConfig);
+      }
     } catch (err) {
       spin.stop("Chutes OAuth failed");
       params.runtime.error(String(err));

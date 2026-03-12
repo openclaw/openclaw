@@ -18,6 +18,8 @@ import {
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
+  applyChutesConfig,
+  applyChutesProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyKilocodeConfig,
@@ -50,6 +52,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  CHUTES_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
@@ -63,6 +66,7 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
+  setChutesApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
@@ -160,6 +164,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
     applyDefaultConfig: applyVercelAiGatewayConfig,
     applyProviderConfig: applyVercelAiGatewayProviderConfig,
     noteDefault: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  },
+  "chutes-api-key": {
+    provider: "chutes",
+    profileId: "chutes:default",
+    expectedProviders: ["chutes"],
+    envLabel: "CHUTES_API_KEY",
+    promptMessage: "Enter Chutes API key",
+    setCredential: setChutesApiKey,
+    defaultModel: CHUTES_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyChutesConfig,
+    applyProviderConfig: applyChutesProviderConfig,
+    noteDefault: CHUTES_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Chutes provides access to leading open-source models including Llama, DeepSeek, and more.",
+      "Get your API key at: https://chutes.ai/settings/api-keys",
+    ].join("\n"),
+    noteTitle: "Chutes",
   },
   "moonshot-api-key": {
     provider: "moonshot",
