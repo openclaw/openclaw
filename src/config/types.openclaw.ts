@@ -26,6 +26,8 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type OpenClawConfig = {
+  /** Optional JSON schema URI for editor tooling. */
+  $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;

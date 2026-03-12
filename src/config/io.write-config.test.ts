@@ -126,6 +126,26 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves $schema field on write", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const schemaUri = "https://openclaw.ai/config.json";
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          $schema: schemaUri,
+          gateway: { port: 18789 },
+        },
+      });
+
+      const persisted = await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
+      expect(persisted.$schema).toBe(schemaUri);
+      expect(persisted.gateway).toEqual({
+        port: 18789,
+        auth: { mode: "token" },
+      });
+    });
+  });
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
       const io = createConfigIO({

@@ -317,6 +317,14 @@ function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function readConfigSchemaUri(value: unknown): string | undefined {
+  if (!isPlainObject(value) || typeof value.$schema !== "string") {
+    return undefined;
+  }
+  const trimmed = value.$schema.trim();
+  return trimmed.length > 0 ? value.$schema : undefined;
+}
+
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
 }
@@ -1107,6 +1115,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           outputConfig = unsetResult.next;
         }
       }
+    }
+    const schemaUri =
+      readConfigSchemaUri(outputConfig) ??
+      readConfigSchemaUri(cfg) ??
+      readConfigSchemaUri(snapshot.parsed);
+    if (schemaUri) {
+      outputConfig = {
+        ...outputConfig,
+        $schema: schemaUri,
+      };
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
