@@ -85,9 +85,58 @@ function enqueueChatMessage(
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
+      kind: "message",
       attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
       refreshSessions,
     },
+  ];
+}
+
+function parseBtwAddendum(text: string): { rest: string } | null {
+  const trimmed = text.trimStart();
+  // Match: "btw ...", "btw: ...", "btw, ...", "BTW - ..." etc.
+  const match = /^btw\b\s*[:,-]?\s*(.*)$/i.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  return { rest: match[1] ?? "" };
+}
+
+function enqueueChatAddendum(host: ChatHost, text: string, attachments?: ChatAttachment[]) {
+  const trimmed = text.trim();
+  const hasAttachments = Boolean(attachments && attachments.length > 0);
+  if (!trimmed && !hasAttachments) {
+    return;
+  }
+
+  const attachmentCopies = hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined;
+  const [first, ...rest] = host.chatQueue;
+  if (first && first.kind === "addendum") {
+    const mergedText = [first.text?.trim(), trimmed].filter(Boolean).join("\n\n");
+    const mergedAttachments = [
+      ...(first.attachments ?? []),
+      ...((attachmentCopies ?? []) as ChatAttachment[]),
+    ];
+    host.chatQueue = [
+      {
+        ...first,
+        text: mergedText,
+        attachments: mergedAttachments.length ? mergedAttachments : undefined,
+      },
+      ...rest,
+    ];
+    return;
+  }
+
+  host.chatQueue = [
+    {
+      id: generateUUID(),
+      text: trimmed,
+      createdAt: Date.now(),
+      kind: "addendum",
+      attachments: attachmentCopies,
+    },
+    ...host.chatQueue,
   ];
 }
 
@@ -188,7 +237,14 @@ export async function handleSendChat(
   }
 
   if (isChatBusy(host)) {
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    const btw = parseBtwAddendum(message);
+    // Special-case: while busy, treat "btw ..." as an addendum for the in-flight request.
+    // Addendums are queued *ahead* of normal queued messages so context arrives in the right order.
+    if (btw && (btw.rest.trim() || hasAttachments)) {
+      enqueueChatAddendum(host, btw.rest, attachmentsToSend);
+    } else {
+      enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    }
     return;
   }
 
