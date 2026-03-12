@@ -1,7 +1,11 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
-import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
+import {
+  type ChatCommandDefinition,
+  type CommandArgs,
+} from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
 import { chunkItems } from "../../utils/chunk-items.js";
@@ -32,6 +36,28 @@ const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_HEADER_TEXT_MAX = 150;
+let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
+  null;
+let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
+  null;
+let slashSkillCommandsRuntimePromise: Promise<
+  typeof import("./slash-skill-commands.runtime.js")
+> | null = null;
+
+function loadSlashCommandsRuntime() {
+  slashCommandsRuntimePromise ??= import("./slash-commands.runtime.js");
+  return slashCommandsRuntimePromise;
+}
+
+function loadSlashDispatchRuntime() {
+  slashDispatchRuntimePromise ??= import("./slash-dispatch.runtime.js");
+  return slashDispatchRuntimePromise;
+}
+
+function loadSlashSkillCommandsRuntime() {
+  slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
+  return slashSkillCommandsRuntimePromise;
+}
 
 type EncodedMenuChoice = SlackExternalArgMenuChoice;
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
@@ -73,15 +99,6 @@ function storeSlackExternalArgMenu(params: {
 
 function readSlackExternalArgMenuToken(raw: unknown): string | undefined {
   return slackExternalArgMenuStore.readToken(raw);
-}
-
-type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
-let commandsRegistry: CommandsRegistry | undefined;
-async function getCommandsRegistry(): Promise<CommandsRegistry> {
-  if (!commandsRegistry) {
-    commandsRegistry = await import("../../auto-reply/commands-registry.js");
-  }
-  return commandsRegistry;
 }
 
 function encodeSlackCommandArgValue(parts: {
@@ -470,8 +487,8 @@ export async function registerSlackMonitorSlashCommands(params: {
       }
 
       if (commandDefinition && supportsInteractiveArgMenus) {
-        const reg = await getCommandsRegistry();
-        const menu = reg.resolveCommandArgMenu({
+        const { resolveCommandArgMenu } = await loadSlashCommandsRuntime();
+        const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
@@ -501,21 +518,17 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       const channelName = channelInfo?.name;
       const roomLabel = channelName ? `#${channelName}` : `#${command.channel_id}`;
-      const [{ resolveAgentRoute }, { finalizeInboundContext }, { dispatchReplyWithDispatcher }] =
-        await Promise.all([
-          import("../../routing/resolve-route.js"),
-          import("../../auto-reply/reply/inbound-context.js"),
-          import("../../auto-reply/reply/provider-dispatcher.js"),
-        ]);
-      const [
-        { resolveConversationLabel },
-        { createReplyPrefixOptions },
-        { recordInboundSessionMetaSafe },
-      ] = await Promise.all([
-        import("../../channels/conversation-label.js"),
-        import("../../channels/reply-prefix.js"),
-        import("../../channels/session-meta.js"),
-      ]);
+      const {
+        createReplyPrefixOptions,
+        deliverSlackSlashReplies,
+        dispatchReplyWithDispatcher,
+        finalizeInboundContext,
+        recordInboundSessionMetaSafe,
+        resolveAgentRoute,
+        resolveChunkMode,
+        resolveConversationLabel,
+        resolveMarkdownTableMode,
+      } = await loadSlashDispatchRuntime();
 
       const route = resolveAgentRoute({
         cfg,
@@ -534,6 +547,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         channelConfig,
       });
 
+      const { sessionKey, commandTargetSessionKey } = resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: slashCommand.sessionPrefix,
+        userId: command.user_id,
+        targetSessionKey: route.sessionKey,
+        lowercaseSessionKey: true,
+      });
       const ctxPayload = finalizeInboundContext({
         Body: prompt,
         BodyForAgent: prompt,
@@ -568,9 +588,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         WasMentioned: true,
         MessageSid: command.trigger_id,
         Timestamp: Date.now(),
-        SessionKey:
-          `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`.toLowerCase(),
-        CommandTargetSessionKey: route.sessionKey,
+        SessionKey: sessionKey,
+        CommandTargetSessionKey: commandTargetSessionKey,
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
@@ -595,12 +614,6 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
 
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
-        const [{ deliverSlackSlashReplies }, { resolveChunkMode }, { resolveMarkdownTableMode }] =
-          await Promise.all([
-            import("./replies.js"),
-            import("../../auto-reply/chunk.js"),
-            import("../../config/markdown-tables.js"),
-          ]);
         await deliverSlackSlashReplies({
           replies,
           respond,
@@ -653,34 +666,39 @@ export async function registerSlackMonitorSlashCommands(params: {
     globalSetting: cfg.commands?.nativeSkills,
   });
 
-  let reg: CommandsRegistry | undefined;
   let nativeCommands: Array<{ name: string }> = [];
+  let slashCommandsRuntime: typeof import("./slash-commands.runtime.js") | null = null;
   if (nativeEnabled) {
-    reg = await getCommandsRegistry();
+    slashCommandsRuntime = await loadSlashCommandsRuntime();
     const skillCommands = nativeSkillsEnabled
-      ? (await import("../../auto-reply/skill-commands.js")).listSkillCommandsForAgents({ cfg })
+      ? (await loadSlashSkillCommandsRuntime()).listSkillCommandsForAgents({ cfg })
       : [];
-    nativeCommands = reg.listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "slack" });
+    nativeCommands = slashCommandsRuntime.listNativeCommandSpecsForConfig(cfg, {
+      skillCommands,
+      provider: "slack",
+    });
   }
 
   if (nativeCommands.length > 0) {
-    const registry = reg;
-    if (!registry) {
-      throw new Error("Missing commands registry for native Slack commands.");
+    if (!slashCommandsRuntime) {
+      throw new Error("Missing commands runtime for native Slack commands.");
     }
     for (const command of nativeCommands) {
       ctx.app.command(
         `/${command.name}`,
         async ({ command: cmd, ack, respond, body }: SlackCommandMiddlewareArgs) => {
-          const commandDefinition = registry.findCommandByNativeName(command.name, "slack");
+          const commandDefinition = slashCommandsRuntime.findCommandByNativeName(
+            command.name,
+            "slack",
+          );
           const rawText = cmd.text?.trim() ?? "";
           const commandArgs = commandDefinition
-            ? registry.parseCommandArgs(commandDefinition, rawText)
+            ? slashCommandsRuntime.parseCommandArgs(commandDefinition, rawText)
             : rawText
               ? ({ raw: rawText } satisfies CommandArgs)
               : undefined;
           const prompt = commandDefinition
-            ? registry.buildCommandTextFromArgs(commandDefinition, commandArgs)
+            ? slashCommandsRuntime.buildCommandTextFromArgs(commandDefinition, commandArgs)
             : rawText
               ? `/${command.name} ${rawText}`
               : `/${command.name}`;
@@ -824,13 +842,14 @@ export async function registerSlackMonitorSlashCommands(params: {
         });
         return;
       }
-      const reg = await getCommandsRegistry();
-      const commandDefinition = reg.findCommandByNativeName(parsed.command, "slack");
+      const { buildCommandTextFromArgs, findCommandByNativeName } =
+        await loadSlashCommandsRuntime();
+      const commandDefinition = findCommandByNativeName(parsed.command, "slack");
       const commandArgs: CommandArgs = {
         values: { [parsed.arg]: parsed.value },
       };
       const prompt = commandDefinition
-        ? reg.buildCommandTextFromArgs(commandDefinition, commandArgs)
+        ? buildCommandTextFromArgs(commandDefinition, commandArgs)
         : `/${parsed.command} ${parsed.value}`;
       const user = body.user;
       const userName =

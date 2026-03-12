@@ -4,7 +4,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/mattermost";
 import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
@@ -43,6 +43,7 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    replyToMode: z.enum(["off", "first", "all"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({
@@ -50,6 +51,12 @@ const MattermostAccountSchemaBase = z
       })
       .optional(),
     commands: MattermostSlashCommandsSchema,
+    interactions: z
+      .object({
+        callbackBaseUrl: z.string().optional(),
+        allowedSourceIps: z.array(z.string()).optional(),
+      })
+      .optional(),
   })
   .strict();
 

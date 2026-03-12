@@ -218,6 +218,91 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("materializes draft previews using rendered HTML text", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      renderText: (text) => ({
+        text: text.replace("**bold**", "<b>bold</b>"),
+        parseMode: "HTML",
+      }),
+    });
+
+    stream.update("**bold**");
+    await stream.flush();
+    await stream.materialize?.();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>bold</b>", {
+      message_thread_id: 42,
+      parse_mode: "HTML",
+    });
+  });
+
+  it("clears draft after materializing to avoid duplicate display in DM", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    // Draft should be cleared with empty string after real message is sent.
+    const draftCalls = api.sendMessageDraft.mock.calls;
+    const clearCall = draftCalls.find((call) => call[2] === "");
+    expect(clearCall).toBeDefined();
+    expect(clearCall?.[0]).toBe(123);
+    expect(clearCall?.[3]).toEqual({ message_thread_id: 42 });
+  });
+
+  it("retries materialize send without thread when dm thread lookup fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"))
+      .mockResolvedValueOnce({ message_id: 55 });
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(55);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", { message_thread_id: 42 });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello", undefined);
+    const draftCalls = api.sendMessageDraft.mock.calls;
+    const clearCall = draftCalls.find((call) => call[2] === "");
+    expect(clearCall).toBeDefined();
+    expect(clearCall?.[3]).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview materialize send failed with message_thread_id, retrying without thread",
+    );
+  });
+
+  it("returns existing preview id when materializing message transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    const materializedId = await stream.materialize?.();
+
+    expect(materializedId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not edit or delete messages after DM draft stream finalization", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
@@ -348,6 +433,46 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B partial", undefined);
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
+  });
+
+  it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(true);
+  });
+
+  it("clears sendMayHaveLanded on pre-connect first preview send failures", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    );
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+
+  it("clears sendMayHaveLanded on Telegram 4xx client rejections", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("403: Forbidden"), { error_code: 403 }),
+    );
+    const stream = createDraftStream(api);
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
   });
 
   it("supports rendered previews with parse_mode", async () => {

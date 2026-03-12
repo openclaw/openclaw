@@ -3,8 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 
 const tempDirs: string[] = [];
 
@@ -15,24 +14,20 @@ function makeTempDir() {
   return dir;
 }
 
-async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
-  return await withEnvAsync(
-    {
-      OPENCLAW_STATE_DIR: stateDir,
-      CLAWDBOT_STATE_DIR: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-    },
-    fn,
-  );
+function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    CLAWDBOT_STATE_DIR: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+  };
 }
 
 async function discoverWithStateDir(
   stateDir: string,
   params: Parameters<typeof discoverOpenClawPlugins>[0],
 ) {
-  return await withStateDir(stateDir, async () => {
-    return discoverOpenClawPlugins(params);
-  });
+  return discoverOpenClawPlugins({ ...params, env: buildDiscoveryEnv(stateDir) });
 }
 
 function writePluginPackageManifest(params: {
@@ -57,6 +52,7 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
 }
 
 afterEach(() => {
+  clearPluginDiscoveryCache();
   for (const dir of tempDirs.splice(0)) {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -79,9 +75,7 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(workspaceExt, { recursive: true });
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({ workspaceDir });
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("alpha");
@@ -109,9 +103,7 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, {});
 
     const ids = candidates.map((candidate) => candidate.idHint);
     expect(ids).toContain("live");
@@ -141,9 +133,7 @@ describe("discoverOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, {});
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("pack/one");
@@ -166,9 +156,7 @@ describe("discoverOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, {});
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("voice-call");
@@ -186,9 +174,7 @@ describe("discoverOpenClawPlugins", () => {
     });
     fs.writeFileSync(path.join(packDir, "index.js"), "module.exports = {}", "utf-8");
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({ extraPaths: [packDir] });
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, { extraPaths: [packDir] });
 
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
@@ -265,9 +251,7 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./escape.ts"],
     });
 
-    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, {});
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
     expectEscapesPackageDiagnostic(diagnostics);
@@ -302,9 +286,7 @@ describe("discoverOpenClawPlugins", () => {
       throw err;
     }
 
-    const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const { candidates } = await discoverWithStateDir(stateDir, {});
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
   });
@@ -317,15 +299,42 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
     fs.chmodSync(pluginPath, 0o777);
 
-    const result = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
-    });
+    const result = await discoverWithStateDir(stateDir, {});
 
     expect(result.candidates).toHaveLength(0);
     expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
       true,
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "repairs world-writable bundled plugin dirs before loading them",
+    async () => {
+      const stateDir = makeTempDir();
+      const bundledDir = path.join(stateDir, "bundled");
+      const packDir = path.join(bundledDir, "demo-pack");
+      fs.mkdirSync(packDir, { recursive: true });
+      fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
+      fs.chmodSync(packDir, 0o777);
+
+      const result = discoverOpenClawPlugins({
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        },
+      });
+
+      expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(true);
+      expect(
+        result.diagnostics.some(
+          (diag) => diag.source === packDir && diag.message.includes("world-writable path"),
+        ),
+      ).toBe(false);
+      expect(fs.statSync(packDir).mode & 0o777).toBe(0o755);
+    },
+  );
 
   it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
     "blocks suspicious ownership when uid mismatch is detected",
@@ -340,9 +349,7 @@ describe("discoverOpenClawPlugins", () => {
       );
 
       const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
-      const result = await withStateDir(stateDir, async () => {
-        return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
-      });
+      const result = await discoverWithStateDir(stateDir, { ownershipUid: actualUid + 1 });
       const shouldBlockForMismatch = actualUid !== 0;
       expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
@@ -350,4 +357,40 @@ describe("discoverOpenClawPlugins", () => {
       );
     },
   );
+
+  it("reuses discovery results from cache until cleared", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+    const pluginPath = path.join(globalExt, "cached.ts");
+    fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
+
+    const first = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+    expect(first.candidates.some((candidate) => candidate.idHint === "cached")).toBe(true);
+
+    fs.rmSync(pluginPath, { force: true });
+
+    const second = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+    expect(second.candidates.some((candidate) => candidate.idHint === "cached")).toBe(true);
+
+    clearPluginDiscoveryCache();
+
+    const third = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+    expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
+  });
 });
