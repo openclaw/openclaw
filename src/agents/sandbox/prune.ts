@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerContainerState, execDocker } from "./docker.js";
+import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
+import { DEFAULT_SANDBOX_WORKSPACE_ROOT } from "./constants.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -16,7 +19,7 @@ let lastPruneAtMs = 0;
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
-  "containerName" | "createdAtMs" | "lastUsedAtMs"
+  "containerName" | "sessionKey" | "createdAtMs" | "lastUsedAtMs"
 >;
 
 function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: PruneableRegistryEntry) {
@@ -37,6 +40,7 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
   cfg: SandboxConfig;
   read: () => Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
+  workspaceRoot?: string;
   onRemoved?: (entry: TEntry) => Promise<void>;
 }) {
   const now = Date.now();
@@ -55,6 +59,16 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
     } catch {
       // ignore prune failures
     } finally {
+      // Remove workspace directory if sessionKey is available
+      if (entry.sessionKey && params.workspaceRoot && params.cfg.scope) {
+        try {
+          const scopeKey = resolveSandboxScopeKey(params.cfg.scope, entry.sessionKey);
+          const workspaceDir = resolveSandboxWorkspaceDir(params.workspaceRoot, scopeKey);
+          await fs.rm(workspaceDir, { force: true, recursive: true });
+        } catch {
+          // ignore workspace removal failures
+        }
+      }
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
     }
@@ -62,14 +76,20 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
+  const workspaceRoot = cfg.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT;
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
     remove: removeRegistryEntry,
+    workspaceRoot,
   });
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
+  // Note: We don't pass workspaceRoot to pruneSandboxRegistryEntries here
+  // because browser sandboxes share workspace directories with their parent
+  // container sandboxes. Deleting the workspace from browser prune could
+  // corrupt an active container's workspace.
   await pruneSandboxRegistryEntries<SandboxBrowserRegistryEntry>({
     cfg,
     read: readBrowserRegistry,
