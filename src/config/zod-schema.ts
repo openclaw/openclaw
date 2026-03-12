@@ -151,7 +151,7 @@ const PluginEntrySchema = z
     enabled: z.boolean().optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
-  .strict();
+  .passthrough();
 
 export const OpenClawSchema = z
   .object({
