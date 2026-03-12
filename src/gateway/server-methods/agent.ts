@@ -38,12 +38,7 @@ import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -78,10 +73,7 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
 }
 
 function isInternalInterSessionCaller(client: GatewayRequestHandlerOptions["client"]): boolean {
-  return (
-    client?.connect?.client?.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND
-  );
+  return client?.isInternalBackendClient === true;
 }
 
 async function runSessionResetFromAgent(params: {

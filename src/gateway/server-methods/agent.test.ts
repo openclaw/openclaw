@@ -441,7 +441,47 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
-  it("allows the inter_session sentinel for backend gateway callers", async () => {
+  it("rejects spoofed backend metadata for the inter_session sentinel", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "strict delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        channel: "inter_session",
+        idempotencyKey: "test-inter-session-spoofed-backend",
+      },
+      {
+        reqId: "inter-session-spoofed-backend-1",
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.write"],
+            client: {
+              id: "gateway-client",
+              mode: "backend",
+              version: "1.0.0",
+              platform: "node",
+            },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("unknown channel: inter_session"),
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("allows the inter_session sentinel only for server-attested internal backend callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
 
@@ -466,6 +506,7 @@ describe("gateway agent handler", () => {
               platform: "node",
             },
           },
+          isInternalBackendClient: true,
         } as unknown as AgentHandlerArgs["client"],
       },
     );
@@ -510,6 +551,7 @@ describe("gateway agent handler", () => {
               platform: "node",
             },
           },
+          isInternalBackendClient: true,
         } as unknown as AgentHandlerArgs["client"],
       },
     );
