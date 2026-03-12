@@ -649,6 +649,7 @@ export const MemorySearchSchema = z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
             deltaMessages: z.number().int().nonnegative().optional(),
+            postCompactionForce: z.boolean().optional(),
           })
           .strict()
           .optional(),
