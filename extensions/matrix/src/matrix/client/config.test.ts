@@ -25,7 +25,7 @@ vi.mock("../credentials.js", () => ({
 
 import { resolveMatrixAuth, resolveMatrixLoginSsrFPolicy } from "./config.js";
 
-describe("resolveMatrixLoginSsrFPolicy", () => {
+describe("Matrix login SSRF policy", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     loadMatrixCredentialsMock.mockClear();
