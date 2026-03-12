@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -851,18 +850,11 @@ describe("initSessionState RawBody", () => {
 });
 
 describe("initSessionState reset policy", () => {
-  let clearBootstrapSnapshotOnSessionRolloverSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.useFakeTimers();
-    clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
-      bootstrapCache,
-      "clearBootstrapSnapshotOnSessionRollover",
-    );
   });
 
   afterEach(() => {
-    clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -889,10 +881,6 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: existingSessionId,
-    });
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1069,10 +1057,6 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: undefined,
-    });
   });
 });
 

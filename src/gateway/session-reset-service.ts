@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
@@ -151,13 +150,11 @@ async function ensureSessionRuntimeCleanup(params: {
   clearSessionQueues([...queueKeys]);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
-    clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
   abortEmbeddedPiRun(params.sessionId);
   const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
-  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
     await closeTrackedBrowserTabs();
     return undefined;

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
@@ -58,11 +57,6 @@ export function resolveCronSession(params: {
     isNewSession = true;
     systemSent = false;
   }
-
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey: params.sessionKey,
-    previousSessionId: isNewSession ? entry?.sessionId : undefined,
-  });
 
   const sessionEntry: SessionEntry = {
     // Preserve existing per-session overrides even when rolling to a new sessionId.
