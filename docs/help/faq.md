@@ -583,6 +583,12 @@ Two common Windows issues:
 - Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
 - Close and reopen PowerShell after updating PATH.
 
+**3) `pnpm build` fails around `canvas:a2ui:bundle` / `bash`**
+
+- The from-source build bundles A2UI through a Bash script.
+- Install **Git for Windows** so Git Bash is available, then reopen PowerShell and rerun the build.
+- If you prefer to avoid native Windows shell differences entirely, use **WSL2** for repo builds.
+
 If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
 Docs: [Windows](/platforms/windows).
 

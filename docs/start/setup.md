@@ -27,6 +27,12 @@ Last updated: 2026-01-01
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
+Native Windows note:
+
+- The repo build runs `pnpm canvas:a2ui:bundle`, which invokes a Bash script for the A2UI host bundle.
+- If you build from native Windows instead of WSL2, install **Git for Windows** so Git Bash is available before running `pnpm build` or `pnpm build:strict-smoke`.
+- WSL2 remains the recommended Windows path for the full Gateway/tooling stack.
+
 ## Tailoring strategy (so updates don’t hurt)
 
 If you want “100% tailored to me” _and_ easy updates, keep your customization in:
