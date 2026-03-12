@@ -7,6 +7,7 @@ const {
   sessionCompactImpl,
   triggerInternalHook,
   sanitizeSessionHistoryMock,
+  contextEngineCompactMock,
 } = vi.hoisted(() => ({
   hookRunner: {
     hasHooks: vi.fn(),
@@ -28,6 +29,14 @@ const {
   })),
   triggerInternalHook: vi.fn(),
   sanitizeSessionHistoryMock: vi.fn(async (params: { messages: unknown[] }) => params.messages),
+  contextEngineCompactMock: vi.fn(async () => ({
+    ok: true as boolean,
+    compacted: true as boolean,
+    reason: undefined as string | undefined,
+    result: { summary: "engine-summary", tokensAfter: 50 } as
+      | { summary: string; tokensAfter: number }
+      | undefined,
+  })),
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -123,6 +132,27 @@ vi.mock("../session-write-lock.js", () => ({
   resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
 }));
 
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+  resolveContextEngine: vi.fn(async () => ({
+    info: { ownsCompaction: true },
+    compact: contextEngineCompactMock,
+  })),
+}));
+
+vi.mock("../../process/command-queue.js", () => ({
+  enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+}));
+
+vi.mock("./lanes.js", () => ({
+  resolveSessionLane: vi.fn(() => "test-session-lane"),
+  resolveGlobalLane: vi.fn(() => "test-global-lane"),
+}));
+
+vi.mock("../context-window-guard.js", () => ({
+  resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
+}));
+
 vi.mock("../bootstrap-files.js", () => ({
   makeBootstrapWarn: vi.fn(() => () => {}),
   resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
@@ -160,7 +190,7 @@ vi.mock("../transcript-policy.js", () => ({
 }));
 
 vi.mock("./extensions.js", () => ({
-  buildEmbeddedExtensionFactories: vi.fn(() => []),
+  buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
 }));
 
 vi.mock("./history.js", () => ({
@@ -251,7 +281,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -434,5 +464,105 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
+  beforeEach(() => {
+    hookRunner.hasHooks.mockReset();
+    hookRunner.runBeforeCompaction.mockReset();
+    hookRunner.runAfterCompaction.mockReset();
+    contextEngineCompactMock.mockReset();
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      reason: undefined,
+      result: { summary: "engine-summary", tokensAfter: 50 },
+    });
+    resolveModelMock.mockReset();
+    resolveModelMock.mockReturnValue({
+      model: { provider: "openai", api: "responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+  });
+
+  it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      messageChannel: "telegram",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: "/tmp/session.jsonl" },
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+      }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      {
+        messageCount: -1,
+        compactedCount: -1,
+        tokenCount: 50,
+        sessionFile: "/tmp/session.jsonl",
+      },
+      expect.objectContaining({
+        sessionKey: "agent:main:session-1",
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("does not fire after_compaction when compaction fails", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    contextEngineCompactMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+      result: undefined,
+    });
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalled();
+    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("catches and logs hook exceptions without aborting compaction", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeCompaction.mockRejectedValue(new Error("hook boom"));
+
+    const result = await compactEmbeddedPiSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+      enqueue: (task) => task(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(contextEngineCompactMock).toHaveBeenCalled();
   });
 });

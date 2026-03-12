@@ -121,6 +121,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config errors: surface up to three validation issues in top-level `config.set`, `config.patch`, and `config.apply` error messages while preserving structured issue details. (#42664) Thanks @huntharo.
 - Hooks/plugin context parity followup: pass `trigger` and `channelId` through embedded `llm_input`, `agent_end`, and `llm_output` hook contexts so plugins receive the same agent metadata across hook phases. (#42362) Thanks @zhoulf1006.
 - ACP/main session aliases: canonicalize `main` before ACP session lookup so restarted ACP main sessions rehydrate instead of failing closed with `Session is not ACP-enabled: main`. (#43285, fixes #25692)
+- Agents/context-engine compaction: guard thrown engine-owned overflow compaction attempts and fire compaction hooks for `ownsCompaction` engines so overflow recovery no longer crashes and plugin subscribers still observe compact runs. (#41361) thanks @davidrudduck.
 
 ## 2026.3.8
 
@@ -4036,6 +4037,7 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Gateway/Daemon/Doctor: atomic config writes; repair gateway service entrypoint + install switches; non-interactive legacy migrations; systemd unit alignment + KillMode=process; node bridge keepalive/pings; Launch at Login persistence; bundle MoltbotKit resources + Swift 6.2 compat dylib; relay version check + remove smoke test; regen Swift GatewayModels + keep agent provider string; cron jobId alias + channel alias migration + main session key normalization; heartbeat Telegram accountId resolution; avoid WhatsApp fallback for internal runs; gateway listener error wording; serveBaseUrl param; honor gateway --dev; fix wide-area discovery updates; align agents.defaults schema; provider account metadata in daemon status; refresh Carbon patch for gateway fixes; restore doctor prompter initialValue handling.
 - Control UI/TUI: persist per-session verbose off + hide tool cards; logs tab opens at bottom; relative asset paths + landing cleanup; session labels lookup/persistence; stop pinning main session in recents; start logs at bottom; TUI status bar refresh + timeout handling + hide reasoning label when off.
 - Onboarding/Configure: QuickStart single-select provider picker; avoid Codex CLI false-expiry warnings; clarify WhatsApp owner prompt; fix Minimax hosted onboarding (agents.defaults + msteams heartbeat target); remove configure Control UI prompt; honor gateway --dev flag.
+- Agent loop: guard overflow compaction throws and restore compaction hooks for engine-owned context engines. (#41361) — thanks @davidrudduck
 
 ### Maintenance
 
