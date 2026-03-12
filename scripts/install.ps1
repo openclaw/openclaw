@@ -13,6 +13,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$NodeMinMajor = 22
+$NodeMinMinor = 12
+$NodeMinVersion = "$NodeMinMajor.$NodeMinMinor"
+
 # Colors
 $ACCENT = "`e[38;2;255;77;77m"    # coral-bright
 $SUCCESS = "`e[38;2;0;229;204m"    # cyan-bright
@@ -89,6 +93,37 @@ function Get-NodeVersion {
     return $null
 }
 
+function Test-NodeVersionSupported {
+    param([string]$Version)
+
+    if (-not $Version) {
+        return $false
+    }
+
+    $parts = $Version -split '\.'
+    if ($parts.Count -lt 2) {
+        return $false
+    }
+
+    $major = 0
+    $minor = 0
+    if (-not [int]::TryParse($parts[0], [ref]$major)) {
+        return $false
+    }
+    if (-not [int]::TryParse($parts[1], [ref]$minor)) {
+        return $false
+    }
+
+    if ($major -gt $NodeMinMajor) {
+        return $true
+    }
+    if ($major -eq $NodeMinMajor -and $minor -ge $NodeMinMinor) {
+        return $true
+    }
+
+    return $false
+}
+
 function Get-NpmVersion {
     try {
         $version = npm --version 2>$null
@@ -144,19 +179,18 @@ function Install-Node {
     }
     
     Write-Host "Could not install Node.js automatically" -Level error
-    Write-Host "Please install Node.js 22+ manually from: https://nodejs.org" -Level info
+    Write-Host "Please install Node.js v$NodeMinVersion+ manually (22 LTS recommended; Node 24 supported): https://nodejs.org" -Level info
     return $false
 }
 
 function Ensure-Node {
     $nodeVersion = Get-NodeVersion
     if ($nodeVersion) {
-        $major = [int]($nodeVersion -split '\.')[0]
-        if ($major -ge 22) {
+        if (Test-NodeVersionSupported -Version $nodeVersion) {
             Write-Host "Node.js v$nodeVersion found" -Level success
             return $true
         }
-        Write-Host "Node.js v$nodeVersion found, but need v22+" -Level warn
+        Write-Host "Node.js v$nodeVersion found, but need v$NodeMinVersion+" -Level warn
     }
     return Install-Node
 }

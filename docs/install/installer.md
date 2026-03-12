@@ -213,16 +213,16 @@ Designed for environments where you want everything under a local prefix (defaul
 <AccordionGroup>
   <Accordion title="Flags reference">
 
-| Flag                   | Description                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `--prefix <path>`      | Install prefix (default: `~/.openclaw`)                                         |
-| `--version <ver>`      | OpenClaw version or dist-tag (default: `latest`)                                |
-| `--node-version <ver>` | Node version (default: `22.22.0`)                                               |
-| `--json`               | Emit NDJSON events                                                              |
-| `--onboard`            | Run `openclaw onboard` after install                                            |
-| `--no-onboard`         | Skip onboarding (default)                                                       |
-| `--set-npm-prefix`     | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable |
-| `--help`               | Show usage (`-h`)                                                               |
+| Flag                   | Description                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `--prefix <path>`      | Install prefix (default: `~/.openclaw`)                                                           |
+| `--version <ver>`      | OpenClaw version or dist-tag (default: `latest`)                                                  |
+| `--node-version <ver>` | Preferred Node bootstrap version (default: `22.22.0`; Node `>=22.12` required, Node 24 supported) |
+| `--json`               | Emit NDJSON events                                                                                |
+| `--onboard`            | Run `openclaw onboard` after install                                                              |
+| `--no-onboard`         | Skip onboarding (default)                                                                         |
+| `--set-npm-prefix`     | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable                   |
+| `--help`               | Show usage (`-h`)                                                                                 |
 
   </Accordion>
 
@@ -251,8 +251,8 @@ Designed for environments where you want everything under a local prefix (defaul
   <Step title="Ensure PowerShell + Windows environment">
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure Node.js 22+">
-    If missing, attempts install via winget, then Chocolatey, then Scoop.
+  <Step title="Ensure Node.js 22.12+">
+    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS is recommended and Node 24 is supported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`

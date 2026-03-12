@@ -25,10 +25,11 @@ const ensureSupportedNodeVersion = () => {
 
   process.stderr.write(
     `openclaw: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
+      "Node 22 LTS is recommended; newer majors (including Node 24) are supported.\n" +
       "If you use nvm, run:\n" +
-      `  nvm install ${MIN_NODE_MAJOR}\n` +
-      `  nvm use ${MIN_NODE_MAJOR}\n` +
-      `  nvm alias default ${MIN_NODE_MAJOR}\n`,
+      "  nvm install --lts\n" +
+      "  nvm use --lts\n" +
+      "  nvm alias default lts/*\n",
   );
   process.exit(1);
 };

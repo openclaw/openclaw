@@ -1316,7 +1316,7 @@ print_active_node_paths() {
     return 0
 }
 
-ensure_macos_node22_active() {
+ensure_macos_node_active() {
     if [[ "$OS" != "macos" ]]; then
         return 0
     fi
@@ -1340,17 +1340,17 @@ ensure_macos_node22_active() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Node.js v22 was installed but this shell is using ${active_version} (${active_path})"
+    ui_error "Node.js v${NODE_MIN_VERSION}+ is required but this shell is using ${active_version} (${active_path})"
     if [[ -n "$brew_node_prefix" ]]; then
         echo "Add this to your shell profile and restart shell:"
         echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
     else
-        echo "Ensure Homebrew node@22 is first on PATH, then rerun installer."
+        echo "Ensure a supported Node (22 LTS recommended; Node 24 supported) is first on PATH, then rerun installer."
     fi
     return 1
 }
 
-ensure_node22_active_shell() {
+ensure_node_active_shell() {
     if node_is_at_least_required; then
         return 0
     fi
@@ -1373,13 +1373,13 @@ ensure_node22_active_shell() {
     if [[ "$nvm_detected" -eq 1 ]]; then
         echo "nvm appears to be managing Node for this shell."
         echo "Run:"
-        echo "  nvm install 22"
-        echo "  nvm use 22"
-        echo "  nvm alias default 22"
+        echo "  nvm install --lts"
+        echo "  nvm use --lts"
+        echo "  nvm alias default lts/*"
         echo "Then open a new shell and rerun:"
         echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
     else
-        echo "Install/select Node.js 22+ and ensure it is first on PATH, then rerun installer."
+        echo "Install/select Node.js ${NODE_MIN_VERSION}+ (22 LTS recommended; Node 24 supported) and ensure it is first on PATH, then rerun installer."
     fi
 
     return 1
@@ -1412,7 +1412,7 @@ install_node() {
         ui_info "Installing Node.js via Homebrew"
         run_quiet_step "Installing node@22" brew install node@22
         brew link node@22 --overwrite --force 2>/dev/null || true
-        if ! ensure_macos_node22_active; then
+        if ! ensure_macos_node_active; then
             exit 1
         fi
         ui_success "Node.js installed"
@@ -1435,7 +1435,7 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            ui_success "Node.js v22 installed"
+            ui_success "Node.js v${NODE_MIN_VERSION}+ installed"
             print_active_node_paths || true
             return 0
         fi
@@ -1476,11 +1476,11 @@ install_node() {
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js 22+ manually: https://nodejs.org"
+            echo "Please install Node.js ${NODE_MIN_VERSION}+ manually (22 LTS recommended; Node 24 supported): https://nodejs.org"
             exit 1
         fi
 
-        ui_success "Node.js v22 installed"
+        ui_success "Node.js v${NODE_MIN_VERSION}+ installed"
         print_active_node_paths || true
     fi
 }
@@ -2267,7 +2267,7 @@ main() {
     if ! check_node; then
         install_node
     fi
-    if ! ensure_node22_active_shell; then
+    if ! ensure_node_active_shell; then
         exit 1
     fi
 
