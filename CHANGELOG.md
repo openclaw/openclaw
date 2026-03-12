@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/subagents: add `sessions_yield` so orchestrators can end the current turn immediately, skip queued tool work, and carry a hidden follow-up payload into the next session turn. (#36537) thanks @jriff
 - Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
+- Errors/rate limit: enrich rate limit error messages with provider/model identity and upstream retry-after timing when available, so users see actionable context like `⚠️ API rate limit reached on google (gemini-2.0-flash). Provider says retry in 58s.` instead of a bare `⚠️ API rate limit reached.` message. (#43932) Thanks @yelog.
 
 ### Fixes
 

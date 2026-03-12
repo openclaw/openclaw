@@ -39,13 +39,92 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+function formatRateLimitErrorMessage(
+  provider?: string,
+  model?: string,
+  retryAfterMs?: number,
+): string {
+  const providerName = provider?.trim();
+  const modelName = model?.trim();
+  const providerLabel =
+    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+
+  let message = "⚠️ API rate limit reached.";
+  if (providerLabel) {
+    message = `⚠️ API rate limit reached on ${providerLabel}.`;
+  }
+
+  if (retryAfterMs && retryAfterMs > 0) {
+    const retrySeconds = Math.round(retryAfterMs / 1000);
+    message += ` Provider says retry in ${retrySeconds}s.`;
+  } else {
+    message += " Please try again later.";
+  }
+
+  return message;
+}
+
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+/**
+ * Extracts retry-after timing from rate limit error messages.
+ * Looks for patterns like "retry after 58s", "retry in 2 minutes", "Retry-After: 120", etc.
+ */
+function parseRetryAfterFromError(raw: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+
+  // Pattern: "retry after X minutes" or "retry in X minutes" (check minutes first!)
+  const retryAfterMinutesMatch = raw.match(
+    /retry\s+(?:after|in)\s+(\d+(?:\.\d+)?)\s*(?:min|minutes?)/i,
+  );
+  if (retryAfterMinutesMatch) {
+    return Math.round(Number.parseFloat(retryAfterMinutesMatch[1]) * 60 * 1000);
+  }
+
+  // Pattern: "retry after Xs" or "retry after X seconds"
+  // Note: unit suffix is required to avoid false positives like "retry after 3 attempts"
+  const retryAfterSecondsMatch = raw.match(
+    /retry\s+(?:after|in)\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?!\w)/i,
+  );
+  if (retryAfterSecondsMatch) {
+    return Math.round(Number.parseFloat(retryAfterSecondsMatch[1]) * 1000);
+  }
+
+  // Pattern: "Retry-After: 120" (HTTP header style)
+  const retryAfterHeaderMatch = raw.match(/retry-after[:\s]+(\d+)/i);
+  if (retryAfterHeaderMatch) {
+    return Number.parseInt(retryAfterHeaderMatch[1], 10) * 1000;
+  }
+
+  // Pattern: "rate limit reset in X minutes" (check minutes first!)
+  // Note: "in" is required to avoid matching time-of-day like "resets 12:00 UTC"
+  const resetInMinutesMatch = raw.match(
+    /(?:rate\s+)?limit\s+(?:reset|resets)\s+in\s+(\d+(?:\.\d+)?)\s*(?:min|minutes?)/i,
+  );
+  if (resetInMinutesMatch) {
+    return Math.round(Number.parseFloat(resetInMinutesMatch[1]) * 60 * 1000);
+  }
+
+  // Pattern: "rate limit reset in Xs" or "limit resets in X seconds"
+  // Note: "in" is required and unit suffix is required to avoid false positives
+  const resetInSecondsMatch = raw.match(
+    /(?:rate\s+)?limit\s+(?:reset|resets)\s+in\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?!\w)/i,
+  );
+  if (resetInSecondsMatch) {
+    return Math.round(Number.parseFloat(resetInSecondsMatch[1]) * 1000);
+  }
+
+  return undefined;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    // Note: This legacy call path doesn't have provider/model context.
+    // Callers with context should use formatRateLimitErrorMessage directly.
+    return "⚠️ API rate limit reached. Please try again later.";
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
@@ -726,9 +805,15 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
-  if (transientCopy) {
-    return transientCopy;
+  // Check for rate limit errors with enriched context
+  if (isRateLimitErrorMessage(raw)) {
+    const retryAfterMs = parseRetryAfterFromError(raw);
+    return formatRateLimitErrorMessage(opts?.provider, opts?.model ?? msg.model, retryAfterMs);
+  }
+
+  // Check for overloaded errors (keep legacy behavior)
+  if (isOverloadedErrorMessage(raw)) {
+    return OVERLOADED_ERROR_USER_MESSAGE;
   }
 
   if (isTimeoutErrorMessage(raw)) {
