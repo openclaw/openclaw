@@ -208,11 +208,10 @@ export type ToolChoice =
 
 export interface FunctionToolDefinition {
   type: "function";
-  function: {
-    name: string;
-    description?: string;
-    parameters?: Record<string, unknown>;
-  };
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  strict?: boolean;
 }
 
 /** Standard response.create event payload (full turn) */

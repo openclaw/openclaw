@@ -29,6 +29,7 @@ import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
+  resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
 import type {
@@ -98,6 +99,8 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
 const safeBinTrustedDirWarningCache = new Set<string>();
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
+const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 
@@ -382,6 +385,29 @@ async function executeSystemRunPhase(
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+  const expectedMutableFileOperand = phase.approvalPlan
+    ? resolveMutableFileOperandSnapshotSync({
+        argv: phase.argv,
+        cwd: phase.cwd,
+        shellCommand: phase.shellPayload,
+      })
+    : null;
+  if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
+    logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: expectedMutableFileOperand.message,
+    });
+    return;
+  }
+  if (expectedMutableFileOperand?.snapshot && !phase.approvalPlan?.mutableFileOperand) {
+    logWarn(`security: system.run approval script binding missing (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE,
     });
     return;
   }
