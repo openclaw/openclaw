@@ -57,18 +57,29 @@ export function extractToolCards(message: unknown): ToolCard[] {
     const name = typeof item.name === "string" ? item.name : "tool";
     // Try to get args from the result block first, then look up paired tool call
     let args = coerceArgs(item.arguments ?? item.args);
-    if (args === undefined || args === null) {
-      // Try matching by toolCallId first
-      const toolCallId =
-        (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
-      if (toolCallId && argsByToolCallId.has(toolCallId)) {
-        args = argsByToolCallId.get(toolCallId);
-      } else if (argsQueueByName.has(name)) {
-        // FIFO: shift from per-name queue for ordered matching
+    // Try matching by toolCallId first
+    const toolCallId =
+      (item.toolCallId as string) ?? (item.tool_call_id as string) ?? (item.id as string);
+    if (toolCallId && argsByToolCallId.has(toolCallId)) {
+      args = argsByToolCallId.get(toolCallId);
+    } else if (args === undefined || args === null) {
+      // Only use queue fallback if we don't have args yet
+      if (argsQueueByName.has(name)) {
         const queue = argsQueueByName.get(name)!;
         if (queue.length > 0) {
           args = queue.shift();
         }
+      }
+    }
+    // Always consume matching queue entry to keep queue in sync
+    // (for results matched by toolCallId or with their own args)
+    if (argsQueueByName.has(name)) {
+      const queue = argsQueueByName.get(name)!;
+      // Find and remove the args we matched (by reference or position)
+      // For toolCallId match, remove the first entry (FIFO preserves order)
+      // For own-args, also remove first to keep queue aligned with call order
+      if (queue.length > 0) {
+        queue.shift();
       }
     }
     cards.push({
