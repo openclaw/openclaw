@@ -57,6 +57,7 @@ function createFetchedReactionMessage(chatId: string) {
     chatId,
     senderOpenId: "ou_bot",
     content: "hello",
+    rawContent: '{"text":"hello"}',
     contentType: "text",
   };
 }
@@ -252,6 +253,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderOpenId: "ou_bot",
         senderType: "app",
         content: "hello",
+        rawContent: '{"text":"hello"}',
         contentType: "text",
       }),
     });
@@ -271,6 +273,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderOpenId: "ou_other",
         senderType: "user",
         content: "hello",
+        rawContent: '{"text":"hello"}',
         contentType: "text",
       }),
     });
@@ -296,6 +299,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderOpenId: "ou_other",
         senderType: "user",
         content: "hello",
+        rawContent: '{"text":"hello"}',
         contentType: "text",
       }),
       uuid: () => "fixed-uuid",
