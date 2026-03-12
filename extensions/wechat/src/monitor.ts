@@ -97,17 +97,18 @@ export async function monitorWechatProvider(
       const senderId = talker?.id ?? "";
       const senderName = talker?.name() ?? undefined;
       const roomTopic = room ? await room.topic() : undefined;
+      const roomId = room?.id;
 
       const message: WechatInboundMessage = {
         messageId: msg.id ?? `wechat_${Date.now()}`,
         text,
         senderId,
         senderName,
-        roomId: room?.id,
+        roomId,
         roomTopic,
         isGroup,
         timestamp: msg.date()?.getTime() ?? Date.now(),
-        target: isGroup ? (roomTopic ?? room?.id ?? "") : senderId,
+        target: isGroup ? (roomId ?? "") : senderId,
       };
 
       core.channel.activity.record({

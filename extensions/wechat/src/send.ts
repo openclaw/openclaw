@@ -41,7 +41,7 @@ export async function sendMessageWechat(
   // Duck-type the bot to avoid hard dependency on wechaty types at compile time
   const wechatyBot = bot as {
     Room: {
-      find: (query: { topic: string }) => Promise<{ say: (text: string) => Promise<void> } | null>;
+      find: (query: { id: string }) => Promise<{ say: (text: string) => Promise<void> } | null>;
     };
     Contact: {
       find: (query: { id: string }) => Promise<{ say: (text: string) => Promise<void> } | null>;
@@ -49,7 +49,7 @@ export async function sendMessageWechat(
   };
 
   if (opts?.isRoom) {
-    const room = await wechatyBot.Room.find({ topic: to });
+    const room = await wechatyBot.Room.find({ id: to });
     if (!room) {
       throw new Error(`WeChat room not found: ${to}`);
     }
