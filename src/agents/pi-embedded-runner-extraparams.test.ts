@@ -210,7 +210,7 @@ describe("applyExtraParamsToAgent", () => {
   }) {
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
@@ -236,7 +236,7 @@ describe("applyExtraParamsToAgent", () => {
   }) {
     const payload = params.payload ?? {};
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };

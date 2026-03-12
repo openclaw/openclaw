@@ -97,7 +97,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };
@@ -125,7 +125,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };
@@ -158,7 +158,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
+      options?.onPayload?.(payload);
       capturedPayload = payload;
       return createAssistantMessageEventStream();
     };
