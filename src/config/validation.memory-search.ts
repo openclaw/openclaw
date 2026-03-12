@@ -113,7 +113,9 @@ function validateSingleMemorySearch(
 
   if (provider === "ollama") {
     const baseUrl = memorySearch?.remote?.baseUrl;
-    if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) {
+    // Reject only if baseUrl is explicitly set to an empty or whitespace string
+    // Allow omitting baseUrl - runtime will use default http://127.0.0.1:11434
+    if (baseUrl !== undefined && (typeof baseUrl !== "string" || baseUrl.trim().length === 0)) {
       return [
         toIssue(
           createValidationError({
