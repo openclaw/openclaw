@@ -46,6 +46,7 @@ import { isRich } from "./list.format.js";
 import {
   describeProbeSummary,
   formatProbeLatency,
+  formatRateLimitShort,
   runAuthProbes,
   sortProbeResults,
   type AuthProbeSummary,
@@ -69,6 +70,7 @@ export async function modelsStatusCommand(
     probeTimeout?: string;
     probeConcurrency?: string;
     probeMaxTokens?: string;
+    rateLimits?: boolean;
     agent?: string;
   },
   runtime: RuntimeEnv,
@@ -249,6 +251,7 @@ export async function modelsStatusCommand(
             timeoutMs: probeTimeoutMs,
             concurrency: probeConcurrency,
             maxTokens: probeMaxTokens,
+            rateLimits: opts.rateLimits,
           },
           onProgress: update,
         });
@@ -651,6 +654,7 @@ export async function modelsStatusCommand(
         }
         return theme.muted;
       };
+      const showRateLimits = opts.rateLimits === true;
       const rows = sorted.map((result) => {
         const status = colorize(rich, statusColor(result.status), result.status);
         const latency = formatProbeLatency(result.latencyMs);
@@ -660,20 +664,33 @@ export async function modelsStatusCommand(
         const detail = result.error?.trim();
         const detailLabel = detail ? `\n${colorize(rich, theme.muted, `↳ ${detail}`)}` : "";
         const statusLabel = `${status}${colorize(rich, theme.muted, ` · ${latency}`)}${detailLabel}`;
-        return {
+        const row: Record<string, string> = {
           Model: colorize(rich, theme.heading, modelLabel),
           Profile: profile,
           Status: statusLabel,
         };
+        if (showRateLimits) {
+          const rl = formatRateLimitShort(result.rateLimit);
+          row["RPM"] = colorize(rich, rl.rpm === "-" ? theme.muted : theme.info, rl.rpm);
+          row["TPM"] = colorize(rich, rl.tpm === "-" ? theme.muted : theme.info, rl.tpm);
+        }
+        return row;
       });
+      const columns = [
+        { key: "Model", header: "Model", minWidth: 18 },
+        { key: "Profile", header: "Profile", minWidth: 24 },
+        { key: "Status", header: "Status", minWidth: 12 },
+        ...(showRateLimits
+          ? [
+              { key: "RPM", header: "RPM Remaining", minWidth: 14 },
+              { key: "TPM", header: "TPM Remaining", minWidth: 14 },
+            ]
+          : []),
+      ];
       runtime.log(
         renderTable({
           width: tableWidth,
-          columns: [
-            { key: "Model", header: "Model", minWidth: 18 },
-            { key: "Profile", header: "Profile", minWidth: 24 },
-            { key: "Status", header: "Status", minWidth: 12 },
-          ],
+          columns,
           rows,
         }).trimEnd(),
       );

@@ -88,6 +88,7 @@ export function registerModelsCli(program: Command) {
     .option("--probe-timeout <ms>", "Per-probe timeout in ms")
     .option("--probe-concurrency <n>", "Concurrent probes")
     .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
+    .option("--rate-limits", "Include provider rate-limit headroom in probe output", false)
     .option(
       "--agent <id>",
       "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
@@ -107,6 +108,7 @@ export function registerModelsCli(program: Command) {
             probeTimeout: opts.probeTimeout as string | undefined,
             probeConcurrency: opts.probeConcurrency as string | undefined,
             probeMaxTokens: opts.probeMaxTokens as string | undefined,
+            rateLimits: Boolean(opts.rateLimits),
             agent,
           },
           defaultRuntime,
