@@ -332,3 +332,110 @@ export function checkMemorySearch(cfg: OpenClawConfig): MemorySearchDiagnosticRe
     issues,
   };
 }
+
+/**
+ * Generate example configuration snippet for memorySearch provider.
+ */
+function generateConfigSnippet(provider: string): string {
+  switch (provider) {
+    case "openai":
+      return `memorySearch:
+  provider: openai
+  model: text-embedding-3-small
+  remote:
+    apiKey: \${OPENAI_API_KEY}`;
+    case "ollama":
+      return `memorySearch:
+  provider: ollama
+  model: nomic-embed-text
+  remote:
+    baseUrl: http://localhost:11434`;
+    case "gemini":
+      return `memorySearch:
+  provider: gemini
+  model: embedding-001
+  remote:
+    apiKey: \${GEMINI_API_KEY}`;
+    case "voyage":
+      return `memorySearch:
+  provider: voyage
+  model: voyage-law-2
+  remote:
+    apiKey: \${VOYAGE_API_KEY}`;
+    case "mistral":
+      return `memorySearch:
+  provider: mistral
+  model: mistral-embed
+  remote:
+    apiKey: \${MISTRAL_API_KEY}`;
+    case "local":
+      return `memorySearch:
+  provider: local
+  local:
+    modelPath: /path/to/model.gguf`;
+    default:
+      return `memorySearch:
+  provider: openai
+  model: text-embedding-3-small`;
+  }
+}
+
+/**
+ * Display structured diagnostic output for memorySearch configuration.
+ *
+ * This function is called by `openclaw doctor` to provide clear, actionable
+ * feedback when memorySearch configuration is invalid.
+ *
+ * Output includes:
+ * - Error explanation
+ * - Missing fields
+ * - Suggested configuration snippet
+ * - Documentation link
+ */
+export function noteMemorySearchDiagnostics(cfg: OpenClawConfig): void {
+  const result = checkMemorySearch(cfg);
+
+  // No issues - memory search is either disabled or properly configured
+  if (result.valid) {
+    return;
+  }
+
+  const lines: string[] = [];
+
+  // Header with provider info
+  lines.push(`[FAIL] memorySearch configuration invalid`);
+  lines.push(``);
+  lines.push(`Provider: ${result.provider}`);
+  lines.push(``);
+
+  // List missing fields
+  if (result.issues.length > 0) {
+    lines.push(`Missing or invalid fields:`);
+    for (const issue of result.issues) {
+      lines.push(`  - ${issue.field}: ${issue.message}`);
+    }
+    lines.push(``);
+  }
+
+  // Add fix suggestions from structured result
+  lines.push(`Suggested fix:`);
+  for (const issue of result.issues) {
+    if (issue.fix) {
+      lines.push(`  ${issue.fix}`);
+    }
+  }
+  lines.push(``);
+
+  // Add example configuration snippet
+  lines.push(`Example configuration:`);
+  lines.push(`\`\`\`yaml`);
+  lines.push(generateConfigSnippet(result.provider ?? "openai"));
+  lines.push(`\`\`\``);
+  lines.push(``);
+
+  // Add documentation link
+  lines.push(`Learn more: https://docs.openclaw.ai/configuration#memory-search`);
+
+  // Output using the note function
+  note(lines.join("\n"), "Memory search");
+}

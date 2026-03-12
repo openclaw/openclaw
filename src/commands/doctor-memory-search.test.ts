@@ -30,9 +30,54 @@ vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
 }));
 
-import { checkMemorySearch } from "./doctor-memory-search.js";
+import { checkMemorySearch, noteMemorySearchDiagnostics } from "./doctor-memory-search.js";
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
+
+/**
+ * Helper to create minimal memorySearch config for testing.
+ */
+function createMockMemorySearchConfig(overrides: {
+  provider?: string;
+  model?: string;
+  remote?: Record<string, unknown>;
+}) {
+  return {
+    provider: overrides.provider ?? "openai",
+    model: overrides.model ?? "",
+    local: {},
+    remote: overrides.remote ?? {},
+    enabled: true,
+    sources: ["memory"],
+    extraPaths: [],
+    multimodal: { enabled: false },
+    experimental: { sessionMemory: false },
+    fallback: "none",
+    store: { driver: "sqlite", path: "", vector: { enabled: true } },
+    chunking: { tokens: 400, overlap: 80 },
+    sync: {
+      onSessionStart: true,
+      onSearch: true,
+      watch: true,
+      watchDebounceMs: 1500,
+      intervalMinutes: 0,
+      sessions: { deltaBytes: 100000, deltaMessages: 50 },
+    },
+    query: {
+      maxResults: 6,
+      minScore: 0.35,
+      hybrid: {
+        enabled: true,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        candidateMultiplier: 4,
+        mmr: { enabled: false, lambda: 0.7 },
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
+      },
+    },
+    cache: { enabled: true },
+  };
+}
 
 describe("noteMemorySearchHealth", () => {
   const cfg = {} as OpenClawConfig;
@@ -674,5 +719,133 @@ describe("checkMemorySearch", () => {
 
     expect(result.valid).toBe(true);
     expect(result.issues).toHaveLength(0);
+  });
+});
+
+describe("noteMemorySearchDiagnostics", () => {
+  const cfg = {} as OpenClawConfig;
+
+  beforeEach(() => {
+    note.mockClear();
+    resolveMemorySearchConfig.mockReset();
+  });
+
+  it("does not output anything when memory search is disabled", () => {
+    resolveMemorySearchConfig.mockReturnValue(null);
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not output anything when configuration is valid", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({
+        provider: "openai",
+        model: "text-embedding-3-small",
+        remote: { apiKey: "test-key" },
+      }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("outputs structured error when provider is 'auto'", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({ provider: "auto", model: "" }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("[FAIL] memorySearch configuration invalid");
+    expect(message).toContain("Provider: auto");
+    expect(message).toContain("memorySearch.provider is set to");
+    expect(message).toContain("Example configuration:");
+    expect(message).toContain("docs.openclaw.ai");
+  });
+
+  it("outputs structured error when openai provider is missing apiKey", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({
+        provider: "openai",
+        model: "text-embedding-3-small",
+        remote: {},
+      }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("[FAIL] memorySearch configuration invalid");
+    expect(message).toContain("Provider: openai");
+    expect(message).toContain("remote.apiKey");
+    expect(message).toContain("apiKey");
+    expect(message).toContain("OPENAI_API_KEY");
+  });
+
+  it("outputs structured error when openai provider is missing model", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({
+        provider: "openai",
+        model: "",
+        remote: { apiKey: "test-key" },
+      }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("[FAIL] memorySearch configuration invalid");
+    expect(message).toContain("model");
+    expect(message).toContain("model to be specified");
+  });
+
+  it("outputs structured error when ollama provider is missing host", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({ provider: "ollama", model: "nomic-embed-text", remote: {} }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("[FAIL] memorySearch configuration invalid");
+    expect(message).toContain("Provider: ollama");
+    expect(message).toContain("remote.baseUrl");
+    expect(message).toContain("baseUrl");
+    expect(message).toContain("localhost:11434");
+  });
+
+  it("includes example configuration snippet in output", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({ provider: "openai", model: "", remote: {} }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    // Check for YAML code block with example config
+    expect(message).toContain("```yaml");
+    expect(message).toContain("memorySearch:");
+    expect(message).toContain("provider: openai");
+  });
+
+  it("includes documentation link in output", () => {
+    resolveMemorySearchConfig.mockReturnValue(
+      createMockMemorySearchConfig({ provider: "auto", model: "", remote: {} }),
+    );
+
+    noteMemorySearchDiagnostics(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("docs.openclaw.ai/configuration#memory-search");
   });
 });
