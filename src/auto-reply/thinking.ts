@@ -63,10 +63,7 @@ export function supportsNativeAdaptiveThinking(
   const normalizedProvider = normalizeProviderId(provider);
   const normalizedModel = model?.trim().toLowerCase() ?? "";
   const isAnthropicFamily =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "amazon-bedrock" ||
-    normalizedModel.includes("anthropic/") ||
-    normalizedModel.includes(".anthropic.");
+    normalizedProvider === "anthropic" || normalizedProvider === "amazon-bedrock";
   return isAnthropicFamily && /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.:])/i.test(normalizedModel);
 }
 

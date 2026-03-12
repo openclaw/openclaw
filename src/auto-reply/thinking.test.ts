@@ -8,6 +8,7 @@ import {
   resolveThinkingDefaultForModel,
   resolveEffectiveThinking,
   resolveThinkingCapabilities,
+  supportsNativeAdaptiveThinking,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -138,6 +139,16 @@ describe("resolveThinkingCapabilities", () => {
     expect(resolveThinkingCapabilities({ reasoningSupported: false })).toEqual({
       reasoningSupported: false,
     });
+  });
+
+  it("does not treat OpenRouter Anthropic routes as native adaptive", () => {
+    expect(supportsNativeAdaptiveThinking("openrouter", "anthropic/claude-sonnet-4-6")).toBe(false);
+    expect(
+      resolveThinkingCapabilities({
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toEqual({ binaryThinking: false });
   });
 });
 

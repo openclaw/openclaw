@@ -1494,15 +1494,27 @@ export async function runEmbeddedAttempt(
       agentId: params.agentId,
     });
     const initialSessionThinkingLevel = (() => {
+      const callerRequestedThinkingLevel = params.thinkLevel;
       if (!params.config || !sandboxSessionKey) {
-        return params.thinkLevel !== initialDefaultThinkingLevel ? params.thinkLevel : undefined;
+        return callerRequestedThinkingLevel !== initialDefaultThinkingLevel
+          ? callerRequestedThinkingLevel
+          : undefined;
       }
       const storePath = resolveStorePath(params.config.session?.store, { agentId: sessionAgentId });
       const store = loadSessionStore(storePath);
-      return resolveSessionStoreEntry({
+      const storedSessionThinkingLevel = resolveSessionStoreEntry({
         store,
         sessionKey: sandboxSessionKey,
       }).existing?.thinkingLevel as ThinkLevel | undefined;
+
+      if (
+        callerRequestedThinkingLevel &&
+        callerRequestedThinkingLevel !== storedSessionThinkingLevel
+      ) {
+        return callerRequestedThinkingLevel;
+      }
+
+      return storedSessionThinkingLevel;
     })();
     const runThinkingState: {
       defaultRequested: ThinkLevel;
