@@ -101,7 +101,10 @@ function resolveBoundThreadBinding(params: {
       return matched;
     }
   }
-  if ("getByThreadId" in params.threadBindings && typeof params.threadBindings.getByThreadId === "function") {
+  if (
+    "getByThreadId" in params.threadBindings &&
+    typeof params.threadBindings.getByThreadId === "function"
+  ) {
     return params.threadBindings.getByThreadId(targetChannelId) ?? undefined;
   }
   return undefined;
