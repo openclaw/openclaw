@@ -48,6 +48,24 @@ describe("buildTelegramMessageContext sender prefix", () => {
     expect(ctx?.ctxPayload?.BodyForCommands).toBe("/think high\nexplain this change");
   });
 
+  it("normalizes addressed bot commands while preserving multiline bodies", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 23457,
+        chat: { id: -99, type: "supergroup", title: "Dev Chat" },
+        date: 1700000000,
+        text: "/think@bot high\nexplain this change",
+        from: { id: 42, first_name: "Alice" },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.CommandBody).toBe("/think high");
+    expect(ctx?.ctxPayload?.BodyForCommands).toBe("/think high\nexplain this change");
+  });
+
   it("respects messageIdOverride option", async () => {
     const ctx = await buildCtx({
       messageId: 12345,
