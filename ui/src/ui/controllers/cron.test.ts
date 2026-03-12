@@ -321,11 +321,7 @@ describe("cron controller", () => {
     expect(addCall).toBeDefined();
     expect(addCall?.[1]).toMatchObject({
       name: "main job",
-    });
-    // Delivery is explicitly sent as { mode: "none" } to clear the announce delivery on the backend.
-    // Previously this was sent as undefined, which left announce in place (bug #31075).
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
-      mode: "none",
+      delivery: { mode: "none" },
     });
     // After submit, form is reset to defaults (deliveryMode = "announce" from DEFAULT_CRON_FORM).
     expect(state.cronForm.deliveryMode).toBe("announce");
