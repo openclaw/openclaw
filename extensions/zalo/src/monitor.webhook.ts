@@ -140,19 +140,8 @@ export async function handleZaloWebhookRequest(
     targetsByPath: webhookTargets,
     allowMethods: ["POST"],
     handle: async ({ targets, path }) => {
-      const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-      const target = resolveWebhookTargetWithAuthOrRejectSync({
-        targets,
-        res,
-        isMatch: (entry) => timingSafeEquals(entry.secret, headerToken),
-      });
-      if (!target) {
-        recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
-        return true;
-      }
       const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
       const nowMs = Date.now();
-
       if (
         !applyBasicWebhookRequestGuards({
           req,
@@ -163,7 +152,18 @@ export async function handleZaloWebhookRequest(
           requireJsonContentType: true,
         })
       ) {
-        recordWebhookStatus(target.runtime, path, res.statusCode);
+        recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
+        return true;
+      }
+
+      const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
+      const target = resolveWebhookTargetWithAuthOrRejectSync({
+        targets,
+        res,
+        isMatch: (entry) => timingSafeEquals(entry.secret, headerToken),
+      });
+      if (!target) {
+        recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
         return true;
       }
       const body = await readJsonWebhookBodyOrReject({
