@@ -251,6 +251,11 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
       thinkingDefault: "low",
       verboseDefault: "off",
+      reasoningDefault: "off",
+      surfaceDefaults: {
+        tui: { verboseDefault: "full", reasoningDefault: "on" },
+        discord: { verboseDefault: "off", reasoningDefault: "off" },
+      },
       elevatedDefault: "on",
       blockStreamingDefault: "off",
       blockStreamingBreak: "text_end",
@@ -488,7 +493,10 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
     discord: {
       enabled: true,
       token: "YOUR_DISCORD_BOT_TOKEN",
-      dm: { enabled: true, allowFrom: ["123456789012345678", "987654321098765432"] },
+      dm: {
+        enabled: true,
+        allowFrom: ["123456789012345678", "987654321098765432"],
+      },
     },
   },
 }
