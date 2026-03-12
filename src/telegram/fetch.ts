@@ -346,15 +346,15 @@ export function resolveTelegramFetch(
 
   const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = explicitProxyUrl
-    ? undiciSourceFetch
-    : proxyFetch
-      ? resolveWrappedFetch(proxyFetch)
-      : undiciSourceFetch;
+  const sourceFetch = proxyFetch ? resolveWrappedFetch(proxyFetch) : undiciSourceFetch;
 
   // Preserve fully caller-owned custom fetch implementations.
-  // OpenClaw proxy fetches are metadata-tagged and continue into resolver-scoped policy.
-  if (proxyFetch && !explicitProxyUrl) {
+  // For explicit OpenClaw proxy fetches, keep the original proxyFetch transport path
+  // instead of rebuilding a fresh undici ProxyAgent dispatcher. In some proxy setups
+  // (observed on Telegram media downloads after v2026.3.11), reconstructing the
+  // explicit proxy route can regress file fetches even though the original proxy fetch
+  // remains healthy.
+  if (proxyFetch) {
     return sourceFetch;
   }
 
@@ -398,7 +398,7 @@ export function resolveTelegramFetch(
       stickyIpv4FallbackEnabled ? resolveStickyIpv4Dispatcher() : defaultDispatcher,
     );
     try {
-      return await sourceFetch(input, initialInit);
+      return await sourceFetch(input, initialInit as RequestInit);
     } catch (err) {
       if (shouldRetryWithIpv4Fallback(err)) {
         // Preserve caller-owned dispatchers on retry.
@@ -416,7 +416,10 @@ export function resolveTelegramFetch(
             `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
           );
         }
-        return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
+        return sourceFetch(
+          input,
+          withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()) as RequestInit,
+        );
       }
       throw err;
     }
