@@ -16,6 +16,7 @@
 import { readFile, writeFile, appendFile, access, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { ChatModel } from "./chat.js";
+import { tracer } from "./tracer.js";
 
 // ============================================================================
 // Types
@@ -407,10 +408,42 @@ Text: "${JSON.stringify(text).slice(1, -1)}"`;
       .replace(/```\s*/g, "")
       .trim();
 
-    const data = JSON.parse(cleanJson) as {
+    let data: {
       nodes?: Array<{ id?: string; type?: string; description?: string }>;
       edges?: Array<{ source?: string; target?: string; relation?: string }>;
     };
+
+    try {
+      data = JSON.parse(cleanJson);
+      tracer.trace(
+        "llm_graph_success",
+        { nodeCount: data.nodes?.length, edgeCount: data.edges?.length },
+        "LLM successfully extracted graph",
+      );
+    } catch (parseErr) {
+      tracer.trace(
+        "llm_graph_json_error",
+        { raw: cleanJson },
+        `Graph JSON Parse Failed: ${parseErr}. Attempting regex rescue.`,
+      );
+      const match = cleanJson.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          data = JSON.parse(match[0]);
+          tracer.trace("llm_graph_repair_success", {}, "Successfully rescued Graph JSON via regex");
+        } catch (e) {
+          tracer.trace(
+            "llm_graph_repair_fatal",
+            { error: String(e) },
+            "Graph regex rescue failed.",
+          );
+          throw e;
+        }
+      } else {
+        tracer.trace("llm_graph_fatal", {}, "No JSON-like structure found in LLM Graph response.");
+        throw parseErr;
+      }
+    }
 
     const allowedRelations = new Set([
       "HAS",
