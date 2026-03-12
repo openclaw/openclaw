@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildToolSidebarContent } from "../ui/src/ui/chat/tool-cards.ts";
+import { buildToolSidebarContent } from "./tool-cards.js";
 
 describe("buildToolSidebarContent", () => {
   it("includes full command and output", () => {
