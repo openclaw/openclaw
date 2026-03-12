@@ -494,6 +494,12 @@ export async function verifyDeviceToken(params: {
     if (!verifyPairingToken(params.token, entry.token)) {
       return { ok: false, reason: "token-mismatch" };
     }
+    const approvedScopes = normalizeDeviceAuthScopes(
+      device.approvedScopes ?? device.scopes ?? entry.scopes,
+    );
+    if (!scopesAllowWithImplications(entry.scopes, approvedScopes)) {
+      return { ok: false, reason: "scope-mismatch" };
+    }
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
@@ -525,8 +531,18 @@ export async function ensureDeviceToken(params: {
       return null;
     }
     const { device, role, tokens, existing } = context;
+    const approvedScopes = normalizeDeviceAuthScopes(
+      device.approvedScopes ?? device.scopes ?? existing?.scopes,
+    );
+    if (!scopesAllowWithImplications(requestedScopes, approvedScopes)) {
+      return null;
+    }
     if (existing && !existing.revokedAtMs) {
-      if (roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })) {
+      const existingWithinApproved = scopesAllowWithImplications(existing.scopes, approvedScopes);
+      if (
+        existingWithinApproved &&
+        roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
+      ) {
         return existing;
       }
     }
