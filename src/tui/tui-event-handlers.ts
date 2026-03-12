@@ -46,8 +46,18 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const thinkingRuns = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
+
+  const thinkingRunId = (runId: string) => `${runId}:thinking`;
+
+  const clearThinkingRun = (runId: string) => {
+    if (!thinkingRuns.delete(runId)) {
+      return;
+    }
+    chatLog.dropAssistant(thinkingRunId(runId));
+  };
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -79,6 +89,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
+    thinkingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     clearLocalRunIds?.();
   };
@@ -91,6 +102,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const noteFinalizedRun = (runId: string) => {
     finalizedRuns.set(runId, Date.now());
     sessionRuns.delete(runId);
+    clearThinkingRun(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
   };
@@ -119,6 +131,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
+    clearThinkingRun(params.runId);
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
@@ -314,6 +327,19 @@ export function createEventHandlers(context: EventHandlerContext) {
           chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
         }
       }
+      tui.requestRender();
+      return;
+    }
+    if (evt.stream === "thinking") {
+      if (!isActiveRun || state.sessionInfo.reasoningLevel !== "stream") {
+        return;
+      }
+      const text = asString(evt.data?.text, "");
+      if (!text.trim()) {
+        return;
+      }
+      thinkingRuns.add(evt.runId);
+      chatLog.updateAssistant(text, thinkingRunId(evt.runId));
       tui.requestRender();
       return;
     }
