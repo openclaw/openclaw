@@ -169,6 +169,7 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private closePromise: Promise<void> | null = null; // Track in-flight close to prevent concurrent execution
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -387,10 +388,23 @@ export class FeishuStreamingSession {
   }
 
   async close(finalText?: string, options?: { note?: string }): Promise<void> {
+    // Prevent concurrent close calls and return existing promise if already closing
+    // This fixes the race condition where multiple close() calls could execute simultaneously
     if (!this.state || this.closed) {
       return;
     }
+    if (this.closePromise) {
+      return this.closePromise;
+    }
     this.closed = true;
+    this.closePromise = this._doClose(finalText, options);
+    return this.closePromise;
+  }
+
+  private async _doClose(finalText?: string, options?: { note?: string }): Promise<void> {
+    if (!this.state) {
+      return;
+    }
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
