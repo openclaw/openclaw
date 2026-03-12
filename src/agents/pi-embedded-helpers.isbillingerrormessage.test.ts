@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
+  extractObservedOverflowTokenCount,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -458,6 +459,29 @@ describe("isLikelyContextOverflowError", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
+  });
+});
+
+describe("extractObservedOverflowTokenCount", () => {
+  it("extracts provider-reported prompt token counts", () => {
+    expect(
+      extractObservedOverflowTokenCount(
+        '400 {"type":"error","error":{"message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
+      ),
+    ).toBe(277403);
+    expect(
+      extractObservedOverflowTokenCount("Context window exceeded: requested 12000 tokens"),
+    ).toBe(12000);
+    expect(
+      extractObservedOverflowTokenCount(
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",
+      ),
+    ).toBe(145000);
+  });
+
+  it("returns undefined when overflow counts are not present", () => {
+    expect(extractObservedOverflowTokenCount("Prompt too large for this model")).toBeUndefined();
+    expect(extractObservedOverflowTokenCount("rate limit exceeded")).toBeUndefined();
   });
 });
 
