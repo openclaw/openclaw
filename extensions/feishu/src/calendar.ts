@@ -1,10 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import {
-  FeishuCalendarSchema,
-  type FeishuCalendarParams,
-} from "./calendar-schema.js";
+import { FeishuCalendarSchema, type FeishuCalendarParams } from "./calendar-schema.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
@@ -32,10 +29,7 @@ function toUnixTimestamp(value: string): string {
   return String(Math.floor(ms / 1000));
 }
 
-async function createEvent(
-  client: Lark.Client,
-  params: FeishuCalendarParams,
-) {
+async function createEvent(client: Lark.Client, params: FeishuCalendarParams) {
   if (!params.summary) {
     throw new Error("summary is required for create_event");
   }
@@ -72,10 +66,7 @@ async function createEvent(
   };
 }
 
-async function addAttendees(
-  client: Lark.Client,
-  params: FeishuCalendarParams,
-) {
+async function addAttendees(client: Lark.Client, params: FeishuCalendarParams) {
   if (!params.event_id) {
     throw new Error("event_id is required for add_attendees");
   }
@@ -83,6 +74,7 @@ async function addAttendees(
     throw new Error("attendees array is required for add_attendees");
   }
 
+  // The Lark SDK types don't expose the attendees sub-resource; cast to any to access it.
   const res = await (client.calendar.calendarEvent.attendees as any).create({
     path: {
       calendar_id: PRIMARY_CALENDAR_ID,
@@ -110,10 +102,7 @@ async function addAttendees(
   };
 }
 
-async function listEvents(
-  client: Lark.Client,
-  params: FeishuCalendarParams,
-) {
+async function listEvents(client: Lark.Client, params: FeishuCalendarParams) {
   const queryParams: Record<string, unknown> = {};
 
   if (params.start_time) {
@@ -153,10 +142,7 @@ async function listEvents(
   };
 }
 
-async function getEvent(
-  client: Lark.Client,
-  params: FeishuCalendarParams,
-) {
+async function getEvent(client: Lark.Client, params: FeishuCalendarParams) {
   if (!params.event_id) {
     throw new Error("event_id is required for get_event");
   }
@@ -185,10 +171,7 @@ async function getEvent(
   };
 }
 
-async function deleteEvent(
-  client: Lark.Client,
-  params: FeishuCalendarParams,
-) {
+async function deleteEvent(client: Lark.Client, params: FeishuCalendarParams) {
   if (!params.event_id) {
     throw new Error("event_id is required for delete_event");
   }
@@ -199,7 +182,7 @@ async function deleteEvent(
       event_id: params.event_id,
     },
     params: {
-      need_notification: params.need_notification ?? true,
+      need_notification: params.need_notification,
     } as any,
   });
 
@@ -215,17 +198,13 @@ async function deleteEvent(
 
 export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.(
-      "feishu_calendar: No config available, skipping calendar tools",
-    );
+    api.logger.debug?.("feishu_calendar: No config available, skipping calendar tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.(
-      "feishu_calendar: No Feishu accounts configured, skipping calendar tools",
-    );
+    api.logger.debug?.("feishu_calendar: No Feishu accounts configured, skipping calendar tools");
     return;
   }
 

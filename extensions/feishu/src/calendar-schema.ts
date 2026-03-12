@@ -17,9 +17,7 @@ export const FeishuCalendarSchema = Type.Object({
     description:
       "Action to run: create_event | add_attendees | list_events | get_event | delete_event",
   }),
-  summary: Type.Optional(
-    Type.String({ description: "Event title (required for create_event)" }),
-  ),
+  summary: Type.Optional(Type.String({ description: "Event title (required for create_event)" })),
   description: Type.Optional(Type.String({ description: "Event description" })),
   start_time: Type.Optional(
     Type.String({
@@ -35,8 +33,7 @@ export const FeishuCalendarSchema = Type.Object({
   ),
   event_id: Type.Optional(
     Type.String({
-      description:
-        "Event ID (required for get_event, delete_event, add_attendees)",
+      description: "Event ID (required for get_event, delete_event, add_attendees)",
     }),
   ),
   attendees: Type.Optional(
@@ -55,12 +52,8 @@ export const FeishuCalendarSchema = Type.Object({
   need_notification: Type.Optional(
     Type.Boolean({ description: "Whether to send notification (default true)" }),
   ),
-  page_size: Type.Optional(
-    Type.Number({ description: "Page size for list_events (default 50)" }),
-  ),
-  page_token: Type.Optional(
-    Type.String({ description: "Pagination token for list_events" }),
-  ),
+  page_size: Type.Optional(Type.Number({ description: "Page size for list_events (default 50)" })),
+  page_token: Type.Optional(Type.String({ description: "Pagination token for list_events" })),
 });
 
 export type FeishuCalendarParams = Static<typeof FeishuCalendarSchema>;
