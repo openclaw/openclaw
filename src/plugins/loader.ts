@@ -412,10 +412,15 @@ function warnWhenAllowlistIsOpen(params: {
 function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
+  allow: string[];
   logger: PluginLogger;
 }) {
+  const allowSet = new Set(params.allow);
   for (const plugin of params.registry.plugins) {
     if (plugin.status !== "loaded" || plugin.origin === "bundled") {
+      continue;
+    }
+    if (allowSet.has(plugin.id)) {
       continue;
     }
     if (
@@ -809,6 +814,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   warnAboutUntrackedLoadedPlugins({
     registry,
     provenance,
+    allow: normalized.allow,
     logger,
   });
 
