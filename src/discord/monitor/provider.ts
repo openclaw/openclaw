@@ -46,6 +46,7 @@ import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
+import { applyDiscordProxyToRequestClient } from "../request-client-proxy.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
@@ -624,6 +625,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    applyDiscordProxyToRequestClient(client.rest, rawDiscordCfg.proxy);
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
 
