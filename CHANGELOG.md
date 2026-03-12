@@ -160,6 +160,9 @@ Docs: https://docs.openclaw.ai
 - Telegram/direct delivery: bridge direct delivery sends to internal `message:sent` hooks so internal hook listeners observe successful Telegram deliveries. (#40185) Thanks @vincentkoc.
 - Dependencies: refresh workspace dependencies except the pinned Carbon package, and harden ACP session-config writes against non-string SDK values so newer ACP clients fail fast instead of tripping type/runtime mismatches.
 - Telegram/polling restarts: clear bounded cleanup timeout handles after `runner.stop()` and `bot.stop()` settle so stall recovery no longer leaves stray 15-second timers behind on clean shutdown. (#43188) thanks @kyohwang.
+- Gateway/config errors: surface up to three validation issues in top-level `config.set`, `config.patch`, and `config.apply` error messages while preserving structured issue details. (#42664) Thanks @huntharo.
+- Hooks/plugin context parity followup: pass `trigger` and `channelId` through embedded `llm_input`, `agent_end`, and `llm_output` hook contexts so plugins receive the same agent metadata across hook phases. (#42362) Thanks @zhoulf1006.
+- Status/context windows: normalize provider-qualified override cache keys so `/status` resolves the active provider's configured context window even when `models.providers` keys use mixed case or surrounding whitespace. (#36389) Thanks @haoruilee.
 
 ## 2026.3.8
 
@@ -236,6 +239,7 @@ Docs: https://docs.openclaw.ai
 - Memory/Gemini: normalize returned Gemini embeddings across direct query, direct batch, and async batch paths so memory search uses consistent vector handling for Gemini too. (#43409) Thanks @gumadeiras.
 - Agents/failover: recognize additional serialized network errno strings plus `EHOSTDOWN` and `EPIPE` structured codes so transient transport failures trigger timeout failover more reliably. (#42830) Thanks @jnMetaCode.
 - Telegram/model picker: make inline model button selections persist the chosen session model correctly, clear overrides when selecting the configured default, and include effective fallback models in `/models` button validation. (#40105) Thanks @avirweb.
+- Agents/embedded runner: carry provider-observed overflow token counts into compaction so overflow retries and diagnostics use the rejected live prompt size instead of only transcript estimates. (#40357) thanks @rabsef-bicrym.
 
 ## 2026.3.7
 
