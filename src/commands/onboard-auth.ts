@@ -43,6 +43,10 @@ export {
   applyModelStudioConfigCn,
   applyModelStudioProviderConfig,
   applyModelStudioProviderConfigCn,
+  applyModelStudioStandardConfig,
+  applyModelStudioStandardConfigCn,
+  applyModelStudioStandardProviderConfig,
+  applyModelStudioStandardProviderConfigCn,
   KILOCODE_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {

@@ -18,6 +18,8 @@ import {
   applyQianfanConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
+  applyModelStudioStandardConfig,
+  applyModelStudioStandardConfigCn,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
@@ -506,6 +508,60 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-standard-api-key-cn") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioStandardApiKeyCn,
+      flagName: "--modelstudio-standard-api-key-cn",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioStandardConfigCn(nextConfig);
+  }
+
+  if (authChoice === "modelstudio-standard-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "modelstudio",
+      cfg: baseConfig,
+      flagValue: opts.modelstudioStandardApiKey,
+      flagName: "--modelstudio-standard-api-key",
+      envVar: "MODELSTUDIO_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelStudioApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelstudio:default",
+      provider: "modelstudio",
+      mode: "api_key",
+    });
+    return applyModelStudioStandardConfig(nextConfig);
   }
 
   if (authChoice === "modelstudio-api-key-cn") {
