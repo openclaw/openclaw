@@ -307,12 +307,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     },
     sendMedia: async (ctx) => {
       const { cfg, to, text, mediaUrl, accountId, replyToId } = ctx;
-      const { mediaPath, mediaBuffer, contentType, filename, caption } = ctx as {
+      const { mediaPath, mediaBuffer, contentType, filename, caption, audioAsVoice } = ctx as {
         mediaPath?: string;
         mediaBuffer?: Uint8Array;
         contentType?: string;
         filename?: string;
         caption?: string;
+        audioAsVoice?: boolean;
       };
       const resolvedCaption = caption ?? text;
       const result = await sendBlueBubblesMedia({
@@ -326,6 +327,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         caption: resolvedCaption ?? undefined,
         replyToId: replyToId ?? null,
         accountId: accountId ?? undefined,
+        asVoice: audioAsVoice ?? undefined,
       });
 
       return { channel: "bluebubbles", ...result };
