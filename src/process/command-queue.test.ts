@@ -23,6 +23,7 @@ import {
   enqueueCommandInLane,
   GatewayDrainingError,
   getActiveTaskCount,
+  getCommandQueueSnapshot,
   getQueueSize,
   markGatewayDraining,
   resetAllLanes,
@@ -145,6 +146,46 @@ describe("command queue", () => {
     release();
     await task;
     expect(getActiveTaskCount()).toBe(0);
+  });
+
+  it("returns queue snapshots with active and queued ages", async () => {
+    const lane = `snapshot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(100);
+      let release!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = enqueueCommandInLane(lane, async () => {
+        await blocker;
+      });
+
+      await Promise.resolve();
+
+      vi.setSystemTime(250);
+      const second = enqueueCommandInLane(lane, async () => "second");
+
+      vi.setSystemTime(500);
+      const snapshot = getCommandQueueSnapshot({ now: 500 });
+      const laneSnapshot = snapshot.find((entry) => entry.lane === lane);
+      expect(laneSnapshot).toMatchObject({
+        lane,
+        active: 1,
+        queued: 1,
+        maxConcurrent: 1,
+        oldestActiveAgeMs: 400,
+        oldestQueuedAgeMs: 250,
+      });
+
+      release();
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).resolves.toBe("second");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waitForActiveTasks resolves immediately when no tasks are active", async () => {

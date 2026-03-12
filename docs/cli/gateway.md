@@ -88,6 +88,30 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
+### `gateway diagnostics queue`
+
+Show a live snapshot of command lanes and tracked session backlog/stuck state.
+
+```bash
+openclaw gateway diagnostics queue
+openclaw gateway diagnostics queue --json
+```
+
+Options:
+
+- `--all`: include idle lanes and tracked idle session states.
+- `--url <url>`: Gateway WebSocket URL.
+- `--token <token>`: token auth for the probe.
+- `--password <password>`: password auth for the probe.
+- `--timeout <ms>`: RPC timeout (default `10000`).
+- `--json`: machine-readable output.
+
+Notes:
+
+- This is the operator-facing queue snapshot for debugging lane backlog and stuck sessions.
+- JSON output is the stable scripting surface.
+- The command reads live in-memory state from the running gateway; it does not reconstruct queue state from log files.
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.

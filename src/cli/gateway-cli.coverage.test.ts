@@ -128,6 +128,51 @@ describe("gateway-cli coverage", () => {
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
   });
 
+  it("registers gateway diagnostics queue and routes to diagnostics.queue", async () => {
+    resetRuntimeCapture();
+    callGateway.mockClear();
+    callGateway.mockResolvedValueOnce({
+      ts: 123,
+      stuckSessionWarnMs: 60_000,
+      summary: {
+        lanes: 1,
+        queued: 2,
+        active: 1,
+        draining: 0,
+        sessions: 1,
+        stuckSessions: 1,
+      },
+      lanes: [
+        {
+          lane: "session:agent:alpha",
+          queued: 2,
+          active: 1,
+          maxConcurrent: 1,
+          draining: false,
+          generation: 0,
+          oldestQueuedAgeMs: 5_000,
+          oldestActiveAgeMs: 6_000,
+        },
+      ],
+      sessions: [
+        {
+          sessionKey: "agent:alpha",
+          lane: "session:agent:alpha",
+          state: "processing",
+          queueDepth: 2,
+          lastActivityAgeMs: 6_000,
+          stuck: true,
+        },
+      ],
+    });
+
+    await runGatewayCommand(["gateway", "diagnostics", "queue", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ method: "diagnostics.queue" });
+    expect(runtimeLogs.join("\n")).toContain('"stuckSessions": 1');
+  });
+
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     resetRuntimeCapture();
     gatewayStatusCommand.mockClear();

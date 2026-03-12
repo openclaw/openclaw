@@ -43,10 +43,21 @@ type QueueEntry = {
 type LaneState = {
   lane: string;
   queue: QueueEntry[];
-  activeTaskIds: Set<number>;
+  activeTasks: Map<number, number>;
   maxConcurrent: number;
   draining: boolean;
   generation: number;
+};
+
+export type CommandQueueLaneSnapshot = {
+  lane: string;
+  queued: number;
+  active: number;
+  maxConcurrent: number;
+  draining: boolean;
+  generation: number;
+  oldestQueuedAgeMs: number | null;
+  oldestActiveAgeMs: number | null;
 };
 
 const lanes = new Map<string, LaneState>();
@@ -60,7 +71,7 @@ function getLaneState(lane: string): LaneState {
   const created: LaneState = {
     lane,
     queue: [],
-    activeTaskIds: new Set(),
+    activeTasks: new Map(),
     maxConcurrent: 1,
     draining: false,
     generation: 0,
@@ -73,14 +84,14 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   if (taskGeneration !== state.generation) {
     return false;
   }
-  state.activeTaskIds.delete(taskId);
+  state.activeTasks.delete(taskId);
   return true;
 }
 
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
-    if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
+    if (state.activeTasks.size === 0 && state.queue.length > 0) {
       diag.warn(
         `drainLane blocked: lane=${lane} draining=true active=0 queue=${state.queue.length}`,
       );
@@ -91,7 +102,7 @@ function drainLane(lane: string) {
 
   const pump = () => {
     try {
-      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+      while (state.activeTasks.size < state.maxConcurrent && state.queue.length > 0) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
@@ -107,7 +118,7 @@ function drainLane(lane: string) {
         logLaneDequeue(lane, waitedMs, state.queue.length);
         const taskId = nextTaskId++;
         const taskGeneration = state.generation;
-        state.activeTaskIds.add(taskId);
+        state.activeTasks.set(taskId, Date.now());
         void (async () => {
           const startTime = Date.now();
           try {
@@ -115,7 +126,7 @@ function drainLane(lane: string) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
-                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTasks.size} queued=${state.queue.length}`,
               );
               pump();
             }
@@ -181,7 +192,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
+    logLaneEnqueue(cleaned, state.queue.length + state.activeTasks.size);
     drainLane(cleaned);
   });
 }
@@ -202,13 +213,13 @@ export function getQueueSize(lane: string = CommandLane.Main) {
   if (!state) {
     return 0;
   }
-  return state.queue.length + state.activeTaskIds.size;
+  return state.queue.length + state.activeTasks.size;
 }
 
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.queue.length + s.activeTaskIds.size;
+    total += s.queue.length + s.activeTasks.size;
   }
   return total;
 }
@@ -246,7 +257,7 @@ export function resetAllLanes(): void {
   const lanesToDrain: string[] = [];
   for (const state of lanes.values()) {
     state.generation += 1;
-    state.activeTaskIds.clear();
+    state.activeTasks.clear();
     state.draining = false;
     if (state.queue.length > 0) {
       lanesToDrain.push(state.lane);
@@ -265,9 +276,58 @@ export function resetAllLanes(): void {
 export function getActiveTaskCount(): number {
   let total = 0;
   for (const s of lanes.values()) {
-    total += s.activeTaskIds.size;
+    total += s.activeTasks.size;
   }
   return total;
+}
+
+export function getCommandQueueSnapshot(
+  opts: { includeIdle?: boolean; now?: number } = {},
+): CommandQueueLaneSnapshot[] {
+  const now = opts.now ?? Date.now();
+  const includeIdle = opts.includeIdle === true;
+  const snapshots: CommandQueueLaneSnapshot[] = [];
+
+  for (const state of lanes.values()) {
+    const queued = state.queue.length;
+    const active = state.activeTasks.size;
+    if (!includeIdle && queued === 0 && active === 0 && !state.draining) {
+      continue;
+    }
+
+    const oldestQueuedAt = state.queue[0]?.enqueuedAt;
+    let oldestActiveAt: number | undefined;
+    for (const startedAt of state.activeTasks.values()) {
+      if (oldestActiveAt === undefined || startedAt < oldestActiveAt) {
+        oldestActiveAt = startedAt;
+      }
+    }
+
+    snapshots.push({
+      lane: state.lane,
+      queued,
+      active,
+      maxConcurrent: state.maxConcurrent,
+      draining: state.draining,
+      generation: state.generation,
+      oldestQueuedAgeMs:
+        typeof oldestQueuedAt === "number" ? Math.max(0, now - oldestQueuedAt) : null,
+      oldestActiveAgeMs:
+        typeof oldestActiveAt === "number" ? Math.max(0, now - oldestActiveAt) : null,
+    });
+  }
+
+  return snapshots.toSorted((a, b) => {
+    const backlogDelta = b.queued + b.active - (a.queued + a.active);
+    if (backlogDelta !== 0) {
+      return backlogDelta;
+    }
+    const waitDelta = (b.oldestQueuedAgeMs ?? -1) - (a.oldestQueuedAgeMs ?? -1);
+    if (waitDelta !== 0) {
+      return waitDelta;
+    }
+    return a.lane.localeCompare(b.lane);
+  });
 }
 
 /**
@@ -284,7 +344,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   const deadline = Date.now() + timeoutMs;
   const activeAtStart = new Set<number>();
   for (const state of lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
+    for (const taskId of state.activeTasks.keys()) {
       activeAtStart.add(taskId);
     }
   }
@@ -298,7 +358,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
 
       let hasPending = false;
       for (const state of lanes.values()) {
-        for (const taskId of state.activeTaskIds) {
+        for (const taskId of state.activeTasks.keys()) {
           if (activeAtStart.has(taskId)) {
             hasPending = true;
             break;

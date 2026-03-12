@@ -12,6 +12,9 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve")).toEqual([
       "operator.read",
     ]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("diagnostics.queue")).toEqual([
+      "operator.read",
+    ]);
     expect(resolveLeastPrivilegeOperatorScopesForMethod("config.schema.lookup")).toEqual([
       "operator.read",
     ]);
@@ -30,6 +33,9 @@ describe("method scope resolution", () => {
 describe("operator scope authorization", () => {
   it("allows read methods with operator.read or operator.write", () => {
     expect(authorizeOperatorScopesForMethod("health", ["operator.read"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("diagnostics.queue", ["operator.read"])).toEqual({
       allowed: true,
     });
     expect(authorizeOperatorScopesForMethod("health", ["operator.write"])).toEqual({
