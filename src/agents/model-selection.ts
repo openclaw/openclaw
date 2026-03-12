@@ -43,7 +43,28 @@ function normalizeAliasKey(value: string): string {
 }
 
 export function modelKey(provider: string, model: string) {
-  return `${provider}/${model}`;
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+export function legacyModelKey(provider: string, model: string): string | null {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId || !modelId) {
+    return null;
+  }
+  const rawKey = `${providerId}/${modelId}`;
+  const canonicalKey = modelKey(providerId, modelId);
+  return rawKey === canonicalKey ? null : rawKey;
 }
 
 export function normalizeProviderId(provider: string): string {
@@ -610,9 +631,12 @@ export function resolveThinkingDefault(params: {
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const modelLower = params.model.toLowerCase();
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
   const perModelThinking =
-    params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
-      ?.thinking;
+    configuredModels?.[canonicalKey]?.params?.thinking ??
+    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
