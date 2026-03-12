@@ -22,6 +22,7 @@ const pluginSdkSubpaths = [
   "msteams",
   "acpx",
   "bluebubbles",
+  "byterover",
   "copilot-proxy",
   "device-pair",
   "diagnostics-otel",
