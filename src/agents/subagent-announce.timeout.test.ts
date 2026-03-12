@@ -176,27 +176,32 @@ describe("subagent announce timeout config", () => {
   });
 
   it("does not retry gateway timeout for externally delivered completion announces", async () => {
-    callGatewayImpl = async (request) => {
-      if (request.method === "chat.history") {
-        return { messages: [] };
-      }
-      throw new Error("gateway timeout after 90000ms");
-    };
+    vi.useFakeTimers();
+    try {
+      callGatewayImpl = async (request) => {
+        if (request.method === "chat.history") {
+          return { messages: [] };
+        }
+        throw new Error("gateway timeout after 90000ms");
+      };
 
-    await expect(
-      runAnnounceFlowForTest("run-completion-timeout-no-retry", {
-        requesterOrigin: {
-          channel: "telegram",
-          to: "12345",
-        },
-        expectsCompletionMessage: true,
-      }),
-    ).resolves.toBe(false);
+      await expect(
+        runAnnounceFlowForTest("run-completion-timeout-no-retry", {
+          requesterOrigin: {
+            channel: "telegram",
+            to: "12345",
+          },
+          expectsCompletionMessage: true,
+        }),
+      ).resolves.toBe(false);
 
-    const directAgentCalls = gatewayCalls.filter(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    expect(directAgentCalls).toHaveLength(1);
+      const directAgentCalls = gatewayCalls.filter(
+        (call) => call.method === "agent" && call.expectFinal === true,
+      );
+      expect(directAgentCalls).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("regression, skips parent announce while descendants are still pending", async () => {
