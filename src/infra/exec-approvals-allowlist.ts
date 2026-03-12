@@ -564,6 +564,7 @@ export async function resolveAllowAlwaysPatternsAsync(params: {
         const { stdout } = await execFileAsync("where.exe", [cmd], {
           cwd: params.cwd,
           env: params.env,
+          timeout: 5000,
         });
         const lines = stdout
           .split(/\r?\n/)
@@ -578,6 +579,7 @@ export async function resolveAllowAlwaysPatternsAsync(params: {
         const { stdout } = await execFileAsync("which", [cmd], {
           cwd: params.cwd,
           env: params.env,
+          timeout: 5000,
         });
         const lines = stdout
           .split(/\r?\n/)
