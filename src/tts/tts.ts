@@ -813,7 +813,7 @@ export async function textToSpeechTelephony(params: {
         }
 
         const outputFormat = TELEPHONY_OUTPUT.cli.format;
-        const sampleRate = config.cli.sampleRate;
+        const sampleRate = config.cli.sampleRate ?? 22050;
         const extension = `.${outputFormat}`;
 
         const tempRoot = resolvePreferredOpenClawTmpDir();

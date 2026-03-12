@@ -428,6 +428,7 @@ export const TtsConfigSchema = z
       .object({
         command: z.string().min(1),
         args: z.array(z.string()).optional(),
+        sampleRate: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
