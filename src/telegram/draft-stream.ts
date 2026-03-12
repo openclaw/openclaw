@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -20,11 +22,20 @@ type TelegramSendMessageDraft = (
   },
 ) => Promise<unknown>;
 
-let nextDraftId = 0;
+/**
+ * Keep draft-id allocation shared across bundled chunks so concurrent preview
+ * lanes do not accidentally reuse draft ids when code-split entries coexist.
+ */
+const TELEGRAM_DRAFT_STREAM_STATE_KEY = Symbol.for("openclaw.telegramDraftStreamState");
+
+const draftStreamState = resolveGlobalSingleton(TELEGRAM_DRAFT_STREAM_STATE_KEY, () => ({
+  nextDraftId: 0,
+}));
 
 function allocateTelegramDraftId(): number {
-  nextDraftId = nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : nextDraftId + 1;
-  return nextDraftId;
+  draftStreamState.nextDraftId =
+    draftStreamState.nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : draftStreamState.nextDraftId + 1;
+  return draftStreamState.nextDraftId;
 }
 
 function resolveSendMessageDraftApi(api: Bot["api"]): TelegramSendMessageDraft | undefined {
@@ -66,6 +77,8 @@ export type TelegramDraftStream = {
   materialize?: () => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** True when a preview sendMessage was attempted but the response was lost. */
+  sendMayHaveLanded?: () => boolean;
 };
 
 type TelegramDraftPreview = {
@@ -126,6 +139,7 @@ export function createTelegramDraftStream(params: {
   }
 
   const streamState = { stopped: false, final: false };
+  let messageSendAttempted = false;
   let streamMessageId: number | undefined;
   let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let previewTransport: "message" | "draft" = usesDraftTransport ? "draft" : "message";
@@ -150,13 +164,16 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
+    const usedThreadParams =
+      "message_thread_id" in (sendParams ?? {}) &&
+      typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
     try {
-      return await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
+      return {
+        sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
+        usedThreadParams,
+      };
     } catch (err) {
-      const hasThreadParam =
-        "message_thread_id" in (sendParams ?? {}) &&
-        typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
-      if (!hasThreadParam || !THREAD_NOT_FOUND_RE.test(String(err))) {
+      if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
       const threadlessParams = {
@@ -164,11 +181,14 @@ export function createTelegramDraftStream(params: {
       };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
-      return await params.api.sendMessage(
-        chatId,
-        sendArgs.renderedText,
-        Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
-      );
+      return {
+        sent: await params.api.sendMessage(
+          chatId,
+          sendArgs.renderedText,
+          Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
+        ),
+        usedThreadParams: false,
+      };
     }
   };
   const sendMessageTransportPreview = async ({
@@ -186,12 +206,24 @@ export function createTelegramDraftStream(params: {
       }
       return true;
     }
-    const sent = await sendRenderedMessageWithThreadFallback({
-      renderedText,
-      renderedParseMode,
-      fallbackWarnMessage:
-        "telegram stream preview send failed with message_thread_id, retrying without thread",
-    });
+    messageSendAttempted = true;
+    let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
+    try {
+      ({ sent } = await sendRenderedMessageWithThreadFallback({
+        renderedText,
+        renderedParseMode,
+        fallbackWarnMessage:
+          "telegram stream preview send failed with message_thread_id, retrying without thread",
+      }));
+    } catch (err) {
+      // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
+      // guarantee the message was never delivered — clear the flag so
+      // sendMayHaveLanded() doesn't suppress fallback.
+      if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+        messageSendAttempted = false;
+      }
+      throw err;
+    }
     const sentMessageId = sent?.message_id;
     if (typeof sentMessageId !== "number" || !Number.isFinite(sentMessageId)) {
       streamState.stopped = true;
@@ -339,6 +371,7 @@ export function createTelegramDraftStream(params: {
     // Re-open the stream lifecycle for the next assistant segment.
     streamState.final = false;
     generation += 1;
+    messageSendAttempted = false;
     streamMessageId = undefined;
     if (previewTransport === "draft") {
       streamDraftId = allocateTelegramDraftId();
@@ -369,7 +402,7 @@ export function createTelegramDraftStream(params: {
     }
     const renderedParseMode = lastSentText ? lastSentParseMode : undefined;
     try {
-      const sent = await sendRenderedMessageWithThreadFallback({
+      const { sent, usedThreadParams } = await sendRenderedMessageWithThreadFallback({
         renderedText,
         renderedParseMode,
         fallbackWarnMessage:
@@ -378,6 +411,20 @@ export function createTelegramDraftStream(params: {
       const sentId = sent?.message_id;
       if (typeof sentId === "number" && Number.isFinite(sentId)) {
         streamMessageId = Math.trunc(sentId);
+        // Clear the draft so Telegram's input area doesn't briefly show a
+        // stale copy alongside the newly materialized real message.
+        if (resolvedDraftApi != null && streamDraftId != null) {
+          const clearDraftId = streamDraftId;
+          const clearThreadParams =
+            usedThreadParams && threadParams?.message_thread_id != null
+              ? { message_thread_id: threadParams.message_thread_id }
+              : undefined;
+          try {
+            await resolvedDraftApi(chatId, clearDraftId, "", clearThreadParams);
+          } catch {
+            // Best-effort cleanup; draft clear failure is cosmetic.
+          }
+        }
         return streamMessageId;
       }
     } catch (err) {
@@ -401,5 +448,12 @@ export function createTelegramDraftStream(params: {
     stop,
     materialize,
     forceNewMessage,
+    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
+
+export const __testing = {
+  resetTelegramDraftStreamForTests() {
+    draftStreamState.nextDraftId = 0;
+  },
+};

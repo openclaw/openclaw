@@ -285,7 +285,7 @@ export function validateConfigObject(
   };
 }
 
-export function validateConfigObjectWithPlugins(raw: unknown):
+type ValidateConfigWithPluginsResult =
   | {
       ok: true;
       config: OpenClawConfig;
@@ -295,38 +295,26 @@ export function validateConfigObjectWithPlugins(raw: unknown):
       ok: false;
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+    };
+
+export function validateConfigObjectWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
 }
 
-export function validateConfigObjectRawWithPlugins(raw: unknown):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+export function validateConfigObjectRawWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
-):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -363,6 +351,7 @@ function validateConfigObjectWithPluginsBase(
     const registry = loadPluginManifestRegistry({
       config,
       workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
     });
 
     for (const diag of registry.diagnostics) {

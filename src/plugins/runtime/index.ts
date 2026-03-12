@@ -1,4 +1,8 @@
 import { createRequire } from "node:module";
+import {
+  getApiKeyForModel as getApiKeyForModelRaw,
+  resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
+} from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
 import { textToSpeechTelephony } from "../../tts/tts.js";
@@ -28,10 +32,28 @@ function resolveVersion(): string {
   }
 }
 
-export function createPluginRuntime(): PluginRuntime {
+function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
+  const unavailable = () => {
+    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+  };
+  return {
+    run: unavailable,
+    waitForRun: unavailable,
+    getSessionMessages: unavailable,
+    getSession: unavailable,
+    deleteSession: unavailable,
+  };
+}
+
+export type CreatePluginRuntimeOptions = {
+  subagent?: PluginRuntime["subagent"];
+};
+
+export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const runtime = {
     version: resolveVersion(),
     config: createRuntimeConfig(),
+    subagent: _options.subagent ?? createUnavailableSubagentRuntime(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeechTelephony },
@@ -41,6 +63,24 @@ export function createPluginRuntime(): PluginRuntime {
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    modelAuth: {
+      // Wrap model-auth helpers so plugins cannot steer credential lookups:
+      // - agentDir / store: stripped (prevents reading other agents' stores)
+      // - profileId / preferredProfile: stripped (prevents cross-provider
+      //   credential access via profile steering)
+      // Plugins only specify provider/model; the core auth pipeline picks
+      // the appropriate credential automatically.
+      getApiKeyForModel: (params) =>
+        getApiKeyForModelRaw({
+          model: params.model,
+          cfg: params.cfg,
+        }),
+      resolveApiKeyForProvider: (params) =>
+        resolveApiKeyForProviderRaw({
+          provider: params.provider,
+          cfg: params.cfg,
+        }),
+    },
   } satisfies PluginRuntime;
 
   return runtime;

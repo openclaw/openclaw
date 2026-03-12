@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
   FeishuConfig,
@@ -169,10 +169,14 @@ export function resolveFeishuCredentials(
   if (!appId || !appSecret) {
     return null;
   }
+  const connectionMode = cfg?.connectionMode ?? "websocket";
   return {
     appId,
     appSecret,
-    encryptKey: normalizeString(cfg?.encryptKey),
+    encryptKey:
+      connectionMode === "webhook"
+        ? resolveSecretLike(cfg?.encryptKey, "channels.feishu.encryptKey")
+        : normalizeString(cfg?.encryptKey),
     verificationToken: resolveSecretLike(
       cfg?.verificationToken,
       "channels.feishu.verificationToken",
