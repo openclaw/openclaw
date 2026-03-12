@@ -248,11 +248,10 @@ struct ExecCommandResolution {
 enum ExecCommandFormatter {
     static func displayString(for argv: [String]) -> String {
         argv.map { arg in
-            let trimmed = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "\"\"" }
-            let needsQuotes = trimmed.contains { $0.isWhitespace || $0 == "\"" }
-            if !needsQuotes { return trimmed }
-            let escaped = trimmed.replacingOccurrences(of: "\"", with: "\\\"")
+            guard !arg.isEmpty else { return "\"\"" }
+            let needsQuotes = arg.contains { $0.isWhitespace || $0 == "\"" }
+            if !needsQuotes { return arg }
+            let escaped = arg.replacingOccurrences(of: "\"", with: "\\\"")
             return "\"\(escaped)\""
         }.joined(separator: " ")
     }

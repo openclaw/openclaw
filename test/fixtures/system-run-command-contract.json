@@ -9,6 +9,14 @@
       }
     },
     {
+      "name": "direct argv preserves significant whitespace in display command",
+      "command": ["echo", "  hi  "],
+      "expected": {
+        "valid": true,
+        "displayCommand": "echo \"  hi  \""
+      }
+    },
+    {
       "name": "direct argv rejects mismatched raw command",
       "command": ["uname", "-a"],
       "rawCommand": "echo hi",

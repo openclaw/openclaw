@@ -62,6 +62,38 @@ struct MacNodeRuntimeTests {
         #expect(payload.plan.sessionKey == "main")
     }
 
+    @Test func `handle invoke prepare preserves command argument whitespace in raw command`() async throws {
+        struct PrepareParams: Encodable {
+            var command: [String]
+        }
+
+        struct PreparePayload: Decodable {
+            struct Plan: Decodable {
+                var argv: [String]
+                var rawCommand: String?
+            }
+
+            var cmdText: String
+            var plan: Plan
+        }
+
+        let runtime = MacNodeRuntime()
+        let params = PrepareParams(command: ["echo", "  hello  "])
+        let json = try #require(String(data: JSONEncoder().encode(params), encoding: .utf8))
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-prepare-whitespace",
+                command: OpenClawSystemCommand.runPrepare.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == true)
+
+        let payloadJSON = try #require(response.payloadJSON)
+        let payload = try JSONDecoder().decode(PreparePayload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.cmdText == #"echo "  hello  ""#)
+        #expect(payload.plan.argv == ["echo", "  hello  "])
+        #expect(payload.plan.rawCommand == #"echo "  hello  ""#)
+    }
+
     @Test func `handle invoke rejects missing or empty system run prepare command`() async throws {
         struct PrepareParams: Encodable {
             var command: [String]?
