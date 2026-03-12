@@ -23,6 +23,7 @@ import {
   parsePollStartContent,
   type PollStartContent,
 } from "../poll-types.js";
+import { enqueueSend } from "../send-queue.js";
 import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
 import { buildReplyRelation, buildTextContent, buildThreadRelation } from "../send/formatting.js";
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
@@ -692,27 +693,32 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               const relation = threadTarget
                 ? buildThreadRelation(threadTarget, replyToMode === "off" ? undefined : messageId)
                 : buildReplyRelation(replyToMode === "off" ? undefined : messageId);
-              const eventId = await client.sendMessage(
+              const eventId = await enqueueSend(
                 roomId,
-                buildTextContent(trimmedText, relation),
+                async () =>
+                  await client.sendMessage(roomId, buildTextContent(trimmedText, relation)),
               );
               if (eventId) {
                 reasoningDraftState.messageId = eventId;
               }
               return;
             }
-            await client.sendMessage(roomId, {
-              msgtype: "m.text",
-              body: `* ${trimmedText}`,
-              "m.new_content": {
-                msgtype: "m.text",
-                body: trimmedText,
-              },
-              "m.relates_to": {
-                rel_type: RelationType.Replace,
-                event_id: reasoningDraftState.messageId,
-              },
-            });
+            await enqueueSend(
+              roomId,
+              async () =>
+                await client.sendMessage(roomId, {
+                  msgtype: "m.text",
+                  body: `* ${trimmedText}`,
+                  "m.new_content": {
+                    msgtype: "m.text",
+                    body: trimmedText,
+                  },
+                  "m.relates_to": {
+                    rel_type: RelationType.Replace,
+                    event_id: reasoningDraftState.messageId,
+                  },
+                }),
+            );
           })
           .catch((err) => {
             runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
@@ -726,7 +732,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const eventId = reasoningDraftState.messageId;
         try {
-          await client.redactEvent(roomId, eventId);
+          await enqueueSend(roomId, async () => await client.redactEvent(roomId, eventId));
           reasoningDraftState.messageId = undefined;
           reasoningDraftState.lastText = "";
         } catch (err) {

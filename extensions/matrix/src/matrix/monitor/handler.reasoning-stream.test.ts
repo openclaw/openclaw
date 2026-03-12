@@ -10,6 +10,9 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
 
 const dispatchReplyFromConfigWithSettledDispatcherMock = vi.hoisted(() => vi.fn());
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn());
+const enqueueSendMock = vi.hoisted(() =>
+  vi.fn(async (_roomId: string, fn: () => Promise<unknown>) => await fn()),
+);
 
 vi.mock("openclaw/plugin-sdk/matrix", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/matrix")>(
@@ -28,6 +31,10 @@ vi.mock("../send.js", () => ({
   reactMatrixMessage: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../send-queue.js", () => ({
+  enqueueSend: (roomId: string, fn: () => Promise<unknown>) => enqueueSendMock(roomId, fn),
+}));
+
 vi.mock("./replies.js", () => ({
   deliverMatrixReplies: (...args: unknown[]) => deliverMatrixRepliesMock(...args),
 }));
@@ -42,6 +49,9 @@ describe("createMatrixRoomMessageHandler reasoning stream", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     finalDeliveryPromise = undefined;
+    enqueueSendMock.mockImplementation(
+      async (_roomId: string, fn: () => Promise<unknown>) => await fn(),
+    );
     dispatchReplyFromConfigWithSettledDispatcherMock.mockImplementation(
       async (params: {
         dispatcher: { sendFinalReply: (payload: ReplyPayload) => boolean };
@@ -235,6 +245,10 @@ describe("createMatrixRoomMessageHandler reasoning stream", () => {
 
     expect(clientSendMessage).toHaveBeenCalledTimes(2);
     expect(clientRedactEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueSendMock).toHaveBeenCalledTimes(3);
+    expect(enqueueSendMock).toHaveBeenNthCalledWith(1, "!room:example", expect.any(Function));
+    expect(enqueueSendMock).toHaveBeenNthCalledWith(2, "!room:example", expect.any(Function));
+    expect(enqueueSendMock).toHaveBeenNthCalledWith(3, "!room:example", expect.any(Function));
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual([
       "send-reasoning",
@@ -405,6 +419,7 @@ describe("createMatrixRoomMessageHandler reasoning stream", () => {
     await handler("!room:example", event);
 
     expect(clientRedactEvent).toHaveBeenCalledTimes(2);
+    expect(enqueueSendMock).toHaveBeenCalledTimes(4);
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(markDispatchIdle).toHaveBeenCalledTimes(1);
   });
