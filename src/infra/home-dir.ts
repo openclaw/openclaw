@@ -14,12 +14,30 @@ export function resolveEffectiveHomeDir(
   return raw ? path.resolve(raw) : undefined;
 }
 
+/** Derive a Termux home from PREFIX when running on Android. */
+function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
+  const prefix = normalize(env.PREFIX);
+  if (!prefix || !normalize(env.ANDROID_DATA)) {
+    return undefined;
+  }
+  // Only trust PREFIX values that look like a real Termux installation
+  // (e.g. /data/data/com.termux/files/usr) to avoid misfires in generic
+  // Android chroots where PREFIX may be something like /usr.
+  if (!prefix.includes("com.termux")) {
+    return undefined;
+  }
+  return path.resolve(prefix, "..", "home");
+}
+
 function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
       const fallbackHome =
-        normalize(env.HOME) ?? normalize(env.USERPROFILE) ?? normalizeSafe(homedir);
+        normalize(env.HOME) ??
+        normalize(env.USERPROFILE) ??
+        resolveTermuxHome(env) ??
+        normalizeSafe(homedir);
       if (fallbackHome) {
         return explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome);
       }
@@ -36,6 +54,14 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
   const userProfile = normalize(env.USERPROFILE);
   if (userProfile) {
     return userProfile;
+  }
+
+  // On Android/Termux, os.homedir() reads /etc/passwd and returns /home which
+  // does not exist. Derive a usable home from Termux's PREFIX before falling
+  // back to os.homedir().
+  const termuxHome = resolveTermuxHome(env);
+  if (termuxHome) {
+    return termuxHome;
   }
 
   return normalizeSafe(homedir);
