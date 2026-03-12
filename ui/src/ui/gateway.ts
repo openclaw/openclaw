@@ -119,6 +119,15 @@ type Pending = {
   reject: (err: unknown) => void;
 };
 
+type SelectedConnectAuth = {
+  authToken?: string;
+  authDeviceToken?: string;
+  authPassword?: string;
+  resolvedDeviceToken?: string;
+  storedToken?: string;
+  canFallbackToShared: boolean;
+};
+
 export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
@@ -236,40 +245,27 @@ export class GatewayBrowserClient {
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
-    let canFallbackToShared = false;
-    const explicitGatewayToken = this.opts.token?.trim() || undefined;
-    let authToken = explicitGatewayToken;
-    let deviceToken: string | undefined;
+    let selectedAuth: SelectedConnectAuth = { canFallbackToShared: false };
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
-      const storedToken = loadDeviceAuthToken({
-        deviceId: deviceIdentity.deviceId,
+      selectedAuth = this.selectConnectAuth({
         role,
-      })?.token;
-      const shouldUseDeviceRetryToken =
-        this.pendingDeviceTokenRetry &&
-        !deviceToken &&
-        Boolean(explicitGatewayToken) &&
-        Boolean(storedToken) &&
-        isTrustedRetryEndpoint(this.opts.url);
-      if (shouldUseDeviceRetryToken) {
-        deviceToken = storedToken ?? undefined;
+        deviceId: deviceIdentity.deviceId,
+      });
+      if (this.pendingDeviceTokenRetry && selectedAuth.authDeviceToken) {
         this.pendingDeviceTokenRetry = false;
-      } else {
-        deviceToken = !(explicitGatewayToken || this.opts.password?.trim())
-          ? (storedToken ?? undefined)
-          : undefined;
       }
-      canFallbackToShared = Boolean(deviceToken && explicitGatewayToken);
     }
-    authToken = explicitGatewayToken ?? deviceToken;
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const authToken = selectedAuth.authToken;
+    const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
     const auth =
-      authToken || this.opts.password
+      authToken || selectedAuth.authPassword
         ? {
             token: authToken,
             deviceToken,
-            password: this.opts.password,
+            password: selectedAuth.authPassword,
           }
         : undefined;
 
@@ -352,15 +348,10 @@ export class GatewayBrowserClient {
           connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
         const shouldRetryWithDeviceToken =
           !this.deviceTokenRetryBudgetUsed &&
-          !deviceToken &&
+          !selectedAuth.authDeviceToken &&
           Boolean(explicitGatewayToken) &&
           Boolean(deviceIdentity) &&
-          Boolean(
-            loadDeviceAuthToken({
-              deviceId: deviceIdentity?.deviceId ?? "",
-              role,
-            })?.token,
-          ) &&
+          Boolean(selectedAuth.storedToken) &&
           canRetryWithDeviceTokenHint &&
           isTrustedRetryEndpoint(this.opts.url);
         if (shouldRetryWithDeviceToken) {
@@ -377,7 +368,7 @@ export class GatewayBrowserClient {
           this.pendingConnectError = undefined;
         }
         if (
-          canFallbackToShared &&
+          selectedAuth.canFallbackToShared &&
           deviceIdentity &&
           connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
         ) {
@@ -442,6 +433,32 @@ export class GatewayBrowserClient {
       }
       return;
     }
+  }
+
+  private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const authPassword = this.opts.password?.trim() || undefined;
+    const storedToken = loadDeviceAuthToken({
+      deviceId: params.deviceId,
+      role: params.role,
+    })?.token;
+    const shouldUseDeviceRetryToken =
+      this.pendingDeviceTokenRetry &&
+      Boolean(explicitGatewayToken) &&
+      Boolean(storedToken) &&
+      isTrustedRetryEndpoint(this.opts.url);
+    const resolvedDeviceToken = !(explicitGatewayToken || authPassword)
+      ? (storedToken ?? undefined)
+      : undefined;
+    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
+    return {
+      authToken,
+      authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
+      authPassword,
+      resolvedDeviceToken,
+      storedToken: storedToken ?? undefined,
+      canFallbackToShared: Boolean(storedToken && explicitGatewayToken),
+    };
   }
 
   request<T = unknown>(method: string, params?: unknown): Promise<T> {
