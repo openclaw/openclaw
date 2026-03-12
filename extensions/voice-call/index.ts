@@ -209,6 +209,23 @@ const voiceCallPlugin = {
       const rt = await ensureRuntime();
       return { rt, callId, message } as const;
     };
+    const initiateCallAndRespond = async (params: {
+      rt: VoiceCallRuntime;
+      respond: GatewayRequestHandlerOptions["respond"];
+      to: string;
+      message?: string;
+      mode?: "notify" | "conversation";
+    }) => {
+      const result = await params.rt.manager.initiateCall(params.to, undefined, {
+        message: params.message,
+        mode: params.mode,
+      });
+      if (!result.success) {
+        params.respond(false, { error: result.error || "initiate failed" });
+        return;
+      }
+      params.respond(true, { callId: result.callId, initiated: true });
+    };
 
     api.registerGatewayMethod(
       "voicecall.initiate",
@@ -230,15 +247,13 @@ const voiceCallPlugin = {
           }
           const mode =
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
-          const result = await rt.manager.initiateCall(to, undefined, {
+          await initiateCallAndRespond({
+            rt,
+            respond,
+            to,
             message,
             mode,
           });
-          if (!result.success) {
-            respond(false, { error: result.error || "initiate failed" });
-            return;
-          }
-          respond(true, { callId: result.callId, initiated: true });
         } catch (err) {
           sendError(respond, err);
         }
@@ -347,14 +362,12 @@ const voiceCallPlugin = {
             return;
           }
           const rt = await ensureRuntime();
-          const result = await rt.manager.initiateCall(to, undefined, {
+          await initiateCallAndRespond({
+            rt,
+            respond,
+            to,
             message: message || undefined,
           });
-          if (!result.success) {
-            respond(false, { error: result.error || "initiate failed" });
-            return;
-          }
-          respond(true, { callId: result.callId, initiated: true });
         } catch (err) {
           sendError(respond, err);
         }

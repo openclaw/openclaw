@@ -5,6 +5,13 @@ export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
+export type ThinkingCatalogEntry = {
+  provider: string;
+  id: string;
+  reasoning?: boolean;
+};
+
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -14,6 +21,9 @@ function normalizeProviderId(provider?: string | null): string {
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   return normalized;
 }
 
@@ -22,7 +32,10 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
 }
 
 export const XHIGH_MODEL_REFS = [
+  "openai/gpt-5.4",
+  "openai/gpt-5.4-pro",
   "openai/gpt-5.2",
+  "openai-codex/gpt-5.4",
   "openai-codex/gpt-5.3-codex",
   "openai-codex/gpt-5.3-codex-spark",
   "openai-codex/gpt-5.2-codex",
@@ -125,6 +138,30 @@ export function formatXHighModelHint(): string {
     return `${refs[0]} or ${refs[1]}`;
   }
   return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
+}
+
+export function resolveThinkingDefaultForModel(params: {
+  provider: string;
+  model: string;
+  catalog?: ThinkingCatalogEntry[];
+}): ThinkLevel {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelLower = params.model.trim().toLowerCase();
+  const isAnthropicFamilyModel =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "amazon-bedrock" ||
+    modelLower.includes("anthropic/") ||
+    modelLower.includes(".anthropic.");
+  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+    return "adaptive";
+  }
+  const candidate = params.catalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  if (candidate?.reasoning) {
+    return "low";
+  }
+  return "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

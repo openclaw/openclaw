@@ -6,6 +6,7 @@ import {
   GATEWAY_SERVICE_MARKER,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
   NODE_SERVICE_KIND,
   NODE_SERVICE_MARKER,
   NODE_WINDOWS_TASK_SCRIPT_NAME,
@@ -29,7 +30,7 @@ type SharedServiceEnvironmentFields = {
   stateDir: string | undefined;
   configPath: string | undefined;
   tmpDir: string;
-  minimalPath: string;
+  minimalPath: string | undefined;
   proxyEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
@@ -244,11 +245,10 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
-  token?: string;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
-  const { env, port, token, launchdLabel } = params;
+  const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
   const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
   const profile = env.OPENCLAW_PROFILE;
@@ -259,9 +259,9 @@ export function buildServiceEnvironment(params: {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
+    OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
@@ -295,16 +295,19 @@ function buildCommonServiceEnvironment(
   env: Record<string, string | undefined>,
   sharedEnv: SharedServiceEnvironmentFields,
 ): Record<string, string | undefined> {
-  return {
+  const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
-    PATH: sharedEnv.minimalPath,
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
   };
+  if (sharedEnv.minimalPath) {
+    serviceEnv.PATH = sharedEnv.minimalPath;
+  }
+  return serviceEnv;
 }
 
 function resolveSharedServiceEnvironmentFields(
@@ -326,7 +329,9 @@ function resolveSharedServiceEnvironmentFields(
     stateDir,
     configPath,
     tmpDir,
-    minimalPath: buildMinimalServicePath({ env }),
+    // On Windows, Scheduled Tasks should inherit the current task PATH instead of
+    // freezing the install-time snapshot into gateway.cmd/node-host.cmd.
+    minimalPath: platform === "win32" ? undefined : buildMinimalServicePath({ env, platform }),
     proxyEnv,
     nodeCaCerts,
     nodeUseSystemCa,
