@@ -424,7 +424,15 @@ export async function createBackupArchive(
           follow: false,
           filter: tarFilter,
           onWriteEntry: (entry) => {
-            entry.path = buildBackupArchivePath(archiveRoot, path.resolve(entry.path));
+            // Use the same remapping as the simple path for consistent
+            // path normalization across platforms (the manifest special-case
+            // in remapArchiveEntryPath is a no-op here since manifest is
+            // appended separately via tar.r below).
+            entry.path = remapArchiveEntryPath({
+              entryPath: entry.path,
+              manifestPath,
+              archiveRoot,
+            });
           },
         },
         result.assets.map((asset) => asset.sourcePath),
