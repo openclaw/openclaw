@@ -111,4 +111,35 @@ describe("env-cli helpers", () => {
     expect(parseAssignment("NOEQUALS")).toBeNull();
     expect(parseAssignment("")).toBeNull();
   });
+
+  describe("redactValue", () => {
+    it("passes through non-sensitive keys unchanged", async () => {
+      const { redactValue } = await helpers();
+      expect(redactValue("ANTHROPIC_BASE_URL", "http://proxy.example.com")).toBe(
+        "http://proxy.example.com",
+      );
+    });
+
+    it("redacts sensitive keys: shows first 4 chars then asterisks", async () => {
+      const { redactValue } = await helpers();
+      // "sk-abc123xyz" = 12 chars → first 4 "sk-a" + 8 asterisks
+      expect(redactValue("ANTHROPIC_AUTH_TOKEN", "sk-abc123xyz")).toBe("sk-a********");
+    });
+
+    it("redacts short sensitive values fully (≤ 4 chars → all asterisks)", async () => {
+      const { redactValue } = await helpers();
+      expect(redactValue("MY_SECRET", "abc")).toBe("***");
+      expect(redactValue("API_KEY", "abcd")).toBe("****");
+    });
+  });
+
+  it("writeEnvFile enforces 0o600 even when file already exists with 0o644", async () => {
+    const { writeEnvFile } = await helpers();
+    // Create with broader permissions first (simulates manual setup).
+    fs.writeFileSync(envFile(), "EXISTING=1\n", { mode: 0o644 });
+    expect(fs.statSync(envFile()).mode & 0o777).toBe(0o644);
+
+    writeEnvFile(new Map([["EXISTING", "1"]]));
+    expect(fs.statSync(envFile()).mode & 0o777).toBe(0o600);
+  });
 });

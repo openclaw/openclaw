@@ -71,8 +71,9 @@ function parseDotEnv(content: string): Map<string, string> {
 }
 
 /**
- * Serialise a key→value map back to dotenv format, preserving existing
- * comment lines and blank lines from the original file where possible.
+ * Serialise a key→value map to dotenv format.
+ * Note: comment lines and blank lines from the original file are not preserved;
+ * only the key=value pairs in the map are written.
  */
 function serialiseDotEnv(map: Map<string, string>): string {
   const lines: string[] = [];
@@ -114,7 +115,25 @@ function writeEnvFile(map: Map<string, string>): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  // `mode` in writeFileSync is only applied on file creation; existing files
+  // keep their current permissions. Use chmodSync afterwards to enforce 0o600
+  // even when the file already exists (e.g. created manually with 0o644).
   fs.writeFileSync(p, serialiseDotEnv(map), { mode: 0o600 });
+  fs.chmodSync(p, 0o600);
+}
+
+/**
+ * Partially redact a value if its key looks like a secret.
+ * Values ≤ 4 chars are fully masked to avoid leaking short tokens.
+ */
+function redactValue(key: string, val: string): string {
+  const isSensitive = /token|key|secret|password|auth/i.test(key);
+  if (!isSensitive) {
+    return val;
+  }
+  return val.length <= 4
+    ? "*".repeat(val.length)
+    : `${val.slice(0, 4)}${"*".repeat(val.length - 4)}`;
 }
 
 /** @internal Exported only for unit tests. */
@@ -124,6 +143,7 @@ export const __test__ = {
   readEnvFile,
   writeEnvFile,
   parseAssignment,
+  redactValue,
 };
 
 export function registerEnvCli(program: Command): void {
@@ -147,7 +167,13 @@ export function registerEnvCli(program: Command): void {
     .action((opts: { json: boolean }) => {
       const map = readEnvFile();
       if (opts.json) {
-        console.log(JSON.stringify(Object.fromEntries(map), null, 2));
+        // Apply the same redaction as the human-readable path so that piped
+        // output / CI logs don't inadvertently expose secrets.
+        const redacted: Record<string, string> = {};
+        for (const [key, val] of map) {
+          redacted[key] = redactValue(key, val);
+        }
+        console.log(JSON.stringify(redacted, null, 2));
         return;
       }
       if (map.size === 0) {
@@ -156,12 +182,7 @@ export function registerEnvCli(program: Command): void {
       }
       console.log(`Gateway env vars (${getEnvFilePath()}):\n`);
       for (const [key, val] of map) {
-        // Redact anything that looks like a secret.
-        const isSensitive = /token|key|secret|password|auth/i.test(key);
-        const display = isSensitive
-          ? `${val.slice(0, 4)}${"*".repeat(Math.max(0, val.length - 4))}`
-          : val;
-        console.log(`  ${key}=${display}`);
+        console.log(`  ${key}=${redactValue(key, val)}`);
       }
     });
 
