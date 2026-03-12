@@ -58,6 +58,7 @@ function createFetchedReactionMessage(chatId: string) {
     senderOpenId: "ou_bot",
     content: "hello",
     contentType: "text",
+    rawContent: '{"text":"hello"}',
   };
 }
 
@@ -253,6 +254,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderType: "app",
         content: "hello",
         contentType: "text",
+        rawContent: '{"text":"hello"}',
       }),
     });
     expect(result).toBeNull();
@@ -272,6 +274,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderType: "user",
         content: "hello",
         contentType: "text",
+        rawContent: '{"text":"hello"}',
       }),
     });
     expect(result).toBeNull();
@@ -297,6 +300,7 @@ describe("resolveReactionSyntheticEvent", () => {
         senderType: "user",
         content: "hello",
         contentType: "text",
+        rawContent: '{"text":"hello"}',
       }),
       uuid: () => "fixed-uuid",
     });

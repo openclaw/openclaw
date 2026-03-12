@@ -571,6 +571,9 @@ function inferPlaceholder(messageType: string): string {
   }
 }
 
+/** Message types that carry downloadable media (images, files, etc.) */
+const FEISHU_MEDIA_MESSAGE_TYPES = ["image", "file", "audio", "video", "media", "sticker", "post"];
+
 /**
  * Resolve media from a Feishu message, downloading and saving to disk.
  * Similar to Discord's resolveMediaList().
@@ -587,8 +590,7 @@ async function resolveFeishuMediaList(params: {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
 
   // Only process media message types (including post for embedded images)
-  const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
-  if (!mediaTypes.includes(messageType)) {
+  if (!FEISHU_MEDIA_MESSAGE_TYPES.includes(messageType)) {
     return [];
   }
 
@@ -1227,8 +1229,6 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
-
     // Fetch quoted/replied message content if parentId exists
     let quotedContent: string | undefined;
     if (ctx.parentId) {
@@ -1243,11 +1243,38 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
           );
+
+          // Also resolve media from quoted message (images, files, etc.)
+          if (FEISHU_MEDIA_MESSAGE_TYPES.includes(quotedMsg.contentType)) {
+            try {
+              const quotedMediaList = await resolveFeishuMediaList({
+                cfg,
+                messageId: quotedMsg.messageId,
+                messageType: quotedMsg.contentType,
+                content: quotedMsg.rawContent,
+                maxBytes: mediaMaxBytes,
+                log,
+                accountId: account.accountId,
+              });
+              if (quotedMediaList.length > 0) {
+                mediaList.push(...quotedMediaList);
+                log(
+                  `feishu[${account.accountId}]: resolved ${quotedMediaList.length} media from quoted message`,
+                );
+              }
+            } catch (quotedMediaErr) {
+              log(
+                `feishu[${account.accountId}]: failed to resolve quoted message media: ${String(quotedMediaErr)}`,
+              );
+            }
+          }
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({
