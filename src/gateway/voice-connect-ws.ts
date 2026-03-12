@@ -21,6 +21,21 @@ async function handleVoiceConnectConnection(ws: WebSocket, _req: IncomingMessage
   // Minimal stub backend:
   // - Accepts JSON messages: config, call_start
   // - Responds with a browser_tts greeting so the UI can validate the pipeline.
+  // - Sends periodic WS pings to keep reverse proxies from idling out the connection.
+
+  const pingInterval = setInterval(() => {
+    try {
+      if (ws.readyState === 1 /* OPEN */) {
+        ws.ping();
+      }
+    } catch {
+      // ignore
+    }
+  }, 15_000);
+
+  ws.on("close", () => {
+    clearInterval(pingInterval);
+  });
 
   ws.on("message", (data, isBinary) => {
     if (isBinary) {
