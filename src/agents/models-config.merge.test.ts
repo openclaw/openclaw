@@ -55,6 +55,7 @@ describe("models-config merge helpers", () => {
     const merged = mergeProviders({
       explicit: {
         " custom ": {
+          baseUrl: "https://custom.example/v1",
           api: "openai-responses",
           models: [] as ProviderConfig["models"],
         } as ProviderConfig,

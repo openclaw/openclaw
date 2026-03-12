@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
@@ -6,6 +7,18 @@ import {
   resolveContextTokensForModel,
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
+
+function makeModel(id: string, contextWindow: number): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    contextWindow,
+    maxTokens: Math.min(contextWindow, 128_000),
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: false,
+  };
+}
 
 describe("applyDiscoveredContextWindows", () => {
   it("keeps the smallest context window when duplicate model ids are discovered", () => {
@@ -140,6 +153,69 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-haiku-3-5",
       fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
+  it("caps override by known model context window", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://example.com/v1",
+              models: [makeModel("gpt-5.4", 900_000)],
+            },
+          },
+        },
+      },
+      contextTokensOverride: 1_048_000,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(900_000);
+  });
+
+  it("prefers lower override when it is already below the model context window", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://example.com/v1",
+              models: [makeModel("gpt-5.4", 900_000)],
+            },
+          },
+        },
+      },
+      contextTokensOverride: 128_000,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(128_000);
+  });
+
+  it("caps override when provider alias resolves to a configured provider entry", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock.example.com",
+              models: [makeModel("us.anthropic.claude-opus-4-6-v1", 200_000)],
+            },
+          },
+        },
+      },
+      contextTokensOverride: 1_048_000,
+      provider: "bedrock",
+      model: "us.anthropic.claude-opus-4-6-v1",
+      fallbackContextTokens: 100_000,
     });
 
     expect(result).toBe(200_000);

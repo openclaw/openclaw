@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 type ModelEntry = { id: string; contextWindow?: number };
@@ -254,20 +255,39 @@ export function resolveContextTokensForModel(params: {
   contextTokensOverride?: number;
   fallbackContextTokens?: number;
 }): number | undefined {
-  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
-    return params.contextTokensOverride;
-  }
-
   const ref = resolveProviderModelRef({
     provider: params.provider,
     model: params.model,
   });
+  const override =
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? params.contextTokensOverride
+      : undefined;
+  let modelTokens: number | undefined;
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
-      return ANTHROPIC_CONTEXT_1M_TOKENS;
+      modelTokens = ANTHROPIC_CONTEXT_1M_TOKENS;
+    } else {
+      const configuredWindow = (() => {
+        const providers = params.cfg?.models?.providers;
+        const providerEntry = findNormalizedProviderValue(providers, ref.provider);
+        const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
+        const match = models.find((m) => m?.id === ref.model);
+        return typeof match?.contextWindow === "number" && match.contextWindow > 0
+          ? Math.floor(match.contextWindow)
+          : undefined;
+      })();
+      modelTokens =
+        configuredWindow ??
+        lookupContextTokens(`${ref.provider}/${ref.model}`) ??
+        lookupContextTokens(ref.model);
     }
   }
 
-  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
+  if (override !== undefined) {
+    return modelTokens !== undefined ? Math.min(override, modelTokens) : override;
+  }
+
+  return modelTokens ?? lookupContextTokens(params.model) ?? params.fallbackContextTokens;
 }
