@@ -151,8 +151,8 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
     const require = createRequire(import.meta.url);
     const geminiCliPackageJson = require.resolve("@google/gemini-cli/package.json");
     const packageRoot = dirname(geminiCliPackageJson);
-    candidates.unshift(packageRoot); // for nested dependencies
     candidates.unshift(dirname(dirname(dirname(packageRoot)))); // for sibling dependencies (global npm/pnpm)
+    candidates.unshift(packageRoot); // for nested dependencies (prioritize this)
   } catch {
     // ignore
   }
