@@ -9,7 +9,7 @@ read_when:
 
 # Release Checklist (npm + macOS)
 
-Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
+Use `pnpm` from the repo root with Node 24 by default. Node `22.12+` remains supported for compatibility. Keep the working tree clean before tagging/publishing.
 
 ## Operator trigger
 
