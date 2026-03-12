@@ -238,6 +238,52 @@ describe("ACP session transcript persistence", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
   });
 
+  it("preserves interrupted prompt-only history when a later ACP turn adds an assistant reply", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-interrupted.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-interrupted",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+
+    await persistAcpTurnTranscript({
+      body: "first prompt",
+      finalText: "",
+      sessionId: "sess-interrupted",
+      sessionKey: "agent:codex:acp:interrupted",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+    });
+
+    await persistAcpTurnTranscript({
+      body: "second prompt",
+      finalText: "assistant reply",
+      sessionId: "sess-interrupted",
+      sessionKey: "agent:codex:acp:interrupted",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+    });
+
+    const messages = readTranscriptMessages(sessionFile);
+    expect(messages).toHaveLength(3);
+    expect(messages).toMatchObject([
+      { role: "user", content: "first prompt" },
+      { role: "user", content: "second prompt" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant reply" }],
+      },
+    ]);
+  });
+
   it("flushes prompt-only transcripts even when SessionManager.isPersisted is unavailable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
     tempDirs.push(tempDir);

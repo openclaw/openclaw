@@ -231,6 +231,7 @@ async function forcePersistPromptOnlyTranscript(
   const manager = sessionManager as unknown as {
     isPersisted?: () => boolean;
     _rewriteFile?: () => Promise<void> | void;
+    flushed?: boolean;
   };
   if (typeof manager.isPersisted === "function" && !manager.isPersisted()) {
     return;
@@ -244,4 +245,5 @@ async function forcePersistPromptOnlyTranscript(
     return;
   }
   await manager._rewriteFile();
+  manager.flushed = true;
 }

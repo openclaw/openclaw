@@ -30,7 +30,6 @@ export async function prepareSessionManagerForRun(params: {
   };
 
   const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
-  const hasMessages = sm.fileEntries.some((e) => e.type === "message");
   const hasAssistant = sm.fileEntries.some(
     (e) => e.type === "message" && (e as SessionMessageEntry).message?.role === "assistant",
   );
@@ -42,13 +41,10 @@ export async function prepareSessionManagerForRun(params: {
     return;
   }
 
-  if (params.hadSessionFile && header && !hasAssistant && !hasMessages) {
-    // Reset file so the first assistant flush includes header+user+assistant in order.
+  if (params.hadSessionFile && header && !hasAssistant) {
+    // Truncate prompt-only session files so the next flush rewrites the complete
+    // in-memory transcript once an assistant message arrives.
     await fs.writeFile(params.sessionFile, "", "utf-8");
-    sm.fileEntries = [header];
-    sm.byId?.clear?.();
-    sm.labelsById?.clear?.();
-    sm.leafId = null;
     sm.flushed = false;
   }
 }
