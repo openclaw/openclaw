@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
 }));
 
+vi.mock("@mariozechner/pi-ai", () => ({
+  getOAuthProviders: () => [],
+  getOAuthApiKey: vi.fn(async () => null),
+}));
+
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));

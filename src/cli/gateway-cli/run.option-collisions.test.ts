@@ -1,9 +1,10 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -176,6 +177,20 @@ describe("gateway run option collisions", () => {
     await expect(runGatewayCli(argv)).rejects.toThrow("__exit__:1");
   }
 
+  async function withTempPasswordFile<T>(
+    password: string,
+    run: (params: { passwordFile: string }) => Promise<T>,
+  ): Promise<T> {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
+    const passwordFile = path.join(dir, "password.txt");
+    try {
+      await fsPromises.writeFile(passwordFile, password, "utf8");
+      return await run({ passwordFile });
+    } finally {
+      await fsPromises.rm(dir, { recursive: true, force: true });
+    }
+  }
+
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
     await runGatewayCli([
       "gateway",
@@ -258,21 +273,17 @@ describe("gateway run option collisions", () => {
   });
 
   it("reads gateway password from --password-file", async () => {
-    await withTempSecretFiles(
-      "openclaw-gateway-run-",
-      { password: "pw_from_file\n" },
-      async ({ passwordFile }) => {
-        await runGatewayCli([
-          "gateway",
-          "run",
-          "--auth",
-          "password",
-          "--password-file",
-          passwordFile ?? "",
-          "--allow-unconfigured",
-        ]);
-      },
-    );
+    await withTempPasswordFile("pw_from_file\n", async ({ passwordFile }) => {
+      await runGatewayCli([
+        "gateway",
+        "run",
+        "--auth",
+        "password",
+        "--password-file",
+        passwordFile ?? "",
+        "--allow-unconfigured",
+      ]);
+    });
 
     expect(startGatewayServer).toHaveBeenCalledWith(
       18789,
@@ -305,23 +316,19 @@ describe("gateway run option collisions", () => {
   });
 
   it("rejects using both --password and --password-file", async () => {
-    await withTempSecretFiles(
-      "openclaw-gateway-run-",
-      { password: "pw_from_file\n" },
-      async ({ passwordFile }) => {
-        await expect(
-          runGatewayCli([
-            "gateway",
-            "run",
-            "--password",
-            "pw_inline",
-            "--password-file",
-            passwordFile ?? "",
-            "--allow-unconfigured",
-          ]),
-        ).rejects.toThrow("__exit__:1");
-      },
-    );
+    await withTempPasswordFile("pw_from_file\n", async ({ passwordFile }) => {
+      await expect(
+        runGatewayCli([
+          "gateway",
+          "run",
+          "--password",
+          "pw_inline",
+          "--password-file",
+          passwordFile ?? "",
+          "--allow-unconfigured",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+    });
 
     expect(runtimeErrors).toContain("Use either --password or --password-file.");
   });
