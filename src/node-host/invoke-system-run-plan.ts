@@ -138,19 +138,16 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "--init-file",
   "--rcfile",
   "--startup-script",
-  "-O",
   "-o",
 ]);
 
 const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "--cache",
-  "--call",
   "--package",
   "--prefix",
   "--script-shell",
   "--userconfig",
   "--workspace",
-  "-c",
   "-p",
   "-w",
 ]);
