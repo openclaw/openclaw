@@ -2656,7 +2656,7 @@ description: test skill
     expectFinding(res, "hooks.default_session_key_unset", "warn");
   });
 
-  it("scores hooks.allowedAgentIds unset by gateway exposure", async () => {
+  it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
     const baseHooks = {
       enabled: true,
       token: "shared-gateway-token-1234567890",
@@ -2682,7 +2682,7 @@ description: test skill
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
         expect(
-          hasFinding(res, "hooks.allowed_agent_ids_unset", testCase.expectedSeverity),
+          hasFinding(res, "hooks.allowed_agent_ids_unrestricted", testCase.expectedSeverity),
           testCase.name,
         ).toBe(true);
       }),
@@ -2699,7 +2699,7 @@ description: test skill
       },
     });
 
-    expectFinding(res, "hooks.allowed_agent_ids_unset", "warn");
+    expectFinding(res, "hooks.allowed_agent_ids_unrestricted", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {
