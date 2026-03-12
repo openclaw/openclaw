@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_KILOCODE_EMBEDDING_MODEL } from "./embeddings-kilocode.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
@@ -20,6 +21,7 @@ import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
+  type KilocodeEmbeddingClient,
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
@@ -100,12 +102,20 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "kilocode";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
+  protected kilocode?: KilocodeEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -1102,7 +1112,8 @@ export abstract class MemoryManagerSyncOps {
       | "local"
       | "voyage"
       | "mistral"
-      | "ollama";
+      | "ollama"
+      | "kilocode";
 
     const fallbackModel =
       fallback === "gemini"
@@ -1115,7 +1126,9 @@ export abstract class MemoryManagerSyncOps {
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
               : fallback === "ollama"
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+                : fallback === "kilocode"
+                  ? DEFAULT_KILOCODE_EMBEDDING_MODEL
+                  : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1136,6 +1149,7 @@ export abstract class MemoryManagerSyncOps {
     this.voyage = fallbackResult.voyage;
     this.mistral = fallbackResult.mistral;
     this.ollama = fallbackResult.ollama;
+    this.kilocode = fallbackResult.kilocode;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });

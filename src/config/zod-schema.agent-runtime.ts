@@ -617,6 +617,7 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("kilocode"),
       ])
       .optional(),
     remote: z
@@ -645,6 +646,7 @@ export const MemorySearchSchema = z
         z.literal("voyage"),
         z.literal("mistral"),
         z.literal("ollama"),
+        z.literal("kilocode"),
         z.literal("none"),
       ])
       .optional(),

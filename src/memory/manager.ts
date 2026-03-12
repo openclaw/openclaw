@@ -12,6 +12,7 @@ import {
   type EmbeddingProvider,
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
+  type KilocodeEmbeddingClient,
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
@@ -72,8 +73,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     | "voyage"
     | "mistral"
     | "ollama"
+    | "kilocode"
     | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "kilocode";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
@@ -81,6 +90,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
+  protected kilocode?: KilocodeEmbeddingClient;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -214,6 +224,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.voyage = params.providerResult.voyage;
     this.mistral = params.providerResult.mistral;
     this.ollama = params.providerResult.ollama;
+    this.kilocode = params.providerResult.kilocode;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();

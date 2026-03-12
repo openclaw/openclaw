@@ -12,6 +12,10 @@ import {
   type GeminiTaskType,
 } from "./embeddings-gemini.js";
 import {
+  createKilocodeEmbeddingProvider,
+  type KilocodeEmbeddingClient,
+} from "./embeddings-kilocode.js";
+import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
@@ -21,6 +25,7 @@ import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./emb
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { KilocodeEmbeddingClient } from "./embeddings-kilocode.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
@@ -35,14 +40,27 @@ export type EmbeddingProvider = {
   embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "kilocode";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = [
+  "openai",
+  "gemini",
+  "voyage",
+  "mistral",
+  "kilocode",
+] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -55,6 +73,7 @@ export type EmbeddingProviderResult = {
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
+  kilocode?: KilocodeEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -175,6 +194,10 @@ export async function createEmbeddingProvider(
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
+    }
+    if (id === "kilocode") {
+      const { provider, client } = await createKilocodeEmbeddingProvider(options);
+      return { provider, kilocode: client };
     }
     if (id === "ollama") {
       const { provider, client } = await createOllamaEmbeddingProvider(options);
