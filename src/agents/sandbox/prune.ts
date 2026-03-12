@@ -58,7 +58,13 @@ async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry
       // ignore prune failures
     } finally {
       await params.remove(entry.containerName);
-      await params.onRemoved?.(entry);
+      // Guard against race: only delete workspace if the container hasn't been re-registered
+      // between the registry removal and now.
+      const current = await params.read();
+      const reregistered = current.entries.some((e) => e.containerName === entry.containerName);
+      if (!reregistered) {
+        await params.onRemoved?.(entry);
+      }
     }
   }
 }
@@ -76,7 +82,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
           await fs.rm(workspaceDir, { recursive: true, force: true });
         } catch (error) {
           const code = (error as { code?: string })?.code;
-          if (code !== "ENOENT" && code !== "ENOTDIR") {
+          if (code !== "ENOTDIR") {
             defaultRuntime.error?.(
               `Failed to remove sandbox workspace directory ${workspaceDir}: ${String(error)}`,
             );
