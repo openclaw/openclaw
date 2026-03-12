@@ -686,17 +686,17 @@ describe("agentCommand", () => {
     });
   });
 
-  it("falls back to session entry channel when messageChannel is not resolved", async () => {
+  it("falls back to session entry lastChannel when messageChannel is not resolved", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:discord:stored-channel-test";
-      // Pre-populate session store with a channel on the entry
+      // Pre-populate session store with lastChannel (set by updateLastRoute)
       fs.writeFileSync(
         store,
         JSON.stringify({
           [sessionKey]: {
             sessionId: "session-stored-channel",
-            channel: "discord",
+            lastChannel: "discord",
             updatedAt: Date.now(),
           },
         }),

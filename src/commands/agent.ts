@@ -20,7 +20,7 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
@@ -1217,7 +1217,13 @@ async function agentCommandInternal(
       const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
       const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
       const contextTokensUsed =
-        agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+        resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: agentCfg?.contextTokens,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        }) ?? DEFAULT_CONTEXT_TOKENS;
       const costUsd = estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({ provider: providerUsed, model: modelUsed, config: cfg }),
@@ -1226,7 +1232,7 @@ async function agentCommandInternal(
         type: "model.usage",
         sessionKey: sessionKey ?? sessionId,
         sessionId,
-        channel: messageChannel ?? sessionEntry?.channel,
+        channel: messageChannel ?? sessionEntry?.lastChannel ?? sessionEntry?.channel,
         provider: providerUsed,
         model: modelUsed,
         usage: {
