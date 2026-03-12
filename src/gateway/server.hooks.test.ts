@@ -208,6 +208,29 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("propagates accountId into job.delivery via cron normalization pipeline", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Send via WhatsApp",
+        name: "WA Hook",
+        channel: "whatsapp",
+        to: "1234567890",
+        accountId: "botnumber",
+      });
+      expect(res.status).toBe(200);
+      await waitForSystemEvent();
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        job?: { delivery?: { accountId?: string; mode?: string }; payload?: { channel?: string } };
+      };
+      expect(call?.job?.delivery?.accountId).toBe("botnumber");
+      expect(call?.job?.delivery?.mode).toBe("announce");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

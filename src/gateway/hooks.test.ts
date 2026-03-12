@@ -158,6 +158,29 @@ describe("gateway hooks helpers", () => {
     }
   });
 
+  test("normalizeAgentPayload extracts and trims accountId", () => {
+    const withAccount = normalizeAgentPayload({
+      message: "hello",
+      accountId: "  botnumber  ",
+    });
+    expect(withAccount.ok).toBe(true);
+    if (withAccount.ok) {
+      expect(withAccount.value.accountId).toBe("botnumber");
+    }
+
+    const noAccount = normalizeAgentPayload({ message: "hello" });
+    expect(noAccount.ok).toBe(true);
+    if (noAccount.ok) {
+      expect(noAccount.value.accountId).toBeUndefined();
+    }
+
+    const blankAccount = normalizeAgentPayload({ message: "hello", accountId: "  " });
+    expect(blankAccount.ok).toBe(true);
+    if (blankAccount.ok) {
+      expect(blankAccount.value.accountId).toBeUndefined();
+    }
+  });
+
   test("resolveHookTargetAgentId falls back to default for unknown agent ids", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
