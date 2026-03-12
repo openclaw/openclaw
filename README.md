@@ -429,7 +429,7 @@ QVerisBot is built on OpenClaw. For deep architecture, channel internals, platfo
 - **Bot migration (cross-OS):** see [Migrating Your Bot](#migrating-your-bot) above — `qverisbot migrate export|import|doctor`
 - **QVeris AI integrations:** https://qveris.ai/integrations
 - **QVeris dashboard / API keys:** https://qveris.ai/dashboard
-- **QVeris tool routing:** see [How the agent uses QVeris tools](#how-the-agent-uses-qveris-tools) above — `qveris_discover`, `qveris_invoke`, `qveris_inspect`
+- **QVeris tool routing:** see [How the agent uses QVeris tools](#how-the-agent-uses-qveris-tools) above — `qveris_discover`, `qveris_call`, `qveris_inspect`
 
 ## About QVerisBot
 
