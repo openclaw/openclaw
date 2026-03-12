@@ -220,6 +220,7 @@ type MutableSession = {
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
+  setThinkingLevel: (level: string) => void;
   agent: {
     streamFn?: unknown;
     replaceMessages: (messages: unknown[]) => void;
@@ -298,6 +299,7 @@ function createDefaultEmbeddedSession(params?: {
     messages: [],
     isCompacting: false,
     isStreaming: false,
+    setThinkingLevel: () => {},
     agent: {
       replaceMessages: (messages: unknown[]) => {
         session.messages = [...messages];
@@ -447,6 +449,76 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
         workspaceDir: sandboxWorkspace,
       }),
     );
+  });
+
+  it("preserves caller-provided thinkLevel when it differs from stored session thinking", async () => {
+    const realWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-think-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-think-agent-dir-"));
+    tempPaths.push(realWorkspace, agentDir);
+
+    const sessionStorePath = path.join(realWorkspace, "sessions-{agentId}.json");
+    await fs.writeFile(
+      path.join(realWorkspace, "sessions-main.json"),
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "embedded-session",
+          updatedAt: Date.now(),
+          thinkingLevel: "high",
+        },
+      }),
+    );
+
+    hoisted.resolveSandboxContextMock.mockResolvedValue(undefined);
+    hoisted.createAgentSessionMock.mockImplementation(async (params: { thinkingLevel: string }) => {
+      expect(params.thinkingLevel).toBe("off");
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: () => {},
+        },
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+        setThinkingLevel: () => {},
+      };
+      return { session };
+    });
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai",
+      compat: {},
+      contextWindow: 8192,
+      input: ["text"],
+      reasoning: true,
+      name: "GPT Test",
+    } as unknown as Model<Api>;
+
+    await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile: path.join(realWorkspace, "session.jsonl"),
+      workspaceDir: realWorkspace,
+      agentDir,
+      config: { session: { store: sessionStorePath } },
+      prompt: "retry with lower thinking",
+      timeoutMs: 10_000,
+      runId: "run-1",
+      provider: "openai",
+      modelId: "gpt-test",
+      model,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+
+    expect(hoisted.createAgentSessionMock).toHaveBeenCalled();
   });
 });
 
