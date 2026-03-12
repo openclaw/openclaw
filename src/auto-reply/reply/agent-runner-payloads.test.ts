@@ -195,10 +195,10 @@ describe("buildReplyPayloads media filter integration", () => {
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.
-    const { createBlockReplyPayloadKey } = await import("./block-reply-pipeline.js");
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
     const directlySentBlockKeys = new Set<string>();
     directlySentBlockKeys.add(
-      createBlockReplyPayloadKey({ text: "response", replyToId: "post-1" }),
+      createBlockReplyContentKey({ text: "response", replyToId: "post-1" }),
     );
 
     const { replyPayloads } = await buildReplyPayloads({

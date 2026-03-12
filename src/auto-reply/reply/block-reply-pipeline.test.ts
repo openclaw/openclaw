@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { createBlockReplyPayloadKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import {
+  createBlockReplyContentKey,
+  createBlockReplyPayloadKey,
+  createBlockReplyPipeline,
+} from "./block-reply-pipeline.js";
 
 describe("createBlockReplyPayloadKey", () => {
-  it("produces the same key for payloads differing only by replyToId", () => {
+  it("produces different keys for payloads differing only by replyToId", () => {
     const a = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-1" });
     const b = createBlockReplyPayloadKey({ text: "hello world", replyToId: "post-2" });
     const c = createBlockReplyPayloadKey({ text: "hello world" });
-    expect(a).toBe(b);
-    expect(a).toBe(c);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
   });
 
   it("produces different keys for payloads with different text", () => {
@@ -29,8 +33,18 @@ describe("createBlockReplyPayloadKey", () => {
   });
 });
 
+describe("createBlockReplyContentKey", () => {
+  it("produces the same key for payloads differing only by replyToId", () => {
+    const a = createBlockReplyContentKey({ text: "hello world", replyToId: "post-1" });
+    const b = createBlockReplyContentKey({ text: "hello world", replyToId: "post-2" });
+    const c = createBlockReplyContentKey({ text: "hello world" });
+    expect(a).toBe(b);
+    expect(a).toBe(c);
+  });
+});
+
 describe("createBlockReplyPipeline dedup with threading", () => {
-  it("deduplicates payloads with same text but different replyToId", async () => {
+  it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (payload) => {
@@ -43,9 +57,10 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     pipeline.enqueue({ text: "response text", replyToId: undefined });
     await pipeline.flush();
 
-    // Only one delivery should happen despite different replyToId
-    expect(sent).toHaveLength(1);
-    expect(sent[0].text).toBe("response text");
+    expect(sent).toEqual([
+      { text: "response text", replyToId: "thread-root-1" },
+      { text: "response text", replyToId: undefined },
+    ]);
   });
 
   it("hasSentPayload matches regardless of replyToId", async () => {
