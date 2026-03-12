@@ -1,4 +1,6 @@
-import { createAsyncLock } from "../utils/async-lock";
+import { createAsyncLock } from "../utils/async-lock.js";
+
+export { createAsyncLock };
 
 // Type definition for file locks
 type FileLock = {
@@ -96,11 +98,10 @@ export async function writeToFileWithLock(
     const mode = options?.mode ?? 0o600; // Default to owner-only read/write
     const payload = options?.trailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
 
-    const mkdirOptions = { recursive: true };
-    if (typeof options?.ensureDirMode === "number") {
-      mkdirOptions.mode = options.ensureDirMode;
-    }
-
+    const mkdirOptions = {
+      recursive: true,
+      mode: typeof options?.ensureDirMode === "number" ? options.ensureDirMode : undefined,
+    };
     await fs.mkdir(path.dirname(filePath), mkdirOptions);
     const tmp = `${filePath}.${crypto.randomUUID()}.tmp`;
 

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileLocker } from "../infra/json-files.js";
+import { fileLocker } from "../infra/file-locker.js";
 
 // Interface for workspace options
 export interface WorkspaceOptions {
@@ -158,7 +158,7 @@ class WorkspaceManager {
             // Original file doesn't exist, so copy
             shouldCopy = true;
           }
-        } else if (mergeStrategy === "backup" && mergeStrategy !== "overwrite") {
+        } else if (mergeStrategy === "backup") {
           try {
             const originalStats = await fs.stat(originalPath);
             // If original file is newer, decide whether to backup or skip
@@ -200,7 +200,7 @@ class WorkspaceManager {
       return;
     }
 
-    if (workspace.isIsolated && (force || workspace.isolated)) {
+    if (workspace.isIsolated && (force || workspace.isIsolated)) {
       try {
         await fs.rm(workspace.workspacePath, { recursive: true, force: true });
       } catch (err) {

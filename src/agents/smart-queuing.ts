@@ -204,7 +204,7 @@ class SmartQueue {
     // Check if one is a subdirectory of the other
     const isSubPath = (parent: string, child: string) => {
       const relative = path.relative(parent, child);
-      return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+      return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
     };
 
     return isSubPath(path1, path2) || isSubPath(path2, path1);

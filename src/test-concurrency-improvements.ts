@@ -1,7 +1,13 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { fileLocker, executeWithFileTracking, smartQueue } from "./enhanced-concurrency.js";
+import {
+  fileLocker,
+  runInAgentWorkspace,
+  executeWithFileTracking,
+  smartQueue,
+  executeWithSelectiveConcurrency,
+} from "./enhanced-concurrency.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,7 +78,7 @@ async function testConcurrencyImprovements() {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return "read result";
       },
-      priority: "normal" as const,
+      priority: 5 as const,
     },
     {
       type: "write" as const,
@@ -80,7 +86,7 @@ async function testConcurrencyImprovements() {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return "write result";
       },
-      priority: "high" as const,
+      priority: 1 as const, // high priority (lower number)
     },
     {
       type: "io" as const,
@@ -88,7 +94,7 @@ async function testConcurrencyImprovements() {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return "io result";
       },
-      priority: "normal" as const,
+      priority: 5 as const,
     },
     {
       type: "compute" as const,
@@ -96,7 +102,7 @@ async function testConcurrencyImprovements() {
         await new Promise((resolve) => setTimeout(resolve, 100));
         return "compute result";
       },
-      priority: "low" as const,
+      priority: 10 as const, // low priority (higher number)
     },
   ];
 
@@ -105,7 +111,7 @@ async function testConcurrencyImprovements() {
       executeWithSelectiveConcurrency({
         type: op.type,
         fn: op.fn,
-        priority: op.priority,
+        priority: 5, // numeric priority
       }),
     ),
   );

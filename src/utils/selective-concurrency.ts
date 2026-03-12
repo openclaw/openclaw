@@ -1,4 +1,4 @@
-import { createAsyncLock } from "./async-lock";
+import { createAsyncLock } from "./async-lock.js";
 
 // Types for operation classifications
 export type OperationType = "read" | "write" | "io" | "compute" | "network";
@@ -18,7 +18,7 @@ export type Operation<T = unknown> = {
 // Represents a pending operation
 type PendingOperation<T = unknown> = {
   op: Operation<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
+  resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
 };
 
@@ -40,6 +40,10 @@ class SelectiveConcurrencyManager {
 
   // Operation ID tracking
   private activeOperations: Map<string, OperationType> = new Map();
+
+  // Completed and failed operations for dependency tracking
+  private completedOperations: Map<string, unknown> = new Map();
+  private failedOperations: Map<string, Error> = new Map();
 
   // Default concurrency limits
   private limits: ConcurrencyLimits = {
@@ -96,7 +100,7 @@ class SelectiveConcurrencyManager {
 
       // Add operation to the appropriate queue
       const queue = this.queues.get(opType) || [];
-      queue.push({ op: operation, resolve, reject });
+      queue.push({ op: operation, resolve: resolve as (value: unknown) => void, reject });
       this.queues.set(opType, queue);
 
       // Attempt to process the queue
@@ -117,11 +121,10 @@ class SelectiveConcurrencyManager {
 
     await lock(async () => {
       const queue = this.queues.get(type) || [];
-      const runningCount = this.running.get(type) || 0;
       const limit = this.getLimit(type);
 
       // Process operations while we have capacity and work available
-      while (runningCount < limit && queue.length > 0) {
+      while ((this.running.get(type) || 0) < limit && queue.length > 0) {
         // Find next eligible operation (one without unsatisfied dependencies)
         const nextOpIndex = this.findNextEligibleOperation(queue);
 
@@ -166,8 +169,15 @@ class SelectiveConcurrencyManager {
 
       // Check if all dependencies are satisfied
       const allSatisfied = op.dependencies.every((depId) => {
-        // A dependency is satisfied if it's not in the active operations map
-        return !this.activeOperations.has(depId);
+        // A dependency is satisfied if:
+        // 1. It's not currently running AND
+        // 2. It has completed successfully (not failed)
+        const isRunning = this.activeOperations.has(depId);
+        const isCompleted = this.completedOperations.has(depId);
+        const isFailed = this.failedOperations.has(depId);
+
+        // Dependency is satisfied if it has completed successfully and is not running
+        return !isRunning && isCompleted && !isFailed;
       });
 
       if (allSatisfied) {
@@ -187,7 +197,16 @@ class SelectiveConcurrencyManager {
     try {
       const result = await pendingOp.op.fn();
       pendingOp.resolve(result);
+
+      // Track successful completion if the operation has an ID
+      if (pendingOp.op.id) {
+        this.completedOperations.set(pendingOp.op.id, result);
+      }
     } catch (error) {
+      // Track the failure
+      if (pendingOp.op.id) {
+        this.failedOperations.set(pendingOp.op.id, error as Error);
+      }
       pendingOp.reject(error);
     } finally {
       // Decrement running counter
