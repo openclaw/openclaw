@@ -74,6 +74,37 @@ describe("INTER_SESSION_CHANNEL sentinel routing", () => {
     ).toBeUndefined();
   });
 
+  it("returns undefined from resolveLastToRaw when channel will be resolved via session-key hint (Codex P1 fix)", () => {
+    // Scenario: persisted state is webchat (not external), so resolveLastChannelRaw
+    // falls back to the session-key hint and returns "discord". Blindly returning
+    // persistedLastTo here would create a mismatched lastChannel/lastTo pair
+    // (discord channel + stale webchat target). The sentinel must return undefined
+    // so the caller can derive an appropriate target from the new channel.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        originatingToRaw: "channel:sender-discord-channel",
+        persistedLastChannel: "webchat",
+        persistedLastTo: "session:stale-webchat-target",
+        sessionKey: "agent:navi:discord:direct:channel:123",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves persistedLastTo when persisted channel is already external (consistent pair)", () => {
+    // When the receiver already has an established external route (e.g. discord),
+    // both channel and to come from persisted state — no mismatch risk.
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: INTER_SESSION_CHANNEL,
+        originatingToRaw: "channel:sender-channel",
+        persistedLastChannel: "discord",
+        persistedLastTo: "channel:receiver-discord-channel",
+        sessionKey: "agent:navi:main",
+      }),
+    ).toBe("channel:receiver-discord-channel");
+  });
+
   it("does not treat a real deliverable channel named 'inter_session' as the sentinel (Codex P2 guard)", () => {
     // isInterSessionChannel guards against plugin channel collision:
     // if a real channel plugin registers with id="inter_session", it must not
