@@ -204,6 +204,57 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
   }
 }
 
+function handleDrop(e: DragEvent, props: ChatProps) {
+  if (!props.onAttachmentsChange) {
+    return;
+  }
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) {
+    return;
+  }
+
+  // Prevent default as soon as we know files are present, so non-image drops
+  // don't trigger browser navigation to the dropped file.
+  e.preventDefault();
+
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  // Batch all FileReader results before updating attachments. Reading
+  // props.attachments inside each individual callback would race: all
+  // callbacks capture the same pre-drop snapshot and each replacement
+  // overwrites the previous, so only the last-read image would survive.
+  const pending = Array.from<ChatAttachment>({ length: imageFiles.length });
+  let loaded = 0;
+  imageFiles.forEach((file, index) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      pending[index] = {
+        id: generateAttachmentId(),
+        dataUrl: reader.result as string,
+        mimeType: file.type,
+      };
+      loaded++;
+      if (loaded === imageFiles.length) {
+        // Read props.attachments once here, after all files are ready, to
+        // pick up any attachment changes that happened during the reads.
+        props.onAttachmentsChange?.([...(props.attachments ?? []), ...pending]);
+      }
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
 function renderAttachmentPreview(props: ChatProps) {
   const attachments = props.attachments ?? [];
   if (attachments.length === 0) {
@@ -254,7 +305,7 @@ export function renderChat(props: ChatProps) {
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : "Message (↩ to send, Shift+↩ for line breaks, paste images)"
+      : "Message (↩ to send, Shift+↩ for line breaks, paste or drag images)"
     : "Connect to the gateway to start chatting…";
 
   const splitRatio = props.splitRatio ?? 0.6;
@@ -455,6 +506,12 @@ export function renderChat(props: ChatProps) {
                 props.onDraftChange(target.value);
               }}
               @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+              @dragover=${(e: DragEvent) => {
+                if (e.dataTransfer?.types.includes("Files")) {
+                  e.preventDefault();
+                }
+              }}
+              @drop=${(e: DragEvent) => handleDrop(e, props)}
               placeholder=${composePlaceholder}
             ></textarea>
           </label>
