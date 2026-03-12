@@ -1015,6 +1015,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+  "agents.defaults.compaction.provider":
+    'Compaction provider: "default" uses LLM-based summarization, "morph" uses the Morph fast compaction API (25k+ tok/s, sub-300ms). Falls back to LLM summarization if Morph API is unavailable.',
+  "agents.defaults.compaction.morphApiUrl":
+    "Base URL for the Morph compaction API. Defaults to https://api.morphllm.com when not set.",
+  "agents.defaults.compaction.morphApiKey":
+    "API key for the Morph compaction API. Use this to set the key in config, or define the MORPH_API_KEY environment variable instead.",
+  "agents.defaults.compaction.compressionRatio":
+    "Target compression ratio for Morph compaction (0.05–1.0, default: 0.3). Lower values produce more aggressive compression; higher values retain more detail.",
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":

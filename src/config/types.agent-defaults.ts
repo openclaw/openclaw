@@ -329,6 +329,14 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
+  /** Compaction provider ("default" uses LLM-based summarization, "morph" uses Morph's fast compaction API). */
+  provider?: "default" | "morph";
+  /** Morph API base URL (default: "https://api.morphllm.com"). Falls back to MORPH_API_URL env var. */
+  morphApiUrl?: string;
+  /** Morph API key. Falls back to MORPH_API_KEY env var. */
+  morphApiKey?: string;
+  /** Compression ratio for Morph compaction (0.05–1.0, default: 0.3). Lower = more compression. */
+  compressionRatio?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

@@ -87,6 +87,10 @@ export const AgentDefaultsSchema = z
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+        provider: z.union([z.literal("default"), z.literal("morph")]).optional(),
+        morphApiUrl: z.string().optional(),
+        morphApiKey: z.string().optional(),
+        compressionRatio: z.number().min(0.05).max(1).optional(),
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),

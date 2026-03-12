@@ -7,6 +7,14 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
 import {
+  MORPH_DEFAULT_API_URL,
+  MORPH_DEFAULT_COMPRESSION_RATIO,
+  MORPH_DEFAULT_MODEL,
+  MORPH_DEFAULT_TIMEOUT_MS,
+  summarizeWithMorph,
+} from "../compaction-morph/index.js";
+import type { MorphCompactConfig } from "../compaction-morph/index.js";
+import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
   MIN_CHUNK_RATIO,
@@ -54,6 +62,89 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+
+/**
+ * Resolve Morph compaction config from runtime values and env vars.
+ * Returns undefined if no API key is available (config or MORPH_API_KEY env).
+ */
+function resolveMorphConfig(runtime: {
+  morphApiUrl?: string;
+  morphApiKey?: string;
+  compressionRatio?: number;
+}): MorphCompactConfig | undefined {
+  const apiKey = runtime.morphApiKey || process.env.MORPH_API_KEY;
+  if (!apiKey) {
+    return undefined;
+  }
+  const apiUrl = runtime.morphApiUrl || process.env.MORPH_API_URL || MORPH_DEFAULT_API_URL;
+  const compressionRatio =
+    typeof runtime.compressionRatio === "number" &&
+    Number.isFinite(runtime.compressionRatio) &&
+    runtime.compressionRatio >= 0.05 &&
+    runtime.compressionRatio <= 1.0
+      ? runtime.compressionRatio
+      : MORPH_DEFAULT_COMPRESSION_RATIO;
+
+  return {
+    apiUrl: apiUrl.replace(/\/+$/, ""), // strip trailing slashes
+    apiKey,
+    model: MORPH_DEFAULT_MODEL,
+    compressionRatio,
+    timeout: MORPH_DEFAULT_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Unified summarization function that delegates to Morph or LLM-based summarizeInStages
+ * based on the provider config. Keeps the same return type (Promise<string>).
+ */
+async function summarizeMessages(params: {
+  messages: AgentMessage[];
+  morphConfig: MorphCompactConfig | undefined;
+  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>;
+  apiKey: string;
+  signal: AbortSignal;
+  reserveTokens: number;
+  maxChunkTokens: number;
+  contextWindow: number;
+  customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
+  previousSummary?: string;
+}): Promise<string> {
+  if (params.morphConfig) {
+    try {
+      return await summarizeWithMorph({
+        messages: params.messages,
+        config: params.morphConfig,
+        signal: params.signal,
+      });
+    } catch (err) {
+      // Abort/timeout errors should not fall through — the caller requested cancellation.
+      if (
+        err instanceof DOMException &&
+        (err.name === "AbortError" || err.name === "TimeoutError")
+      ) {
+        throw err;
+      }
+      log.warn(
+        `Morph compaction failed, falling back to LLM: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // Fall through to LLM summarization below
+    }
+  }
+  return summarizeInStages({
+    messages: params.messages,
+    model: params.model,
+    apiKey: params.apiKey,
+    signal: params.signal,
+    reserveTokens: params.reserveTokens,
+    maxChunkTokens: params.maxChunkTokens,
+    contextWindow: params.contextWindow,
+    customInstructions: params.customInstructions,
+    summarizationInstructions: params.summarizationInstructions,
+    previousSummary: params.previousSummary,
+  });
+}
 
 type ToolFailure = {
   toolCallId: string;
@@ -720,6 +811,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       identifierInstructions: runtime?.identifierInstructions,
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
+    const useMorph = runtime?.provider === "morph";
+
+    // Resolve Morph config when provider is "morph". If the config is incomplete
+    // (e.g. missing API key), fall through to LLM-based summarization.
+    const morphConfig = useMorph ? resolveMorphConfig(runtime) : undefined;
+    if (useMorph && !morphConfig) {
+      log.warn(
+        "Compaction safeguard: Morph provider configured but no API key found " +
+          "(set compaction.morphApiKey or MORPH_API_KEY env var). Falling back to LLM summarization.",
+      );
+    }
+
+    // Model and API key are always required: even when Morph is the primary
+    // compaction provider, the LLM path is used as a fallback when Morph fails.
     const model = ctx.model ?? runtime?.model;
     if (!model) {
       // Log warning once per session when both models are missing (diagnostic for future issues).
@@ -801,8 +906,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await summarizeInStages({
+                droppedSummary = await summarizeMessages({
                   messages: pruned.droppedMessagesList,
+                  morphConfig,
                   model,
                   apiKey,
                   signal,
@@ -868,8 +974,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           const historySummary =
             messagesToSummarize.length > 0
-              ? await summarizeInStages({
+              ? await summarizeMessages({
                   messages: messagesToSummarize,
+                  morphConfig,
                   model,
                   apiKey,
                   signal,
@@ -884,8 +991,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await summarizeInStages({
+            const prefixSummary = await summarizeMessages({
               messages: turnPrefixMessages,
+              morphConfig,
               model,
               apiKey,
               signal,
