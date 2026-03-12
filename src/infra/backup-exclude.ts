@@ -226,11 +226,11 @@ export async function resolveExcludePatterns(
     }
   }
 
-  // Validate counts and user-supplied pattern complexity.
+  // Validate counts and pattern complexity for ALL sources (CLI, .backupignore, --exclude-file).
   if (deduplicated.length > MAX_PATTERN_COUNT) {
     throw new Error(`Too many exclude patterns: ${deduplicated.length} (max ${MAX_PATTERN_COUNT})`);
   }
-  for (const p of spec.exclude) {
+  for (const p of deduplicated) {
     validatePattern(p);
   }
 

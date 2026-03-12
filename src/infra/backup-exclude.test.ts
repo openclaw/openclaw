@@ -328,6 +328,15 @@ describe("resolveExcludePatterns", () => {
     );
   });
 
+  // Finding 10: pattern validation applies to all sources
+  it("rejects too-long pattern from .backupignore (not just CLI)", async () => {
+    const backupignore = path.join(tempDir, ".backupignore");
+    await fs.writeFile(backupignore, `${"*".repeat(257)}\n`, "utf8");
+    await fs.chmod(backupignore, 0o644);
+
+    await expect(resolveExcludePatterns(makeSpec(), tempDir)).rejects.toThrow(/too long/i);
+  });
+
   // .backupignore auto-detection
   it(".backupignore auto-loaded from stateDir when present", async () => {
     const backupignore = path.join(tempDir, ".backupignore");
