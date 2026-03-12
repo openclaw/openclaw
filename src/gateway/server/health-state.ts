@@ -1,4 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getLatestCortexCaptureHistoryEntrySync } from "../../agents/cortex-history.js";
+import { resolveAgentCortexConfig } from "../../agents/cortex.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { STATE_DIR, createConfigIO, loadConfig } from "../../config/config.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
@@ -18,6 +20,10 @@ export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const configPath = createConfigIO().configPath;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const cortex = resolveAgentCortexConfig(cfg, defaultAgentId);
+  const latestCortexCapture = cortex
+    ? getLatestCortexCaptureHistoryEntrySync({ agentId: defaultAgentId })
+    : null;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const mainSessionKey = resolveMainSessionKey(cfg);
   const scope = cfg.session?.scope ?? "per-sender";
@@ -43,6 +49,17 @@ export function buildGatewaySnapshot(): Snapshot {
     },
     authMode: auth.mode,
     updateAvailable,
+    cortex: cortex
+      ? {
+          enabled: true,
+          mode: cortex.mode,
+          graphPath: cortex.graphPath,
+          lastCaptureAtMs: latestCortexCapture?.timestamp,
+          lastCaptureReason: latestCortexCapture?.reason,
+          lastCaptureStored: latestCortexCapture?.captured,
+          lastSyncPlatforms: latestCortexCapture?.syncPlatforms,
+        }
+      : undefined,
   };
 }
 
