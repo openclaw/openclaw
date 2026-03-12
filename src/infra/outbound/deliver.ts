@@ -820,6 +820,7 @@ async function deliverOutboundPayloadsCore(
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
+        idempotencyKey: params.mirror.idempotencyKey,
       });
     }
   }

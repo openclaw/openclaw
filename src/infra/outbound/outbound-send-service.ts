@@ -36,6 +36,7 @@ export type OutboundSendContext = {
     agentId?: string;
     text?: string;
     mediaUrls?: string[];
+    idempotencyKey?: string;
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
@@ -115,6 +116,7 @@ export async function executeSendAction(params: {
         sessionKey: params.ctx.mirror.sessionKey,
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
+        idempotencyKey: params.ctx.mirror.idempotencyKey,
       });
     },
   });

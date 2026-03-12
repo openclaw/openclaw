@@ -324,6 +324,40 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
   });
+
+  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
+    const sessionId = "test-session-id";
+    const sessionKey = "test-session";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+
+    const messageLine = JSON.parse(lines[1]);
+    expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
+    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
 });
 
 describe("resolveAndPersistSessionFile", () => {
