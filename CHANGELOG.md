@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs/Kubernetes: Add a starter K8s install path with raw manifests, Kind setup, and deployment docs. Thanks @sallyom @dzianisv @egkristi
+- Gateway/Control UI: add a Russian (`ru-RU`) locale pack for the Control UI and auto-detect Russian browser locales in the dashboard language picker. Thanks @vitalcc55.
 
 ### Fixes
 
