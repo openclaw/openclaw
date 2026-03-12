@@ -239,7 +239,7 @@ const MARKDOWN_LINE_RULES: MarkdownLineRule[] = [
     ruleId: "prompt-injection-role-play",
     severity: "warn",
     message: "Prompt injection: role reassignment attempt detected",
-    pattern: /you\s+are\s+now\s+(a\s+)?(?!an?\s+(expert|helpful|skilled))/i,
+    pattern: /you\s+are\s+now\s+(?!an?\s+(expert|helpful|skilled)\b)/i,
   },
   {
     ruleId: "prompt-injection-reveal",

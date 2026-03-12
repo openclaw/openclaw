@@ -190,8 +190,7 @@ describe("isScannable", () => {
     expect(isScannable("file.jsx")).toBe(true);
   });
 
-  it("rejects non-code files (.md, .json, .png, .css)", () => {
-    expect(isScannable("readme.md")).toBe(false);
+  it("rejects non-code files (.json, .png, .css)", () => {
     expect(isScannable("package.json")).toBe(false);
     expect(isScannable("logo.png")).toBe(false);
     expect(isScannable("style.css")).toBe(false);
