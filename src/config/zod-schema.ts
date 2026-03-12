@@ -696,6 +696,7 @@ export const OpenClawSchema = z
           .optional(),
         remote: z
           .object({
+            enabled: z.boolean().optional(),
             url: z.string().optional(),
             transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
             token: SecretInputSchema.optional().register(sensitive),
