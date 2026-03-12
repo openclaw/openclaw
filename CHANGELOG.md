@@ -65,7 +65,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
 - Git/runtime state: ignore the gateway-generated `.dev-state` file so local runtime state does not show up as untracked repo noise. (#41848) Thanks @smysle.
 - Exec/child commands: mark child command environments with `OPENCLAW_CLI` so subprocesses can detect when they were launched from the OpenClaw CLI. (#41411) Thanks @vincentkoc.
-  <<<<<<< HEAD
 - LLM Task/Lobster: add an optional `thinking` override so workflow calls can explicitly set embedded reasoning level with shared validation for invalid values and unsupported `xhigh` modes. (#15606) Thanks @xadenryan and @ImLukeF.
 - Mattermost/reply threading: add `channels.mattermost.replyToMode` for channel and group messages so top-level posts can start thread-scoped sessions without the manual reply-then-thread workaround. (#29587) Thanks @teconomix.
 
@@ -247,6 +246,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: recognize additional serialized network errno strings plus `EHOSTDOWN` and `EPIPE` structured codes so transient transport failures trigger timeout failover more reliably. (#42830) Thanks @jnMetaCode.
 - Telegram/model picker: make inline model button selections persist the chosen session model correctly, clear overrides when selecting the configured default, and include effective fallback models in `/models` button validation. (#40105) Thanks @avirweb.
 - Agents/embedded runner: carry provider-observed overflow token counts into compaction so overflow retries and diagnostics use the rejected live prompt size instead of only transcript estimates. (#40357) thanks @rabsef-bicrym.
+- Agents/compaction transcript updates: emit a transcript-update event immediately after successful embedded compaction so downstream listeners observe the post-compact transcript without waiting for a later write. (#25558) thanks @rodrigouroz.
 
 ## 2026.3.7
 
