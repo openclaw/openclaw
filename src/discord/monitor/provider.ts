@@ -48,7 +48,11 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
-import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
+import {
+  DiscordVoiceManager,
+  DiscordVoiceReadyListener,
+  DiscordVoiceResumedListener,
+} from "../voice/manager.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -673,6 +677,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
+      registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
+
+      // Proactively call autoJoin after listener registration.
+      // The Carbon client may have already received the READY event before the listeners
+      // were registered, so we trigger autoJoin on the next microtask to ensure the bot
+      // joins its configured voice channels even if the event was missed.
+      Promise.resolve()
+        .then(() => voiceManager!.autoJoin())
+        .catch(() => {});
     }
 
     const messageHandler = createDiscordMessageHandler({

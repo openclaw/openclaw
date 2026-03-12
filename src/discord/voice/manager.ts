@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
+import { ChannelType, type Client, ReadyListener, ResumedListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   AudioPlayerStatus,
@@ -12,6 +12,7 @@ import {
   createAudioPlayer,
   createAudioResource,
   entersState,
+  getVoiceConnection,
   joinVoiceChannel,
   type AudioPlayer,
   type VoiceConnection,
@@ -403,6 +404,21 @@ export class DiscordVoiceManager {
         decryptionFailureTolerance ?? "default"
       }`,
     );
+
+    // Proactively destroy any stale VoiceConnection left in @discordjs/voice's global registry
+    // for this guild. This can happen after a health-monitor account-level restart: the old
+    // DiscordVoiceManager is torn down but the VoiceConnection object stays in the global Map.
+    // joinVoiceChannel would then return the stale connection (possibly already destroyed),
+    // causing "Cannot destroy VoiceConnection - it has already been destroyed" errors and
+    // preventing the bot from ever rejoining the channel.
+    const staleConnection = getVoiceConnection(guildId);
+    if (staleConnection && staleConnection.state.status !== VoiceConnectionStatus.Destroyed) {
+      logVoiceVerbose(
+        `join: destroying stale voice connection for guild ${guildId} (status: ${staleConnection.state.status})`,
+      );
+      staleConnection.destroy();
+    }
+
     const connection = joinVoiceChannel({
       channelId,
       guildId,
@@ -641,13 +657,21 @@ export class DiscordVoiceManager {
     const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
     const prompt = speaker.label ? `${speaker.label}: ${transcript}` : transcript;
 
+    // Use a :voice: session key instead of :channel: so that the session is not
+    // treated as a group chat (which would trigger NO_REPLY / silent-reply policies).
+    const voiceSessionKey = entry.route.sessionKey.replace(/:channel:/, ":voice:");
+
     const result = await agentCommandFromIngress(
       {
         message: prompt,
-        sessionKey: entry.route.sessionKey,
+        sessionKey: voiceSessionKey,
         agentId: entry.route.agentId,
         messageChannel: "discord",
         senderIsOwner: speaker.senderIsOwner,
+        extraSystemPrompt:
+          "You are in a live VOICE CONVERSATION. " +
+          "ALWAYS respond with a spoken reply — never output NO_REPLY or HEARTBEAT_OK. " +
+          "Keep answers concise (1–3 sentences). Do not use markdown formatting.",
         deliver: false,
       },
       this.params.runtime,
@@ -888,6 +912,25 @@ export class DiscordVoiceManager {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
+  constructor(private manager: DiscordVoiceManager) {
+    super();
+  }
+
+  async handle() {
+    await this.manager.autoJoin();
+  }
+}
+
+/**
+ * Triggers autoJoin on RESUMED events.
+ *
+ * When the health-monitor performs an account-level restart, @buape/carbon reconnects
+ * to Discord using RESUME rather than a fresh IDENTIFY. This means Discord sends a
+ * RESUMED event (not READY), so DiscordVoiceReadyListener never fires and the bot
+ * stays disconnected from its configured voice channels. This listener ensures
+ * autoJoin is called whenever a session is resumed as well.
+ */
+export class DiscordVoiceResumedListener extends ResumedListener {
   constructor(private manager: DiscordVoiceManager) {
     super();
   }
