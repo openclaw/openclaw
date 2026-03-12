@@ -112,7 +112,12 @@ afterEach(() => {
 function createTrackedDiskSM(): { sm: SessionManager; getSessionFile: () => string } {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "guard-test-"));
   tmpDirs.push(tmpDir);
-  const sm = new (SessionManager as unknown as new (...args: unknown[]) => SessionManager)(process.cwd(), tmpDir, undefined, true);
+  const sm = new (SessionManager as unknown as new (...args: unknown[]) => SessionManager)(
+    process.cwd(),
+    tmpDir,
+    undefined,
+    true,
+  );
   return {
     sm,
     getSessionFile: () => (sm as unknown as { sessionFile: string }).sessionFile,
