@@ -257,26 +257,42 @@ function resolveConfiguredProviderContextWindow(
   if (!providers) {
     return undefined;
   }
-  const normalizedProvider = normalizeProviderId(provider);
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(providerId) !== normalizedProvider) {
-      continue;
-    }
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const m of providerConfig.models) {
-      if (
-        typeof m?.id === "string" &&
-        m.id === model &&
-        typeof m?.contextWindow === "number" &&
-        m.contextWindow > 0
-      ) {
-        return m.contextWindow;
+
+  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
+  // then normalized fallback. This prevents alias collisions (e.g. when both
+  // "qwen" and "qwen-portal" exist as config keys) from picking the wrong
+  // contextWindow based on Object.entries iteration order.
+  function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
+    for (const [providerId, providerConfig] of Object.entries(providers!)) {
+      if (!matchProviderId(providerId)) {
+        continue;
+      }
+      if (!Array.isArray(providerConfig?.models)) {
+        continue;
+      }
+      for (const m of providerConfig.models) {
+        if (
+          typeof m?.id === "string" &&
+          m.id === model &&
+          typeof m?.contextWindow === "number" &&
+          m.contextWindow > 0
+        ) {
+          return m.contextWindow;
+        }
       }
     }
+    return undefined;
   }
-  return undefined;
+
+  // 1. Exact match (case-insensitive, no alias expansion).
+  const exactResult = findContextWindow((id) => id.trim().toLowerCase() === provider.toLowerCase());
+  if (exactResult !== undefined) {
+    return exactResult;
+  }
+
+  // 2. Normalized fallback: covers alias keys such as "qwen" → "qwen-portal".
+  const normalizedProvider = normalizeProviderId(provider);
+  return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {

@@ -225,4 +225,39 @@ describe("lookupContextTokens", () => {
     });
     expect(openrouterResult).toBe(999_000);
   });
+
+  it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
+    // When both "qwen" and "qwen-portal" exist as config keys (alias pattern),
+    // resolveConfiguredProviderContextWindow must return the exact-key match first,
+    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
+    mockDiscoveryDeps([]);
+
+    const cfg = {
+      models: {
+        providers: {
+          "qwen-portal": { models: [{ id: "qwen-max", contextWindow: 32_000 }] },
+          qwen: { models: [{ id: "qwen-max", contextWindow: 128_000 }] },
+        },
+      },
+    };
+
+    const { resolveContextTokensForModel } = await import("./context.js");
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
+    const qwenResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "qwen",
+      model: "qwen-max",
+    });
+    expect(qwenResult).toBe(128_000);
+
+    // Exact key "qwen-portal" wins (no alias lookup needed).
+    const portalResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "qwen-portal",
+      model: "qwen-max",
+    });
+    expect(portalResult).toBe(32_000);
+  });
 });
