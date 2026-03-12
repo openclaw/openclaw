@@ -179,4 +179,18 @@ describe("resolveEnableState", () => {
     );
     expect(state).toEqual({ enabled: true });
   });
+
+  it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
+    const state = resolveEnableState(
+      "memory-core",
+      "workspace",
+      normalizePluginsConfig({
+        slots: { memory: "memory-core" },
+      }),
+    );
+    expect(state).toEqual({
+      enabled: false,
+      reason: "workspace plugin (disabled by default)",
+    });
+  });
 });
