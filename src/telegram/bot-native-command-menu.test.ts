@@ -280,4 +280,85 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
   });
+
+  describe("Windows path validation (#44199)", () => {
+    it("guards against invalid directory paths in command hash cache", async () => {
+      const fs = await import("node:fs/promises");
+      const fsMkdirSpy = vi.spyOn(fs, "mkdir");
+      const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
+      
+      // Mock mkdir to track calls and succeed normally
+      fsMkdirSpy.mockResolvedValue(undefined);
+      fsWriteFileSpy.mockResolvedValue(undefined);
+
+      const deleteMyCommands = vi.fn(async () => undefined);
+      const setMyCommands = vi.fn(async () => undefined);
+      const runtimeLog = vi.fn();
+      
+      // Use a unique account ID to avoid cache interference
+      const accountId = `test-path-validation-${Date.now()}`;
+      const commands = [{ command: "test_cmd", description: "Test command" }];
+
+      syncMenuCommandsWithMocks({
+        deleteMyCommands,
+        setMyCommands,
+        runtimeLog,
+        commandsToRegister: commands,
+        accountId,
+        botIdentity: "bot-path-test",
+      });
+
+      await vi.waitFor(() => {
+        expect(setMyCommands).toHaveBeenCalled();
+      });
+
+      // Check that mkdir was called with a valid path (not "\\?" or empty)
+      if (fsMkdirSpy.mock.calls.length > 0) {
+        const mkdirPath = fsMkdirSpy.mock.calls[0]?.[0] as string;
+        expect(mkdirPath).toBeTruthy();
+        expect(mkdirPath).not.toBe(".");
+        expect(mkdirPath).not.toBe("\\\\?");
+        expect(mkdirPath).not.toBe("\\\\?\\\\");
+        expect(mkdirPath.length).toBeGreaterThanOrEqual(2);
+      }
+
+      fsMkdirSpy.mockRestore();
+      fsWriteFileSpy.mockRestore();
+    });
+
+    it("continues menu sync even if command hash cache write fails", async () => {
+      const fs = await import("node:fs/promises");
+      const fsMkdirSpy = vi.spyOn(fs, "mkdir");
+      
+      // Simulate mkdir failure (e.g., due to invalid path)
+      fsMkdirSpy.mockRejectedValue(new Error("ENOENT: no such file or directory, mkdir '\\\\?'"));
+
+      const deleteMyCommands = vi.fn(async () => undefined);
+      const setMyCommands = vi.fn(async () => undefined);
+      const runtimeLog = vi.fn();
+      
+      const accountId = `test-mkdir-fail-${Date.now()}`;
+      const commands = [{ command: "fail_test", description: "Fail test command" }];
+
+      syncMenuCommandsWithMocks({
+        deleteMyCommands,
+        setMyCommands,
+        runtimeLog,
+        commandsToRegister: commands,
+        accountId,
+        botIdentity: "bot-fail-test",
+      });
+
+      await vi.waitFor(() => {
+        expect(setMyCommands).toHaveBeenCalled();
+      });
+
+      // The menu sync should succeed despite mkdir failure
+      expect(setMyCommands).toHaveBeenCalledWith([
+        { command: "fail_test", description: "Fail test command" },
+      ]);
+
+      fsMkdirSpy.mockRestore();
+    });
+  });
 });
