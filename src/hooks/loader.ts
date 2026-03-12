@@ -20,6 +20,20 @@ import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
 
+function maybeWarnTrustedHookSource(source: string): void {
+  if (source === "openclaw-workspace") {
+    log.warn(
+      "Loading workspace hook code into the gateway process. Workspace hooks are trusted local code.",
+    );
+    return;
+  }
+  if (source === "openclaw-managed") {
+    log.warn(
+      "Loading managed hook code into the gateway process. Managed hooks are trusted local code.",
+    );
+  }
+}
+
 /**
  * Load and register all hook handlers
  *
@@ -74,7 +88,13 @@ export async function loadInternalHooks(
       }
 
       try {
-        const hookBaseDir = safeRealpathOrResolve(entry.hook.baseDir);
+        const hookBaseDir = resolveExistingRealpath(entry.hook.baseDir);
+        if (!hookBaseDir) {
+          log.error(
+            `Hook '${entry.hook.name}' base directory is no longer readable: ${entry.hook.baseDir}`,
+          );
+          continue;
+        }
         const opened = await openBoundaryFile({
           absolutePath: entry.hook.handlerPath,
           rootPath: hookBaseDir,
@@ -88,6 +108,7 @@ export async function loadInternalHooks(
         }
         const safeHandlerPath = opened.path;
         fs.closeSync(opened.fd);
+        maybeWarnTrustedHookSource(entry.hook.source);
 
         // Import handler module — only cache-bust mutable (workspace/managed) hooks
         const importUrl = buildImportUrl(safeHandlerPath, entry.hook.source);
@@ -150,8 +171,16 @@ export async function loadInternalHooks(
       }
       const baseDir = path.resolve(workspaceDir);
       const modulePath = path.resolve(baseDir, rawModule);
-      const baseDirReal = safeRealpathOrResolve(baseDir);
-      const modulePathSafe = safeRealpathOrResolve(modulePath);
+      const baseDirReal = resolveExistingRealpath(baseDir);
+      if (!baseDirReal) {
+        log.error(`Workspace directory is no longer readable while loading hooks: ${baseDir}`);
+        continue;
+      }
+      const modulePathSafe = resolveExistingRealpath(modulePath);
+      if (!modulePathSafe) {
+        log.error(`Handler module path could not be resolved with realpath: ${rawModule}`);
+        continue;
+      }
       const rel = path.relative(baseDir, modulePath);
       if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
         log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
@@ -168,6 +197,9 @@ export async function loadInternalHooks(
       }
       const safeModulePath = opened.path;
       fs.closeSync(opened.fd);
+      log.warn(
+        `Loading legacy internal hook module from workspace path ${rawModule}. Legacy hook modules are trusted local code.`,
+      );
 
       // Legacy handlers are always workspace-relative, so use mtime-based cache busting
       const importUrl = buildImportUrl(safeModulePath, "openclaw-workspace");
@@ -200,10 +232,10 @@ export async function loadInternalHooks(
   return loadedCount;
 }
 
-function safeRealpathOrResolve(value: string): string {
+function resolveExistingRealpath(value: string): string | null {
   try {
     return fs.realpathSync(value);
   } catch {
-    return path.resolve(value);
+    return null;
   }
 }
