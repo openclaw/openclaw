@@ -97,3 +97,7 @@ export function colorSchemeForTheme(theme: ResolvedTheme): "light" | "dark" {
     ? "light"
     : "dark";
 }
+
+export function dataThemeForTheme(theme: ResolvedTheme): ResolvedTheme | "light" {
+  return colorSchemeForTheme(theme) === "light" ? "light" : theme;
+}

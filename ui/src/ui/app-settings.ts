@@ -38,6 +38,7 @@ import { saveSettings, type UiSettings } from "./storage.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import {
   colorSchemeForTheme,
+  dataThemeForTheme,
   resolveTheme,
   type ResolvedTheme,
   type ThemeMode,
@@ -299,7 +300,7 @@ export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) 
     return;
   }
   const root = document.documentElement;
-  root.dataset.theme = resolved;
+  root.dataset.theme = dataThemeForTheme(resolved);
   root.style.colorScheme = colorSchemeForTheme(resolved);
 }
 
