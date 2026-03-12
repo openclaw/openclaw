@@ -110,6 +110,9 @@ describe("isBillingErrorMessage", () => {
       // Venice returns "Insufficient USD or Diem balance" which has extra words
       // between "insufficient" and "balance"
       "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      // OpenRouter returns "requires more credits" for underfunded accounts
+      "This model requires more credits to use",
+      "This endpoint require more credits",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -503,6 +506,18 @@ describe("isTransientHttpError", () => {
 });
 
 describe("classifyFailoverReasonFromHttpStatus", () => {
+  it("treats HTTP 422 as format error", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
+    expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
+      "format",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(422, "Unprocessable Entity")).toBe("format");
+  });
+
+  it("treats 422 with billing message as billing instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422, "insufficient credits")).toBe("billing");
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
@@ -718,6 +733,8 @@ describe("classifyFailoverReason", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
       ),
     ).toBe("billing");
+    // OpenRouter "requires more credits" billing text
+    expect(classifyFailoverReason("This model requires more credits to use")).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
