@@ -197,6 +197,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "cortex",
+      description: "Inspect or override Cortex prompt mode for this conversation.",
+      textAlias: "/cortex",
+      acceptsArgs: true,
+      scope: "text",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "export-session",
       nativeName: "export-session",
       description: "Export current session to HTML file with full system prompt.",
