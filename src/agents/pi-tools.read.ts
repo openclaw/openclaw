@@ -378,14 +378,11 @@ function mapContainerPathToWorkspaceRoot(params: {
       candidate = fileURLToPath(candidate);
     } catch {
       try {
-        const parsed = new URL(candidate);
-        if (parsed.protocol !== "file:") {
+        const fileUrl = new URL(candidate);
+        if (fileUrl.protocol !== "file:" || !fileUrl.pathname) {
           return params.filePath;
         }
-        candidate = decodeURIComponent(parsed.pathname || "");
-        if (!candidate.startsWith("/")) {
-          return params.filePath;
-        }
+        candidate = decodeURIComponent(fileUrl.pathname);
       } catch {
         return params.filePath;
       }
