@@ -196,25 +196,26 @@ export async function dispatchReplyFromConfig(params: {
       });
     }, firstVisibleWatchdog.thresholdMs);
   }
-  dispatcher.setFirstVisibleHandler?.((info) => {
-    if (!diagnosticsEnabled) {
-      return;
-    }
-    firstVisibleSeen = true;
-    if (firstVisibleWatchdogTimer) {
-      clearTimeout(firstVisibleWatchdogTimer);
-      firstVisibleWatchdogTimer = undefined;
-    }
-    logMessageFirstVisible({
-      channel,
-      chatId,
-      messageId,
-      sessionKey,
-      kind: info.kind,
-      dispatchToFirstVisibleMs: Math.max(0, Date.now() - startTime),
+  if (firstVisibleWatchdog.mode === "diagnose_only") {
+    dispatcher.setFirstVisibleHandler?.((info) => {
+      firstVisibleSeen = true;
+      if (firstVisibleWatchdogTimer) {
+        clearTimeout(firstVisibleWatchdogTimer);
+        firstVisibleWatchdogTimer = undefined;
+      }
+      logMessageFirstVisible({
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        kind: info.kind,
+        dispatchToFirstVisibleMs: Math.max(0, Date.now() - startTime),
+      });
+      dispatcher.setFirstVisibleHandler?.(undefined);
     });
+  } else {
     dispatcher.setFirstVisibleHandler?.(undefined);
-  });
+  }
   const unregisterSupersededListener =
     sessionKey && generationToken
       ? registerSessionGenerationListener(sessionKey, () => {

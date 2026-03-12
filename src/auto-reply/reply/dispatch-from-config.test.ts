@@ -1814,6 +1814,7 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
+    expect(diagnosticMocks.logMessageFirstVisible).not.toHaveBeenCalled();
     expect(diagnosticMocks.logMessageFirstVisibleTimeout).not.toHaveBeenCalled();
     vi.useRealTimers();
   });

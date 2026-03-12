@@ -185,7 +185,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return params.dispatcher.sendBlockReply(ttsPayload);
     }
     if (kind === "status") {
-      return params.dispatcher.sendStatusReply(ttsPayload);
+      return (
+        params.dispatcher.sendStatusReply?.(ttsPayload) ??
+        params.dispatcher.sendBlockReply(ttsPayload)
+      );
     }
     return params.dispatcher.sendFinalReply(ttsPayload);
   };

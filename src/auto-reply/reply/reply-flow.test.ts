@@ -1359,7 +1359,7 @@ describe("createReplyDispatcher", () => {
     const onFirstVisible = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, onFirstVisible });
 
-    dispatcher.sendStatusReply({ text: "working..." });
+    dispatcher.sendStatusReply?.({ text: "working..." });
 
     await dispatcher.waitForIdle();
 
@@ -1473,7 +1473,7 @@ describe("createReplyDispatcher", () => {
 
     dispatcher.sendToolResult({ text: "tool" });
     dispatcher.sendBlockReply({ text: "block" });
-    dispatcher.sendStatusReply({ text: "status" });
+    dispatcher.sendStatusReply?.({ text: "status" });
     dispatcher.sendFinalReply({ text: "final" });
 
     await dispatcher.waitForIdle();
