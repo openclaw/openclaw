@@ -1,12 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
+  getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
+  isTelegramPollingNetworkError,
   isTelegramServerError,
+  tagTelegramNetworkError,
 } from "./network-errors.js";
 
 describe("isRecoverableTelegramNetworkError", () => {
+  it("tracks Telegram polling origin separately from generic network matching", () => {
+    const slackDnsError = Object.assign(
+      new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com"),
+      {
+        code: "ENOTFOUND",
+        hostname: "slack.com",
+      },
+    );
+    expect(isRecoverableTelegramNetworkError(slackDnsError)).toBe(true);
+    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(false);
+
+    tagTelegramNetworkError(slackDnsError, {
+      method: "getUpdates",
+      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
+    });
+    expect(getTelegramNetworkErrorOrigin(slackDnsError)).toEqual({
+      method: "getupdates",
+      url: "https://api.telegram.org/bot123456:ABC/getUpdates",
+    });
+    expect(isTelegramPollingNetworkError(slackDnsError)).toBe(true);
+  });
+
   it("detects recoverable error codes", () => {
     const err = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
