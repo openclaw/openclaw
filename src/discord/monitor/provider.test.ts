@@ -36,6 +36,7 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  voiceRuntimeModuleLoadedMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
@@ -103,6 +104,7 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    voiceRuntimeModuleLoadedMock: vi.fn(),
   };
 });
 
@@ -210,10 +212,13 @@ vi.mock("../voice/command.js", () => ({
   createDiscordVoiceCommand: () => ({ name: "voice-command" }),
 }));
 
-vi.mock("../voice/manager.js", () => ({
-  DiscordVoiceManager: class DiscordVoiceManager {},
-  DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
-}));
+vi.mock("../voice/manager.runtime.js", () => {
+  voiceRuntimeModuleLoadedMock();
+  return {
+    DiscordVoiceManager: class DiscordVoiceManager {},
+    DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+  };
+});
 
 vi.mock("./agent-components.js", () => ({
   createAgentComponentButton: () => ({ id: "btn" }),
@@ -390,6 +395,7 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    voiceRuntimeModuleLoadedMock.mockClear();
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -422,6 +428,38 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not load the Discord voice runtime when voice is disabled", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("loads the Discord voice runtime only when voice is enabled", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: true },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
   it("treats ACP error status as uncertain during startup thread-binding probes", async () => {
