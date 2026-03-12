@@ -22,6 +22,8 @@ type SlackInboundEntry = {
 };
 
 const APP_MENTION_RETRY_TTL_MS = 60_000;
+export const MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION = 50;
+export const MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_TOTAL = 100;
 
 function resolveSlackSenderId(message: SlackMessageEvent): string | null {
   return message.user ?? message.bot_id ?? null;
@@ -114,6 +116,7 @@ export function createSlackMessageHandler(params: {
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
   const pendingTopLevelImmediateEntries = new Map<string, SlackInboundEntry[]>();
   const drainingTopLevelImmediateEntries = new Set<string>();
+  let totalPendingTopLevelImmediateEntries = 0;
   let debouncer!: ReturnType<typeof createChannelInboundDebouncer<SlackInboundEntry>>["debouncer"];
 
   const releaseTopLevelPendingKey = (entry: SlackInboundEntry): string | null => {
@@ -136,8 +139,36 @@ export function createSlackMessageHandler(params: {
 
   const queueTopLevelImmediateEntry = (conversationKey: string, entry: SlackInboundEntry) => {
     const queuedEntries = pendingTopLevelImmediateEntries.get(conversationKey) ?? [];
+    if (
+      queuedEntries.length >= MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_PER_CONVERSATION ||
+      totalPendingTopLevelImmediateEntries >= MAX_PENDING_TOP_LEVEL_IMMEDIATE_ENTRIES_TOTAL
+    ) {
+      ctx.runtime.error?.(
+        "slack inbound immediate backlog overflow; bypassing queue to cap memory growth",
+      );
+      return false;
+    }
     queuedEntries.push(entry);
     pendingTopLevelImmediateEntries.set(conversationKey, queuedEntries);
+    totalPendingTopLevelImmediateEntries += 1;
+    return true;
+  };
+
+  const shiftTopLevelImmediateEntry = (conversationKey: string) => {
+    const queuedEntries = pendingTopLevelImmediateEntries.get(conversationKey);
+    if (!queuedEntries) {
+      return null;
+    }
+    const nextEntry = queuedEntries.shift();
+    if (!nextEntry) {
+      pendingTopLevelImmediateEntries.delete(conversationKey);
+      return null;
+    }
+    totalPendingTopLevelImmediateEntries = Math.max(0, totalPendingTopLevelImmediateEntries - 1);
+    if (queuedEntries.length === 0) {
+      pendingTopLevelImmediateEntries.delete(conversationKey);
+    }
+    return nextEntry;
   };
 
   const drainTopLevelImmediateEntries = async (conversationKey: string) => {
@@ -153,17 +184,9 @@ export function createSlackMessageHandler(params: {
     drainingTopLevelImmediateEntries.add(conversationKey);
     try {
       while ((pendingTopLevelDebounceKeys.get(conversationKey)?.size ?? 0) === 0) {
-        const queuedEntries = pendingTopLevelImmediateEntries.get(conversationKey);
-        if (!queuedEntries) {
-          return;
-        }
-        const nextEntry = queuedEntries.shift();
+        const nextEntry = shiftTopLevelImmediateEntry(conversationKey);
         if (!nextEntry) {
-          pendingTopLevelImmediateEntries.delete(conversationKey);
           return;
-        }
-        if (queuedEntries.length === 0) {
-          pendingTopLevelImmediateEntries.delete(conversationKey);
         }
         await debouncer.enqueue(nextEntry);
       }
@@ -342,7 +365,11 @@ export function createSlackMessageHandler(params: {
             return;
           }
           // Keep immediate top-level followers behind older buffered keys until those keys resolve.
-          queueTopLevelImmediateEntry(conversationKey, { message: resolvedMessage, opts });
+          if (queueTopLevelImmediateEntry(conversationKey, { message: resolvedMessage, opts })) {
+            return;
+          }
+          // Once the backlog cap is hit, bypass the queue so pending memory stays bounded.
+          await debouncer.enqueue({ message: resolvedMessage, opts });
           return;
         }
       }
