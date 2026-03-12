@@ -527,6 +527,39 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
 
     expect(partialToolCall.arguments).toEqual({});
   });
+
+  it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"}oops',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
+  });
 });
 
 describe("isOllamaCompatProvider", () => {

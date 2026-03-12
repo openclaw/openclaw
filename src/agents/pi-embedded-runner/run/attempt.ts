@@ -479,24 +479,51 @@ function extractBalancedJsonPrefix(raw: string): string | null {
   return null;
 }
 
-function tryParseMalformedToolCallArguments(raw: string): Record<string, unknown> | undefined {
+const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
+const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
+const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+
+function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
+  if (/[}\]]/.test(delta)) {
+    return true;
+  }
+  const trimmedDelta = delta.trim();
+  return (
+    trimmedDelta.length > 0 &&
+    trimmedDelta.length <= MAX_TOOLCALL_REPAIR_TRAILING_CHARS &&
+    /[}\]]/.test(partialJson)
+  );
+}
+
+type ToolCallArgumentRepair = {
+  args: Record<string, unknown>;
+  trailingSuffix: string;
+};
+
+function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    JSON.parse(raw);
+    return undefined;
   } catch {
     const jsonPrefix = extractBalancedJsonPrefix(raw);
     if (!jsonPrefix) {
       return undefined;
     }
+    const suffix = raw.slice(raw.indexOf(jsonPrefix) + jsonPrefix.length).trim();
+    if (
+      suffix.length === 0 ||
+      suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
+      !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix)
+    ) {
+      return undefined;
+    }
     try {
       const parsed = JSON.parse(jsonPrefix) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
+        ? { args: parsed as Record<string, unknown>, trailingSuffix: suffix }
         : undefined;
     } catch {
       return undefined;
@@ -548,10 +575,16 @@ function wrapStreamRepairMalformedToolCallArguments(
 ): ReturnType<typeof streamSimple> {
   const partialJsonByIndex = new Map<number, string>();
   const repairedArgsByIndex = new Map<number, Record<string, unknown>>();
+  const disabledIndices = new Set<number>();
+  const loggedRepairIndices = new Set<number>();
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
     repairMalformedToolCallArgumentsInMessage(message, repairedArgsByIndex);
+    partialJsonByIndex.clear();
+    repairedArgsByIndex.clear();
+    disabledIndices.clear();
+    loggedRepairIndices.clear();
     return message;
   };
 
@@ -577,14 +610,31 @@ function wrapStreamRepairMalformedToolCallArguments(
               event.type === "toolcall_delta" &&
               typeof event.delta === "string"
             ) {
+              if (disabledIndices.has(event.contentIndex)) {
+                return result;
+              }
               const nextPartialJson =
                 (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
+              if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+                partialJsonByIndex.delete(event.contentIndex);
+                repairedArgsByIndex.delete(event.contentIndex);
+                disabledIndices.add(event.contentIndex);
+                return result;
+              }
               partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-              const repairedArgs = tryParseMalformedToolCallArguments(nextPartialJson);
-              if (repairedArgs) {
-                repairedArgsByIndex.set(event.contentIndex, repairedArgs);
-                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
-                repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
+              if (shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta)) {
+                const repair = tryParseMalformedToolCallArguments(nextPartialJson);
+                if (repair) {
+                  repairedArgsByIndex.set(event.contentIndex, repair.args);
+                  repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
+                  repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
+                  if (!loggedRepairIndices.has(event.contentIndex)) {
+                    loggedRepairIndices.add(event.contentIndex);
+                    log.warn(
+                      `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+                    );
+                  }
+                }
               }
             }
             if (
@@ -600,6 +650,9 @@ function wrapStreamRepairMalformedToolCallArguments(
                 repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
                 repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
               }
+              partialJsonByIndex.delete(event.contentIndex);
+              disabledIndices.delete(event.contentIndex);
+              loggedRepairIndices.delete(event.contentIndex);
             }
           }
           return result;
@@ -626,6 +679,10 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
     }
     return wrapStreamRepairMalformedToolCallArguments(maybeStream);
   };
+}
+
+function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
+  return normalizeProviderId(provider ?? "") === "kimi-coding";
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,7 +1625,10 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
       );
 
-      if (params.model.api === "anthropic-messages") {
+      if (
+        params.model.api === "anthropic-messages" &&
+        shouldRepairMalformedAnthropicToolCallArguments(params.provider)
+      ) {
         activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
           activeSession.agent.streamFn,
         );
