@@ -6,6 +6,25 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 
+type MockCompactionResult =
+  | {
+      ok: true;
+      compacted: true;
+      result: {
+        summary: string;
+        firstKeptEntryId?: string;
+        tokensBefore?: number;
+        tokensAfter?: number;
+      };
+      reason?: string;
+    }
+  | {
+      ok: false;
+      compacted: false;
+      reason: string;
+      result?: undefined;
+    };
+
 export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentStart: vi.fn(
@@ -26,10 +45,33 @@ export const mockedGlobalHookRunner = {
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
   ),
+  runBeforeCompaction: vi.fn(async () => undefined),
+  runAfterCompaction: vi.fn(async () => undefined),
 };
+
+export const mockedContextEngine = {
+  info: { ownsCompaction: false as boolean },
+  compact: vi.fn<(params: unknown) => Promise<MockCompactionResult>>(async () => ({
+    ok: false as const,
+    compacted: false as const,
+    reason: "nothing to compact",
+  })),
+};
+
+export const mockedContextEngineCompact = vi.mocked(mockedContextEngine.compact);
+export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi.fn();
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+}));
+
+vi.mock("../../context-engine/index.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+  resolveContextEngine: vi.fn(async () => mockedContextEngine),
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: mockedEnsureRuntimePluginsLoaded,
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -141,9 +183,13 @@ vi.mock("../../process/command-queue.js", () => ({
   enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
-  isMarkdownCapableMessageChannel: vi.fn(() => true),
-}));
+vi.mock(import("../../utils/message-channel.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    isMarkdownCapableMessageChannel: vi.fn(() => true),
+  };
+});
 
 vi.mock("../agent-paths.js", () => ({
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
