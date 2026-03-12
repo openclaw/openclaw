@@ -1059,7 +1059,7 @@ describe("statusCommand", () => {
       "Plugin compatibility",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "no workspaces bootstrapping",
       "Tasks",
       "Sessions",
       "+1000",
@@ -1181,6 +1181,12 @@ describe("statusCommand", () => {
     expect(joined).not.toContain("Gateway: local · ws://127.0.0.1:18789");
     expect(joined).toContain("openclaw --profile isolated node status");
     expect(joined).not.toContain("Fix reachability first");
+  });
+
+  it("describes mature workspaces as not actively bootstrapping", async () => {
+    const joined = await runStatusAndGetJoinedLogs();
+    expect(joined).toContain("no workspaces bootstrapping");
+    expect(joined).not.toContain("no bootstrap files");
   });
 
   it("shows gateway auth when reachable", async () => {
