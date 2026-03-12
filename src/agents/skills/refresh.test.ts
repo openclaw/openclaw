@@ -115,6 +115,8 @@ describe("isSkillPath", () => {
 
     expect(isSkillPath("/workspace/skills/README.md", roots)).toBe(false);
     expect(isSkillPath("/workspace/skills/my-skill/index.ts", roots)).toBe(false);
+    expect(isSkillPath("/workspace/skills/my-skill/SKILL.md.bak", roots)).toBe(false);
+    expect(isSkillPath("/workspace/skills/my-skill/SKILL.md.old", roots)).toBe(false);
   });
 
   it("rejects paths outside any watch root", async () => {

@@ -77,7 +77,7 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
 
 /** Check whether a changed path is a SKILL.md file inside one of the skill roots. */
 export function isSkillPath(changedPath: string, watchRoots: string[]): boolean {
-  if (!path.basename(changedPath).toUpperCase().startsWith("SKILL.MD")) {
+  if (path.basename(changedPath).toUpperCase() !== "SKILL.MD") {
     return false;
   }
   const resolved = path.resolve(changedPath);

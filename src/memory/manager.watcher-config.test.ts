@@ -8,15 +8,17 @@ import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 type WatcherHandler = (p: string) => void;
 
 const { watchMock } = vi.hoisted(() => {
-  const handlers = new Map<string, WatcherHandler>();
   return {
-    watchMock: vi.fn(() => ({
-      on: vi.fn((event: string, handler: WatcherHandler) => {
-        handlers.set(event, handler);
-      }),
-      close: vi.fn(async () => undefined),
-      _handlers: handlers,
-    })),
+    watchMock: vi.fn(() => {
+      const handlers = new Map<string, WatcherHandler>();
+      return {
+        on: vi.fn((event: string, handler: WatcherHandler) => {
+          handlers.set(event, handler);
+        }),
+        close: vi.fn(async () => undefined),
+        _handlers: handlers,
+      };
+    }),
   };
 });
 
