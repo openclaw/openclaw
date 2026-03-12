@@ -43,6 +43,12 @@ type RequestClientAbortState = {
   abortController?: AbortController | null;
 };
 
+type DiscordAttachment = Record<string, unknown> & {
+  id: number | string;
+  filename?: string;
+  description?: string;
+};
+
 type DiscordUploadFile = {
   data: Blob | Buffer | ArrayBuffer | ArrayBufferView | string;
   name: string;
@@ -50,7 +56,7 @@ type DiscordUploadFile = {
 };
 
 type DiscordMultipartBody = Record<string, unknown> & {
-  attachments?: Array<{ id: number; filename: string; description?: string }>;
+  attachments?: DiscordAttachment[];
   files?: DiscordUploadFile[];
   data?: Record<string, unknown> & { files?: DiscordUploadFile[] };
 };
@@ -74,6 +80,73 @@ function buildDiscordQueryString(query?: QueuedRequest["query"]) {
   return `?${Object.entries(query)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&")}`;
+}
+
+function getDiscordUploadFiles(payload: DiscordMultipartBody): DiscordUploadFile[] {
+  if (Array.isArray(payload.files)) {
+    return payload.files;
+  }
+  if (payload.data && typeof payload.data === "object" && Array.isArray(payload.data.files)) {
+    return payload.data.files;
+  }
+  return [];
+}
+
+function buildDiscordMultipartBody(payload: DiscordMultipartBody): FormData {
+  const formData = new FormData();
+  const files = getDiscordUploadFiles(payload);
+  const attachments = Array.isArray(payload.attachments) ? [...payload.attachments] : [];
+
+  for (const [index, file] of files.entries()) {
+    let { data: fileData } = file;
+    if (!(fileData instanceof Blob)) {
+      fileData = new Blob([toBlobPart(fileData)]);
+    }
+    formData.append(`files[${index}]`, fileData, file.name);
+    attachments.push({
+      id: index,
+      filename: file.name,
+      description: file.description,
+    });
+  }
+
+  const cleanedBody: DiscordMultipartBody = {
+    ...payload,
+    attachments,
+    files: undefined,
+    data:
+      payload.data && typeof payload.data === "object"
+        ? {
+            ...payload.data,
+            files: undefined,
+          }
+        : payload.data,
+  };
+  formData.append("payload_json", JSON.stringify(cleanedBody));
+  return formData;
+}
+
+function resolveProxyAwareClient(client: RequestClient): {
+  abortState: RequestClientAbortState;
+  client: ProxyAwareRequestClient;
+} | null {
+  const surface = client as RequestClientAbortState &
+    Partial<ProxyAwareRequestClient> & {
+      options?: RequestClient["options"];
+    };
+  if (
+    !surface.options ||
+    typeof surface.executeRequest !== "function" ||
+    typeof surface.scheduleRateLimit !== "function" ||
+    typeof surface.updateBucketFromHeaders !== "function" ||
+    typeof surface.waitForBucket !== "function"
+  ) {
+    return null;
+  }
+  return {
+    abortState: surface,
+    client: surface as ProxyAwareRequestClient,
+  };
 }
 
 async function executeRequestWithFetch(
@@ -116,40 +189,7 @@ async function executeRequestWithFetch(
         "files" in data.body.data))
   ) {
     const payload = data.body as DiscordMultipartBody;
-    data.body = { ...payload, attachments: [] } satisfies DiscordMultipartBody;
-    const multipartBody = data.body as DiscordMultipartBody;
-    const formData = new FormData();
-    const files = (() => {
-      if (Array.isArray(payload.files)) {
-        return payload.files;
-      }
-      if (payload.data && typeof payload.data === "object" && Array.isArray(payload.data.files)) {
-        return payload.data.files;
-      }
-      return [] as DiscordUploadFile[];
-    })();
-
-    for (const [index, file] of files.entries()) {
-      let { data: fileData } = file;
-      if (!(fileData instanceof Blob)) {
-        fileData = new Blob([toBlobPart(fileData)]);
-      }
-      formData.append(`files[${index}]`, fileData, file.name);
-      multipartBody.attachments?.push({
-        id: index,
-        filename: file.name,
-        description: file.description,
-      });
-    }
-
-    if (multipartBody != null) {
-      const cleanedBody = {
-        ...multipartBody,
-        files: undefined,
-      };
-      formData.append("payload_json", JSON.stringify(cleanedBody));
-    }
-    body = formData;
+    body = buildDiscordMultipartBody(payload);
   } else if (data?.body != null) {
     headers.set("Content-Type", "application/json");
     body = data.rawBody ? (data.body as BodyInit) : JSON.stringify(data.body);
@@ -260,10 +300,13 @@ function attachDiscordRestFetch(
   token: string,
   fetcher: typeof fetch,
 ): RequestClient {
-  const proxyAwareClient = client as unknown as ProxyAwareRequestClient;
-  const abortState = client as unknown as RequestClientAbortState;
-  proxyAwareClient.executeRequest = (request) =>
-    executeRequestWithFetch(proxyAwareClient, abortState, token, request, fetcher);
+  const surface = resolveProxyAwareClient(client);
+  if (!surface) {
+    logWarn("discord: RequestClient runtime surface changed; falling back to direct REST fetch.");
+    return client;
+  }
+  surface.client.executeRequest = (request) =>
+    executeRequestWithFetch(surface.client, surface.abortState, token, request, fetcher);
   return client;
 }
 

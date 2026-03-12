@@ -68,4 +68,52 @@ describe("createDiscordRestClient proxy support", () => {
     expect(globalFetch).not.toHaveBeenCalled();
     expect(result).toEqual({ id: "message-1" });
   });
+
+  it("strips nested upload files from payload_json and preserves existing attachments", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    proxyFetch.mockResolvedValue(
+      new Response(JSON.stringify({ id: "message-2" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+          proxy: "http://proxy.test:8080",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({}, cfg);
+    await rest.patch("/channels/123/messages/456", {
+      body: {
+        attachments: [{ id: "keep-1", filename: "keep.png" }],
+        data: {
+          content: "updated",
+          files: [{ data: "hello", name: "new.png", description: "new upload" }],
+        },
+      },
+    });
+
+    const init = proxyFetch.mock.calls[0]?.[1] as RequestInit;
+    const formData = init.body as FormData;
+    const payloadJsonPart = formData.get("payload_json");
+    expect(typeof payloadJsonPart).toBe("string");
+    const payloadJson = JSON.parse(payloadJsonPart as string) as {
+      attachments: Array<{ id: string | number; filename: string; description?: string }>;
+      data?: Record<string, unknown>;
+      files?: unknown;
+    };
+
+    expect(payloadJson.files).toBeUndefined();
+    expect(payloadJson.data?.files).toBeUndefined();
+    expect(payloadJson.attachments).toEqual([
+      { id: "keep-1", filename: "keep.png" },
+      { id: 0, filename: "new.png", description: "new upload" },
+    ]);
+    expect(formData.get("files[0]")).toBeInstanceOf(File);
+  });
 });
