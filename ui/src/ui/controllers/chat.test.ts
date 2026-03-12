@@ -601,6 +601,48 @@ describe("abortChatRun", () => {
   });
 });
 
+describe("sendChatMessage attachments", () => {
+  it("sends image attachments to chat.send and keeps optimistic image block in chatMessages", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const dataUrl = "data:image/png;base64,aGVsbG8=";
+
+    const runId = await sendChatMessage(state, "", [
+      {
+        id: "att-1",
+        dataUrl,
+        mimeType: "image/png",
+      },
+    ]);
+
+    expect(typeof runId).toBe("string");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        message: "",
+        deliver: false,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            content: "aGVsbG8=",
+          },
+        ],
+      }),
+    );
+    const optimistic = state.chatMessages[state.chatMessages.length - 1] as Record<string, unknown>;
+    const content = optimistic.content as Array<Record<string, unknown>>;
+    expect(Array.isArray(content)).toBe(true);
+    const imageBlock = content.find((entry) => entry.type === "image");
+    expect(imageBlock).toBeTruthy();
+  });
+});
+
 describe("loadChatHistory", () => {
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({

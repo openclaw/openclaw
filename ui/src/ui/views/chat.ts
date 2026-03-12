@@ -297,6 +297,30 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function addFilesAsAttachments(files: File[], props: ChatProps) {
+  if (!props.onAttachmentsChange || files.length === 0) {
+    return;
+  }
+  let nextAttachments = [...(props.attachments ?? [])];
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) {
+      continue;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      const newAttachment: ChatAttachment = {
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      };
+      nextAttachments = [...nextAttachments, newAttachment];
+      props.onAttachmentsChange?.(nextAttachments);
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -313,24 +337,33 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     return;
   }
   e.preventDefault();
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
+  const files = imageItems
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  addFilesAsAttachments(files, props);
+}
+
+function handleDragOver(e: DragEvent) {
+  const types = e.dataTransfer?.types;
+  if (!types) {
+    return;
   }
+  if (Array.from(types).includes("Files")) {
+    e.preventDefault();
+  }
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  const allFiles = Array.from(e.dataTransfer?.files ?? []);
+  if (allFiles.length === 0) {
+    return;
+  }
+  e.preventDefault();
+  const files = allFiles.filter((file) => file.type.startsWith("image/"));
+  if (files.length === 0) {
+    return;
+  }
+  addFilesAsAttachments(files, props);
 }
 
 function handleFileSelect(e: Event, props: ChatProps) {
@@ -1202,6 +1235,8 @@ export function renderChat(props: ChatProps) {
           @keydown=${handleKeyDown}
           @input=${handleInput}
           @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+          @dragover=${(e: DragEvent) => handleDragOver(e)}
+          @drop=${(e: DragEvent) => handleDrop(e, props)}
           placeholder=${vs.sttRecording ? "Listening..." : placeholder}
           rows="1"
         ></textarea>

@@ -305,9 +305,14 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
+  const activeRunIdBeforeEvent = host.chatRunId;
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+  if (
+    state === "final" &&
+    !historyReloaded &&
+    shouldReloadHistoryForFinalEvent(payload, { activeRunIdBeforeEvent })
+  ) {
     void loadChatHistory(host as unknown as OpenClawApp);
   }
 }
