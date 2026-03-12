@@ -17,6 +17,8 @@ type ObfuscationPattern = {
   regex: RegExp;
 };
 
+const MAX_COMMAND_CHARS = 10_000;
+
 const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x00ad,
   0x034f,
@@ -73,6 +75,8 @@ const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0xfe0f,
   0xe0001,
   ...Array.from({ length: 95 }, (_unused, index) => 0xe0020 + index),
+  0xe007f,
+  ...Array.from({ length: 240 }, (_unused, index) => 0xe0100 + index),
 ]);
 
 function stripInvisibleUnicode(command: string): string {
@@ -156,35 +160,66 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   {
     id: "var-expansion-obfuscation",
     description: "Variable assignment chain with expansion (potential obfuscation)",
-    regex: /(?:[a-zA-Z_]\w{0,2}=\S+\s*;\s*){2,}.*\$(?:[a-zA-Z_]|\{[a-zA-Z_])/,
+    regex: /(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])/,
   },
 ];
 
-const FALSE_POSITIVE_SUPPRESSIONS: Array<{
-  suppresses: string[];
-  regex: RegExp;
-}> = [
-  {
-    suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/Homebrew|brew\.sh)\b/i,
-  },
-  {
-    suppresses: ["curl-pipe-shell"],
-    regex:
-      /curl\s+.*https?:\/\/(?:raw\.githubusercontent\.com\/nvm-sh\/nvm|sh\.rustup\.rs|get\.docker\.com|install\.python-poetry\.org)\b/i,
-  },
-  {
-    suppresses: ["curl-pipe-shell"],
-    regex: /curl\s+.*https?:\/\/(?:get\.pnpm\.io|bun\.sh\/install)\b/i,
-  },
+const SAFE_CURL_PIPE_URLS = [
+  { host: "brew.sh" },
+  { host: "get.pnpm.io" },
+  { host: "bun.sh", pathPrefix: "/install" },
+  { host: "sh.rustup.rs" },
+  { host: "get.docker.com" },
+  { host: "install.python-poetry.org" },
+  { host: "raw.githubusercontent.com", pathPrefix: "/Homebrew" },
+  { host: "raw.githubusercontent.com", pathPrefix: "/nvm-sh/nvm" },
 ];
+
+function extractHttpUrls(command: string): URL[] {
+  const urls = command.match(/https?:\/\/\S+/g) ?? [];
+  const parsed: URL[] = [];
+  for (const value of urls) {
+    try {
+      parsed.push(new URL(value));
+    } catch {
+      continue;
+    }
+  }
+  return parsed;
+}
+
+function shouldSuppressCurlPipeShell(command: string): boolean {
+  const urls = extractHttpUrls(command);
+  if (urls.length !== 1) {
+    return false;
+  }
+
+  const [url] = urls;
+  if (!url || url.username || url.password) {
+    return false;
+  }
+
+  return SAFE_CURL_PIPE_URLS.some(
+    (candidate) =>
+      url.hostname === candidate.host &&
+      (!candidate.pathPrefix || url.pathname.startsWith(candidate.pathPrefix)),
+  );
+}
 
 export function detectCommandObfuscation(command: string): ObfuscationDetection {
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
+  if (command.length > MAX_COMMAND_CHARS) {
+    return {
+      detected: true,
+      reasons: ["Command too long; potential obfuscation"],
+      matchedPatterns: ["command-too-long"],
+    };
+  }
 
   const normalizedCommand = stripInvisibleUnicode(command.normalize("NFKC"));
+  const urlCount = (normalizedCommand.match(/https?:\/\/\S+/g) ?? []).length;
 
   const reasons: string[] = [];
   const matchedPatterns: string[] = [];
@@ -194,13 +229,8 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
       continue;
     }
 
-    const urlCount = (normalizedCommand.match(/https?:\/\/\S+/g) ?? []).length;
     const suppressed =
-      urlCount <= 1 &&
-      FALSE_POSITIVE_SUPPRESSIONS.some(
-        (exemption) =>
-          exemption.suppresses.includes(pattern.id) && exemption.regex.test(normalizedCommand),
-      );
+      pattern.id === "curl-pipe-shell" && urlCount <= 1 && shouldSuppressCurlPipeShell(command);
 
     if (suppressed) {
       continue;
