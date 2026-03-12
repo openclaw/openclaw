@@ -300,7 +300,6 @@ function hasRetryable402TransientSignal(text: string): boolean {
   const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
   const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
   return (
-    hasQuotaRefreshWindowSignal(text) ||
     (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
       includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
     (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
