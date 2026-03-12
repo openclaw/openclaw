@@ -328,11 +328,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import {
-  __testing,
-  compactEmbeddedPiSession,
-  compactEmbeddedPiSessionDirect,
-} from "./compact.js";
+import { __testing, compactEmbeddedPiSession, compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
