@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type {
   AuthStorage,
@@ -240,6 +241,14 @@ function createSubscriptionMock() {
   };
 }
 
+const testModel = {
+  api: "openai-completions",
+  provider: "openai",
+  compat: {},
+  contextWindow: 8192,
+  input: ["text"],
+} as unknown as Model<Api>;
+
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   const tempPaths: string[] = [];
 
@@ -326,14 +335,6 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       },
     );
 
-    const model = {
-      api: "openai-completions",
-      provider: "openai",
-      compat: {},
-      contextWindow: 8192,
-      input: ["text"],
-    } as unknown as Model<Api>;
-
     const result = await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey: "agent:main:main",
@@ -346,7 +347,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       runId: "run-1",
       provider: "openai",
       modelId: "gpt-test",
-      model,
+      model: testModel,
       authStorage: {} as AuthStorage,
       modelRegistry: {} as ModelRegistry,
       thinkLevel: "off",
@@ -370,5 +371,210 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
         workspaceDir: sandboxWorkspace,
       }),
     );
+  });
+});
+
+describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
+  const tempPaths: string[] = [];
+  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+
+  beforeEach(() => {
+    hoisted.createAgentSessionMock.mockReset();
+    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+    hoisted.resolveSandboxContextMock.mockReset();
+    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(createSubscriptionMock);
+    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
+      release: async () => {},
+    });
+    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+    hoisted.sessionManager.branch.mockReset();
+    hoisted.sessionManager.resetLeaf.mockReset();
+    hoisted.sessionManager.appendCustomEntry.mockReset();
+  });
+
+  afterEach(async () => {
+    while (tempPaths.length > 0) {
+      const target = tempPaths.pop();
+      if (target) {
+        await fs.rm(target, { recursive: true, force: true });
+      }
+    }
+  });
+
+  // Build a minimal real attempt harness so lifecycle hooks run against
+  // the actual runner flow instead of a hand-written wrapper.
+  async function runAttemptWithContextEngine(contextEngine: {
+    bootstrap?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      sessionFile: string;
+    }) => Promise<unknown>;
+    assemble: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      messages: AgentMessage[];
+      tokenBudget?: number;
+    }) => Promise<{
+      messages: AgentMessage[];
+      estimatedTokens: number;
+      systemPromptAddition?: string;
+    }>;
+    afterTurn?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      sessionFile: string;
+      messages: AgentMessage[];
+      prePromptMessageCount: number;
+      tokenBudget?: number;
+      runtimeContext?: Record<string, unknown>;
+    }) => Promise<void>;
+    ingestBatch?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      messages: AgentMessage[];
+    }) => Promise<unknown>;
+    ingest?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      message: AgentMessage;
+    }) => Promise<unknown>;
+    info?: { id?: string; name?: string; version?: string };
+  }) {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({
+      messages: [{ role: "user", content: "seed", timestamp: 1 }],
+    });
+
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session: MutableSession = {
+        sessionId: "embedded-session",
+        messages: [],
+        isCompacting: false,
+        isStreaming: false,
+        agent: {
+          replaceMessages: (messages: unknown[]) => {
+            session.messages = [...messages];
+          },
+        },
+        prompt: async () => {
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        },
+        abort: async () => {},
+        dispose: () => {},
+        steer: async () => {},
+      };
+
+      return { session };
+    });
+
+    return await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-context-engine-forwarding",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      contextTokenBudget: 2048,
+      contextEngine: {
+        info: {
+          id: contextEngine.info?.id ?? "test-context-engine",
+          name: contextEngine.info?.name ?? "Test Context Engine",
+          version: contextEngine.info?.version ?? "0.0.1",
+        },
+        ...contextEngine,
+      },
+    });
+  }
+
+  it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+    const afterTurn = vi.fn(async () => {});
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      afterTurn,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(bootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+      }),
+    );
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+      }),
+    );
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+      }),
+    );
+  });
+
+  it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+    const ingestBatch = vi.fn(async () => ({ ingestedCount: 1 }));
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      ingestBatch,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(ingestBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+      }),
+    );
+  });
+
+  it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+    const ingest = vi.fn(async () => ({ ingested: true }));
+
+    const result = await runAttemptWithContextEngine({
+      bootstrap,
+      assemble,
+      ingest,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(ingest).toHaveBeenCalled();
+    expect(ingest.mock.calls.every(([params]) => params.sessionKey === sessionKey)).toBe(true);
   });
 });
