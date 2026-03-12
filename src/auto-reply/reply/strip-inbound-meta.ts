@@ -32,6 +32,11 @@ const SENTINEL_FAST_RE = new RegExp(
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|"),
 );
+const SESSION_RECAP_QUICK_RE = /<\s*session[-_]recap\b/i;
+const SESSION_RECAP_SINGLE_LINE_RE =
+  /^<\s*session[-_]recap\b[^<>]*>.*<\s*\/\s*session[-_]recap\s*>\s*$/i;
+const SESSION_RECAP_OPEN_LINE_RE = /^<\s*session[-_]recap\b[^<>]*>\s*$/i;
+const SESSION_RECAP_CLOSE_LINE_RE = /^<\s*\/\s*session[-_]recap\s*>\s*$/i;
 
 function isInboundMetaSentinelLine(line: string): boolean {
   const trimmed = line.trim();
@@ -103,6 +108,43 @@ function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
     return lines.slice(0, end);
   }
   return lines;
+}
+
+// Session recap is injected as a standalone leading block and should never
+// consume literal recap tags that appear later in real user text.
+function stripLeadingSessionRecapBlock(lines: string[]): { lines: string[]; stripped: boolean } {
+  let index = 0;
+  while (index < lines.length && lines[index]?.trim() === "") {
+    index += 1;
+  }
+  if (index >= lines.length) {
+    return { lines, stripped: false };
+  }
+  const startLine = lines[index] ?? "";
+  if (SESSION_RECAP_SINGLE_LINE_RE.test(startLine)) {
+    let end = index + 1;
+    while (end < lines.length && lines[end]?.trim() === "") {
+      end += 1;
+    }
+    return { lines: lines.slice(end), stripped: true };
+  }
+  if (!SESSION_RECAP_OPEN_LINE_RE.test(startLine)) {
+    return { lines, stripped: false };
+  }
+
+  let end = index + 1;
+  while (end < lines.length && !SESSION_RECAP_CLOSE_LINE_RE.test(lines[end] ?? "")) {
+    end += 1;
+  }
+  if (end >= lines.length) {
+    return { lines, stripped: false };
+  }
+
+  end += 1;
+  while (end < lines.length && lines[end]?.trim() === "") {
+    end += 1;
+  }
+  return { lines: lines.slice(end), stripped: true };
 }
 
 /**
@@ -178,11 +220,18 @@ export function stripInboundMetadata(text: string): string {
 }
 
 export function stripLeadingInboundMetadata(text: string): string {
-  if (!text || !SENTINEL_FAST_RE.test(text)) {
+  const hasSentinel = !!text && SENTINEL_FAST_RE.test(text);
+  const hasSessionRecap = !!text && SESSION_RECAP_QUICK_RE.test(text);
+  if (!text || (!hasSentinel && !hasSessionRecap)) {
     return text;
   }
 
-  const lines = text.split("\n");
+  const recap = stripLeadingSessionRecapBlock(text.split("\n"));
+  if (!hasSentinel && !recap.stripped) {
+    return text;
+  }
+
+  const lines = recap.lines;
   let index = 0;
 
   while (index < lines.length && lines[index] === "") {

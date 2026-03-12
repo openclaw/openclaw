@@ -6,6 +6,10 @@ import {
 } from "./message-normalizer.ts";
 
 describe("message-normalizer", () => {
+  const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+</session-recap>`;
+
   describe("normalizeMessage", () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -120,6 +124,25 @@ describe("message-normalizer", () => {
       });
 
       expect(result.senderLabel).toBe("Iris");
+    });
+
+    it("strips a leading session recap block from user messages", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: `${SESSION_RECAP_BLOCK}\n\nVisible user text`,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Visible user text" }]);
+    });
+
+    it("preserves session recap text when it appears mid-message", () => {
+      const content = `Visible prefix\n${SESSION_RECAP_BLOCK}\n\nVisible suffix`;
+      const result = normalizeMessage({
+        role: "user",
+        content,
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: content }]);
     });
   });
 

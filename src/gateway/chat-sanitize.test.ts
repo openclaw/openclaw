@@ -2,6 +2,10 @@ import { describe, expect, test } from "vitest";
 import { stripEnvelopeFromMessage } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessage", () => {
+  const SESSION_RECAP_BLOCK = `<session-recap>
+<summary>Found 10 recent items across 3 categories</summary>
+</session-recap>`;
+
   test("removes message_id hint lines from user messages", () => {
     const input = {
       role: "user",
@@ -48,6 +52,15 @@ describe("stripEnvelopeFromMessage", () => {
     };
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("Assistant body");
+  });
+
+  test("does not strip leading session recap blocks from assistant messages", () => {
+    const input = {
+      role: "assistant",
+      content: `${SESSION_RECAP_BLOCK}\n\nAssistant body`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe(`${SESSION_RECAP_BLOCK}\n\nAssistant body`);
   });
 
   test("removes inbound un-bracketed conversation info blocks from user messages", () => {
