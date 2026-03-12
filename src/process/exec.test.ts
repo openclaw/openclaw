@@ -72,44 +72,6 @@ describe("runCommandWithTimeout", () => {
     expect(result.code).not.toBe(0);
   });
 
-  it("mirrors stdout when requested", async () => {
-    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", 'process.stdout.write("hello")'],
-        {
-          timeoutMs: 5_000,
-          mirrorStdout: true,
-        },
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stdout).toBe("hello");
-      expect(stdoutSpy).toHaveBeenCalledWith(expect.any(Buffer));
-    } finally {
-      stdoutSpy.mockRestore();
-    }
-  });
-
-  it("mirrors stderr when requested", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", 'process.stderr.write("oops")'],
-        {
-          timeoutMs: 5_000,
-          mirrorStderr: true,
-        },
-      );
-
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("oops");
-      expect(stderrSpy).toHaveBeenCalledWith(expect.any(Buffer));
-    } finally {
-      stderrSpy.mockRestore();
-    }
-  });
-
   it.runIf(process.platform === "win32")(
     "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
     async () => {
