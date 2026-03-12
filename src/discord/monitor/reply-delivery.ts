@@ -24,6 +24,7 @@ export type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId?: (threadId: string) => DiscordThreadBindingLookupRecord | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
@@ -89,18 +90,21 @@ function resolveBoundThreadBinding(params: {
   target: string;
 }): DiscordThreadBindingLookupRecord | undefined {
   const sessionKey = params.sessionKey?.trim();
-  if (!params.threadBindings || !sessionKey) {
-    return undefined;
-  }
-  const bindings = params.threadBindings.listBySessionKey(sessionKey);
-  if (bindings.length === 0) {
-    return undefined;
-  }
   const targetChannelId = resolveTargetChannelId(params.target);
-  if (!targetChannelId) {
+  if (!params.threadBindings || !targetChannelId) {
     return undefined;
   }
-  return bindings.find((entry) => entry.threadId === targetChannelId);
+  if (sessionKey) {
+    const bindings = params.threadBindings.listBySessionKey(sessionKey);
+    const matched = bindings.find((entry) => entry.threadId === targetChannelId);
+    if (matched) {
+      return matched;
+    }
+  }
+  if ("getByThreadId" in params.threadBindings && typeof params.threadBindings.getByThreadId === "function") {
+    return params.threadBindings.getByThreadId(targetChannelId) ?? undefined;
+  }
+  return undefined;
 }
 
 function resolveBindingPersona(

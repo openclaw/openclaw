@@ -37,6 +37,7 @@ describe("deliverDiscordReply", () => {
       webhookId: string;
       webhookToken: string;
       introText: string;
+      targetKind: "subagent" | "acp";
     }> = {},
   ) => {
     const threadBindings = createThreadBindingManager({
@@ -434,6 +435,36 @@ describe("deliverDiscordReply", () => {
         accountId: "default",
         threadId: "thread-1",
         replyTo: "reply-1",
+      }),
+    );
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("uses thread-id fallback when the binding is owned by a different session key", async () => {
+    const threadBindings = await createBoundThreadBindings({
+      targetKind: "acp",
+      targetSessionKey: "agent:main:acp:child",
+      label: "codex-acp",
+    });
+
+    await deliverDiscordReply({
+      replies: [{ text: "Hello from ACP" }],
+      target: "channel:thread-1",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      sessionKey: "agent:main:discord:parent",
+      threadBindings,
+    });
+
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendWebhookMessageDiscordMock).toHaveBeenCalledWith(
+      "Hello from ACP",
+      expect.objectContaining({
+        webhookId: "wh_1",
+        webhookToken: "tok_1",
+        threadId: "thread-1",
       }),
     );
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();

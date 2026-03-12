@@ -113,11 +113,22 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
       event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""
         ? String(event.requesterOrigin.threadId).trim()
         : "";
-    const bindings = listThreadBindingsBySessionKey({
-      targetSessionKey: event.childSessionKey,
-      ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
-      targetKind: "subagent",
-    });
+    const bindingTargetKinds = ["subagent", "acp"] as const;
+    const seenBindingKeys = new Set<string>();
+    const bindings = bindingTargetKinds.flatMap((targetKind) =>
+      listThreadBindingsBySessionKey({
+        targetSessionKey: event.childSessionKey,
+        ...(requesterAccountId ? { accountId: requesterAccountId } : {}),
+        targetKind,
+      }).filter((entry) => {
+        const key = `${entry.accountId}:${entry.threadId}`;
+        if (seenBindingKeys.has(key)) {
+          return false;
+        }
+        seenBindingKeys.add(key);
+        return true;
+      }),
+    );
     if (bindings.length === 0) {
       return;
     }
