@@ -59,6 +59,17 @@ function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonito
   });
 }
 
+function shouldFlushDirectSlackMessage(
+  message: SlackMessageEvent,
+  cfg: SlackMonitorContext["cfg"],
+): boolean {
+  return shouldFlushDirectTextInbound({
+    text: stripSlackMentionsForCommandDetection(message.text ?? ""),
+    cfg,
+    requiresDirectFlush: Boolean(message.files && message.files.length > 0),
+  });
+}
+
 function buildSeenMessageKey(channelId: string | undefined, ts: string | undefined): string | null {
   if (!channelId || !ts) {
     return null;
@@ -168,11 +179,7 @@ export function createSlackMessageHandler(params: {
       buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
       shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
       shouldFlushDirectWhenPending: (entry) =>
-        shouldFlushDirectTextInbound({
-          text: stripSlackMentionsForCommandDetection(entry.message.text ?? ""),
-          cfg: ctx.cfg,
-          requiresDirectFlush: Boolean(entry.message.files && entry.message.files.length > 0),
-        }),
+        shouldFlushDirectSlackMessage(entry.message, ctx.cfg),
       onFlush: async (entries) => {
         const last = entries.at(-1);
         if (!last) {
@@ -320,6 +327,7 @@ export function createSlackMessageHandler(params: {
     const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId);
     const conversationKey = buildTopLevelSlackConversationKey(resolvedMessage, ctx.accountId);
     const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    const shouldFlushDirect = shouldFlushDirectSlackMessage(resolvedMessage, ctx.cfg);
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {
@@ -329,6 +337,10 @@ export function createSlackMessageHandler(params: {
           waitingOnPendingKeys ||= !(await debouncer.flushKey(pendingKey));
         }
         if (waitingOnPendingKeys) {
+          if (shouldFlushDirect) {
+            await debouncer.enqueue({ message: resolvedMessage, opts });
+            return;
+          }
           // Keep immediate top-level followers behind older buffered keys until those keys resolve.
           queueTopLevelImmediateEntry(conversationKey, { message: resolvedMessage, opts });
           return;

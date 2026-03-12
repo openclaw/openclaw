@@ -176,7 +176,7 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 
-  it("queues immediate top-level follow-ups until pending buffered keys fully flush", async () => {
+  it("queues non-priority top-level follow-ups until pending buffered keys fully flush", async () => {
     flushKeyMock.mockResolvedValue(false);
     const handler = createSlackMessageHandler({
       ctx: createContext(),
@@ -192,20 +192,18 @@ describe("createSlackMessageHandler", () => {
       ts: "1709000000.000100",
       text: "first buffered text",
     } as SlackMessageEvent;
-    const fileMessage = {
+    const immediateMessage = {
       type: "message",
-      subtype: "file_share",
       channel: "C111",
       user: "U111",
       ts: "1709000000.000200",
-      text: "file follows",
-      files: [{ id: "F1" }],
+      text: "",
     } as SlackMessageEvent;
 
     await handler(bufferedMessage as never, { source: "message" });
     enqueueMock.mockClear();
 
-    await handler(fileMessage as never, { source: "message" });
+    await handler(immediateMessage as never, { source: "message" });
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
     expect(enqueueMock).not.toHaveBeenCalled();
@@ -240,20 +238,18 @@ describe("createSlackMessageHandler", () => {
       ts: "1709000000.000100",
       text: "first buffered text",
     } as SlackMessageEvent;
-    const fileMessage = {
+    const immediateMessage = {
       type: "message",
-      subtype: "file_share",
       channel: "C111",
       user: "U111",
       ts: "1709000000.000200",
-      text: "file follows",
-      files: [{ id: "F1" }],
+      text: "",
     } as SlackMessageEvent;
 
     await handler(bufferedMessage as never, { source: "message" });
     enqueueMock.mockClear();
 
-    await handler(fileMessage as never, { source: "message" });
+    await handler(immediateMessage as never, { source: "message" });
 
     capturedDebouncerParams?.onError?.(
       Object.assign(new Error("inbound debounce flush retries exceeded"), {
@@ -268,6 +264,47 @@ describe("createSlackMessageHandler", () => {
       message: expect.objectContaining({
         ts: "1709000000.000200",
         channel: "C111",
+      }),
+      opts: { source: "message" },
+    });
+  });
+
+  it("flushes priority top-level followers immediately while older keys are still retrying", async () => {
+    flushKeyMock.mockResolvedValue(false);
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+
+    const bufferedMessage = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000100",
+      text: "first buffered text",
+    } as SlackMessageEvent;
+    const priorityMessage = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000200",
+      text: "/stop",
+    } as SlackMessageEvent;
+
+    await handler(bufferedMessage as never, { source: "message" });
+    enqueueMock.mockClear();
+
+    await handler(priorityMessage as never, { source: "message" });
+
+    expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledWith({
+      message: expect.objectContaining({
+        ts: "1709000000.000200",
+        channel: "C111",
+        text: "/stop",
       }),
       opts: { source: "message" },
     });
