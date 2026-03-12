@@ -52,21 +52,17 @@ function trimToUndefined(value: string | undefined): string | undefined {
 
 /**
  * Extract token from WebSocket upgrade request headers.
- * This allows nginx proxy to inject X-OpenClaw-Token header for browser clients
- * that cannot send custom WebSocket headers.
+ * This allows a trusted reverse proxy to inject X-OpenClaw-Token header
+ * for browser clients that cannot send custom WebSocket headers.
+ *
+ * Note: Only X-OpenClaw-Token is extracted, not Authorization: Bearer.
+ * The standard Authorization header may contain unrelated OAuth/OIDC tokens
+ * that would cause spurious rate-limit hits if treated as gateway auth.
  */
 function extractHeaderToken(req: IncomingMessage): string | undefined {
   const headerToken = req.headers["x-openclaw-token"];
   if (typeof headerToken === "string" && headerToken.trim()) {
     return headerToken.trim();
-  }
-  // Also check Authorization: Bearer header
-  const auth = req.headers.authorization;
-  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
-    const token = auth.slice(7).trim();
-    if (token) {
-      return token;
-    }
   }
   return undefined;
 }
@@ -104,6 +100,19 @@ function resolveBootstrapTokenCandidate(
   return trimToUndefined(connectAuth?.bootstrapToken);
 }
 
+/**
+ * Resolve auth state for a WebSocket connect handshake.
+ *
+ * When the request comes from a trusted proxy (gateway.trustedProxies),
+ * extracts X-OpenClaw-Token header and uses it as shared auth. This enables
+ * browser clients behind a reverse proxy to authenticate without device pairing
+ * when gateway.controlUi.dangerouslyDisableDeviceAuth is enabled.
+ *
+ * Limitations:
+ * - Header token is only used as shared auth, not as device token candidate.
+ *   Browser clients authing solely via header need dangerouslyDisableDeviceAuth: true
+ *   or must pass primary auth (token/password) via authorizeWsControlUiGatewayConnect.
+ */
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
