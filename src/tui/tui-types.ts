@@ -8,6 +8,7 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  theme?: string;
 };
 
 export type ChatEvent = {

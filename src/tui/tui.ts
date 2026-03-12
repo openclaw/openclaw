@@ -20,7 +20,7 @@ import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { GatewayChatClient } from "./gateway-chat.js";
-import { editorTheme, theme } from "./theme/theme.js";
+import { editorTheme, setTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
@@ -320,6 +320,11 @@ export function resolveCtrlCAction(params: {
 }
 
 export async function runTui(opts: TuiOptions) {
+  // Apply theme from CLI flag, env var, or auto-detect (in that priority).
+  if (opts.theme) {
+    setTheme(opts.theme);
+  }
+
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;

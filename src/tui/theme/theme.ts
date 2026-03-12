@@ -7,10 +7,15 @@ import type {
 import chalk from "chalk";
 import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
-import { createSyntaxTheme } from "./syntax-theme.js";
+import type { Palette, ThemePalette } from "./palettes.js";
+import { detectThemeName } from "./detect.js";
+import { getPalette, palettes } from "./palettes.js";
+import { createSyntaxThemeFromPalette } from "./syntax-theme.js";
 
-const DARK_TEXT = "#E8E3D5";
-const LIGHT_TEXT = "#1E1E1E";
+// ---------------------------------------------------------------------------
+// WCAG contrast utilities (from upstream)
+// ---------------------------------------------------------------------------
+
 const XTERM_LEVELS = [0, 95, 135, 175, 215, 255] as const;
 
 function channelToSrgb(value: number): number {
@@ -42,7 +47,7 @@ function contrastRatio(background: number, foregroundHex: string): number {
 
 function pickHigherContrastText(r: number, g: number, b: number): boolean {
   const background = relativeLuminanceRgb(r, g, b);
-  return contrastRatio(background, LIGHT_TEXT) >= contrastRatio(background, DARK_TEXT);
+  return contrastRatio(background, "#1E1E1E") >= contrastRatio(background, "#E8E3D5");
 }
 
 function isLightBackground(): boolean {
@@ -78,154 +83,183 @@ function isLightBackground(): boolean {
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
-export const darkPalette = {
-  text: "#E8E3D5",
-  dim: "#7B7F87",
-  accent: "#F6C453",
-  accentSoft: "#F2A65A",
-  border: "#3C414B",
-  userBg: "#2B2F36",
-  userText: "#F3EEE0",
-  systemText: "#9BA3B2",
-  toolPendingBg: "#1F2A2F",
-  toolSuccessBg: "#1E2D23",
-  toolErrorBg: "#2F1F1F",
-  toolTitle: "#F6C453",
-  toolOutput: "#E1DACB",
-  quote: "#8CC8FF",
-  quoteBorder: "#3B4D6B",
-  code: "#F0C987",
-  codeBlock: "#1E232A",
-  codeBorder: "#343A45",
-  link: "#7DD3A5",
-  error: "#F97066",
-  success: "#7DD3A5",
-} as const;
-
-export const lightPalette = {
-  text: "#1E1E1E",
-  dim: "#5B6472",
-  accent: "#B45309",
-  accentSoft: "#C2410C",
-  border: "#5B6472",
-  userBg: "#F3F0E8",
-  userText: "#1E1E1E",
-  systemText: "#4B5563",
-  toolPendingBg: "#EFF6FF",
-  toolSuccessBg: "#ECFDF5",
-  toolErrorBg: "#FEF2F2",
-  toolTitle: "#B45309",
-  toolOutput: "#374151",
-  quote: "#1D4ED8",
-  quoteBorder: "#2563EB",
-  code: "#92400E",
-  codeBlock: "#F9FAFB",
-  codeBorder: "#92400E",
-  link: "#047857",
-  error: "#DC2626",
-  success: "#047857",
-} as const;
+// Keep upstream's static palette exports for backward compatibility
+export const darkPalette = palettes.dark.ui;
+export const lightPalette = palettes.light.ui;
 
 export const palette = lightMode ? lightPalette : darkPalette;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-const syntaxTheme = createSyntaxTheme(fg(palette.code), lightMode);
+// ---------------------------------------------------------------------------
+// Theme builder — creates all themed exports from a palette
+// ---------------------------------------------------------------------------
 
-/**
- * Highlight code with syntax coloring.
- * Returns an array of lines with ANSI escape codes.
- */
-function highlightCode(code: string, lang?: string): string[] {
-  try {
-    // Auto-detect can be slow for very large blocks; prefer explicit language when available.
-    // Check if language is supported, fall back to auto-detect
-    const language = lang && supportsLanguage(lang) ? lang : undefined;
-    const highlighted = highlight(code, {
-      language,
-      theme: syntaxTheme,
-      ignoreIllegals: true,
-    });
-    return highlighted.split("\n");
-  } catch {
-    // If highlighting fails, return plain code
-    return code.split("\n").map((line) => fg(palette.code)(line));
-  }
+type HighlightTheme = Record<string, (text: string) => string>;
+
+function buildHighlightCode(syntaxTheme: HighlightTheme, codeFallback: string) {
+  return function highlightCode(code: string, lang?: string): string[] {
+    try {
+      const language = lang && supportsLanguage(lang) ? lang : undefined;
+      const highlighted = highlight(code, {
+        language,
+        theme: syntaxTheme,
+        ignoreIllegals: true,
+      });
+      return highlighted.split("\n");
+    } catch {
+      return code.split("\n").map((line) => fg(codeFallback)(line));
+    }
+  };
 }
 
-export const theme = {
-  fg: fg(palette.text),
-  assistantText: (text: string) => text,
-  dim: fg(palette.dim),
-  accent: fg(palette.accent),
-  accentSoft: fg(palette.accentSoft),
-  success: fg(palette.success),
-  error: fg(palette.error),
-  header: (text: string) => chalk.bold(fg(palette.accent)(text)),
-  system: fg(palette.systemText),
-  userBg: bg(palette.userBg),
-  userText: fg(palette.userText),
-  toolTitle: fg(palette.toolTitle),
-  toolOutput: fg(palette.toolOutput),
-  toolPendingBg: bg(palette.toolPendingBg),
-  toolSuccessBg: bg(palette.toolSuccessBg),
-  toolErrorBg: bg(palette.toolErrorBg),
-  border: fg(palette.border),
-  bold: (text: string) => chalk.bold(text),
-  italic: (text: string) => chalk.italic(text),
-};
+function buildTheme(p: Palette) {
+  return {
+    fg: fg(p.text),
+    assistantText: (text: string) => text,
+    dim: fg(p.dim),
+    accent: fg(p.accent),
+    accentSoft: fg(p.accentSoft),
+    success: fg(p.success),
+    error: fg(p.error),
+    header: (text: string) => chalk.bold(fg(p.accent)(text)),
+    system: fg(p.systemText),
+    userBg: bg(p.userBg),
+    userText: fg(p.userText),
+    toolTitle: fg(p.toolTitle),
+    toolOutput: fg(p.toolOutput),
+    toolPendingBg: bg(p.toolPendingBg),
+    toolSuccessBg: bg(p.toolSuccessBg),
+    toolErrorBg: bg(p.toolErrorBg),
+    border: fg(p.border),
+    bold: (text: string) => chalk.bold(text),
+    italic: (text: string) => chalk.italic(text),
+  };
+}
 
-export const markdownTheme: MarkdownTheme = {
-  heading: (text) => chalk.bold(fg(palette.accent)(text)),
-  link: (text) => fg(palette.link)(text),
-  linkUrl: (text) => chalk.dim(text),
-  code: (text) => fg(palette.code)(text),
-  codeBlock: (text) => fg(palette.code)(text),
-  codeBlockBorder: (text) => fg(palette.codeBorder)(text),
-  quote: (text) => fg(palette.quote)(text),
-  quoteBorder: (text) => fg(palette.quoteBorder)(text),
-  hr: (text) => fg(palette.border)(text),
-  listBullet: (text) => fg(palette.accentSoft)(text),
-  bold: (text) => chalk.bold(text),
-  italic: (text) => chalk.italic(text),
-  strikethrough: (text) => chalk.strikethrough(text),
-  underline: (text) => chalk.underline(text),
-  highlightCode,
-};
+function buildMarkdownTheme(p: Palette, syntaxTheme: HighlightTheme): MarkdownTheme {
+  return {
+    heading: (text) => chalk.bold(fg(p.accent)(text)),
+    link: (text) => fg(p.link)(text),
+    linkUrl: (text) => chalk.dim(text),
+    code: (text) => fg(p.code)(text),
+    codeBlock: (text) => fg(p.code)(text),
+    codeBlockBorder: (text) => fg(p.codeBorder)(text),
+    quote: (text) => fg(p.quote)(text),
+    quoteBorder: (text) => fg(p.quoteBorder)(text),
+    hr: (text) => fg(p.border)(text),
+    listBullet: (text) => fg(p.accentSoft)(text),
+    bold: (text) => chalk.bold(text),
+    italic: (text) => chalk.italic(text),
+    strikethrough: (text) => chalk.strikethrough(text),
+    underline: (text) => chalk.underline(text),
+    highlightCode: buildHighlightCode(syntaxTheme, p.code),
+  };
+}
 
-const baseSelectListTheme: SelectListTheme = {
-  selectedPrefix: (text) => fg(palette.accent)(text),
-  selectedText: (text) => chalk.bold(fg(palette.accent)(text)),
-  description: (text) => fg(palette.dim)(text),
-  scrollInfo: (text) => fg(palette.dim)(text),
-  noMatch: (text) => fg(palette.dim)(text),
-};
+function buildSelectListTheme(p: Palette): SelectListTheme {
+  return {
+    selectedPrefix: (text) => fg(p.accent)(text),
+    selectedText: (text) => chalk.bold(fg(p.accent)(text)),
+    description: (text) => fg(p.dim)(text),
+    scrollInfo: (text) => fg(p.dim)(text),
+    noMatch: (text) => fg(p.dim)(text),
+  };
+}
 
-export const selectListTheme: SelectListTheme = baseSelectListTheme;
+function buildSettingsListTheme(p: Palette): SettingsListTheme {
+  return {
+    label: (text, selected) => (selected ? chalk.bold(fg(p.accent)(text)) : fg(p.text)(text)),
+    value: (text, selected) => (selected ? fg(p.accentSoft)(text) : fg(p.dim)(text)),
+    description: (text) => fg(p.systemText)(text),
+    cursor: fg(p.accent)("→ "),
+    hint: (text) => fg(p.dim)(text),
+  };
+}
 
-export const filterableSelectListTheme = {
-  ...baseSelectListTheme,
-  filterLabel: (text: string) => fg(palette.dim)(text),
-};
+function buildSearchableSelectListTheme(p: Palette): SearchableSelectListTheme {
+  return {
+    selectedPrefix: (text) => fg(p.accent)(text),
+    selectedText: (text) => chalk.bold(fg(p.accent)(text)),
+    description: (text) => fg(p.dim)(text),
+    scrollInfo: (text) => fg(p.dim)(text),
+    noMatch: (text) => fg(p.dim)(text),
+    searchPrompt: (text) => fg(p.accentSoft)(text),
+    searchInput: (text) => fg(p.text)(text),
+    matchHighlight: (text) => chalk.bold(fg(p.accent)(text)),
+  };
+}
 
-export const settingsListTheme: SettingsListTheme = {
-  label: (text, selected) =>
-    selected ? chalk.bold(fg(palette.accent)(text)) : fg(palette.text)(text),
-  value: (text, selected) => (selected ? fg(palette.accentSoft)(text) : fg(palette.dim)(text)),
-  description: (text) => fg(palette.systemText)(text),
-  cursor: fg(palette.accent)("→ "),
-  hint: (text) => fg(palette.dim)(text),
-};
+// ---------------------------------------------------------------------------
+// Exported mutable state — declared first, then initialized.
+//
+// ESM named imports are live bindings, so consumers always see the
+// latest value after setTheme() reassigns them.
+// ---------------------------------------------------------------------------
 
-export const editorTheme: EditorTheme = {
-  borderColor: (text) => fg(palette.border)(text),
-  selectList: selectListTheme,
-};
+export let theme: ReturnType<typeof buildTheme>;
+export let markdownTheme: MarkdownTheme;
+export let selectListTheme: SelectListTheme;
+export let filterableSelectListTheme: SelectListTheme & { filterLabel: (text: string) => string };
+export let settingsListTheme: SettingsListTheme;
+export let editorTheme: EditorTheme;
+export let searchableSelectListTheme: SearchableSelectListTheme;
 
-export const searchableSelectListTheme: SearchableSelectListTheme = {
-  ...baseSelectListTheme,
-  searchPrompt: (text) => fg(palette.accentSoft)(text),
-  searchInput: (text) => fg(palette.text)(text),
-  matchHighlight: (text) => chalk.bold(fg(palette.accent)(text)),
-};
+// ---------------------------------------------------------------------------
+// Internal state
+// ---------------------------------------------------------------------------
+
+let activeThemeName = "";
+
+function applyPalette(tp: ThemePalette) {
+  const p = tp.ui;
+  const syntaxTheme = createSyntaxThemeFromPalette(tp.syntax, fg(p.code));
+
+  theme = buildTheme(p);
+  markdownTheme = buildMarkdownTheme(p, syntaxTheme);
+  selectListTheme = buildSelectListTheme(p);
+  filterableSelectListTheme = {
+    ...selectListTheme,
+    filterLabel: (text: string) => fg(p.dim)(text),
+  };
+  settingsListTheme = buildSettingsListTheme(p);
+  editorTheme = {
+    borderColor: (text) => fg(p.border)(text),
+    selectList: selectListTheme,
+  };
+  searchableSelectListTheme = buildSearchableSelectListTheme(p);
+}
+
+function resolveAndApply(name: string): string {
+  const tp = getPalette(name);
+  if (!tp) {
+    applyPalette(palettes.dark);
+    activeThemeName = "dark";
+  } else {
+    applyPalette(tp);
+    activeThemeName = name;
+  }
+  return activeThemeName;
+}
+
+// Initialize with detected theme on module load.
+resolveAndApply(detectThemeName());
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/** Switch the active TUI theme at runtime. Returns the resolved theme name. */
+export function setTheme(name: string): string {
+  return resolveAndApply(name);
+}
+
+/** Get the currently active theme name. */
+export function getThemeName(): string {
+  return activeThemeName;
+}

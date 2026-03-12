@@ -1,10 +1,63 @@
 import chalk from "chalk";
+import type { SyntaxPalette } from "./palettes.js";
 
 type HighlightTheme = Record<string, (text: string) => string>;
 
 /**
- * Syntax highlighting theme for code blocks.
+ * Build a syntax highlighting theme from a palette.
  * Uses chalk functions to style different token types.
+ */
+export function createSyntaxThemeFromPalette(
+  p: SyntaxPalette,
+  fallback: (text: string) => string,
+): HighlightTheme {
+  return {
+    keyword: chalk.hex(p.keyword),
+    built_in: chalk.hex(p.builtIn),
+    type: chalk.hex(p.type),
+    literal: chalk.hex(p.literal),
+    number: chalk.hex(p.number),
+    string: chalk.hex(p.string),
+    regexp: chalk.hex(p.regexp),
+    symbol: chalk.hex(p.symbol),
+    class: chalk.hex(p.class),
+    function: chalk.hex(p.function),
+    title: chalk.hex(p.title),
+    params: chalk.hex(p.params),
+    comment: chalk.hex(p.comment),
+    doctag: chalk.hex(p.doctag),
+    meta: chalk.hex(p.meta),
+    "meta-keyword": chalk.hex(p.metaKeyword),
+    "meta-string": chalk.hex(p.metaString),
+    section: chalk.hex(p.section),
+    tag: chalk.hex(p.tag),
+    name: chalk.hex(p.name),
+    attr: chalk.hex(p.attr),
+    attribute: chalk.hex(p.attr),
+    variable: chalk.hex(p.variable),
+    bullet: chalk.hex(p.bullet),
+    code: chalk.hex(p.code),
+    emphasis: chalk.italic,
+    strong: chalk.bold,
+    formula: chalk.hex(p.formula),
+    link: chalk.hex(p.link),
+    quote: chalk.hex(p.quote),
+    addition: chalk.hex(p.addition),
+    deletion: chalk.hex(p.deletion),
+    "selector-tag": chalk.hex(p.selectorTag),
+    "selector-id": chalk.hex(p.selectorTag),
+    "selector-class": chalk.hex(p.selectorTag),
+    "selector-attr": chalk.hex(p.selectorTag),
+    "selector-pseudo": chalk.hex(p.selectorTag),
+    "template-tag": chalk.hex(p.templateTag),
+    "template-variable": chalk.hex(p.templateVariable),
+    default: fallback,
+  };
+}
+
+/**
+ * Create a syntax theme using the dark palette defaults.
+ * Kept for backward compatibility.
  */
 export function createSyntaxTheme(
   fallback: (text: string) => string,
@@ -56,45 +109,45 @@ export function createSyntaxTheme(
   }
 
   return {
-    keyword: chalk.hex("#C586C0"), // purple - if, const, function, etc.
-    built_in: chalk.hex("#4EC9B0"), // teal - console, Math, etc.
-    type: chalk.hex("#4EC9B0"), // teal - types
-    literal: chalk.hex("#569CD6"), // blue - true, false, null
-    number: chalk.hex("#B5CEA8"), // green - numbers
-    string: chalk.hex("#CE9178"), // orange - strings
-    regexp: chalk.hex("#D16969"), // red - regex
-    symbol: chalk.hex("#B5CEA8"), // green - symbols
-    class: chalk.hex("#4EC9B0"), // teal - class names
-    function: chalk.hex("#DCDCAA"), // yellow - function names
-    title: chalk.hex("#DCDCAA"), // yellow - titles/names
-    params: chalk.hex("#9CDCFE"), // light blue - parameters
-    comment: chalk.hex("#6A9955"), // green - comments
-    doctag: chalk.hex("#608B4E"), // darker green - jsdoc tags
-    meta: chalk.hex("#9CDCFE"), // light blue - meta/preprocessor
-    "meta-keyword": chalk.hex("#C586C0"), // purple
-    "meta-string": chalk.hex("#CE9178"), // orange
-    section: chalk.hex("#DCDCAA"), // yellow - sections
-    tag: chalk.hex("#569CD6"), // blue - HTML/XML tags
-    name: chalk.hex("#9CDCFE"), // light blue - tag names
-    attr: chalk.hex("#9CDCFE"), // light blue - attributes
-    attribute: chalk.hex("#9CDCFE"), // light blue - attributes
-    variable: chalk.hex("#9CDCFE"), // light blue - variables
-    bullet: chalk.hex("#D7BA7D"), // gold - list bullets in markdown
-    code: chalk.hex("#CE9178"), // orange - inline code
-    emphasis: chalk.italic, // italic
-    strong: chalk.bold, // bold
-    formula: chalk.hex("#C586C0"), // purple - math
-    link: chalk.hex("#4EC9B0"), // teal - links
-    quote: chalk.hex("#6A9955"), // green - quotes
-    addition: chalk.hex("#B5CEA8"), // green - diff additions
-    deletion: chalk.hex("#F44747"), // red - diff deletions
-    "selector-tag": chalk.hex("#D7BA7D"), // gold - CSS selectors
-    "selector-id": chalk.hex("#D7BA7D"), // gold
-    "selector-class": chalk.hex("#D7BA7D"), // gold
-    "selector-attr": chalk.hex("#D7BA7D"), // gold
-    "selector-pseudo": chalk.hex("#D7BA7D"), // gold
-    "template-tag": chalk.hex("#C586C0"), // purple
-    "template-variable": chalk.hex("#9CDCFE"), // light blue
-    default: fallback, // fallback to code color
+    keyword: chalk.hex("#C586C0"),
+    built_in: chalk.hex("#4EC9B0"),
+    type: chalk.hex("#4EC9B0"),
+    literal: chalk.hex("#569CD6"),
+    number: chalk.hex("#B5CEA8"),
+    string: chalk.hex("#CE9178"),
+    regexp: chalk.hex("#D16969"),
+    symbol: chalk.hex("#B5CEA8"),
+    class: chalk.hex("#4EC9B0"),
+    function: chalk.hex("#DCDCAA"),
+    title: chalk.hex("#DCDCAA"),
+    params: chalk.hex("#9CDCFE"),
+    comment: chalk.hex("#6A9955"),
+    doctag: chalk.hex("#608B4E"),
+    meta: chalk.hex("#9CDCFE"),
+    "meta-keyword": chalk.hex("#C586C0"),
+    "meta-string": chalk.hex("#CE9178"),
+    section: chalk.hex("#DCDCAA"),
+    tag: chalk.hex("#569CD6"),
+    name: chalk.hex("#9CDCFE"),
+    attr: chalk.hex("#9CDCFE"),
+    attribute: chalk.hex("#9CDCFE"),
+    variable: chalk.hex("#9CDCFE"),
+    bullet: chalk.hex("#D7BA7D"),
+    code: chalk.hex("#CE9178"),
+    emphasis: chalk.italic,
+    strong: chalk.bold,
+    formula: chalk.hex("#C586C0"),
+    link: chalk.hex("#4EC9B0"),
+    quote: chalk.hex("#6A9955"),
+    addition: chalk.hex("#B5CEA8"),
+    deletion: chalk.hex("#F44747"),
+    "selector-tag": chalk.hex("#D7BA7D"),
+    "selector-id": chalk.hex("#D7BA7D"),
+    "selector-class": chalk.hex("#D7BA7D"),
+    "selector-attr": chalk.hex("#D7BA7D"),
+    "selector-pseudo": chalk.hex("#D7BA7D"),
+    "template-tag": chalk.hex("#C586C0"),
+    "template-variable": chalk.hex("#9CDCFE"),
+    default: fallback,
   };
 }
