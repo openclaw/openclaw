@@ -117,14 +117,6 @@ export function resolveLastChannelRaw(params: {
       resolved = sessionKeyChannelHint;
     }
   }
-  // Fix #34308: When channel is INTERNAL but session has a persisted external channel
-  // (deliveryContext), use the persisted channel for reply delivery.
-  if (
-    originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
-    isExternalRoutingChannel(persistedChannel)
-  ) {
-    resolved = persistedChannel;
-  }
   return resolved;
 }
 
@@ -160,10 +152,11 @@ export function resolveLastToRaw(params: {
   }
 
   // Fix #34308: When channel is INTERNAL but session has a persisted external channel
-  // (deliveryContext), use the persisted to address for reply delivery.
+  // (deliveryContext) AND a persisted lastTo address, use the persisted to address for reply delivery.
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
-    isExternalRoutingChannel(persistedChannel)
+    isExternalRoutingChannel(persistedChannel) &&
+    params.persistedLastTo
   ) {
     return params.persistedLastTo;
   }
