@@ -405,6 +405,21 @@ export async function createBackupArchive(
       workspaceDirs: plan.workspaceDirs,
     };
 
+    // Shared tar options — single source of truth so the two archive paths
+    // cannot diverge (divergence caused the Windows CI failures in Finding 9).
+    const baseTarOpts = {
+      portable: true,
+      preservePaths: true,
+      follow: false,
+      onWriteEntry: (entry: tar.WriteEntry) => {
+        entry.path = remapArchiveEntryPath({
+          entryPath: entry.path,
+          manifestPath,
+          archiveRoot,
+        });
+      },
+    } as const;
+
     if (hasExcludes) {
       // Two-step archive creation: create uncompressed tar with payload only,
       // collect excludedStats via filter side-effect, write the final
@@ -412,27 +427,12 @@ export async function createBackupArchive(
       // This ensures the in-archive manifest accurately records what was excluded.
       uncompressedTarPath = `${tempArchivePath}.tar`;
 
-      const tarFilter = (entryPath: string, stat: { size?: number }) => {
-        return excludeFilter(entryPath, stat);
-      };
-
       await tar.c(
         {
+          ...baseTarOpts,
           file: uncompressedTarPath,
-          portable: true,
-          preservePaths: true,
-          follow: false,
-          filter: tarFilter,
-          onWriteEntry: (entry) => {
-            // Use the same remapping as the simple path for consistent
-            // path normalization across platforms (the manifest special-case
-            // in remapArchiveEntryPath is a no-op here since manifest is
-            // appended separately via tar.r below).
-            entry.path = remapArchiveEntryPath({
-              entryPath: entry.path,
-              manifestPath,
-              archiveRoot,
-            });
+          filter: (entryPath: string, stat: { size?: number }) => {
+            return excludeFilter(entryPath, stat);
           },
         },
         result.assets.map((asset) => asset.sourcePath),
@@ -477,18 +477,9 @@ export async function createBackupArchive(
 
       await tar.c(
         {
+          ...baseTarOpts,
           file: tempArchivePath,
           gzip: true,
-          portable: true,
-          preservePaths: true,
-          follow: false,
-          onWriteEntry: (entry) => {
-            entry.path = remapArchiveEntryPath({
-              entryPath: entry.path,
-              manifestPath,
-              archiveRoot,
-            });
-          },
         },
         [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
       );
