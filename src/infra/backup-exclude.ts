@@ -362,6 +362,14 @@ export function buildExcludeFilter(
         return true; // root directory itself — always include
       }
 
+      // Paths outside baseDir are not subject to exclude patterns.
+      // Covers: "../" paths (same drive) and "D:" paths (cross-drive on Windows).
+      // Without this guard, `ignore` throws RangeError on "../" paths,
+      // which hits the fail-closed catch and silently excludes content.
+      if (rel.startsWith("../") || rel === ".." || /^[A-Za-z]:/.test(rel)) {
+        return true;
+      }
+
       // Fast path: prefix check for simple directory/file name patterns.
       for (const { prefix, pattern } of prefixPatterns) {
         if (rel === prefix || rel.startsWith(`${prefix}/`)) {

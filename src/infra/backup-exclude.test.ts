@@ -575,4 +575,24 @@ describe("buildExcludeFilter", () => {
     const logStats = stats.byPattern.find((p: { pattern: string }) => p.pattern === "*.log");
     expect(logStats).toEqual({ pattern: "*.log", source: "cli", files: 2, bytes: 500 });
   });
+
+  // Finding 2: paths outside baseDir are included (not silently excluded)
+  it("filter returns true (include) for absolute path outside baseDir", () => {
+    const sources = new Map([["venvs/", "default" as const]]);
+    const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
+    // Path outside tempDir — should be included, not silently excluded
+    expect(filter("/some/other/path/file.txt", { size: 100 })).toBe(true);
+  });
+
+  it("filter returns true for ../relative paths (outside baseDir) without triggering warn", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sources = new Map([["venvs/", "default" as const]]);
+    const { filter } = buildExcludeFilter(["venvs/"], sources, tempDir);
+
+    // Simulate a path that resolves to ../ relative to baseDir
+    expect(filter(path.join(tempDir, "..", "outside-file.txt"), { size: 100 })).toBe(true);
+    // Should NOT trigger the fail-closed warn — guard catches before catch block
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
