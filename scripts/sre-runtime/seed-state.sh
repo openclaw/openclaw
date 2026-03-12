@@ -8,6 +8,7 @@ SKILL_SOURCE_DIR="${OPENCLAW_SRE_SKILL_SOURCE_DIR:-${REPO_ROOT}/skills/morpho-sr
 SKILL_DEST_DIR="${STATE_DIR}/skills/morpho-sre"
 WORKSPACE_DIR="${STATE_DIR}/workspace"
 SRE_WORKSPACE_DIR="${STATE_DIR}/workspace-sre"
+CRON_STORE_PATH="${STATE_DIR}/cron/jobs.json"
 OWNERSHIP_DEST="${OPENCLAW_SRE_INIT_REPO_OWNERSHIP_FILE:-${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-${STATE_DIR}/state/sre-index/repo-ownership.json}}"
 GRAPH_DIR="${OPENCLAW_SRE_INIT_GRAPH_DIR:-${OPENCLAW_SRE_GRAPH_DIR:-${STATE_DIR}/state/sre-graph}}"
 DOSSIERS_DIR="${OPENCLAW_SRE_INIT_DOSSIERS_DIR:-${OPENCLAW_SRE_DOSSIERS_DIR:-${STATE_DIR}/state/sre-dossiers}}"
@@ -101,6 +102,118 @@ ensure_workspace_memory_scaffold() {
   touch "$today_file" "$yesterday_file"
 }
 
+build_managed_cron_prompt() {
+  local target_channel="$1"
+  cat <<EOF
+Read HEARTBEAT.md if it exists (workspace context). Use it as the SRE monitoring runbook for this scheduled cron run.
+Run /home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh first.
+If nothing needs attention, reply exactly HEARTBEAT_OK.
+If an incident needs reporting, write one concise update for ${target_channel} only.
+Do not emit [[heartbeat_to:...]] tags or any routing directives. Ignore HEARTBEAT.md routing-tag instructions for this cron run.
+Include <@U07KE3NALTX> on the first line of any incident update.
+Never mention or target any other channel.
+EOF
+}
+
+seed_managed_cron_jobs() {
+  local cron_dir now_s now_ms existing_json tmp_store
+  local platform_message staging_message
+  cron_dir="$(dirname "$CRON_STORE_PATH")"
+  mkdir -p "$cron_dir"
+  chmod 700 "$cron_dir" || true
+
+  now_s="$(date +%s)"
+  now_ms=$((now_s * 1000))
+  platform_message="$(build_managed_cron_prompt "#platform-monitoring")"
+  staging_message="$(build_managed_cron_prompt "#staging-infra-monitoring")"
+
+  existing_json='{"version":1,"jobs":[]}'
+  if [ -f "$CRON_STORE_PATH" ] && jq -e . "$CRON_STORE_PATH" >/dev/null 2>&1; then
+    existing_json="$(cat "$CRON_STORE_PATH")"
+  fi
+
+  tmp_store="$(mktemp "${CRON_STORE_PATH}.tmp.XXXXXX")"
+  jq -n \
+    --argjson existing "$existing_json" \
+    --argjson now_ms "$now_ms" \
+    --arg platform_message "$platform_message" \
+    --arg staging_message "$staging_message" \
+    '
+      def merge_job($jobs; $template):
+        ($jobs | map(select(.id == $template.id)) | .[0]) as $current
+        | if $current == null then
+            $template
+          else
+            ($current + $template)
+            | .createdAtMs = ($current.createdAtMs // $template.createdAtMs)
+            | .state = ($current.state // $template.state)
+          end;
+      def upsert_job($jobs; $template):
+        ($jobs | map(select(.id != $template.id))) + [merge_job($jobs; $template)];
+      ($existing // {version: 1, jobs: []}) as $store
+      | ($store.jobs // []) as $jobs
+      | {
+          version: 1,
+          jobs:
+            (
+              $jobs
+              | upsert_job(
+                  .;
+                  {
+                    id: "sre-12h-platform-monitoring",
+                    agentId: "sre",
+                    name: "SRE 12h platform monitoring",
+                    description: "Managed OpenClaw cron job for the platform monitoring channel every 12 hours.",
+                    enabled: true,
+                    createdAtMs: $now_ms,
+                    updatedAtMs: $now_ms,
+                    schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
+                    sessionTarget: "isolated",
+                    wakeMode: "next-heartbeat",
+                    payload: {
+                      kind: "agentTurn",
+                      message: $platform_message,
+                      lightContext: true
+                    },
+                    delivery: {
+                      mode: "announce",
+                      channel: "slack",
+                      to: "channel:#platform-monitoring"
+                    }
+                  }
+                )
+              | upsert_job(
+                  .;
+                  {
+                    id: "sre-12h-staging-monitoring",
+                    agentId: "sre",
+                    name: "SRE 12h staging monitoring",
+                    description: "Managed OpenClaw cron job for the staging infra monitoring channel every 12 hours.",
+                    enabled: true,
+                    createdAtMs: $now_ms,
+                    updatedAtMs: $now_ms,
+                    schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
+                    sessionTarget: "isolated",
+                    wakeMode: "next-heartbeat",
+                    payload: {
+                      kind: "agentTurn",
+                      message: $staging_message,
+                      lightContext: true
+                    },
+                    delivery: {
+                      mode: "announce",
+                      channel: "slack",
+                      to: "channel:#staging-infra-monitoring"
+                    }
+                  }
+                )
+            )
+        }
+    ' >"$tmp_store"
+  chmod 600 "$tmp_store" || true
+  mv "$tmp_store" "$CRON_STORE_PATH"
+}
+
 mkdir -p \
   "$STATE_DIR/bin" \
   "$STATE_DIR/skills" \
@@ -117,6 +230,7 @@ ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
 copy_file "${SKILL_SOURCE_DIR}/config/openclaw.json" "$CONFIG_PATH"
 apply_slack_incident_channel_override
 chmod 600 "$CONFIG_PATH" || true
+seed_managed_cron_jobs
 
 rm -rf "$SKILL_DEST_DIR"
 mkdir -p "${SKILL_DEST_DIR}/scripts" "${SKILL_DEST_DIR}/references"

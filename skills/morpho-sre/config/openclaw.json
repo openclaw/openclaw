@@ -44,7 +44,7 @@
         "maxChildrenPerAgent": 5
       },
       "heartbeat": {
-        "every": "1h",
+        "every": "0m",
         "target": "slack",
         "activeHours": {
           "start": "00:00",
@@ -52,13 +52,7 @@
           "timezone": "user"
         },
         "ackMaxChars": 30,
-        "session": "sentinel-monitor",
-        "to": "channel:#staging-infra-monitoring",
-        "routeAllowlist": [
-          "channel:#platform-monitoring",
-          "channel:#staging-infra-monitoring",
-          "user:U07KE3NALTX"
-        ]
+        "session": "sentinel-monitor"
       }
     },
     "list": [
@@ -209,6 +203,10 @@
         }
       }
     ]
+  },
+  "cron": {
+    "enabled": true,
+    "store": "~/.openclaw/cron/jobs.json"
   },
   "tools": {
     "elevated": {

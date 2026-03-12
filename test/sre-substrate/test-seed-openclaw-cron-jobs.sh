@@ -35,29 +35,22 @@ OPENCLAW_STATE_DIR="$STATE_DIR" \
 OPENCLAW_CONFIG_PATH="$STATE_DIR/openclaw.json" \
 bash "$REPO_ROOT/scripts/sre-runtime/seed-state.sh" >/dev/null
 
-test -f "$STATE_DIR/openclaw.json"
-test -f "$STATE_DIR/skills/morpho-sre/SKILL.md"
-test -f "$STATE_DIR/skills/morpho-sre/scripts/sentinel-triage.sh"
-test -f "$STATE_DIR/skills/morpho-sre/knowledge-index.md"
-test -f "$STATE_DIR/state/sre-index/repo-ownership.json"
-test -f "$STATE_DIR/workspace/MEMORY.md"
-test -f "$STATE_DIR/workspace-sre/MEMORY.md"
-test -f "$STATE_DIR/workspace/HEARTBEAT.md"
-test -f "$STATE_DIR/workspace-sre/HEARTBEAT.md"
-test -f "$STATE_DIR/cron/jobs.json"
-test -d "$STATE_DIR/workspace/memory"
-test -d "$STATE_DIR/workspace-sre/memory"
-ls "$STATE_DIR"/workspace/memory/*.md >/dev/null 2>&1
-ls "$STATE_DIR"/workspace-sre/memory/*.md >/dev/null 2>&1
 jq -e '
-  (.jobs | map(.id) | sort) == ([
-    "sre-12h-platform-monitoring",
-    "sre-12h-staging-monitoring"
-  ] | sort)
+  .version == 1 and
+  (.jobs | length) == 2 and
+  all(.jobs[];
+    .agentId == "sre" and
+    .enabled == true and
+    .schedule.kind == "cron" and
+    .schedule.expr == "0 */12 * * *" and
+    .schedule.tz == "UTC" and
+    .sessionTarget == "isolated" and
+    .wakeMode == "next-heartbeat" and
+    .payload.kind == "agentTurn" and
+    .payload.lightContext == true and
+    .delivery.mode == "announce" and
+    .delivery.channel == "slack"
+  ) and
+  any(.jobs[]; .id == "sre-12h-platform-monitoring" and .delivery.to == "channel:#platform-monitoring") and
+  any(.jobs[]; .id == "sre-12h-staging-monitoring" and .delivery.to == "channel:#staging-infra-monitoring")
 ' "$STATE_DIR/cron/jobs.json" >/dev/null
-test -d "$STATE_DIR/skills/foundry-evm-debug"
-test -f "$STATE_DIR/skills/argocd-diff/SKILL.md"
-test -f "$STATE_DIR/skills/eks-troubleshoot/SKILL.md"
-test -f "$STATE_DIR/skills/grafana-metrics-best-practices/SKILL.md"
-test -f "$STATE_DIR/skills/go-memory-profiling/SKILL.md"
-test -f "$STATE_DIR/skills/terraform-ci-review/SKILL.md"

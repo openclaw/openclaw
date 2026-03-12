@@ -6,20 +6,11 @@ ROOT="$REPO_ROOT/skills/morpho-sre"
 CONFIG="$ROOT/config/openclaw.json"
 
 jq -e '
-  .agents.defaults.heartbeat.every == "1h"
+  .agents.defaults.heartbeat.every == "0m"
 ' "$CONFIG" >/dev/null
 
 jq -e '
   .agents.defaults.heartbeat.session == "sentinel-monitor"
-' "$CONFIG" >/dev/null
-
-jq -e '
-  (.agents.defaults.heartbeat.routeAllowlist | sort) ==
-  ([
-    "channel:#platform-monitoring",
-    "channel:#staging-infra-monitoring",
-    "user:U07KE3NALTX"
-  ] | sort)
 ' "$CONFIG" >/dev/null
 
 jq -e '

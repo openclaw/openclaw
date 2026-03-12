@@ -423,12 +423,32 @@ compute_dedup_key() {
   local minute half hour_bucket key_source
   minute="$(date -u +%M)"
   half=0
-  if [[ "$minute" =~ ^[0-9]+$ ]] && [[ "$minute" -ge 30 ]]; then
+  if [[ "$minute" =~ ^[0-9]+$ ]] && ((10#$minute >= 30)); then
     half=30
   fi
   hour_bucket="$(date -u +%Y%m%d%H)$(printf '%02d' "$half")"
   key_source="${namespace}${category}${workload_hash8}${hour_bucket}"
   printf '%s' "$key_source" | shasum -a 256 | awk '{print $1}'
+}
+
+normalize_json_compact_or() {
+  local raw="${1:-}"
+  local fallback="${2:-null}"
+  if [[ -n "$raw" ]] && printf '%s\n' "$raw" | jq -ce . >/dev/null 2>&1; then
+    printf '%s\n' "$raw" | jq -c .
+    return 0
+  fi
+  printf '%s\n' "$fallback" | jq -c .
+}
+
+normalize_json_number_or() {
+  local raw="${1:-}"
+  local fallback="${2:-0}"
+  if [[ "$raw" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+  printf '%s\n' "$fallback"
 }
 
 resolve_helper_script() {
@@ -768,7 +788,7 @@ rca_cache_write_json() {
     --arg incident_id "$incident_id" \
     --arg evidence_fingerprint "$evidence_fingerprint" \
     --arg last_rca_ts "$last_rca_ts" \
-    --argjson rca_result_json "$rca_json" \
+    --argjson rca_result_json "$(normalize_json_compact_or "$rca_json" '{}')" \
     '{
       incident_id: $incident_id,
       evidence_fingerprint: $evidence_fingerprint,
@@ -1619,7 +1639,7 @@ write_phase1_shadow_artifacts() {
       --arg severity "${severity_level:-unknown}" \
       --arg fingerprint "${incident_fingerprint:-unknown}" \
       --arg gate_reason "${gate_reason:-}" \
-      --argjson primary_impact_signals "${primary_impact_signals:-0}" \
+      --argjson primary_impact_signals "$(normalize_json_number_or "${primary_impact_signals:-0}" 0)" \
       '{
         incident_id: $incident_id,
         namespace: $namespace,
@@ -1635,7 +1655,7 @@ write_phase1_shadow_artifacts() {
 
   rca_payload="$(
     jq -nc \
-      --argjson rca "${rca_result_json:-{}}" \
+      --argjson rca "$(normalize_json_compact_or "${rca_result_json:-}" '{}')" \
       --arg mode "${rca_mode_effective:-unknown}" \
       --arg source "${rca_result_source:-unknown}" \
       --arg status "${rca_result_status:-unknown}" \
@@ -1707,7 +1727,7 @@ write_phase1_shadow_artifacts() {
       --arg fingerprint "${incident_fingerprint:-unknown}" \
       --arg status "${rca_result_status:-fallback}" \
       --arg observed_at "$observed_at" \
-      --argjson confidence "${rca_confidence:-0}" \
+      --argjson confidence "$(normalize_json_number_or "${rca_confidence:-0}" 0)" \
       '{
         version: $version,
         incident_id: $incident_id,
