@@ -62,7 +62,7 @@ describe("resolveEffectiveSessionToolsVisibility", () => {
     ).toBe("all");
   });
 
-  it("falls back to default sandbox clamp when agentId override is missing", () => {
+  it("falls back to default sandbox clamp when agentId is not found in agents.list", () => {
     const cfg = {
       tools: { sessions: { visibility: "all" } },
       agents: {
