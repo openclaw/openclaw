@@ -592,7 +592,54 @@ function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean 
 type PayloadMessage = {
   role?: string;
   content?: unknown;
+  tool_calls?: unknown;
+  function_call?: unknown;
 };
+
+function hasOpenAIToolCall(message: PayloadMessage): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  return Boolean(
+    message.function_call &&
+    typeof message.function_call === "object" &&
+    !Array.isArray(message.function_call),
+  );
+}
+
+/**
+ * Some OpenAI-compatible providers reject assistant tool-call messages when
+ * `content` is null. Preserve empty assistant text as "" for replay.
+ */
+function createOpenAIEmptyAssistantContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const messages = (payload as Record<string, unknown>).messages;
+          if (Array.isArray(messages)) {
+            for (const message of messages as PayloadMessage[]) {
+              if (message.role !== "assistant" || message.content !== null) {
+                continue;
+              }
+              if (!hasOpenAIToolCall(message)) {
+                continue;
+              }
+              message.content = "";
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
 
 /**
  * Inject cache_control into the system message for OpenRouter Anthropic models.
@@ -1345,4 +1392,8 @@ export function applyExtraParamsToAgent(
       log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
     }
   }
+
+  // Preserve empty assistant content across tool-call turns for providers
+  // that reject `assistant.content = null` in openai-completions payloads.
+  agent.streamFn = createOpenAIEmptyAssistantContentWrapper(agent.streamFn);
 }

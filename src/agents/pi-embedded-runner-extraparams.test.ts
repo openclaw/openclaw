@@ -491,6 +491,57 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("parallel_tool_calls");
   });
 
+  it("rewrites assistant content null to empty string when tool_calls are present", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "deepseek",
+      applyModelId: "deepseek-chat",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "read", arguments: '{"path":"SOUL.md"}' },
+              },
+            ],
+          },
+        ],
+      },
+      model: {
+        api: "openai-completions",
+        provider: "deepseek",
+        id: "deepseek-chat",
+      } as Model<"openai-completions">,
+    });
+
+    expect((payload.messages as Array<{ content: unknown }>)[0]?.content).toBe("");
+  });
+
+  it("does not rewrite assistant content null without tool calls", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "deepseek",
+      applyModelId: "deepseek-chat",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: null,
+          },
+        ],
+      },
+      model: {
+        api: "openai-completions",
+        provider: "deepseek",
+        id: "deepseek-chat",
+      } as Model<"openai-completions">,
+    });
+
+    expect((payload.messages as Array<{ content: unknown }>)[0]?.content).toBeNull();
+  });
+
   it("lets runtime override win across alias styles for parallel_tool_calls", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
