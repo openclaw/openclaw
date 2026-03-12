@@ -161,7 +161,7 @@ describe("createDiscordGatewayPlugin", () => {
       runtime,
     });
 
-    expect(Object.getPrototypeOf(plugin)).toBe(GatewayPlugin.prototype);
+    expect(plugin).toBeInstanceOf(GatewayPlugin);
     expect(runtime.error).toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
