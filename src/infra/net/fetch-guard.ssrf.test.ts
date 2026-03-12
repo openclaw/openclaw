@@ -224,4 +224,51 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("forwards connectOptions to pinned dispatcher (regression: 45b74fb56c)", async () => {
+    // Regression test: Telegram media downloads go through fetchWithSsrFGuard which
+    // creates a pinned dispatcher. The telegram fetch wrapper's IPv4 fallback is
+    // skipped when callerProvidedDispatcher is true (always the case for SSRF guard).
+    // Callers must be able to pass connectOptions (e.g. autoSelectFamily: false) to
+    // prevent IPv6 timeouts in dual-stack environments with broken IPv6 routes.
+    const lookupFn = createPublicLookup();
+    let capturedDispatcher: unknown = null;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedDispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/botTOKEN/documents/file_42.pdf",
+      fetchImpl,
+      lookupFn,
+      connectOptions: { autoSelectFamily: false },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(capturedDispatcher).toBeDefined();
+    expect(capturedDispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    await result.release();
+  });
+
+  it("does not set connect options on pinned dispatcher when connectOptions is omitted", async () => {
+    const lookupFn = createPublicLookup();
+    let capturedDispatcher: unknown = null;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedDispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://example.com/file.pdf",
+      fetchImpl,
+      lookupFn,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // Dispatcher is present (pinned) but without connect options override
+    expect(capturedDispatcher).toBeDefined();
+    expect(capturedDispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
+    await result.release();
+  });
 });

@@ -38,6 +38,13 @@ export type GuardedFetchOptions = {
    */
   dangerouslyAllowEnvProxyWithoutPinnedDns?: boolean;
   auditContext?: string;
+  /**
+   * Connect-level options forwarded to the pinned SSRF dispatcher.
+   * Use `{ autoSelectFamily: false }` to disable Happy Eyeballs when the
+   * target is known to have broken IPv6 routes (e.g. Telegram media downloads
+   * in dual-stack containers).
+   */
+  connectOptions?: { autoSelectFamily?: boolean; autoSelectFamilyAttemptTimeout?: number };
 };
 
 export type GuardedFetchResult = {
@@ -196,7 +203,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        dispatcher = createPinnedDispatcher(pinned, params.connectOptions);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

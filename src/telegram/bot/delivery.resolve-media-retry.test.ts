@@ -177,6 +177,31 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
+  it("passes connectOptions with autoSelectFamily: false to fetchRemoteMedia (regression: 45b74fb56c)", async () => {
+    // Regression test: the SSRF pinned dispatcher must receive autoSelectFamily: false
+    // for Telegram media downloads. Without this, dual-stack containers with broken
+    // IPv6 routes hit ETIMEDOUT because the telegram fetch wrapper's IPv4 fallback is
+    // skipped when callerProvidedDispatcher is true (always the case for SSRF guard).
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
+
+    await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectOptions: { autoSelectFamily: false },
+      }),
+    );
+  });
+
   it.each(["voice", "photo", "video"] as const)(
     "returns null for %s when getFile exhausts retries so message is not dropped",
     async (mediaField) => {

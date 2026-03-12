@@ -126,6 +126,11 @@ async function downloadAndSaveTelegramFile(params: {
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    // Disable Happy Eyeballs on the SSRF pinned dispatcher. The telegram fetch
+    // wrapper's own IPv4 fallback (stickyIpv4Dispatcher) is skipped when the
+    // SSRF guard provides a caller dispatcher. Without this, dual-stack
+    // containers with broken IPv6 routes hit ETIMEDOUT before IPv4 connects.
+    connectOptions: { autoSelectFamily: false },
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(

@@ -329,10 +329,19 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  connectOptions?: { autoSelectFamily?: boolean; autoSelectFamilyAttemptTimeout?: number },
+): Dispatcher {
   return new Agent({
     connect: {
       lookup: pinned.lookup,
+      ...(connectOptions?.autoSelectFamily !== undefined
+        ? { autoSelectFamily: connectOptions.autoSelectFamily }
+        : {}),
+      ...(connectOptions?.autoSelectFamilyAttemptTimeout !== undefined
+        ? { autoSelectFamilyAttemptTimeout: connectOptions.autoSelectFamilyAttemptTimeout }
+        : {}),
     },
   });
 }

@@ -35,6 +35,8 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  /** Connect-level options forwarded to the SSRF pinned dispatcher. */
+  connectOptions?: { autoSelectFamily?: boolean; autoSelectFamilyAttemptTimeout?: number };
 };
 
 function stripQuotes(value: string): string {
@@ -92,6 +94,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    connectOptions,
   } = options;
 
   let res: Response;
@@ -106,6 +109,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         maxRedirects,
         policy: ssrfPolicy,
         lookupFn,
+        connectOptions,
       }),
     );
     res = result.response;
