@@ -57,7 +57,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSessionAndRefresh, loadSessions, patchSession, type SessionsListResult } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -144,6 +144,93 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
     return candidate;
   }
   return identity?.avatarUrl;
+}
+
+// Session time grouping for sidebar
+function getSessionTimeGroup(timestamp: number | null): string {
+  if (!timestamp) return "Earlier";
+  const now = Date.now();
+  const diff = now - timestamp;
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (diff < dayMs) return "Today";
+  if (diff < 2 * dayMs) return "Yesterday";
+  if (diff < 7 * dayMs) return "This week";
+  return "Earlier";
+}
+
+function formatSessionTime(timestamp: number | null): string {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now.getTime() - timestamp;
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (diff < dayMs) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  if (diff < 2 * dayMs) return "Yesterday";
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function resolveSessionDisplayName(key: string): string {
+  const parsed = parseAgentSessionKey(key);
+  if (parsed?.sessionId) {
+    // Shorten UUID-like session IDs
+    const id = parsed.sessionId;
+    if (id.length > 16) {
+      return id.substring(0, 16) + "...";
+    }
+    return id;
+  }
+  return key.substring(0, 20);
+}
+
+function renderRecentSessions(state: AppViewState) {
+  const sessions = state.sessionsResult?.sessions ?? [];
+  if (sessions.length === 0) {
+    return html`<div class="muted" style="padding: 12px; font-size: 13px;">No recent conversations</div>`;
+  }
+
+  // Group sessions by time
+  const groups: Record<string, typeof sessions> = {};
+  for (const session of sessions.slice(0, 10)) {
+    const group = getSessionTimeGroup(session.updatedAt ?? null);
+    if (!groups[group]) groups[group] = [];
+    groups[group].push(session);
+  }
+
+  const groupOrder = ["Today", "Yesterday", "This week", "Earlier"];
+
+  return html`
+    ${groupOrder.map((group) => {
+      const groupSessions = groups[group];
+      if (!groupSessions?.length) return nothing;
+      return html`
+        <div class="session-group">
+          <div class="session-group__label">${group}</div>
+          ${groupSessions.map((session) => {
+            const isActive = session.key === state.sessionKey;
+            return html`
+              <div
+                class="session-item ${isActive ? "active" : ""}"
+                @click=${() => {
+                  const app = state as unknown as { sessionKey: string; chatMessage: string; applySettings: (s: unknown) => void };
+                  app.sessionKey = session.key;
+                  app.chatMessage = "";
+                  app.applySettings({ sessionKey: session.key });
+                }}
+              >
+                <span class="session-item__icon">${icons.messageSquare}</span>
+                <div class="session-item__content">
+                  <div class="session-item__title">${session.displayName || resolveSessionDisplayName(session.key)}</div>
+                  <div class="session-item__time">${formatSessionTime(session.updatedAt ?? null)}</div>
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      `;
+    })}
+  `;
 }
 
 export function renderApp(state: AppViewState) {
@@ -254,69 +341,144 @@ export function renderApp(state: AppViewState) {
               <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-title">OpenClaw</div>
             </div>
           </div>
+          ${isChat && state.sessionKey ? html`
+            <div class="topbar-session">
+              <span class="topbar-session__title">${parseAgentSessionKey(state.sessionKey)?.sessionId?.substring(0, 24) || t("chat.newChat")}</span>
+            </div>
+          ` : nothing}
         </div>
         <div class="topbar-status">
-          <div class="pill">
-            <span class="statusDot ${versionStatusClass}"></span>
-            <span>${t("common.version")}</span>
-            <span class="mono">${openClawVersion}</span>
-          </div>
-          <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
-          </div>
+          ${isChat ? html`
+            <div class="connection-status">
+              <span class="dot ${state.connected ? "connected" : "disconnected"}"></span>
+              <span>${state.connected ? t("common.connected") : t("common.offline")}</span>
+            </div>
+          ` : html`
+            <div class="pill">
+              <span class="statusDot ${versionStatusClass}"></span>
+              <span>${openClawVersion}</span>
+            </div>
+          `}
+          <button
+            class="btn btn--sm btn--icon"
+            @click=${() => state.setTab("config")}
+            title="Settings"
+          >
+            ${icons.settings}
+          </button>
           ${renderThemeToggle(state)}
         </div>
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
+        ${state.settings.navCollapsed ? nothing : html`
+          <div class="sidebar-header">
+            <button
+              class="new-chat-btn"
+              @click=${() => {
+                const app = state as unknown as { sessionKey: string; chatMessage: string; applySettings: (s: unknown) => void; setTab: (t: string) => void };
+                app.sessionKey = "";
+                app.chatMessage = "";
+                app.applySettings({ sessionKey: "" });
+                app.setTab("chat");
+              }}
+            >
+              ${icons.plus}
+              <span>New Chat</span>
+            </button>
+          </div>
+
+          <div class="sidebar-search">
+            <input
+              type="text"
+              class="sidebar-search__input"
+              placeholder="Search conversations..."
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Escape") {
+                  (e.target as HTMLInputElement).value = "";
+                }
+              }}
+            />
+          </div>
+        `}
+
+        ${!state.settings.navCollapsed ? html`
+          <div class="sidebar-section">
+            <div class="sidebar-section__label">
+              <span>Recent</span>
+            </div>
+            <div class="sidebar-section__items">
+              ${renderRecentSessions(state)}
+            </div>
+          </div>
+        ` : nothing}
+
         ${TAB_GROUPS.map((group) => {
           const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
           const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
           return html`
-            <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
-              <button
-                class="nav-label"
-                @click=${() => {
-                  const next = { ...state.settings.navGroupsCollapsed };
-                  next[group.label] = !isGroupCollapsed;
-                  state.applySettings({
-                    ...state.settings,
-                    navGroupsCollapsed: next,
-                  });
-                }}
-                aria-expanded=${!isGroupCollapsed}
-              >
-                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
-                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
-              </button>
+            <div class="nav-group ${(isGroupCollapsed && !hasActiveTab) || state.settings.navCollapsed ? "nav-group--collapsed" : ""}">
+              ${!state.settings.navCollapsed ? html`
+                <button
+                  class="nav-label"
+                  @click=${() => {
+                    const next = { ...state.settings.navGroupsCollapsed };
+                    next[group.label] = !isGroupCollapsed;
+                    state.applySettings({
+                      ...state.settings,
+                      navGroupsCollapsed: next,
+                    });
+                  }}
+                  aria-expanded=${!isGroupCollapsed}
+                >
+                  <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
+                  <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
+                </button>
+              ` : nothing}
               <div class="nav-group__items">
                 ${group.tabs.map((tab) => renderTab(state, tab))}
               </div>
             </div>
           `;
         })}
-        <div class="nav-group nav-group--links">
-          <div class="nav-label nav-label--static">
-            <span class="nav-label__text">${t("common.resources")}</span>
+
+        ${!state.settings.navCollapsed ? html`
+          <div class="nav-group nav-group--links">
+            <div class="nav-label nav-label--static">
+              <span class="nav-label__text">${t("common.resources")}</span>
+            </div>
+            <div class="nav-group__items">
+              <a
+                class="nav-item nav-item--external"
+                href="https://docs.openclaw.ai"
+                target=${EXTERNAL_LINK_TARGET}
+                rel=${buildExternalLinkRel()}
+                title="${t("common.docs")} (opens in new tab)"
+              >
+                <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+                <span class="nav-item__text">${t("common.docs")}</span>
+              </a>
+            </div>
           </div>
-          <div class="nav-group__items">
-            <a
-              class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
-              target=${EXTERNAL_LINK_TARGET}
-              rel=${buildExternalLinkRel()}
-              title="${t("common.docs")} (opens in new tab)"
+        ` : nothing}
+
+        ${!state.settings.navCollapsed ? html`
+          <div class="sidebar-account">
+            <button
+              class="sidebar-account__trigger"
+              @click=${() => {}}
             >
-              <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">${t("common.docs")}</span>
-            </a>
+              <div class="sidebar-account__avatar">U</div>
+              <div class="sidebar-account__info">
+                <div class="sidebar-account__name">User</div>
+                <div class="sidebar-account__status">Account</div>
+              </div>
+              <span class="sidebar-account__chevron">${icons.chevronDown}</span>
+            </button>
           </div>
-        </div>
+        ` : nothing}
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
@@ -1028,6 +1190,20 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                // New: Model, Mode, Thinking, Capabilities
+                model: state.chatModel,
+                mode: state.chatMode,
+                thinkingEnabled: state.chatThinkingEnabled,
+                capabilities: state.gatewayCapabilities,
+                onModelChange: (model: string) => { state.chatModel = model; },
+                onModeChange: (mode: string) => { state.chatMode = mode; },
+                onThinkingToggle: (enabled: boolean) => {
+                  // Capability negotiation: only enable if supported
+                  if (enabled && !state.gatewayCapabilities?.thinkingSupported) {
+                    return; // Can't enable thinking if not supported
+                  }
+                  state.chatThinkingEnabled = enabled;
+                },
               })
             : nothing
         }

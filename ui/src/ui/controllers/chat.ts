@@ -213,14 +213,27 @@ export async function sendChatMessage(
         .filter((a): a is NonNullable<typeof a> => a !== null)
     : undefined;
 
+  // CAPABILITY NEGOTIATION: Build request params based on gateway capabilities
+  // Only send thinkingLevel if gateway supports it
+  const requestPayload: Record<string, unknown> = {
+    sessionKey: state.sessionKey,
+    message: msg,
+    deliver: false,
+    idempotencyKey: runId,
+    attachments: apiAttachments,
+  };
+
+  // Only include thinkingLevel if explicitly enabled AND supported by gateway
+  const chatThinkingEnabled = (state as unknown as { chatThinkingEnabled?: boolean }).chatThinkingEnabled;
+  const chatThinkingLevel = (state as unknown as { chatThinkingLevel?: string }).chatThinkingLevel;
+  const gatewayCaps = (state as unknown as { gatewayCapabilities?: { thinkingSupported?: boolean; thinkingLevels?: string[] } }).gatewayCapabilities;
+  if (chatThinkingEnabled && gatewayCaps?.thinkingSupported) {
+    // Use user's configured thinking level, fall back to "medium" if not set
+    requestPayload.thinkingLevel = chatThinkingLevel ?? "medium";
+  }
+
   try {
-    await state.client.request("chat.send", {
-      sessionKey: state.sessionKey,
-      message: msg,
-      deliver: false,
-      idempotencyKey: runId,
-      attachments: apiAttachments,
-    });
+    await state.client.request("chat.send", requestPayload);
     return runId;
   } catch (err) {
     const error = String(err);

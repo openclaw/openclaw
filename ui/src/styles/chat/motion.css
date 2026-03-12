@@ -1,0 +1,587 @@
+/* =============================================
+   CHAT MOTION & POLISH
+   Premium animations and micro-interactions
+   ============================================= */
+
+/* Smooth spring easing */
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* =============================================
+   KEYFRAME ANIMATIONS
+   ============================================= */
+
+/* Message appear - subtle slide up */
+@keyframes message-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Bubble pop in */
+@keyframes bubble-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+  70% {
+    transform: scale(1.02) translateY(-1px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Typing indicator - bouncing dots */
+@keyframes typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}
+
+/* Pulse ring for streaming */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+}
+
+/* Loading spinner */
+@keyframes spin-smooth {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Toast slide in from bottom */
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Toast slide out */
+@keyframes toast-slide-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
+/* Dropdown appear */
+@keyframes dropdown-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer-gradient {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Focus ring pulse */
+@keyframes focus-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--accent-subtle), 0 0 0 4px transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--accent-subtle);
+  }
+}
+
+/* =============================================
+   TRANSITION UTILITIES
+   ============================================= */
+
+/* Smooth color transitions */
+.transition-colors {
+  transition: background-color 150ms var(--ease-in-out),
+              border-color 150ms var(--ease-in-out),
+              color 150ms var(--ease-in-out);
+}
+
+/* Smooth transform transitions */
+.transition-transform {
+  transition: transform 200ms var(--ease-out-expo);
+}
+
+/* Smooth all */
+.transition-all {
+  transition: all 150ms var(--ease-in-out);
+}
+
+/* =============================================
+   MESSAGE ANIMATIONS
+   ============================================= */
+
+/* Apply animation to new messages */
+.chat-bubble {
+  animation: bubble-pop 200ms var(--ease-spring) forwards;
+}
+
+/* Stagger grouped messages */
+.chat-group:nth-child(1) .chat-bubble { animation-delay: 0ms; }
+.chat-group:nth-child(2) .chat-bubble { animation-delay: 30ms; }
+.chat-group:nth-child(3) .chat-bubble { animation-delay: 60ms; }
+.chat-group:nth-child(4) .chat-bubble { animation-delay: 90ms; }
+.chat-group:nth-child(5) .chat-bubble { animation-delay: 120ms; }
+
+/* Streaming indicator animation */
+.chat-reading-indicator__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.chat-reading-indicator__dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typing-bounce 1.4s ease-in-out infinite;
+}
+
+.chat-reading-indicator__dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chat-reading-indicator__dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* =============================================
+   BUTTON MICRO-INTERACTIONS
+   ============================================= */
+
+/* Button press effect */
+.btn, .compose-send-btn, .compose-toolbar__btn {
+  transition: transform 100ms var(--ease-in-out),
+              background-color 150ms var(--ease-in-out),
+              border-color 150ms var(--ease-in-out),
+              box-shadow 150ms var(--ease-in-out);
+}
+
+.btn:active, .compose-send-btn:active, .compose-toolbar__btn:active {
+  transform: scale(0.97);
+}
+
+/* Send button pulse when active */
+.compose-send-btn:not(:disabled) {
+  animation: none;
+}
+
+.compose-send-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+/* Focus visible for buttons */
+.btn:focus-visible,
+.compose-toolbar__btn:focus-visible,
+.compose-send-btn:focus-visible {
+  animation: focus-pulse 1.5s ease-in-out infinite;
+  outline: none;
+}
+
+/* =============================================
+   INPUT MICRO-INTERACTIONS
+   ============================================= */
+
+.compose-textarea {
+  transition: border-color 150ms var(--ease-in-out),
+              box-shadow 150ms var(--ease-in-out);
+}
+
+.compose-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+/* Input wrapper focus */
+.chat-compose__input-wrapper {
+  transition: border-color 150ms var(--ease-in-out),
+              box-shadow 150ms var(--ease-in-out),
+              background-color 150ms var(--ease-in-out);
+}
+
+.chat-compose__input-wrapper:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+/* Placeholder animation on focus */
+.compose-textarea:focus::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* =============================================
+   TOOLBAR ANIMATIONS
+   ============================================= */
+
+.compose-toolbar__btn, .compose-mode-chip, .compose-model-chip {
+  transition: all 150ms var(--ease-in-out);
+}
+
+.compose-toolbar__btn:hover {
+  transform: translateY(-1px);
+}
+
+/* Chip hover lift */
+.compose-mode-chip:hover,
+.compose-model-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Active state for toolbar buttons */
+.compose-toolbar__btn.active {
+  transform: scale(1.05);
+}
+
+/* =============================================
+   DROPDOWN ANIMATIONS
+   ============================================= */
+
+.dropdown-menu {
+  animation: dropdown-appear 150ms var(--ease-out-expo) forwards;
+  transform-origin: top right;
+}
+
+.model-dropdown,
+.plus-menu {
+  animation: dropdown-appear 150ms var(--ease-out-expo) forwards;
+  transform-origin: top center;
+}
+
+/* =============================================
+   ATTACHMENT PREVIEW ANIMATIONS
+   ============================================= */
+
+.chat-attachment {
+  animation: scale-in 200ms var(--ease-spring) forwards;
+  opacity: 0;
+}
+
+.chat-attachment:nth-child(1) { animation-delay: 0ms; }
+.chat-attachment:nth-child(2) { animation-delay: 50ms; }
+.chat-attachment:nth-child(3) { animation-delay: 100ms; }
+.chat-attachment:nth-child(4) { animation-delay: 150ms; }
+
+.chat-attachment:hover .chat-attachment__remove {
+  opacity: 1;
+}
+
+/* Attachment remove button */
+.chat-attachment__remove {
+  transition: opacity 100ms var(--ease-in-out),
+              transform 100ms var(--ease-in-out),
+              background-color 100ms var(--ease-in-out);
+}
+
+.chat-attachment__remove:hover {
+  transform: scale(1.1);
+}
+
+/* =============================================
+   ACTIVITY PANEL ANIMATIONS
+   ============================================= */
+
+.chat-activity {
+  animation: dropdown-appear 200ms var(--ease-out-expo) forwards;
+}
+
+/* Tool activity items staggered */
+.tool-activity-item {
+  animation: message-appear 200ms var(--ease-out-expo) forwards;
+  opacity: 0;
+}
+
+.tool-activity-item:nth-child(1) { animation-delay: 0ms; }
+.tool-activity-item:nth-child(2) { animation-delay: 50ms; }
+.tool-activity-item:nth-child(3) { animation-delay: 100ms; }
+.tool-activity-item:nth-child(4) { animation-delay: 150ms; }
+.tool-activity-item:nth-child(5) { animation-delay: 200ms; }
+
+/* =============================================
+   THINKING PANEL ANIMATIONS
+   ============================================= */
+
+.chat-thinking {
+  animation: message-appear 200ms var(--ease-out-expo) forwards;
+}
+
+/* Thinking dots animation */
+.chat-thinking__dot {
+  animation: typing-bounce 1.4s ease-in-out infinite;
+}
+
+.chat-thinking__dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chat-thinking__dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* =============================================
+   LOADING STATES
+   ============================================= */
+
+.chat-loading__spinner {
+  animation: spin-smooth 0.8s linear infinite;
+}
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--panel) 25%,
+    var(--panel-strong) 50%,
+    var(--panel) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-gradient 1.5s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}
+
+/* =============================================
+   ERROR STATES
+   ============================================= */
+
+.callout.danger {
+  animation: message-appear 200ms var(--ease-out-expo) forwards;
+  border-left: 3px solid var(--danger);
+}
+
+/* Error pulse animation */
+@keyframes error-pulse {
+  0%, 100% {
+    border-color: var(--danger-subtle);
+  }
+  50% {
+    border-color: var(--danger);
+  }
+}
+
+.callout.danger {
+  animation: message-appear 200ms var(--ease-out-expo),
+              error-pulse 2s ease-in-out 200ms infinite;
+}
+
+/* =============================================
+   TOAST NOTIFICATIONS
+   ============================================= */
+
+.compaction-indicator {
+  animation: toast-slide-in 300ms var(--ease-out-expo) forwards;
+}
+
+.compaction-indicator--complete {
+  animation: toast-slide-in 300ms var(--ease-out-expo) forwards,
+              toast-slide-out 300ms var(--ease-in-out) 4s forwards;
+}
+
+/* =============================================
+   NEW MESSAGES BUTTON
+   ============================================= */
+
+.chat-new-messages {
+  animation: toast-slide-in 200ms var(--ease-out-expo) forwards;
+  transition: transform 150ms var(--ease-in-out),
+              background-color 150ms var(--ease-in-out),
+              border-color 150ms var(--ease-in-out);
+}
+
+.chat-new-messages:hover {
+  transform: translateY(-2px);
+}
+
+/* =============================================
+   QUEUE ANIMATIONS
+   ============================================= */
+
+.chat-queue__item {
+  animation: message-appear 200ms var(--ease-out-expo) forwards;
+  opacity: 0;
+}
+
+.chat-queue__item:nth-child(1) { animation-delay: 0ms; }
+.chat-queue__item:nth-child(2) { animation-delay: 50ms; }
+.chat-queue__item:nth-child(3) { animation-delay: 100ms; }
+
+/* Queue remove button */
+.chat-queue__remove {
+  transition: transform 100ms var(--ease-in-out),
+              background-color 100ms var(--ease-in-out);
+}
+
+.chat-queue__remove:hover {
+  transform: scale(1.1);
+}
+
+/* =============================================
+   EMPTY STATE ANIMATIONS
+   ============================================= */
+
+.chat-empty {
+  animation: fade-in 400ms var(--ease-out-expo) forwards;
+}
+
+.chat-empty__greeting {
+  animation: message-appear 300ms var(--ease-out-expo) 100ms forwards;
+  opacity: 0;
+}
+
+.chat-empty__subtitle {
+  animation: message-appear 300ms var(--ease-out-expo) 200ms forwards;
+  opacity: 0;
+}
+
+.chat-empty__quick-actions {
+  animation: message-appear 300ms var(--ease-out-expo) 300ms forwards;
+  opacity: 0;
+}
+
+.chat-empty__quick-action {
+  animation: scale-in 200ms var(--ease-spring) forwards;
+  opacity: 0;
+}
+
+.chat-empty__quick-action:nth-child(1) { animation-delay: 350ms; }
+.chat-empty__quick-action:nth-child(2) { animation-delay: 400ms; }
+.chat-empty__quick-action:nth-child(3) { animation-delay: 450ms; }
+.chat-empty__quick-action:nth-child(4) { animation-delay: 500ms; }
+.chat-empty__quick-action:nth-child(5) { animation-delay: 550ms; }
+
+/* Quick action hover */
+.chat-empty__quick-action {
+  transition: transform 150ms var(--ease-in-out),
+              background-color 150ms var(--ease-in-out),
+              border-color 150ms var(--ease-in-out);
+}
+
+.chat-empty__quick-action:hover {
+  transform: translateY(-2px);
+}
+
+/* =============================================
+   FOCUS MODE EXIT BUTTON
+   ============================================= */
+
+.chat-focus-exit {
+  transition: transform 150ms var(--ease-in-out),
+              background-color 150ms var(--ease-in-out),
+              border-color 150ms var(--ease-in-out);
+}
+
+.chat-focus-exit:hover {
+  transform: scale(1.1);
+}
+
+/* =============================================
+   COPY BUTTON ANIMATIONS
+   ============================================= */
+
+.chat-copy-btn {
+  transition: opacity 120ms var(--ease-in-out),
+              transform 120ms var(--ease-in-out),
+              background-color 120ms var(--ease-in-out);
+}
+
+.chat-copy-btn:hover {
+  transform: scale(1.05);
+}
+
+/* Copy success animation */
+.chat-copy-btn[data-copied="1"] {
+  animation: scale-in 200ms var(--ease-spring) forwards;
+}
+
+/* =============================================
+   REDUCED MOTION PREFERENCE
+   ============================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .chat-bubble {
+    animation: fade-in 100ms ease-out forwards;
+  }
+
+  .tool-activity-item,
+  .chat-attachment,
+  .chat-queue__item {
+    animation: fade-in 100ms ease-out forwards;
+  }
+}
+
+/* =============================================
+   MOBILE OPTIMIZATIONS
+   ============================================= */
+
+@media (max-width: 640px) {
+  /* Faster animations on mobile */
+  .chat-bubble,
+  .tool-activity-item,
+  .chat-attachment,
+  .dropdown-menu {
+    animation-duration: 150ms;
+  }
+
+  /* Disable some hover effects on touch */
+  .compose-toolbar__btn:hover,
+  .compose-mode-chip:hover,
+  .compose-model-chip:hover {
+    transform: none;
+  }
+}

@@ -152,6 +152,15 @@ export class OpenClawApp extends LitElement {
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatModel: string | null = null; // Selected model
+  @state() chatMode: string = "smart"; // smart, learn, write, code, research, analyze
+  @state() chatThinkingEnabled = false;
+  @state() gatewayCapabilities: {
+    models?: string[];
+    thinkingSupported?: boolean;
+    thinkingLevels?: string[];
+    tools?: string[];
+  } | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
