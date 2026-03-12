@@ -237,6 +237,27 @@ export function sanitizeFileNameForUpload(fileName: string): string {
 }
 
 /**
+ * Decode a filename that may have been URL-encoded by sanitizeFileNameForUpload.
+ * This is used when receiving filenames from Feishu messages, * to ensure proper display of non-ASCII characters.
+ */
+export function decodeFileNameFromFeishu(fileName: string): string {
+  if (!fileName) {
+    return fileName;
+  }
+  // Check if the filename looks URL-encoded
+  const hasEncodedChars = /%[0-9A-Fa-f]{2}/.test(fileName);
+  if (!hasEncodedChars) {
+    return fileName;
+  }
+  try {
+    return decodeURIComponent(fileName);
+  } catch {
+    // If decoding fails, return as-is
+    return fileName;
+  }
+}
+
+/**
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
  */
