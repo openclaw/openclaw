@@ -290,15 +290,19 @@ export function resolveUserPath(input: string): string {
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
+  // Strip shell-style backslash escapes (e.g., "Mobile\ Documents" → "Mobile Documents")
+  // This is common when users copy paths from terminal autocomplete on macOS.
+  // Only unescape backslash followed by space - preserve other backslash usage.
+  const unescaped = trimmed.replace(/\\ /g, " ");
+  if (unescaped.startsWith("~")) {
+    const expanded = expandHomePrefix(unescaped, {
       home: resolveRequiredHomeDir(process.env, os.homedir),
       env: process.env,
       homedir: os.homedir,
     });
     return path.resolve(expanded);
   }
-  return path.resolve(trimmed);
+  return path.resolve(unescaped);
 }
 
 export function resolveConfigDir(

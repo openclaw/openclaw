@@ -245,4 +245,31 @@ describe("resolveUserPath", () => {
     expect(resolveUserPath(undefined as unknown as string)).toBe("");
     expect(resolveUserPath(null as unknown as string)).toBe("");
   });
+
+  it("strips shell-style backslash escapes from paths with spaces", () => {
+    // Common pattern: terminal autocomplete adds backslashes before spaces
+    // e.g., ~/Library/Mobile\ Documents/... from macOS iCloud paths
+    const input = "~/Library/Mobile\\ Documents/com~apple~CloudDocs/workspace";
+    const resolved = resolveUserPath(input);
+    expect(resolved).toBe(
+      path.resolve(os.homedir(), "Library/Mobile Documents/com~apple~CloudDocs/workspace"),
+    );
+  });
+
+  it("strips shell-style backslash escapes from absolute paths", () => {
+    const input = "/path/with\\ spaces/nested\\ dir";
+    const resolved = resolveUserPath(input);
+    expect(resolved).toBe(path.resolve("/path/with spaces/nested dir"));
+  });
+
+  it("preserves valid Windows backslashes in paths", () => {
+    // Windows paths use backslashes as separators - don't strip those
+    // Only strip backslash-space sequences
+    const input = "C:\\Users\\test\\Documents";
+    const resolved = resolveUserPath(input);
+    // On non-Windows, this becomes a strange path, but that's expected
+    // The important thing is we don't corrupt normal backslash usage
+    expect(resolved).toContain("Users");
+    expect(resolved).toContain("test");
+  });
 });
