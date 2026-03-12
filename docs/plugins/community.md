@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **memory-openviking** — Use OpenViking as the long-term memory backend for OpenClaw; supports local mode (plugin-managed service) and remote mode (existing HTTP service).
+  npm: `openclaw-openviking-setup-helper`
+  repo: `https://github.com/volcengine/OpenViking`
+  install: `npm install -g openclaw-openviking-setup-helper`, `ov-install`
