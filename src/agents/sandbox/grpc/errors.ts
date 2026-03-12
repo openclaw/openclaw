@@ -5,7 +5,6 @@
  * SandboxProviderError instances with retry semantics.
  */
 
-// @ts-expect-error -- Optional gRPC dependency for Firecracker support
 import { Status, ClientError } from "nice-grpc";
 
 export interface SandboxProviderErrorOptions {
