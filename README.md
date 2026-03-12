@@ -22,14 +22,24 @@
 
 ## Why Use This Fork?
 
-**v2026.3.11 of the upstream release contains an incomplete origin validation fix that breaks reverse proxy deployments.**
+**v2026.3.11 of the upstream release contains an incomplete origin validation fix.**
 
-The upstream "security hardening" (GHSA-5wcw-8jjv-m286) only removes a bypass — it does NOT handle X-Forwarded-Host, cross-validation, or trusted proxy gating. This means:
+The upstream "security hardening" (GHSA-5wcw-8jjv-m286) provides reasonable security for **local-only installations** (direct browser access without a reverse proxy). However, it is NOT secure for reverse proxy deployments:
 
-- Running OpenClaw behind Tailscale, Nginx, Docker, Cloudflare, or any reverse proxy may result in broken connections or insecure configurations
-- The fix claims to handle proxies ("regardless of proxy headers") but provides no actual proxy support
+### What IS reasonably secure (local-only):
 
-**This fork includes the complete proxy-aware infrastructure (originally PR #35109) to resolve the issue securely:**
+- Direct browser access to Gateway (no reverse proxy)
+- Origin validation works correctly
+
+### What is NOT secure (reverse proxy):
+
+- Running OpenClaw behind Tailscale, Nginx, Docker, Cloudflare, or any reverse proxy
+- The fix claims to handle proxies ("regardless of proxy headers") but provides NO actual X-Forwarded-Host handling
+- Users are forced into broken or insecure configurations:
+  1. Disable reverse proxy (not always possible), OR
+  2. Enable `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback: true` which reopens the bypass vulnerability
+
+### This fork provides proper security for ALL setups:
 
 - X-Forwarded-Host header parsing with comma-separated chain support
 - Cross-validation between Origin and X-Forwarded-Host
@@ -37,12 +47,7 @@ The upstream "security hardening" (GHSA-5wcw-8jjv-m286) only removes a bypass �
 - IPv6 support with bracket notation handling
 - Port normalization (:443, :80 stripping)
 
-The upstream requires users to either:
-
-1. Not use a reverse proxy (broken for proxy users), OR
-2. Enable `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback: true` which is inherently insecure — it trusts the Host header directly, reopening the bypass vulnerability
-
-This fork provides a third option: proper proxy-aware origin validation.
+Use this fork if you run OpenClaw behind a reverse proxy — or if you want proper security without dangerous workarounds.
 
 ---
 
