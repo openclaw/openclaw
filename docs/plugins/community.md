@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Memory Core Plus** — Enhanced workspace memory with closed-loop auto-recall and auto-capture. Semantically searches past memories before each LLM turn and automatically extracts durable facts from conversations.
+  npm: `openclaw-memory-core-plus`
+  repo: `https://github.com/aloong-planet/openclaw-memory-core-plus`
+  install: `openclaw plugins install openclaw-memory-core-plus`
