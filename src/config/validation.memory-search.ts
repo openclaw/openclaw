@@ -1,3 +1,4 @@
+import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
@@ -83,7 +84,7 @@ function toIssue(error: ReturnType<typeof createValidationError>): ConfigValidat
 }
 
 function validateSingleMemorySearch(
-  memorySearch: NonNullable<OpenClawConfig["agents"]>["defaults"]["memorySearch"],
+  memorySearch: AgentDefaultsConfig["memorySearch"],
   configPath: string,
 ): ConfigValidationIssue[] {
   const provider = memorySearch?.provider;
