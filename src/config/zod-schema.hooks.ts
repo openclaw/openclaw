@@ -118,6 +118,17 @@ export const InternalHooksSchema = z
   .strict()
   .optional();
 
+export const HookSignatureProviderSchema = z
+  .object({
+    header: z.string(),
+    algorithm: z.union([z.literal("sha256"), z.literal("sha1")]).optional(),
+    secret: z.string().min(1, "HMAC secret must not be empty").register(sensitive),
+    format: z.union([z.literal("hex"), z.literal("prefixed")]).optional(),
+    timestampHeader: z.string().optional(),
+    timestampMaxAgeSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const HooksGmailSchema = z
   .object({
     account: z.string().optional(),

@@ -10,7 +10,12 @@ import {
   SecretInputSchema,
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
-import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import {
+  HookMappingSchema,
+  HookSignatureProviderSchema,
+  HooksGmailSchema,
+  InternalHooksSchema,
+} from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -560,6 +565,8 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         path: z.string().optional(),
         token: z.string().optional().register(sensitive),
+        auth: z.union([z.literal("bearer"), z.literal("signature")]).optional(),
+        signatures: z.record(z.string(), HookSignatureProviderSchema).optional(),
         defaultSessionKey: z.string().optional(),
         allowRequestSessionKey: z.boolean().optional(),
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),

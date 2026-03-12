@@ -107,10 +107,35 @@ export type InternalHooksConfig = {
   installs?: Record<string, HookInstallRecord>;
 };
 
+export type HookSignatureAlgorithm = "sha256" | "sha1";
+
+export type HookSignatureFormat = "hex" | "prefixed";
+
+export type HookSignatureProviderConfig = {
+  /** HTTP header containing the signature (e.g. 'X-Hub-Signature-256'). */
+  header: string;
+  /** HMAC algorithm. Default: 'sha256'. */
+  algorithm?: HookSignatureAlgorithm;
+  /** Shared secret for HMAC computation. */
+  secret: string;
+  /** How to parse the header value. 'hex' = raw hex, 'prefixed' = 'algo=hex' (GitHub-style). Default: 'hex'. */
+  format?: HookSignatureFormat;
+  /** Optional header containing a timestamp for replay protection. */
+  timestampHeader?: string;
+  /** Max age in seconds for timestamp replay protection. Default: 300. */
+  timestampMaxAgeSeconds?: number;
+};
+
+export type HooksAuthMode = "bearer" | "signature";
+
 export type HooksConfig = {
   enabled?: boolean;
   path?: string;
   token?: string;
+  /** Auth mode: 'bearer' (default, current behavior) or 'signature' (HMAC verification). */
+  auth?: HooksAuthMode;
+  /** Signature providers keyed by name. Only used when auth is 'signature'. */
+  signatures?: Record<string, HookSignatureProviderConfig>;
   /**
    * Default session key used for hook agent runs when no request/mapping session key is used.
    * If omitted, OpenClaw generates `hook:<uuid>` per request.
