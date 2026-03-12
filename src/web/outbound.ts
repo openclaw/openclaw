@@ -26,7 +26,11 @@ export async function sendMessageWhatsApp(
     accountId?: string;
   },
 ): Promise<{ messageId: string; toJid: string }> {
-  let text = body;
+  let text = body.trimStart();
+  const jid = toWhatsappJid(to);
+  if (!text && !options.mediaUrl) {
+    return { messageId: "", toJid: jid };
+  }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
@@ -51,7 +55,6 @@ export async function sendMessageWhatsApp(
     to: redactedTo,
   });
   try {
-    const jid = toWhatsappJid(to);
     const redactedJid = redactIdentifier(jid);
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
