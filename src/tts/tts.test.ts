@@ -213,7 +213,7 @@ describe("tts", () => {
   });
 
   describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
+    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp/bluebubbles) and mp3 for others", () => {
       const cases = [
         {
           channel: "telegram",
@@ -235,6 +235,15 @@ describe("tts", () => {
         },
         {
           channel: "whatsapp",
+          expected: {
+            openai: "opus",
+            elevenlabs: "opus_48000_64",
+            extension: ".opus",
+            voiceCompatible: true,
+          },
+        },
+        {
+          channel: "bluebubbles",
           expected: {
             openai: "opus",
             elevenlabs: "opus_48000_64",
