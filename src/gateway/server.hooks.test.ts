@@ -279,6 +279,39 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "hook-idem-1" } },
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      expect(firstBody.runId).toBeTruthy();
+      await waitForSystemEvent();
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      drainSystemEvents(resolveMainKey());
+
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Do it", name: "Email" },
+        { headers: { "Idempotency-Key": "hook-idem-1" } },
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { runId?: string };
+      expect(secondBody.runId).toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+    });
+  });
+
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
