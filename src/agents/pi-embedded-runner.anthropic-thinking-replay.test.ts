@@ -266,6 +266,58 @@ describe("anthropic thinking replay", () => {
     });
   });
 
+  it("drops delivery-mirror assistant entries for anthropic-compatible replay providers", async () => {
+    const sessionFile = path.join(tempRoot, `session-${Date.now()}-bedrock.jsonl`);
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "bedrock",
+      model: "claude-sonnet-4-6",
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "bedrock reply" }],
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "mirrored outbound reply" }],
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "continue",
+      timestamp: Date.now(),
+    });
+
+    const replayable = await getReplayableMessagesForTarget(sessionFile, {
+      modelApi: "anthropic-messages",
+      provider: "bedrock",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(replayable.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(
+      replayable.some(
+        (message) =>
+          message.role === "assistant" &&
+          message.provider === "openclaw" &&
+          message.model === "delivery-mirror",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps delivery-mirror assistant entries for non-anthropic replay", async () => {
     const sessionFile = path.join(tempRoot, `session-${Date.now()}-openai.jsonl`);
 

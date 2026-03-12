@@ -166,10 +166,7 @@ function shouldDropSyntheticAssistantTranscriptMessages(params: {
   modelApi?: string | null;
   provider?: string;
 }): boolean {
-  if (params.provider) {
-    return params.provider === "anthropic";
-  }
-  return params.modelApi === "anthropic-messages";
+  return params.provider === "anthropic" || params.modelApi === "anthropic-messages";
 }
 
 function parseMessageTimestamp(value: unknown): number | null {
