@@ -1732,6 +1732,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   firecrawlBaseUrl?: string;
+  firecrawlTimeoutSeconds?: number;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1905,7 +1906,7 @@ async function runWebSearch(params: {
       count: params.count,
       apiKey: params.apiKey,
       baseUrl: params.firecrawlBaseUrl ?? DEFAULT_FIRECRAWL_SEARCH_BASE_URL,
-      timeoutSeconds: params.timeoutSeconds,
+      timeoutSeconds: params.firecrawlTimeoutSeconds ?? params.timeoutSeconds,
     });
 
     const mapped = firecrawlResults.results.map((entry) => ({
@@ -2354,6 +2355,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         firecrawlBaseUrl: resolveFirecrawlSearchBaseUrl(firecrawlSearchConfig),
+        firecrawlTimeoutSeconds: firecrawlSearchConfig?.timeoutSeconds,
         braveMode,
       });
       return jsonResult(result);

@@ -532,7 +532,7 @@ export async function runOnboardingWizard(
   }
 
   // Web scraping provider setup (after search so Firecrawl auth state is known).
-  {
+  if (!opts.skipSearch) {
     const { setupFetch } = await import("../commands/onboard-fetch.js");
     nextConfig = await setupFetch(nextConfig, prompter, {
       quickstartDefaults: flow === "quickstart",
