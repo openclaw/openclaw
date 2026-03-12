@@ -2355,7 +2355,9 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         firecrawlBaseUrl: resolveFirecrawlSearchBaseUrl(firecrawlSearchConfig),
-        firecrawlTimeoutSeconds: firecrawlSearchConfig?.timeoutSeconds,
+        firecrawlTimeoutSeconds: firecrawlSearchConfig?.timeoutSeconds
+          ? resolveTimeoutSeconds(firecrawlSearchConfig.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS)
+          : undefined,
         braveMode,
       });
       return jsonResult(result);

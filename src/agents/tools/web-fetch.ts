@@ -293,9 +293,9 @@ async function fetchViaScrapingBee(params: {
     throw new Error(`ScrapingBee API error (${res.status}): ${detail || res.statusText}`);
   }
 
-  const markdown = await res.text();
+  const bodyResult = await readResponseText(res, { maxBytes: DEFAULT_FETCH_MAX_RESPONSE_BYTES });
   const resolvedUrl = res.headers.get("Spb-resolved-url") || params.url;
-  return { markdown, status: res.status, resolvedUrl };
+  return { markdown: bodyResult.text, status: res.status, resolvedUrl };
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {

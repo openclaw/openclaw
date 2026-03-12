@@ -215,7 +215,7 @@ export function applyFirecrawlKeyEverywhere(
 }
 
 function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): OpenClawConfig {
-  return {
+  const base: OpenClawConfig = {
     ...config,
     tools: {
       ...config.tools,
@@ -229,6 +229,25 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
       },
     },
   };
+  // When firecrawl is env-authenticated, also set fetch provider so web_fetch
+  // resolves the key from FIRECRAWL_API_KEY at runtime.
+  if (provider === "firecrawl") {
+    base.tools = {
+      ...base.tools,
+      web: {
+        ...base.tools?.web,
+        fetch: {
+          ...base.tools?.web?.fetch,
+          provider: "firecrawl" as const,
+          firecrawl: {
+            ...base.tools?.web?.fetch?.firecrawl,
+            enabled: true,
+          },
+        },
+      },
+    };
+  }
+  return base;
 }
 
 function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig): OpenClawConfig {
