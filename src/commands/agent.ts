@@ -390,7 +390,15 @@ function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const partialExecContext = buildPartialExecutionSystemContext(params.previousPartialExecution);
+  // Suppress partial execution context on cross-provider retries to avoid
+  // leaking internal tool names to a different LLM provider (CWE-200).
+  const isCrossProviderRetry =
+    params.isFallbackRetry &&
+    !!params.primaryProvider &&
+    params.primaryProvider !== params.providerOverride;
+  const partialExecContext = isCrossProviderRetry
+    ? undefined
+    : buildPartialExecutionSystemContext(params.previousPartialExecution);
   const effectiveExtraSystemPrompt =
     [params.opts.extraSystemPrompt, partialExecContext].filter(Boolean).join("\n\n") || undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {
@@ -495,11 +503,6 @@ function runAgentAttempt(params: {
       throw err;
     });
   }
-
-  const isCrossProviderRetry =
-    params.isFallbackRetry &&
-    !!params.primaryProvider &&
-    params.primaryProvider !== params.providerOverride;
 
   const authProfileId =
     params.providerOverride === params.primaryProvider
