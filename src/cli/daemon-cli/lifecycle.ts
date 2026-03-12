@@ -286,7 +286,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        await service.restart({ env: process.env, stdout });
+        const retryRestart = await service.restart({ env: process.env, stdout });
+        if (retryRestart.outcome === "scheduled") {
+          return retryRestart;
+        }
         health = await waitForGatewayHealthyRestart({
           service,
           port: restartPort,

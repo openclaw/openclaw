@@ -132,6 +132,7 @@ describe("runDaemonRestart health checks", () => {
       programArguments: ["openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
+    service.restart.mockResolvedValue({ outcome: "completed" });
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       const fail = (message: string, hints?: string[]) => {
@@ -202,6 +203,25 @@ describe("runDaemonRestart health checks", () => {
     expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
     expect(service.restart).toHaveBeenCalledTimes(1);
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips stale-pid retry health checks when the retry restart is only scheduled", async () => {
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [1993],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy);
+    terminateStaleGatewayPids.mockResolvedValue([1993]);
+    service.restart.mockResolvedValueOnce({ outcome: "scheduled" });
+
+    const result = await runDaemonRestart({ json: true });
+
+    expect(result).toBe(true);
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([1993]);
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
   it("fails restart when gateway remains unhealthy", async () => {

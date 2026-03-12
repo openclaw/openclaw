@@ -66,6 +66,31 @@ export type GatewayService = {
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
+export function describeGatewayServiceRestart(
+  serviceNoun: string,
+  result: GatewayServiceRestartResult,
+): {
+  scheduled: boolean;
+  daemonActionResult: "restarted" | "scheduled";
+  message: string;
+  progressMessage: string;
+} {
+  if (result.outcome === "scheduled") {
+    return {
+      scheduled: true,
+      daemonActionResult: "scheduled",
+      message: `restart scheduled, ${serviceNoun.toLowerCase()} will restart momentarily`,
+      progressMessage: `${serviceNoun} service restart scheduled.`,
+    };
+  }
+  return {
+    scheduled: false,
+    daemonActionResult: "restarted",
+    message: `${serviceNoun} service restarted.`,
+    progressMessage: `${serviceNoun} service restarted.`,
+  };
+}
+
 type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
 
 const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
