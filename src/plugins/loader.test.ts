@@ -595,6 +595,46 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(fs.realpathSync(plugin.file));
   });
 
+  it("prefers OPENCLAW_HOME over HOME for env-expanded load paths", () => {
+    const ignoredHome = makeTempDir();
+    const openclawHome = makeTempDir();
+    const stateDir = makeTempDir();
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "openclaw-home-demo",
+      dir: path.join(openclawHome, "plugins", "openclaw-home-demo"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "openclaw-home-demo", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      env: {
+        ...process.env,
+        HOME: ignoredHome,
+        OPENCLAW_HOME: openclawHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+      config: {
+        plugins: {
+          allow: ["openclaw-home-demo"],
+          entries: {
+            "openclaw-home-demo": { enabled: true },
+          },
+          load: {
+            paths: ["~/plugins/openclaw-home-demo"],
+          },
+        },
+      },
+    });
+
+    expect(
+      fs.realpathSync(
+        registry.plugins.find((entry) => entry.id === "openclaw-home-demo")?.source ?? "",
+      ),
+    ).toBe(fs.realpathSync(plugin.file));
+  });
+
   it("loads plugins when source and root differ only by realpath alias", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

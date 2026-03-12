@@ -477,4 +477,30 @@ describe("discoverOpenClawPlugins", () => {
       pluginB,
     );
   });
+
+  it("treats configured load-path order as cache-significant", () => {
+    const stateDir = makeTempDir();
+    const pluginA = path.join(stateDir, "plugins", "alpha.ts");
+    const pluginB = path.join(stateDir, "plugins", "beta.ts");
+    fs.mkdirSync(path.dirname(pluginA), { recursive: true });
+    fs.writeFileSync(pluginA, "export default {}", "utf-8");
+    fs.writeFileSync(pluginB, "export default {}", "utf-8");
+
+    const env = {
+      ...buildDiscoveryEnv(stateDir),
+      OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+    };
+
+    const first = discoverOpenClawPlugins({
+      extraPaths: [pluginA, pluginB],
+      env,
+    });
+    const second = discoverOpenClawPlugins({
+      extraPaths: [pluginB, pluginA],
+      env,
+    });
+
+    expect(first.candidates.map((candidate) => candidate.idHint)).toEqual(["alpha", "beta"]);
+    expect(second.candidates.map((candidate) => candidate.idHint)).toEqual(["beta", "alpha"]);
+  });
 });
