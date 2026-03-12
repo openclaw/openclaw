@@ -22,6 +22,10 @@ import {
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
+function resolveSyncRealpath(filePath: string): string {
+  return fs.realpathSync.native(filePath);
+}
+
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   try {
     fs.symlinkSync(targetPath, linkPath);
@@ -287,7 +291,7 @@ describe("gateway session utils", () => {
 
       const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
 
-      expect(target.storePath).toBe(fs.realpathSync(retiredStorePath));
+      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
     });
   });
 
@@ -316,7 +320,7 @@ describe("gateway session utils", () => {
 
         const loaded = loadSessionEntry("agent:retired-agent:main");
 
-        expect(loaded.storePath).toBe(fs.realpathSync(retiredStorePath));
+        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-retired");
       });
     } finally {
