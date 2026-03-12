@@ -129,6 +129,18 @@ describe("buildPairingReply", () => {
       expect(text).not.toContain("Your iMessage sender id:");
     });
 
+    it("allows empty senderIdLabel overrides without falling back to defaults", () => {
+      const text = buildPairingReply({
+        channel: "telegram",
+        idLine: "Your Telegram user id: 42",
+        senderId: "42",
+        code: "XYZ123",
+        pairingMessage: { senderIdLabel: "" },
+      });
+      expect(text.split("\n")).toContain("42");
+      expect(text).not.toContain("Your Telegram user id:");
+    });
+
     it("applies no changes when pairingMessage is undefined (backward compat)", () => {
       const text = buildPairingReply({
         channel: "imessage",

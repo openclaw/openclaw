@@ -57,6 +57,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
   sendChatActionHandler,
+  pairingMessage,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
@@ -194,6 +195,7 @@ export const buildTelegramMessageContext = async ({
       accountId: account.accountId,
       bot,
       logger,
+      pairingMessage,
     }))
   ) {
     return null;

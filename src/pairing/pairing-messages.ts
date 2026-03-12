@@ -46,8 +46,14 @@ export function buildPairingReply(params: {
   const footer = cfg?.footer ?? "Ask the bot owner to approve with:";
   const showCliHint = cfg?.showCliHint ?? true;
   const applyDefaultFooter = cfg?.footer !== undefined || showCliHint;
+  const hasSenderIdOverride = cfg?.senderIdLabel !== undefined;
+  const customSenderIdLabel = cfg?.senderIdLabel ?? "";
+  const labelSeparator =
+    customSenderIdLabel.length > 0 && !/[\s\u00A0]$/.test(customSenderIdLabel) ? " " : "";
   const resolvedIdLine =
-    cfg?.senderIdLabel && senderId ? `${cfg.senderIdLabel} ${senderId}` : idLineParam;
+    hasSenderIdOverride && senderId
+      ? `${customSenderIdLabel}${labelSeparator}${senderId}`
+      : idLineParam;
 
   const lines = [header, "", resolvedIdLine, "", `${codeLabel} ${code}`];
   if (applyDefaultFooter) {
