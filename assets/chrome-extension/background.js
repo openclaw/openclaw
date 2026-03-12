@@ -930,6 +930,7 @@ async function onDebuggerDetach(source, reason) {
 
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
+  void clearStoredTabColorScheme(tabId)
   reattachPending.delete(tabId)
   if (!tabs.has(tabId)) return
   const tab = tabs.get(tabId)
