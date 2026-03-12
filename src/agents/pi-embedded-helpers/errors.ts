@@ -288,11 +288,19 @@ function hasExplicit402BillingSignal(text: string): boolean {
   );
 }
 
+function hasQuotaRefreshWindowSignal(text: string): boolean {
+  return (
+    text.includes("subscription quota limit") &&
+    (text.includes("automatic quota refresh") || text.includes("rolling time window"))
+  );
+}
+
 function hasRetryable402TransientSignal(text: string): boolean {
   const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
   const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
   const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
   return (
+    hasQuotaRefreshWindowSignal(text) ||
     (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
       includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
     (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
@@ -311,6 +319,10 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
   if (!normalized) {
     return "billing";
+  }
+
+  if (hasQuotaRefreshWindowSignal(normalized)) {
+    return "rate_limit";
   }
 
   if (hasExplicit402BillingSignal(normalized)) {
