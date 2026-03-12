@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveBlockStreamingChunking,
+  resolveBlockStreamingCoalescing,
   resolveEffectiveBlockStreamingConfig,
 } from "./block-streaming.js";
 
@@ -64,5 +65,23 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     expect(resolved.chunking.maxChars).toBe(1800);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
+  });
+
+  it("keeps newline-mode streaming coalescing packable under the limit", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          textChunkLimit: 4000,
+          chunkMode: "newline",
+        },
+      },
+    } as OpenClawConfig;
+
+    const chunking = resolveBlockStreamingChunking(cfg, "whatsapp");
+    const coalescing = resolveBlockStreamingCoalescing(cfg, "whatsapp", undefined, chunking);
+
+    expect(chunking.flushOnParagraph).toBe(true);
+    expect(coalescing?.joiner).toBe(" ");
+    expect(coalescing?.flushOnEnqueue).toBe(false);
   });
 });

@@ -632,6 +632,74 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not duplicate joiners when chunks already carry paragraph separators", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 100,
+      joiner: " ",
+    });
+
+    coalescer.enqueue({ text: "First paragraph\n\n" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("keeps same-paragraph streamed chunks separated with the configured inline joiner", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 100,
+      joiner: " ",
+    });
+
+    coalescer.enqueue({ text: "Sentence one." });
+    coalescer.enqueue({ text: "Sentence two." });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["Sentence one. Sentence two."]);
+    coalescer.stop();
+  });
+
+  it("preserves paragraph breaks for indented follow-up chunks when the prior chunk already carries the boundary", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 100,
+      joiner: " ",
+    });
+
+    coalescer.enqueue({ text: "First paragraph\n\n" });
+    coalescer.enqueue({ text: "  - indented item" });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["First paragraph\n\n  - indented item"]);
+    coalescer.stop();
+  });
+
+  it("preserves single-newline boundaries carried by the next chunk", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 100,
+      joiner: " ",
+    });
+
+    coalescer.enqueue({ text: "Alpha" });
+    coalescer.enqueue({ text: "\nBeta" });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["Alpha\nBeta"]);
+    coalescer.stop();
+  });
+
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {

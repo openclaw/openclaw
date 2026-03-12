@@ -157,12 +157,15 @@ export class EmbeddedBlockChunker {
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
+        if (
+          paragraphBreak &&
+          paragraphBreak.index + paragraphBreak.length - start <= paragraphLimit
+        ) {
+          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index + paragraphBreak.length)}`;
           if (chunk.trim().length > 0) {
             emit(chunk);
           }
-          start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
+          start = paragraphBreak.index + paragraphBreak.length;
           reopenFence = undefined;
           continue;
         }
@@ -171,16 +174,20 @@ export class EmbeddedBlockChunker {
         }
       }
 
+      if (force && remainingLength <= maxChars) {
+        emit(`${reopenPrefix}${source.slice(start)}`);
+        start = source.length;
+        reopenFence = undefined;
+        continue;
+      }
+
       const view = source.slice(start);
-      const breakResult =
-        force && remainingLength <= maxChars
-          ? this.#pickSoftBreakIndex(view, fenceSpans, 1, start)
-          : this.#pickBreakIndex(
-              view,
-              fenceSpans,
-              force || this.#chunking.flushOnParagraph ? 1 : undefined,
-              start,
-            );
+      const breakResult = this.#pickBreakIndex(
+        view,
+        fenceSpans,
+        force || this.#chunking.flushOnParagraph ? 1 : undefined,
+        start,
+      );
       if (breakResult.index <= 0) {
         if (force) {
           emit(`${reopenPrefix}${source.slice(start)}`);
@@ -214,7 +221,9 @@ export class EmbeddedBlockChunker {
     }
     this.#buffer = reopenFence
       ? `${reopenFence.openLine}\n${source.slice(start)}`
-      : stripLeadingNewlines(source.slice(start));
+      : this.#chunking.flushOnParagraph
+        ? source.slice(start)
+        : stripLeadingNewlines(source.slice(start));
   }
 
   #emitBreakResult(params: {
@@ -242,67 +251,17 @@ export class EmbeddedBlockChunker {
         ? `${fenceSplit.closeFenceLine}\n`
         : `\n${fenceSplit.closeFenceLine}\n`;
       rawChunk = `${rawChunk}${closeFence}`;
-    }
-
-    emit(rawChunk);
-
-    if (fenceSplit) {
+      emit(rawChunk);
       return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
     }
 
+    const nextChar = source[absoluteBreakIdx];
     const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source[absoluteBreakIdx])
+      absoluteBreakIdx < source.length && nextChar !== "\n" && /\s/.test(nextChar)
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
-    return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
-  }
-
-  #pickSoftBreakIndex(
-    buffer: string,
-    fenceSpans: FenceSpan[],
-    minCharsOverride?: number,
-    offset = 0,
-  ): BreakResult {
-    const minChars = Math.max(1, Math.floor(minCharsOverride ?? this.#chunking.minChars));
-    if (buffer.length < minChars) {
-      return { index: -1 };
-    }
-    const preference = this.#chunking.breakPreference ?? "paragraph";
-
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-        offset,
-      });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
-      }
-    }
-
-    if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(buffer, fenceSpans, minChars, offset);
-      if (sentenceIdx !== -1) {
-        return { index: sentenceIdx };
-      }
-    }
-
-    return { index: -1 };
+    emit(rawChunk);
+    return { start: nextStart, reopenFence: undefined };
   }
 
   #pickBreakIndex(

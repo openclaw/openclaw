@@ -624,6 +624,34 @@ describe("createAcpReplyProjector", () => {
     });
   });
 
+  it("preserves paragraph boundaries across live projector chunk splits", async () => {
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+          deliveryMode: "live",
+        },
+      },
+    });
+
+    const first = "A".repeat(63);
+    const second = "B".repeat(10);
+    await projector.onEvent({
+      type: "text_delta",
+      text: `${first}\n\n${second}`,
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(blockDeliveries(deliveries)).toEqual([
+      { kind: "block", text: first },
+      { kind: "block", text: `\n\n${second}` },
+    ]);
+    expect(combinedBlockText(deliveries)).toBe(`${first}\n\n${second}`);
+  });
+
   it("supports tagVisibility overrides for tool updates", async () => {
     const { deliveries, projector } = createProjectorHarness({
       acp: {

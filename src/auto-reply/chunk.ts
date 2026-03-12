@@ -208,6 +208,7 @@ export function chunkByParagraph(
   const spans = parseFenceSpans(normalized);
 
   const parts: string[] = [];
+  const separators: string[] = [];
   const re = /\n[\t ]*\n+/g; // paragraph break: blank line(s), allowing whitespace
   let lastIndex = 0;
   for (const match of normalized.matchAll(re)) {
@@ -219,25 +220,47 @@ export function chunkByParagraph(
     }
 
     parts.push(normalized.slice(lastIndex, idx));
+    separators.push(match[0]);
     lastIndex = idx + match[0].length;
   }
   parts.push(normalized.slice(lastIndex));
 
   const chunks: string[] = [];
-  for (const part of parts) {
+  let current = "";
+  const pushCurrent = () => {
+    if (current) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+
+  for (const [index, part] of parts.entries()) {
     const paragraph = part.replace(/\s+$/g, "");
     if (!paragraph.trim()) {
       continue;
     }
-    if (paragraph.length <= limit) {
-      chunks.push(paragraph);
-    } else if (!splitLongParagraphs) {
-      chunks.push(paragraph);
-    } else {
-      chunks.push(...chunkText(paragraph, limit));
+    if (paragraph.length > limit) {
+      pushCurrent();
+      if (!splitLongParagraphs) {
+        chunks.push(paragraph);
+      } else {
+        chunks.push(...chunkText(paragraph, limit));
+      }
+      continue;
     }
+
+    const separator = index > 0 ? (separators[index - 1] ?? "\n\n") : "";
+    const candidate = current ? `${current}${separator}${paragraph}` : paragraph;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+
+    pushCurrent();
+    current = paragraph;
   }
 
+  pushCurrent();
   return chunks;
 }
 

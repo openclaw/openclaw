@@ -308,10 +308,10 @@ describe("chunkTextWithMode", () => {
         expected: ["Line one\nLine two"],
       },
       {
-        name: "newline mode (blank-line split)",
+        name: "newline mode keeps short blank-line paragraphs together",
         text: "Para one\n\nPara two",
         mode: "newline" as const,
-        expected: ["Para one", "Para two"],
+        expected: ["Para one\n\nPara two"],
       },
     ] as const;
 
@@ -319,6 +319,16 @@ describe("chunkTextWithMode", () => {
       const chunks = chunkTextWithMode(testCase.text, 1000, testCase.mode);
       expect(chunks, testCase.name).toEqual(testCase.expected);
     }
+  });
+
+  it("packs multiple paragraphs up to the limit before splitting", () => {
+    const text = "Alpha\n\nBeta\n\nGamma";
+    expect(chunkTextWithMode(text, 14, "newline")).toEqual(["Alpha\n\nBeta", "Gamma"]);
+  });
+
+  it("preserves original paragraph separator width when paragraphs stay together", () => {
+    const text = "Alpha\n\n\nBeta";
+    expect(chunkTextWithMode(text, 1000, "newline")).toEqual(["Alpha\n\n\nBeta"]);
   });
 });
 
@@ -338,10 +348,10 @@ describe("chunkMarkdownTextWithMode", () => {
         expected: ["Line one\nLine two"],
       },
       {
-        name: "newline mode splits by blank line",
+        name: "newline mode keeps short blank-line paragraphs together",
         text: "Para one\n\nPara two",
         mode: "newline" as const,
-        expected: ["Para one", "Para two"],
+        expected: ["Para one\n\nPara two"],
       },
     ] as const;
     for (const testCase of cases) {
@@ -368,10 +378,10 @@ describe("chunkMarkdownTextWithMode", () => {
         expected: [fence],
       },
       {
-        name: "splits between fence and following paragraph",
+        name: "keeps fence and following paragraph together when under limit",
         text: `${fence}\n\nAfter`,
         limit: 1000,
-        expected: [fence, "After"],
+        expected: [`${fence}\n\nAfter`],
       },
       {
         name: "defers long markdown blocks to markdown chunker",
