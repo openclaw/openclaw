@@ -3,41 +3,6 @@ type ErrorPattern = RegExp | string;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
-// 402-specific classification hints (borrowed from errors.ts) ------------------------------------------------
-const PERIODIC_402_HINTS = ["daily", "weekly", "monthly", "rolling"] as const;
-const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
-const RETRYABLE_402_LIMIT_HINTS = ["usage limit", "rate limit", "organization usage", "subscription quota"] as const;
-const RETRYABLE_402_SCOPED_HINTS = ["organization", "workspace"] as const;
-const RETRYABLE_402_SCOPED_RESULT_HINTS = [
-  "billing period",
-  "exceeded",
-  "reached",
-  "exhausted",
-] as const;
-
-function includesAnyHint(text: string, hints: readonly string[]): boolean {
-  return hints.some((hint) => text.includes(hint));
-}
-
-function hasRetryable402TransientSignal(text: string): boolean {
-  // zenmux responses should always be treated as rate‑limit failures
-  if (text.includes("zenmux")) {
-    return true;
-  }
-  const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
-  const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
-  const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
-  return (
-    (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
-      includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
-    (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
-    (hasPeriodicHint && text.includes("limit") && text.includes("reset")) ||
-    (hasScopedHint &&
-      text.includes("limit") &&
-      (hasSpendLimit || includesAnyHint(text, RETRYABLE_402_SCOPED_RESULT_HINTS)))
-  );
-}
-
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,

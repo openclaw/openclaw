@@ -285,6 +285,11 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
     return "billing";
   }
 
+  // explicit ZenMux guard: classify any ZenMux 402 response as rate limit
+  if (normalized.includes("zenmux")) {
+    return "rate_limit";
+  }
+
   if (hasExplicit402BillingSignal(normalized)) {
     return "billing";
   }
