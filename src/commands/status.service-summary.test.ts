@@ -10,7 +10,7 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
     install: vi.fn(async () => {}),
     uninstall: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
-    restart: vi.fn(async () => {}),
+    restart: vi.fn(async () => ({ outcome: "completed" as const })),
     isLoaded: vi.fn(async () => false),
     readCommand: vi.fn(async () => null),
     readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
