@@ -170,6 +170,7 @@ describe("resolveMedia getFile retry", () => {
     fetchRemoteMedia.mockClear();
     saveMediaBuffer.mockClear();
     resolveTelegramFetch.mockReset();
+    resolveTelegramFetch.mockReturnValue(vi.fn() as unknown as typeof fetch);
   });
 
   afterEach(() => {
