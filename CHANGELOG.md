@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Security
 - Security/exec approvals: escape invisible Unicode format characters in approval prompts so zero-width command text renders as visible `\u{...}` escapes instead of spoofing the reviewed command. (#43687) Thanks @EkiXu and @vincentkoc.
+- Security/device pairing: cap issued and verified device-token scopes to each paired device's approved scope baseline so stale or overbroad tokens cannot exceed approved access. (#43686) Thanks @tdjackey and @vincentkoc.
 
 ### Changes
 
