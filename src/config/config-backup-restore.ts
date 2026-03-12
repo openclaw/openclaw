@@ -75,12 +75,14 @@ export async function listConfigBackups(
     // Primary backup doesn't exist
   }
 
-  // Check numbered backups
+  // Check numbered and timestamped backups
   try {
     const entries = await ioFs.readdir(dir);
     for (const entry of entries) {
-      const match = entry.match(new RegExp(`^${base}\\.bak\\.(\\d+)$`));
-      if (match) {
+      // Match both numbered backups (.bak.1, .bak.2) and timestamped backups (.bak.2024-01-15_00-00-00)
+      // Exclude failed backups (.failed-*)
+      const match = entry.match(new RegExp(`^${base}\\.bak\\.(.+)$`));
+      if (match && !entry.includes(".failed-")) {
         const fullPath = path.join(dir, entry);
         try {
           const stat = await ioFs.stat(fullPath);
@@ -113,6 +115,7 @@ export async function createConfigBackup(
   ioFs: BackupRestoreFs = defaultFs,
 ): Promise<ConfigBackup> {
   const dir = path.dirname(configPath);
+  const keepBackups = options.keepBackups ?? DEFAULT_KEEP_BACKUPS;
 
   // Ensure backup directory exists
   try {
@@ -140,6 +143,11 @@ export async function createConfigBackup(
 
   await ioFs.writeFile(backupPath, configContent);
 
+  // Prune old backups if keepBackups is set
+  if (keepBackups > 0) {
+    await pruneOldBackups(configPath, keepBackups, ioFs);
+  }
+
   const stat = await ioFs.stat(backupPath);
   return {
     path: backupPath,
@@ -147,6 +155,29 @@ export async function createConfigBackup(
     size: stat.size,
     label: options.label || (options.timestamp ? timestamp : "latest"),
   };
+}
+
+/**
+ * Prune old backups, keeping only the most recent N backups.
+ */
+async function pruneOldBackups(
+  configPath: string,
+  keepBackups: number,
+  ioFs: BackupRestoreFs,
+): Promise<void> {
+  const backups = await listConfigBackups(configPath, ioFs);
+
+  // Keep the primary .bak file plus (keepBackups - 1) numbered/timestamped backups
+  // The primary .bak is always kept as the most recent automatic backup
+  const backupsToPrune = backups.slice(keepBackups);
+
+  for (const backup of backupsToPrune) {
+    try {
+      await ioFs.unlink(backup.path);
+    } catch {
+      // Best-effort cleanup
+    }
+  }
 }
 
 /**

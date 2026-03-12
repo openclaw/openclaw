@@ -568,7 +568,10 @@ async function runConfigRestore(opts: { last?: boolean; backupPath?: string; dry
       return;
     }
 
+    // Use the most recent backup (first in sorted list)
+    const latestBackup = backups[0];
     const result = await restoreConfigBackup(snapshot.path, {
+      backupPath: latestBackup.path,
       dryRun: opts.dryRun,
     });
 
