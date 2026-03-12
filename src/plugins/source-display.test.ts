@@ -1,5 +1,7 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatPluginSourceForTable } from "./source-display.js";
+import { withEnv } from "../test-utils/env.js";
+import { formatPluginSourceForTable, resolvePluginSourceRoots } from "./source-display.js";
 
 describe("formatPluginSourceForTable", () => {
   it("shortens bundled plugin sources under the stock root", () => {
@@ -48,5 +50,31 @@ describe("formatPluginSourceForTable", () => {
     );
     expect(out.value).toBe("global:zalo/index.js");
     expect(out.rootKey).toBe("global");
+  });
+
+  it("resolves source roots from an explicit env override", () => {
+    const roots = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/tmp/ignored-bundled",
+        OPENCLAW_STATE_DIR: "/tmp/ignored-state",
+        HOME: "/tmp/ignored-home",
+      },
+      () =>
+        resolvePluginSourceRoots({
+          env: {
+            ...process.env,
+            HOME: "/tmp/openclaw-home",
+            OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
+            OPENCLAW_STATE_DIR: "~/state",
+          },
+          workspaceDir: "/tmp/ws",
+        }),
+    );
+
+    expect(roots).toEqual({
+      stock: path.join("/tmp/openclaw-home", "bundled"),
+      global: path.join("/tmp/openclaw-home", "state", "extensions"),
+      workspace: path.join("/tmp/ws", ".openclaw", "extensions"),
+    });
   });
 });

@@ -393,4 +393,33 @@ describe("discoverOpenClawPlugins", () => {
     });
     expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
   });
+
+  it("does not reuse discovery results across env root changes", () => {
+    const stateDirA = makeTempDir();
+    const stateDirB = makeTempDir();
+    const globalExtA = path.join(stateDirA, "extensions");
+    const globalExtB = path.join(stateDirB, "extensions");
+    fs.mkdirSync(globalExtA, { recursive: true });
+    fs.mkdirSync(globalExtB, { recursive: true });
+    fs.writeFileSync(path.join(globalExtA, "alpha.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(path.join(globalExtB, "beta.ts"), "export default function () {}", "utf-8");
+
+    const first = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDirA),
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+    const second = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDirB),
+        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5000",
+      },
+    });
+
+    expect(first.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(true);
+    expect(first.candidates.some((candidate) => candidate.idHint === "beta")).toBe(false);
+    expect(second.candidates.some((candidate) => candidate.idHint === "alpha")).toBe(false);
+    expect(second.candidates.some((candidate) => candidate.idHint === "beta")).toBe(true);
+  });
 });
