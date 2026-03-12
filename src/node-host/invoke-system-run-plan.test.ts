@@ -548,6 +548,52 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
+  it("rejects ruby require preloads that approval cannot bind completely", () => {
+    withFakeRuntimeBin({
+      binName: "ruby",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-require-"));
+        try {
+          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["ruby", "-r", "attacker", "./safe.rb"],
+            cwd: tmp,
+          });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects ruby load-path flags that can redirect module resolution after approval", () => {
+    withFakeRuntimeBin({
+      binName: "ruby",
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ruby-load-path-"));
+        try {
+          fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
+          const prepared = buildSystemRunApprovalPlan({
+            command: ["ruby", "-I.", "./safe.rb"],
+            cwd: tmp,
+          });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
   it("rejects shell payloads that hide mutable interpreter scripts", () => {
     withFakeRuntimeBin({
       binName: "node",
