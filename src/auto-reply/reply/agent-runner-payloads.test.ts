@@ -167,6 +167,7 @@ describe("buildReplyPayloads media filter integration", () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
       isAborted: () => false,
+      hasSentContentKey: () => false,
       hasSentPayload: () => false,
       enqueue: () => {},
       flush: async () => {},
@@ -181,6 +182,40 @@ describe("buildReplyPayloads media filter integration", () => {
       blockReplyPipeline: pipeline,
       replyToMode: "all",
       payloads: [{ text: "response", replyToId: "post-123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("deduplicates aborted streaming final payloads using the raw content key before sanitize", async () => {
+    const { createBlockReplyContentKey } = await import("./block-reply-pipeline.js");
+    const sentKeys = new Set<string>([
+      createBlockReplyContentKey({
+        text: '{"action":"NO_REPLY"}',
+        mediaUrl: "file:///tmp/photo.jpg",
+      }),
+    ]);
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => true,
+      hasSentContentKey: (contentKey) => sentKeys.has(contentKey),
+      hasSentPayload: (payload) => sentKeys.has(createBlockReplyContentKey(payload)),
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [
+        {
+          text: '{"action":"NO_REPLY"}',
+          mediaUrl: "file:///tmp/photo.jpg",
+        },
+      ],
     });
 
     expect(replyPayloads).toHaveLength(0);
