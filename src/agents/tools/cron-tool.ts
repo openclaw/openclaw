@@ -250,19 +250,23 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
+- "acpTurn": Directly invokes an ACP harness (Claude Code, Codex, Gemini CLI, etc.) as a one-shot isolated run
+  { "kind": "acpTurn", "message": "<prompt>", "acpAgentId": "codex|claude|gemini|opencode|kimi|pi", "cwd": "<optional>", "timeoutSeconds": <optional> }
+  acpTurn REQUIRES sessionTarget="isolated". Returns explicit error if ACP is disabled by policy or backend is unavailable.
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
-  - Default for isolated agentTurn jobs (when delivery omitted): "announce"
+  - Default for isolated agentTurn/acpTurn jobs (when delivery omitted): "announce"
   - announce: send to chat channel (optional channel/to target)
   - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- sessionTarget="isolated" REQUIRES payload.kind="agentTurn" or "acpTurn"
+- payload.kind="acpTurn" REQUIRES sessionTarget="isolated"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+Default: prefer isolated agentTurn jobs unless the user explicitly wants acpTurn (direct ACP harness) or a main-session system event.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -366,12 +370,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }
           }
 
+          const jobPayloadKind = (job as { payload?: { kind?: string } }).payload?.kind;
           if (
             opts?.agentSessionKey &&
             job &&
             typeof job === "object" &&
             "payload" in job &&
-            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+            (jobPayloadKind === "agentTurn" || jobPayloadKind === "acpTurn")
           ) {
             const deliveryValue = (job as { delivery?: unknown }).delivery;
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;

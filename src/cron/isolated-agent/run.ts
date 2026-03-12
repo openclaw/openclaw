@@ -427,7 +427,9 @@ export async function runCronIsolatedAgentTurn(params: {
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
     overrideSeconds:
-      params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
+      params.job.payload.kind === "agentTurn" || params.job.payload.kind === "acpTurn"
+        ? params.job.payload.timeoutSeconds
+        : undefined,
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;

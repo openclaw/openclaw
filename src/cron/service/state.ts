@@ -103,6 +103,20 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  /**
+   * Execute an acpTurn cron job by spawning the configured ACP harness
+   * (Claude Code, Codex, Gemini CLI, etc.) as a one-shot isolated run.
+   * Returns an explicit error if the ACP backend is unavailable.
+   */
+  runAcpJob?: (params: { job: CronJob; message: string; abortSignal?: AbortSignal }) => Promise<
+    {
+      summary?: string;
+      outputText?: string;
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+    } & CronRunOutcome &
+      CronRunTelemetry
+  >;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;

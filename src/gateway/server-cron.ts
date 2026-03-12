@@ -9,7 +9,7 @@ import {
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
-import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { runCronAcpTurn, runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
@@ -285,6 +285,19 @@ export function buildGatewayCronService(params: {
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job,
+        message,
+        abortSignal,
+        agentId,
+        sessionKey: `cron:${job.id}`,
+        lane: "cron",
+      });
+    },
+    runAcpJob: async ({ job, message, abortSignal }) => {
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      return await runCronAcpTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,

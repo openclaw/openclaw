@@ -352,6 +352,7 @@ function renderFieldLabel(text: string, required = false) {
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
   const isAgentTurn = props.form.payloadKind === "agentTurn";
+  const isAcpTurn = props.form.payloadKind === "acpTurn";
   const isCronSchedule = props.form.scheduleKind === "cron";
   const channelOptions = buildChannelOptions(props);
   const selectedJob =
@@ -372,7 +373,8 @@ export function renderCron(props: CronProps) {
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const supportsAnnounce =
-    props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
+    props.form.sessionTarget === "isolated" &&
+    (props.form.payloadKind === "agentTurn" || props.form.payloadKind === "acpTurn");
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
@@ -815,7 +817,7 @@ export function renderCron(props: CronProps) {
                 </select>
                 <div class="cron-help">${t("cron.form.wakeModeHelp")}</div>
               </label>
-              <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
+              <label class="field ${isAgentTurn || isAcpTurn ? "" : "cron-span-2"}">
                 ${renderFieldLabel(t("cron.form.payloadKind"))}
                 <select
                   id="cron-payload-kind"
@@ -828,17 +830,20 @@ export function renderCron(props: CronProps) {
                 >
                   <option value="systemEvent">${t("cron.form.systemEvent")}</option>
                   <option value="agentTurn">${t("cron.form.agentTurn")}</option>
+                  <option value="acpTurn">${t("cron.form.acpTurn")}</option>
                 </select>
                 <div class="cron-help">
                   ${
                     props.form.payloadKind === "systemEvent"
                       ? t("cron.form.systemEventHelp")
-                      : t("cron.form.agentTurnHelp")
+                      : isAcpTurn
+                        ? t("cron.form.acpTurnHelp")
+                        : t("cron.form.agentTurnHelp")
                   }
                 </div>
               </label>
               ${
-                isAgentTurn
+                isAgentTurn || isAcpTurn
                   ? html`
                       <label class="field">
                         ${renderFieldLabel(t("cron.form.timeoutSeconds"))}
@@ -872,7 +877,7 @@ export function renderCron(props: CronProps) {
                 props.form.payloadKind === "systemEvent"
                   ? t("cron.form.mainTimelineMessage")
                   : t("cron.form.assistantTaskPrompt"),
-                true,
+                true, // required
               )}
               <textarea
                 id="cron-payload-text"
@@ -1112,7 +1117,7 @@ export function renderCron(props: CronProps) {
                   : nothing
               }
               ${
-                isAgentTurn
+                isAgentTurn || isAcpTurn
                   ? html`
                       <label class="field cron-span-2">
                         ${renderFieldLabel("Account ID")}
@@ -1131,20 +1136,45 @@ export function renderCron(props: CronProps) {
                           Optional channel account ID for multi-account setups.
                         </div>
                       </label>
-                      <label class="field checkbox cron-checkbox cron-span-2">
-                        <input
-                          type="checkbox"
-                          .checked=${props.form.payloadLightContext}
-                          @change=${(e: Event) =>
-                            props.onFormChange({
-                              payloadLightContext: (e.target as HTMLInputElement).checked,
-                            })}
-                        />
-                        <span class="field-checkbox__label">Light context</span>
-                        <div class="cron-help">
-                          Use lightweight bootstrap context for this agent job.
-                        </div>
-                      </label>
+                      ${
+                        isAgentTurn
+                          ? html`
+                              <label class="field checkbox cron-checkbox cron-span-2">
+                                <input
+                                  type="checkbox"
+                                  .checked=${props.form.payloadLightContext}
+                                  @change=${(e: Event) =>
+                                    props.onFormChange({
+                                      payloadLightContext: (e.target as HTMLInputElement).checked,
+                                    })}
+                                />
+                                <span class="field-checkbox__label">Light context</span>
+                                <div class="cron-help">
+                                  Use lightweight bootstrap context for this agent job.
+                                </div>
+                              </label>
+                            `
+                          : nothing
+                      }
+                      ${
+                        isAcpTurn
+                          ? html`
+                              <label class="field cron-span-2">
+                                ${renderFieldLabel(t("cron.form.acpAgentId"))}
+                                <input
+                                  id="cron-payload-acp-agent-id"
+                                  .value=${props.form.payloadAcpAgentId}
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      payloadAcpAgentId: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder=${t("cron.form.acpAgentIdPlaceholder")}
+                                />
+                                <div class="cron-help">${t("cron.form.acpAgentIdHelp")}</div>
+                              </label>
+                            `
+                          : nothing
+                      }
                       <label class="field">
                         ${renderFieldLabel(t("cron.form.model"))}
                         <input
@@ -1159,25 +1189,31 @@ export function renderCron(props: CronProps) {
                         />
                         <div class="cron-help">${t("cron.form.modelHelp")}</div>
                       </label>
-                      <label class="field">
-                        ${renderFieldLabel(t("cron.form.thinking"))}
-                        <input
-                          id="cron-payload-thinking"
-                          .value=${props.form.payloadThinking}
-                          list="cron-thinking-suggestions"
-                          @input=${(e: Event) =>
-                            props.onFormChange({
-                              payloadThinking: (e.target as HTMLInputElement).value,
-                            })}
-                          placeholder=${t("cron.form.thinkingPlaceholder")}
-                        />
-                        <div class="cron-help">${t("cron.form.thinkingHelp")}</div>
-                      </label>
+                      ${
+                        isAgentTurn
+                          ? html`
+                              <label class="field">
+                                ${renderFieldLabel(t("cron.form.thinking"))}
+                                <input
+                                  id="cron-payload-thinking"
+                                  .value=${props.form.payloadThinking}
+                                  list="cron-thinking-suggestions"
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      payloadThinking: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder=${t("cron.form.thinkingPlaceholder")}
+                                />
+                                <div class="cron-help">${t("cron.form.thinkingHelp")}</div>
+                              </label>
+                            `
+                          : nothing
+                      }
                     `
                   : nothing
               }
               ${
-                isAgentTurn
+                isAgentTurn || isAcpTurn
                   ? html`
                       <label class="field cron-span-2">
                         ${renderFieldLabel("Failure alerts")}

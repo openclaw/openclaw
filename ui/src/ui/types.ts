@@ -456,6 +456,14 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       lightContext?: boolean;
+    }
+  | {
+      kind: "acpTurn";
+      message: string;
+      acpAgentId?: string;
+      cwd?: string;
+      model?: string;
+      timeoutSeconds?: number;
     };
 
 export type CronDelivery = {

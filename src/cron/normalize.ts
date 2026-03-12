@@ -89,6 +89,8 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "acpturn") {
+    next.kind = "acpTurn";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
@@ -434,7 +436,7 @@ export function normalizeCronJobInput(
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       }
-      if (kind === "agentTurn") {
+      if (kind === "agentTurn" || kind === "acpTurn") {
         next.sessionTarget = "isolated";
       }
     }
@@ -462,8 +464,9 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    const isIsolatedAgentTurn =
-      sessionTarget === "isolated" || (sessionTarget === "" && payloadKind === "agentTurn");
+    const isIsolatedRun =
+      sessionTarget === "isolated" ||
+      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "acpTurn"));
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: isRecord(next.delivery) ? next.delivery : null,
@@ -475,8 +478,8 @@ export function normalizeCronJobInput(
     if (
       !hasDelivery &&
       !normalizedLegacy.delivery &&
-      isIsolatedAgentTurn &&
-      payloadKind === "agentTurn"
+      isIsolatedRun &&
+      (payloadKind === "agentTurn" || payloadKind === "acpTurn")
     ) {
       next.delivery = { mode: "announce" };
     }

@@ -34,6 +34,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
+  payloadAcpAgentId: "",
   deliveryMode: "announce",
   deliveryChannel: "last",
   deliveryTo: "",

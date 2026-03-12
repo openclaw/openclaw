@@ -230,9 +230,15 @@ export const en: TranslationMap = {
       payloadKind: "What should run?",
       systemEvent: "Post message to main timeline",
       agentTurn: "Run assistant task (isolated)",
+      acpTurn: "Run ACP harness (Claude Code / Codex / Gemini CLI)",
       systemEventHelp:
         "Sends your text to the gateway main timeline (good for reminders/triggers).",
       agentTurnHelp: "Starts an assistant run in its own session using your prompt.",
+      acpTurnHelp:
+        "Directly invokes an ACP harness (Claude Code, Codex, Gemini CLI, etc.) as a one-shot isolated run.",
+      acpAgentId: "ACP agent",
+      acpAgentIdPlaceholder: "e.g. codex, claude, gemini",
+      acpAgentIdHelp: "Which ACP harness to invoke (codex, claude, gemini, opencode, kimi, pi).",
       timeoutSeconds: "Timeout (seconds)",
       timeoutPlaceholder: "Optional, e.g. 90",
       timeoutHelp:

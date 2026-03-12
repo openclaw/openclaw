@@ -132,11 +132,20 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
+  // acpTurn-specific constraint checked first so it gives the most precise error
+  // even when sessionTarget="main" is combined with acpTurn.
+  if (job.payload.kind === "acpTurn" && job.sessionTarget !== "isolated") {
+    throw new Error('acpTurn cron jobs require sessionTarget="isolated"');
+  }
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  if (
+    job.sessionTarget === "isolated" &&
+    job.payload.kind !== "agentTurn" &&
+    job.payload.kind !== "acpTurn"
+  ) {
+    throw new Error('isolated cron jobs require payload.kind="agentTurn" or "acpTurn"');
   }
 }
 
@@ -660,6 +669,29 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "acpTurn") {
+    if (existing.kind !== "acpTurn") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "acpTurn" }> = { ...existing };
+    if (typeof patch.message === "string") {
+      next.message = patch.message;
+    }
+    if (typeof patch.acpAgentId === "string") {
+      next.acpAgentId = patch.acpAgentId;
+    }
+    if (typeof patch.cwd === "string") {
+      next.cwd = patch.cwd;
+    }
+    if (typeof patch.model === "string") {
+      next.model = patch.model;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -745,6 +777,20 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
       throw new Error('cron.update payload.kind="systemEvent" requires text');
     }
     return { kind: "systemEvent", text: patch.text };
+  }
+
+  if (patch.kind === "acpTurn") {
+    if (typeof patch.message !== "string" || patch.message.length === 0) {
+      throw new Error('cron.update payload.kind="acpTurn" requires message');
+    }
+    return {
+      kind: "acpTurn",
+      message: patch.message,
+      acpAgentId: patch.acpAgentId,
+      cwd: patch.cwd,
+      model: patch.model,
+      timeoutSeconds: patch.timeoutSeconds,
+    };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

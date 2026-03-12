@@ -78,9 +78,34 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronAcpTurnPayload;
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronAcpTurnPayloadPatch;
+
+type CronAcpTurnPayloadFields = {
+  message: string;
+  /** ACP harness identifier: codex / claude / gemini / opencode / kimi / pi */
+  acpAgentId?: string;
+  /** Optional working directory passed to the ACP runtime. */
+  cwd?: string;
+  /** Optional model hint; forwarded to the ACP backend when the backend supports it. */
+  model?: string;
+  timeoutSeconds?: number;
+};
+
+type CronAcpTurnPayload = {
+  kind: "acpTurn";
+} & CronAcpTurnPayloadFields;
+
+type CronAcpTurnPayloadPatch = {
+  kind: "acpTurn";
+} & Partial<CronAcpTurnPayloadFields>;
 
 type CronAgentTurnPayloadFields = {
   message: string;

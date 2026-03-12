@@ -1123,8 +1123,43 @@ export async function executeJobCore(
     }
   }
 
+  if (job.payload.kind === "acpTurn") {
+    if (!state.deps.runAcpJob) {
+      return {
+        status: "error",
+        error: "ACP backend unavailable: runAcpJob not configured on this gateway",
+      };
+    }
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const acpRes = await state.deps.runAcpJob({
+      job,
+      message: job.payload.message,
+      abortSignal,
+    });
+    if (abortSignal?.aborted) {
+      return { status: "error", error: timeoutErrorMessage() };
+    }
+    return {
+      status: acpRes.status,
+      error: acpRes.error,
+      summary: acpRes.summary,
+      delivered: acpRes.delivered,
+      deliveryAttempted: acpRes.deliveryAttempted,
+      sessionId: acpRes.sessionId,
+      sessionKey: acpRes.sessionKey,
+      model: acpRes.model,
+      provider: acpRes.provider,
+      usage: acpRes.usage,
+    };
+  }
+
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    return {
+      status: "skipped",
+      error: `isolated job requires payload.kind="agentTurn" or "acpTurn"`,
+    };
   }
   if (abortSignal?.aborted) {
     return resolveAbortError();

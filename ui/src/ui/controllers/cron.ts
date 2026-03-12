@@ -84,7 +84,10 @@ export type CronModelSuggestionsState = {
 export function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
 ) {
-  return form.sessionTarget === "isolated" && form.payloadKind === "agentTurn";
+  return (
+    form.sessionTarget === "isolated" &&
+    (form.payloadKind === "agentTurn" || form.payloadKind === "acpTurn")
+  );
 }
 
 export function normalizeCronFormState(form: CronFormState): CronFormState {
@@ -135,7 +138,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
         ? "cron.errors.systemTextRequired"
         : "cron.errors.agentMessageRequired";
   }
-  if (form.payloadKind === "agentTurn") {
+  if (form.payloadKind === "agentTurn" || form.payloadKind === "acpTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
@@ -451,10 +454,16 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     wakeMode: job.wakeMode,
     payloadKind: job.payload.kind,
     payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
-    payloadModel: job.payload.kind === "agentTurn" ? (job.payload.model ?? "") : "",
+    payloadModel:
+      job.payload.kind === "agentTurn"
+        ? (job.payload.model ?? "")
+        : job.payload.kind === "acpTurn"
+          ? (job.payload.model ?? "")
+          : "",
     payloadThinking: job.payload.kind === "agentTurn" ? (job.payload.thinking ?? "") : "",
     payloadLightContext:
       job.payload.kind === "agentTurn" ? job.payload.lightContext === true : false,
+    payloadAcpAgentId: job.payload.kind === "acpTurn" ? (job.payload.acpAgentId ?? "") : "",
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -488,7 +497,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertAccountId:
       failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
-      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+      (job.payload.kind === "agentTurn" || job.payload.kind === "acpTurn") &&
+      typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
         : "",
   };
@@ -558,6 +568,28 @@ export function buildCronPayload(form: CronFormState) {
   const message = form.payloadText.trim();
   if (!message) {
     throw new Error(t("cron.errors.agentMessageRequiredShort"));
+  }
+  if (form.payloadKind === "acpTurn") {
+    const acpPayload: {
+      kind: "acpTurn";
+      message: string;
+      acpAgentId?: string;
+      model?: string;
+      timeoutSeconds?: number;
+    } = { kind: "acpTurn", message };
+    const acpAgentId = form.payloadAcpAgentId.trim();
+    if (acpAgentId) {
+      acpPayload.acpAgentId = acpAgentId;
+    }
+    const model = form.payloadModel.trim();
+    if (model) {
+      acpPayload.model = model;
+    }
+    const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
+    if (timeoutSeconds > 0) {
+      acpPayload.timeoutSeconds = timeoutSeconds;
+    }
+    return acpPayload;
   }
   const payload: {
     kind: "agentTurn";
