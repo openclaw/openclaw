@@ -198,6 +198,49 @@ function warnEscapedSkillPath(params: {
   });
 }
 
+function tryPathIdentity(filePath: string): { dev: number; ino: number } | null {
+  try {
+    const stat = fs.statSync(filePath);
+    if (typeof stat.dev !== "number" || typeof stat.ino !== "number") {
+      return null;
+    }
+    return { dev: stat.dev, ino: stat.ino };
+  } catch {
+    return null;
+  }
+}
+
+function isPathInsideRealRoot(rootRealPath: string, candidateRealPath: string): boolean {
+  if (isPathInside(rootRealPath, candidateRealPath)) {
+    return true;
+  }
+
+  // Some package-manager / mount layouts can expose the same directory through
+  // multiple canonical-looking path strings. Fall back to device+inode ancestry
+  // before warning so bundled/plugin skills do not spam false positives.
+  const rootIdentity = tryPathIdentity(rootRealPath);
+  if (!rootIdentity) {
+    return false;
+  }
+
+  let current = candidateRealPath;
+  while (true) {
+    const currentIdentity = tryPathIdentity(current);
+    if (
+      currentIdentity &&
+      currentIdentity.dev === rootIdentity.dev &&
+      currentIdentity.ino === rootIdentity.ino
+    ) {
+      return true;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+
 function resolveContainedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -208,7 +251,7 @@ function resolveContainedSkillPath(params: {
   if (!candidateRealPath) {
     return null;
   }
-  if (isPathInside(params.rootRealPath, candidateRealPath)) {
+  if (isPathInsideRealRoot(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
   }
   warnEscapedSkillPath({
