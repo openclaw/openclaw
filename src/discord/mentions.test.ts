@@ -92,6 +92,19 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("profile https://x.com/@alice and ping <@123456789>");
   });
 
+  it("does not rewrite CJK inline mentions inside URL tokens", () => {
+    rememberDiscordDirectoryUser({
+      accountId: "default",
+      userId: "2233445566",
+      handles: ["张三"],
+    });
+    const rewritten = rewriteDiscordKnownMentions(
+      "url https://x.com/你好@张三 and ping 你好@张三",
+      { accountId: "default" },
+    );
+    expect(rewritten).toBe("url https://x.com/你好@张三 and ping 你好<@2233445566>");
+  });
+
   it("preserves unknown mentions and reserved mentions", () => {
     rememberDiscordDirectoryUser({
       accountId: "default",
