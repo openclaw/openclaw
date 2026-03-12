@@ -9,7 +9,7 @@ import {
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
-import { renderTable } from "../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { parseTimeoutOption, resolveTimeoutMs } from "./parse-timeout.js";
@@ -230,7 +230,7 @@ export function registerDevicesCli(program: Command) {
           return;
         }
         if (list.pending?.length) {
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           defaultRuntime.log(
             `${theme.heading("Pending")} ${theme.muted(`(${list.pending.length})`)}`,
           );
@@ -257,7 +257,7 @@ export function registerDevicesCli(program: Command) {
           );
         }
         if (list.paired?.length) {
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           defaultRuntime.log(
             `${theme.heading("Paired")} ${theme.muted(`(${list.paired.length})`)}`,
           );

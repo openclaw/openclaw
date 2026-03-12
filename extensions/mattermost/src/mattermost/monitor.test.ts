@@ -109,6 +109,29 @@ describe("mattermost mention gating", () => {
   });
 });
 
+describe("resolveMattermostReplyRootId with block streaming payloads", () => {
+  it("uses threadRootId for block-streamed payloads with replyToId", () => {
+    // When block streaming sends a payload with replyToId from the threading
+    // mode, the deliver callback should still use the existing threadRootId.
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "thread-root-1",
+        replyToId: "streamed-reply-id",
+      }),
+    ).toBe("thread-root-1");
+  });
+
+  it("falls back to payload replyToId when no threadRootId in block streaming", () => {
+    // Top-level channel message: no threadRootId, payload carries the
+    // inbound post id as replyToId from the "all" threading mode.
+    expect(
+      resolveMattermostReplyRootId({
+        replyToId: "inbound-post-for-threading",
+      }),
+    ).toBe("inbound-post-for-threading");
+  });
+});
+
 describe("resolveMattermostReplyRootId", () => {
   it("uses replyToId for top-level replies", () => {
     expect(
