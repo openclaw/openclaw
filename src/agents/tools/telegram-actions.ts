@@ -504,6 +504,7 @@ export async function handleTelegramAction(
         durationSeconds: durationSeconds ?? undefined,
       },
       {
+        cfg,
         token,
         accountId: accountId ?? undefined,
         isAnonymous,
