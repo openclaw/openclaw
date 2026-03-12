@@ -58,6 +58,10 @@ export type GetReplyOptions = {
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   disableBlockStreaming?: boolean;
+  /** Allow reasoning payloads (isReasoning: true) to be forwarded to the dispatcher
+   *  instead of being suppressed. Set by channels that have a dedicated reasoning lane
+   *  and handle reasoning splitting themselves (e.g. Telegram with reasoning="on"). */
+  allowReasoningPayloads?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
   /** If provided, only load these skills for this session (empty = no skills). */

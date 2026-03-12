@@ -320,6 +320,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({
         replyOptions: expect.objectContaining({
           disableBlockStreaming: false,
+          allowReasoningPayloads: true,
         }),
       }),
     );
@@ -327,6 +328,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "Reasoning:\n_step_" })],
+      }),
+    );
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Hello" })],
       }),
     );
   });
