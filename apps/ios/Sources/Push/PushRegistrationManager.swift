@@ -90,9 +90,11 @@ actor PushRegistrationManager {
         }
 
         let tokenHashHex = Self.sha256Hex(apnsTokenHex)
+        let relayOrigin = relayClient.normalizedBaseURLString
         if let stored = PushRelayRegistrationStore.loadRegistrationState(),
            stored.installationId == installationId,
            stored.gatewayDeviceId == gatewayIdentity.deviceId,
+           stored.relayOrigin == relayOrigin,
            stored.lastAPNsTokenHashHex == tokenHashHex,
            !Self.isExpired(stored.relayHandleExpiresAtMs)
         {
@@ -119,6 +121,7 @@ actor PushRegistrationManager {
         let registrationState = PushRelayRegistrationStore.RegistrationState(
             relayHandle: response.relayHandle,
             sendGrant: response.sendGrant,
+            relayOrigin: relayOrigin,
             gatewayDeviceId: gatewayIdentity.deviceId,
             relayHandleExpiresAtMs: response.expiresAtMs,
             tokenDebugSuffix: Self.normalizeTokenSuffix(response.tokenSuffix),

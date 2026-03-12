@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import { nodeHandlers } from "./nodes.js";
+import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -224,6 +224,43 @@ describe("node.invoke APNs wake path", () => {
     expect(call?.[2]?.message).toBe("node not connected");
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue({
+      nodeId: "ios-node-relay-no-auth",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      updatedAtMs: 1,
+      tokenDebugSuffix: "abcd1234",
+    });
+    mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
+      ok: false,
+      error: "relay config missing",
+    });
+
+    const first = await maybeWakeNodeWithApns("ios-node-relay-no-auth");
+    const second = await maybeWakeNodeWithApns("ios-node-relay-no-auth");
+
+    expect(first).toMatchObject({
+      available: false,
+      throttled: false,
+      path: "no-auth",
+      apnsReason: "relay config missing",
+    });
+    expect(second).toMatchObject({
+      available: false,
+      throttled: false,
+      path: "no-auth",
+      apnsReason: "relay config missing",
+    });
+    expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(2);
+    expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
   });
 
   it("wakes and retries invoke after the node reconnects", async () => {

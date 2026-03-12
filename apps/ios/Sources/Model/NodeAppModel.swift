@@ -1853,6 +1853,7 @@ private extension NodeAppModel {
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
+                            await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
                             await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
@@ -2498,7 +2499,8 @@ extension NodeAppModel {
         else {
             return
         }
-        if token == self.apnsLastRegisteredTokenHex {
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        if !usesRelayTransport && token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2509,7 +2511,8 @@ extension NodeAppModel {
 
         do {
             let gatewayIdentity: PushRelayGatewayIdentity?
-            if await self.pushRegistrationManager.usesRelayTransport {
+            if usesRelayTransport {
+                guard self.operatorConnected else { return }
                 gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
             } else {
                 gatewayIdentity = nil

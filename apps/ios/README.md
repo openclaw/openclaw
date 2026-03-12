@@ -105,9 +105,35 @@ pnpm ios:beta -- --build-number 7
 ## APNs Expectations For Official Builds
 
 - Official/TestFlight builds register with the external push relay before they publish `push.apns.register` to the gateway.
-- The gateway registration for relay mode contains an opaque relay handle, a registration-scoped send grant, and installation metadata instead of the raw APNs token.
+- The gateway registration for relay mode contains an opaque relay handle, a registration-scoped send grant, relay origin metadata, and installation metadata instead of the raw APNs token.
+- The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
 - The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
+- If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
 - Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
+- Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
+
+## Official Build Relay Trust Model
+
+- `iOS -> gateway`
+  - The app must pair with the gateway and establish both node and operator sessions.
+  - The operator session is used to fetch `gateway.identity.get`.
+- `iOS -> relay`
+  - The app registers with the relay over HTTPS using App Attest plus the app receipt.
+  - The relay requires the official production/TestFlight distribution path, which is why local
+    Xcode/dev installs cannot use the hosted relay.
+- `gateway delegation`
+  - The app includes the gateway identity in relay registration.
+  - The relay returns a relay handle and registration-scoped send grant delegated to that gateway.
+- `gateway -> relay`
+  - The gateway signs relay send requests with its own device identity.
+  - The relay verifies both the delegated send grant and the gateway signature before it sends to
+    APNs.
+- `relay -> APNs`
+  - Production APNs credentials and raw official-build APNs tokens stay in the relay deployment,
+    not on the gateway.
+
+This exists to keep the hosted relay limited to genuine OpenClaw official builds and to ensure a
+gateway can only send pushes for iOS devices that paired with that gateway.
 
 ## What Works Now (Concrete)
 

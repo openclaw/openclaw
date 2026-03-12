@@ -274,7 +274,6 @@ export async function maybeWakeNodeWithApns(
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 
-      state.lastWakeAtMs = Date.now();
       let wakeResult;
       if (registration.transport === "relay") {
         const relay = resolveRelayNodePushConfig();
@@ -286,6 +285,7 @@ export async function maybeWakeNodeWithApns(
             apnsReason: relay.error,
           });
         }
+        state.lastWakeAtMs = Date.now();
         wakeResult = await sendApnsBackgroundWake({
           registration,
           nodeId,
@@ -302,6 +302,7 @@ export async function maybeWakeNodeWithApns(
             apnsReason: auth.error,
           });
         }
+        state.lastWakeAtMs = Date.now();
         wakeResult = await sendApnsBackgroundWake({
           registration,
           nodeId,

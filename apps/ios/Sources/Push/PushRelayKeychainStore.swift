@@ -3,6 +3,7 @@ import Foundation
 private struct StoredPushRelayRegistrationState: Codable {
     var relayHandle: String
     var sendGrant: String
+    var relayOrigin: String?
     var gatewayDeviceId: String
     var relayHandleExpiresAtMs: Int64?
     var tokenDebugSuffix: String?
@@ -20,6 +21,7 @@ enum PushRelayRegistrationStore {
     struct RegistrationState: Codable {
         var relayHandle: String
         var sendGrant: String
+        var relayOrigin: String?
         var gatewayDeviceId: String
         var relayHandleExpiresAtMs: Int64?
         var tokenDebugSuffix: String?
@@ -40,6 +42,7 @@ enum PushRelayRegistrationStore {
         return RegistrationState(
             relayHandle: decoded.relayHandle,
             sendGrant: decoded.sendGrant,
+            relayOrigin: decoded.relayOrigin,
             gatewayDeviceId: decoded.gatewayDeviceId,
             relayHandleExpiresAtMs: decoded.relayHandleExpiresAtMs,
             tokenDebugSuffix: decoded.tokenDebugSuffix,
@@ -53,6 +56,7 @@ enum PushRelayRegistrationStore {
         let stored = StoredPushRelayRegistrationState(
             relayHandle: state.relayHandle,
             sendGrant: state.sendGrant,
+            relayOrigin: state.relayOrigin,
             gatewayDeviceId: state.gatewayDeviceId,
             relayHandleExpiresAtMs: state.relayHandleExpiresAtMs,
             tokenDebugSuffix: state.tokenDebugSuffix,

@@ -229,6 +229,10 @@ final class PushRelayClient: @unchecked Sendable {
         self.session = session
     }
 
+    var normalizedBaseURLString: String {
+        Self.normalizeBaseURLString(self.baseURL)
+    }
+
     func register(
         installationId: String,
         bundleId: String,
@@ -322,6 +326,14 @@ final class PushRelayClient: @unchecked Sendable {
 
     private static func statusCode(from response: URLResponse) -> Int {
         (response as? HTTPURLResponse)?.statusCode ?? 0
+    }
+
+    private static func normalizeBaseURLString(_ url: URL) -> String {
+        var absolute = url.absoluteString
+        while absolute.hasSuffix("/") {
+            absolute.removeLast()
+        }
+        return absolute
     }
 
     private static func decodeErrorMessage(data: Data) -> String {
