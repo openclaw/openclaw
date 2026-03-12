@@ -13,6 +13,8 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed";
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -41,6 +43,11 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;

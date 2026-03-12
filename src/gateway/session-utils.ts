@@ -9,6 +9,10 @@ import {
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
+import {
+  getSubagentRunByChildSessionKey,
+  listSubagentRunsForController,
+} from "../agents/subagent-registry.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -175,6 +179,49 @@ export function deriveSessionTitle(
   }
 
   return undefined;
+}
+
+function resolveSessionRunStatus(
+  run: {
+    endedAt?: number;
+    outcome?: { status?: string };
+  } | null,
+): "running" | "done" | "failed" | "killed" | undefined {
+  if (!run) {
+    return undefined;
+  }
+  if (!run.endedAt) {
+    return "running";
+  }
+  const status = run.outcome?.status;
+  if (status === "error") {
+    return "failed";
+  }
+  if (status === "killed") {
+    return "killed";
+  }
+  return "done";
+}
+
+function resolveSessionRuntimeMs(
+  run: { startedAt?: number; endedAt?: number } | null,
+  now: number,
+) {
+  if (!run?.startedAt) {
+    return undefined;
+  }
+  return Math.max(0, (run.endedAt ?? now) - run.startedAt);
+}
+
+function resolveChildSessionKeys(controllerSessionKey: string): string[] | undefined {
+  const childSessions = Array.from(
+    new Set(
+      listSubagentRunsForController(controllerSessionKey)
+        .map((entry) => entry.childSessionKey)
+        .filter((value) => typeof value === "string" && value.trim().length > 0),
+    ),
+  );
+  return childSessions.length > 0 ? childSessions : undefined;
 }
 
 export function loadSessionEntry(sessionKey: string) {
@@ -936,6 +983,8 @@ export function listSessionsFromStore(params: {
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
+      const subagentRun = getSubagentRunByChildSessionKey(key);
+      const childSessions = resolveChildSessionKeys(key);
       return {
         key,
         spawnedBy: entry?.spawnedBy,
@@ -963,6 +1012,11 @@ export function listSessionsFromStore(params: {
         outputTokens: entry?.outputTokens,
         totalTokens: total,
         totalTokensFresh,
+        status: resolveSessionRunStatus(subagentRun),
+        startedAt: subagentRun?.startedAt,
+        endedAt: subagentRun?.endedAt,
+        runtimeMs: resolveSessionRuntimeMs(subagentRun, now),
+        childSessions,
         responseUsage: entry?.responseUsage,
         modelProvider,
         model,
