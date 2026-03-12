@@ -116,7 +116,8 @@ export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider)
 
 /** Check if Firecrawl is authenticated (config or env). */
 export function isFirecrawlAuthenticated(config: OpenClawConfig): boolean {
-  return hasExistingKey(config, "firecrawl") || hasKeyInEnv(SEARCH_PROVIDER_OPTIONS[0]);
+  const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === "firecrawl");
+  return hasExistingKey(config, "firecrawl") || (entry ? hasKeyInEnv(entry) : false);
 }
 
 /** Build an env-backed SecretRef for a search provider. */

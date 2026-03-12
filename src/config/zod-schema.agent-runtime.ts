@@ -266,10 +266,10 @@ export const ToolsWebSearchSchema = z
       .union([
         z.literal("brave"),
         z.literal("firecrawl"),
-        z.literal("gemini"),
-        z.literal("grok"),
-        z.literal("kimi"),
         z.literal("perplexity"),
+        z.literal("grok"),
+        z.literal("gemini"),
+        z.literal("kimi"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),

@@ -990,3 +990,10 @@ export function createWebFetchTool(options?: {
     },
   };
 }
+
+export const __testing = {
+  resolveFetchProvider,
+  resolveScrapingBeeApiKey,
+  resolveScrapingBeeConfig,
+  resolveScrapingBeeRenderJs,
+} as const;
