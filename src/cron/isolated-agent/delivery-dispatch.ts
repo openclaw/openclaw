@@ -391,14 +391,7 @@ export async function dispatchCronDelivery(
       });
     }
     if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        delivered: true,
-        ...params.telemetry,
-      });
-    }
+    if (isSilentReplyText(synthesizedText.toUpperCase(), SILENT_REPLY_TOKEN)) {
 
     // If the final text still looks like an interim/status narration,
     // suppress announce delivery instead of leaking chatty no-data updates.
