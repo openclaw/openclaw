@@ -507,7 +507,7 @@ jobs:
       # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
         run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
+          sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
@@ -567,7 +567,7 @@ jobs:
 
       - name: Select Xcode 26.1
         run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
+          sudo xcode-select -s /Applications/Xcode.app
           xcodebuild -version
 
       - name: Install XcodeGen
