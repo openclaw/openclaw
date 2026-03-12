@@ -34,7 +34,8 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
 
   for (const session of sessions) {
     const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
+    const messageCounts = getMessageCountsWithFallback(usage);
+    if (!messageCounts || messageCounts.total === 0) {
       continue;
     }
     const start = usage.firstActivity ?? session.updatedAt;
@@ -55,8 +56,8 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       const nextMs = Math.min(nextHour.getTime(), endMs);
       const minutes = Math.max((nextMs - cursor) / 60000, 0);
       const share = minutes / totalMinutes;
-      hourErrors[hour] += usage.messageCounts.errors * share;
-      hourMsgs[hour] += usage.messageCounts.total * share;
+      hourErrors[hour] += messageCounts.errors * share;
+      hourMsgs[hour] += messageCounts.total * share;
       cursor = nextMs + 1;
     }
   }

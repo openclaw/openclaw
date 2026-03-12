@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAggregatesFromSessions } from "./usage-metrics.ts";
+import { buildAggregatesFromSessions, buildPeakErrorHours } from "./usage-metrics.ts";
 import type { UsageSessionEntry } from "./usageTypes.ts";
 
 function makeSession(
@@ -105,5 +105,46 @@ describe("buildAggregatesFromSessions", () => {
     expect(aggregates.messages.toolCalls).toBe(1);
     expect(aggregates.messages.toolResults).toBe(3);
     expect(aggregates.messages.errors).toBe(1);
+  });
+});
+
+describe("buildPeakErrorHours", () => {
+  it("uses dailyMessageCounts fallback when messageCounts is missing", () => {
+    const peakHours = buildPeakErrorHours(
+      [
+        makeSession({
+          totalTokens: 1000,
+          totalCost: 0,
+          input: 400,
+          output: 600,
+          cacheRead: 0,
+          cacheWrite: 0,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+          firstActivity: Date.UTC(2026, 2, 1, 10, 0, 0),
+          lastActivity: Date.UTC(2026, 2, 1, 10, 30, 0),
+          dailyMessageCounts: [
+            {
+              date: "2026-03-01",
+              total: 10,
+              user: 3,
+              assistant: 4,
+              toolCalls: 2,
+              toolResults: 1,
+              errors: 2,
+            },
+          ],
+        }),
+      ],
+      "utc",
+    );
+
+    expect(peakHours).toHaveLength(1);
+    expect(peakHours[0]?.value).toBe("20.00%");
+    expect(peakHours[0]?.sub).toContain("2");
+    expect(peakHours[0]?.sub).toContain("10");
   });
 });
