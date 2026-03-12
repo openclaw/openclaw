@@ -8,6 +8,11 @@ export type PluginSourceRoots = {
   workspace?: string;
 };
 
+export type PluginCacheInputs = {
+  roots: PluginSourceRoots;
+  loadPaths: string[];
+};
+
 export function resolvePluginSourceRoots(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -18,4 +23,22 @@ export function resolvePluginSourceRoots(params: {
   const global = path.join(resolveConfigDir(env), "extensions");
   const workspace = workspaceRoot ? path.join(workspaceRoot, ".openclaw", "extensions") : undefined;
   return { stock, global, workspace };
+}
+
+export function resolvePluginCacheInputs(params: {
+  workspaceDir?: string;
+  loadPaths?: string[];
+  env?: NodeJS.ProcessEnv;
+}): PluginCacheInputs {
+  const env = params.env ?? process.env;
+  const roots = resolvePluginSourceRoots({
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const loadPaths = (params.loadPaths ?? [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolveUserPath(entry, env));
+  return { roots, loadPaths };
 }

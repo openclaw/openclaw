@@ -10,7 +10,7 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
-import { resolvePluginSourceRoots } from "./roots.js";
+import { resolvePluginCacheInputs, resolvePluginSourceRoots } from "./roots.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -71,21 +71,16 @@ function buildDiscoveryCacheKey(params: {
   ownershipUid?: number | null;
   env: NodeJS.ProcessEnv;
 }): string {
-  const roots = resolvePluginSourceRoots({
+  const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
+    loadPaths: params.extraPaths,
     env: params.env,
   });
   const workspaceKey = roots.workspace ?? "";
   const configExtensionsRoot = roots.global ?? "";
   const bundledRoot = roots.stock ?? "";
-  const normalizedExtraPaths = (params.extraPaths ?? [])
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => resolveUserPath(entry, params.env))
-    .toSorted();
   const ownershipUid = params.ownershipUid ?? currentUid();
-  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(normalizedExtraPaths)}`;
+  return `${workspaceKey}::${ownershipUid ?? "none"}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 
 function currentUid(overrideUid?: number | null): number | null {

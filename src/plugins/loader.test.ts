@@ -503,6 +503,66 @@ describe("loadOpenClawPlugins", () => {
     ).toBe(fs.realpathSync(pluginB.file));
   });
 
+  it("does not reuse cached load-path plugin registries across env home changes", () => {
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const stateDir = makeTempDir();
+    const bundledDir = makeTempDir();
+    const pluginA = writePlugin({
+      id: "demo",
+      dir: path.join(homeA, "plugins", "demo"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "demo", register() {} };`,
+    });
+    const pluginB = writePlugin({
+      id: "demo",
+      dir: path.join(homeB, "plugins", "demo"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "demo", register() {} };`,
+    });
+
+    const options = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          entries: {
+            demo: { enabled: true },
+          },
+          load: {
+            paths: ["~/plugins/demo"],
+          },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins({
+      ...options,
+      env: {
+        ...process.env,
+        HOME: homeA,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+    const second = loadOpenClawPlugins({
+      ...options,
+      env: {
+        ...process.env,
+        HOME: homeB,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expect(second).not.toBe(first);
+    expect(fs.realpathSync(first.plugins.find((entry) => entry.id === "demo")?.source ?? "")).toBe(
+      fs.realpathSync(pluginA.file),
+    );
+    expect(fs.realpathSync(second.plugins.find((entry) => entry.id === "demo")?.source ?? "")).toBe(
+      fs.realpathSync(pluginB.file),
+    );
+  });
+
   it("normalizes bundled plugin env overrides against the provided env", () => {
     const bundledDir = makeTempDir();
     const homeDir = path.dirname(bundledDir);

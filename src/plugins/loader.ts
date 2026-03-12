@@ -21,7 +21,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { resolvePluginSourceRoots } from "./roots.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { createPluginRuntime, type CreatePluginRuntimeOptions } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -175,11 +175,15 @@ function buildCacheKey(params: {
   plugins: NormalizedPluginsConfig;
   env: NodeJS.ProcessEnv;
 }): string {
-  const roots = resolvePluginSourceRoots({
+  const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
+    loadPaths: params.plugins.loadPaths,
     env: params.env,
   });
-  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(params.plugins)}`;
+  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
+    ...params.plugins,
+    loadPaths,
+  })}`;
 }
 
 function validatePluginConfig(params: {
