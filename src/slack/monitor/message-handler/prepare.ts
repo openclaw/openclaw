@@ -87,7 +87,7 @@ type SlackConversationContext = {
   isRoom: boolean;
   isRoomish: boolean;
   channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
-  allowBots: boolean;
+  allowBotsMode: "off" | "all" | "mentions";
   isBotMessage: boolean;
 };
 
@@ -146,11 +146,17 @@ async function resolveSlackConversationContext(params: {
         defaultRequireMention: ctx.defaultRequireMention,
       })
     : null;
-  const allowBots =
+  const allowBotsSetting =
     channelConfig?.allowBots ??
     account.config?.allowBots ??
     cfg.channels?.slack?.allowBots ??
     false;
+  const allowBotsMode =
+    allowBotsSetting === "mentions"
+      ? ("mentions" as const)
+      : allowBotsSetting === true
+        ? ("all" as const)
+        : ("off" as const);
 
   return {
     channelInfo,
@@ -161,7 +167,7 @@ async function resolveSlackConversationContext(params: {
     isRoom,
     isRoomish,
     channelConfig,
-    allowBots,
+    allowBotsMode,
     isBotMessage: Boolean(message.bot_id),
   };
 }
@@ -173,14 +179,14 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
+  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
     conversation;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
       return null;
     }
-    if (!allowBots) {
+    if (allowBotsMode === "off") {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
       return null;
     }
@@ -331,6 +337,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
+    allowBotsMode,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -509,6 +516,15 @@ export async function prepareSlackMessage(params: {
         : null,
     });
     return null;
+  }
+
+  // Mentions-mode gate for bot messages (mirrors Discord allowBots=mentions).
+  if (isBotMessage && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || wasMentioned || implicitMention;
+    if (!botMentioned) {
+      logVerbose("slack: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
   }
 
   const threadStarter =
