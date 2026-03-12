@@ -28,24 +28,31 @@ export function startRpcDaemon() {
             // First check if this is asking for help for a specific command (e.g. openclaw-tool feishu --help)
             const baseArgs = args.filter((a: string) => a !== "--help" && a !== "-h");
             if (baseArgs.length > 0) {
+              const { getCustomMapper, macroMappers } = require("./registry.js");
+              const macro = macroMappers.get(baseArgs[0]);
+
+              if (macro) {
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(
+                  JSON.stringify({
+                    stdout: macro.generateHelp(),
+                    exitCode: 0,
+                  }),
+                );
+                return;
+              }
+
               const cmd = resolveCommand(sessionKey, baseArgs);
               if (cmd) {
-                const { getCustomMapper, macroMappers } = require("./registry.js");
-                const macro = macroMappers.get(baseArgs[0]);
+                const cliKey = baseArgs.slice(0, 2).join(" "); // simplistic assumption for now
+                const mapper = getCustomMapper(cliKey) || getCustomMapper(baseArgs[0]);
 
                 let helpResult = "";
-                if (macro) {
-                  helpResult = macro.generateHelp();
+                if (mapper && mapper.generateHelp) {
+                  helpResult = mapper.generateHelp(cmd.tool, cliKey);
                 } else {
-                  const cliKey = baseArgs.slice(0, 2).join(" "); // simplistic assumption for now
-                  const mapper = getCustomMapper(cliKey) || getCustomMapper(baseArgs[0]);
-
-                  if (mapper && mapper.generateHelp) {
-                    helpResult = mapper.generateHelp(cmd.tool, cliKey);
-                  } else {
-                    const { defaultGenericHelp } = require("./mappers/types.js");
-                    helpResult = defaultGenericHelp(cmd.tool, baseArgs.join(" "));
-                  }
+                  const { defaultGenericHelp } = require("./mappers/types.js");
+                  helpResult = defaultGenericHelp(cmd.tool, baseArgs.join(" "));
                 }
 
                 res.writeHead(200, { "Content-Type": "application/json" });
