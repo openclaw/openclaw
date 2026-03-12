@@ -1,5 +1,7 @@
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -90,6 +92,7 @@ import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./opencode-go-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
+import { configureZaiMcpTools } from "./zai-mcp-tools-config.js";
 
 const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   openrouter: "openrouter-api-key",
@@ -736,6 +739,23 @@ export async function applyAuthChoiceApiProviders(
         }),
       noteDefault: defaultModel,
     });
+
+    // Auto-configure Z.AI MCP tools (zread, vision, web-search)
+    try {
+      if (apiKey) {
+        await configureZaiMcpTools(
+          apiKey,
+          resolveAgentWorkspaceDir(nextConfig, params.agentId ?? DEFAULT_AGENT_ID),
+        );
+        await params.prompter.note(
+          "Z.AI MCP tools (zread, vision, web-search) auto-configured.",
+          "MCP Tools",
+        );
+      }
+    } catch (e) {
+      // Non-fatal, just log and continue
+      console.warn("Failed to auto-configure Z.AI MCP tools:", e);
+    }
 
     return { config: nextConfig, agentModelOverride };
   }
