@@ -149,6 +149,30 @@ describe("FeishuConfigSchema webhook validation", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts SecretRef encryptKey in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      encryptKey: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_ENCRYPT_KEY",
+      },
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("FeishuConfigSchema replyInThread", () => {

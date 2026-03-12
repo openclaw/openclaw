@@ -172,7 +172,7 @@ export function resolveFeishuCredentials(
   return {
     appId,
     appSecret,
-    encryptKey: normalizeString(cfg?.encryptKey),
+    encryptKey: resolveSecretLike(cfg?.encryptKey, "channels.feishu.encryptKey"),
     verificationToken: resolveSecretLike(
       cfg?.verificationToken,
       "channels.feishu.verificationToken",

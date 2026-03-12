@@ -371,23 +371,36 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
         };
       }
       const currentEncryptKey = (next.channels?.feishu as FeishuConfig | undefined)?.encryptKey;
-      const encryptKey = String(
-        await prompter.text({
-          message: "Enter Feishu encrypt key",
-          initialValue: currentEncryptKey ?? "",
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
-      ).trim();
-      next = {
-        ...next,
-        channels: {
-          ...next.channels,
-          feishu: {
-            ...next.channels?.feishu,
-            encryptKey,
+      const encryptKeyPromptState = buildSingleChannelSecretPromptState({
+        accountConfigured: hasConfiguredSecretInput(currentEncryptKey),
+        hasConfigToken: hasConfiguredSecretInput(currentEncryptKey),
+        allowEnv: false,
+      });
+      const encryptKeyResult = await promptSingleChannelSecretInput({
+        cfg: next,
+        prompter,
+        providerHint: "feishu-webhook",
+        credentialLabel: "encrypt key",
+        accountConfigured: encryptKeyPromptState.accountConfigured,
+        canUseEnv: encryptKeyPromptState.canUseEnv,
+        hasConfigToken: encryptKeyPromptState.hasConfigToken,
+        envPrompt: "",
+        keepPrompt: "Feishu encrypt key already configured. Keep it?",
+        inputPrompt: "Enter Feishu encrypt key",
+        preferredEnvVar: "FEISHU_ENCRYPT_KEY",
+      });
+      if (encryptKeyResult.action === "set") {
+        next = {
+          ...next,
+          channels: {
+            ...next.channels,
+            feishu: {
+              ...next.channels?.feishu,
+              encryptKey: encryptKeyResult.value,
+            },
           },
-        },
-      };
+        };
+      }
       const currentWebhookPath = (next.channels?.feishu as FeishuConfig | undefined)?.webhookPath;
       const webhookPath = String(
         await prompter.text({

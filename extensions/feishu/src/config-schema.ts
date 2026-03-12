@@ -3,10 +3,6 @@ import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
 const GroupPolicySchema = z.union([
   z.enum(["open", "allowlist", "disabled"]),
@@ -190,7 +186,7 @@ export const FeishuAccountConfigSchema = z
     name: z.string().optional(), // Display name for this account
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
-    encryptKey: z.string().optional(),
+    encryptKey: buildSecretInputSchema().optional(),
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
@@ -208,7 +204,7 @@ export const FeishuConfigSchema = z
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
-    encryptKey: z.string().optional(),
+    encryptKey: buildSecretInputSchema().optional(),
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
@@ -244,7 +240,7 @@ export const FeishuConfigSchema = z
 
     const defaultConnectionMode = value.connectionMode ?? "websocket";
     const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
-    const defaultEncryptKeyConfigured = hasNonEmptyString(value.encryptKey);
+    const defaultEncryptKeyConfigured = hasConfiguredSecretInput(value.encryptKey);
     if (defaultConnectionMode === "webhook") {
       if (!defaultVerificationTokenConfigured) {
         ctx.addIssue({
@@ -274,7 +270,7 @@ export const FeishuConfigSchema = z
       const accountVerificationTokenConfigured =
         hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
       const accountEncryptKeyConfigured =
-        hasNonEmptyString(account.encryptKey) || defaultEncryptKeyConfigured;
+        hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
       if (!accountVerificationTokenConfigured) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
