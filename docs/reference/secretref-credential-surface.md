@@ -23,6 +23,7 @@ Scope intent:
 [//]: # "secretref-supported-list-start"
 
 - `models.providers.*.apiKey`
+- `models.providers.*.headers.*`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
@@ -30,6 +31,7 @@ Scope intent:
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`
 - `messages.tts.openai.apiKey`
+- `tools.web.fetch.firecrawl.apiKey`
 - `tools.web.search.apiKey`
 - `tools.web.search.gemini.apiKey`
 - `tools.web.search.grok.apiKey`
@@ -98,9 +100,11 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- For SecretRef-managed model providers, generated `agents/*/agent/models.json` entries persist non-secret markers (not resolved secret values) for `apiKey`/header surfaces.
 - For web search:
   - In explicit provider mode (`tools.web.search.provider` set), only the selected provider key is active.
-  - In auto mode (`tools.web.search.provider` unset), `tools.web.search.apiKey` and provider-specific keys are active.
+  - In auto mode (`tools.web.search.provider` unset), only the first provider key that resolves by precedence is active.
+  - In auto mode, non-selected provider refs are treated as inactive until selected.
 
 ## Unsupported credentials
 

@@ -13,6 +13,7 @@ import { updateSessionStore, type SessionEntry } from "../../config/sessions.js"
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { handleCompactCommand } from "./commands-compact.js";
@@ -104,27 +105,6 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-type ResetAcpSessionInPlaceResult = { ok: true } | { ok: false; skipped?: boolean; error?: string };
-
-const resetAcpSessionInPlaceMock = vi.hoisted(() =>
-  vi.fn(
-    async (_params: unknown): Promise<ResetAcpSessionInPlaceResult> => ({
-      ok: false,
-      skipped: true,
-    }),
-  ),
-);
-vi.mock("../../acp/persistent-bindings.js", async () => {
-  const actual = await vi.importActual<typeof import("../../acp/persistent-bindings.js")>(
-    "../../acp/persistent-bindings.js",
-  );
-  return {
-    ...actual,
-    resetAcpSessionInPlace: (params: unknown) => resetAcpSessionInPlaceMock(params),
-  };
-});
-
-import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 
@@ -156,11 +136,6 @@ afterAll(async () => {
 function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
-
-beforeEach(() => {
-  resetAcpSessionInPlaceMock.mockReset();
-  resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, skipped: true } as const);
-});
 
 describe("handleCommands gating", () => {
   it("blocks gated commands when disabled or not elevated-allowlisted", async () => {
@@ -313,6 +288,122 @@ describe("/approve command", () => {
         params: { id: "abc", decision: "allow-once" },
       }),
     );
+  });
+
+  it("accepts Telegram command mentions for /approve", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve@bot abc12345 allow-once", cfg, {
+      BotUsername: "bot",
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("rejects Telegram /approve mentions targeting a different bot", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve@otherbot abc12345 allow-once", cfg, {
+      BotUsername: "bot",
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("targets a different Telegram bot");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces unknown or expired approval id errors", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("unknown or expired approval id");
+  });
+
+  it("rejects Telegram /approve when telegram exec approvals are disabled", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Telegram exec approvals are not enabled");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram /approve from non-approvers", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+          execApprovals: { enabled: true, approvers: ["999"], target: "dm" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects gateway clients without approvals scope", async () => {
@@ -590,6 +681,153 @@ describe("handleCommands /config configWrites gating", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");
   });
+
+  it("blocks /config set when the target account disables writes", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams(
+      "/config set channels.telegram.accounts.work.enabled=false",
+      cfg,
+      {
+        AccountId: "default",
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    );
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("blocks ambiguous channel-root /config writes from channel commands", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { config: true, text: true },
+      channels: { telegram: { configWrites: true } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams('/config set channels.telegram={"enabled":false}', cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain(
+      "cannot replace channels, channel roots, or accounts collections",
+    );
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("blocks /config set from gateway clients without operator.admin", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    const params = buildParams('/config set messages.ackReaction=":)"', cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("requires operator.admin");
+  });
+
+  it("keeps /config show available to gateway operator.write clients", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackreaction: ":)" } },
+    });
+    const params = buildParams("/config show messages.ackReaction", cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config messages.ackreaction");
+  });
+
+  it("keeps /config set working for gateway operator.admin clients", async () => {
+    const cfg = {
+      commands: { config: true, text: true },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: { messages: { ackReaction: ":)" } },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    const params = buildParams('/config set messages.ackReaction=":D"', cfg, {
+      Provider: INTERNAL_MESSAGE_CHANNEL,
+      Surface: INTERNAL_MESSAGE_CHANNEL,
+      GatewayClientScopes: ["operator.write", "operator.admin"],
+    });
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(writeConfigFileMock).toHaveBeenCalledOnce();
+    expect(result.reply?.text).toContain("Config updated");
+  });
+
+  it("keeps /config set working for gateway operator.admin on protected account paths", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: {
+          telegram: {
+            accounts: {
+              work: { enabled: true, configWrites: false },
+            },
+          },
+        },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    const params = buildParams(
+      "/config set channels.telegram.accounts.work.enabled=false",
+      {
+        commands: { config: true, text: true },
+        channels: {
+          telegram: {
+            accounts: {
+              work: { enabled: true, configWrites: false },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: INTERNAL_MESSAGE_CHANNEL,
+        Surface: INTERNAL_MESSAGE_CHANNEL,
+        GatewayClientScopes: ["operator.write", "operator.admin"],
+      },
+    );
+    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Config updated");
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
+  });
 });
 
 describe("handleCommands bash alias", () => {
@@ -704,8 +942,101 @@ describe("handleCommands /allowlist", () => {
     expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
       channel: "telegram",
       entry: "789",
+      accountId: "default",
     });
     expect(result.reply?.text).toContain("DM allowlist added");
+  });
+
+  it("writes store entries to the selected account scope", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+      },
+    });
+    validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+      ok: true,
+      config,
+    }));
+    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+      changed: true,
+      allowFrom: ["123", "789"],
+    });
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm --account work 789", cfg, {
+      AccountId: "work",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      entry: "789",
+      accountId: "work",
+    });
+  });
+
+  it("blocks config-targeted /allowlist edits when the target account disables writes", async () => {
+    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, allowFrom: ["123"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
+    const params = buildPolicyParams("/allowlist add dm --account work --config 789", cfg, {
+      AccountId: "default",
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("removes default-account entries from scoped and legacy pairing stores", async () => {
+    removeChannelAllowFromStoreEntryMock
+      .mockResolvedValueOnce({
+        changed: true,
+        allowFrom: [],
+      })
+      .mockResolvedValueOnce({
+        changed: true,
+        allowFrom: [],
+      });
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist remove dm --store 789", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenNthCalledWith(1, {
+      channel: "telegram",
+      entry: "789",
+      accountId: "default",
+    });
+    expect(removeChannelAllowFromStoreEntryMock).toHaveBeenNthCalledWith(2, {
+      channel: "telegram",
+      entry: "789",
+    });
   });
 
   it("rejects blocked account ids and keeps Object.prototype clean", async () => {
@@ -907,6 +1238,28 @@ describe("/models command", () => {
     expect(result.reply?.text).toContain("localai/ultra-chat");
     expect(result.reply?.text).not.toContain("Unknown provider");
   });
+
+  it("threads the routed agent through /models replies", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as unknown as OpenClawConfig;
+    const params = buildPolicyParams("/models", scopedCfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+
+    const result = await handleCommands({
+      ...params,
+      agentId: "support",
+      sessionKey: "agent:support:main",
+    });
+
+    expect(result.reply?.text).toContain("localai");
+  });
 });
 
 describe("handleCommands plugin commands", () => {
@@ -993,229 +1346,12 @@ describe("handleCommands hooks", () => {
         type: "command",
         action: "new",
         sessionKey: "agent:main:telegram:direct:123",
-      }),
-    );
-    spy.mockRestore();
-  });
-});
-
-describe("handleCommands ACP-bound /new and /reset", () => {
-  const discordChannelId = "1478836151241412759";
-  const buildDiscordBoundConfig = (): OpenClawConfig =>
-    ({
-      commands: { text: true },
-      bindings: [
-        {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: {
-              kind: "channel",
-              id: discordChannelId,
-            },
-          },
-          acp: {
-            mode: "persistent",
-          },
-        },
-      ],
-      channels: {
-        discord: {
-          allowFrom: ["*"],
-          guilds: { "1459246755253325866": { channels: { [discordChannelId]: {} } } },
-        },
-      },
-    }) as OpenClawConfig;
-
-  const buildDiscordBoundParams = (body: string) => {
-    const params = buildParams(body, buildDiscordBoundConfig(), {
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      AccountId: "default",
-      SenderId: "12345",
-      From: "discord:12345",
-      To: discordChannelId,
-      OriginatingTo: discordChannelId,
-      SessionKey: "agent:main:acp:binding:discord:default:feedface",
-    });
-    params.sessionKey = "agent:main:acp:binding:discord:default:feedface";
-    return params;
-  };
-
-  it("handles /new as ACP in-place reset for bound conversations", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
-    const result = await handleCommands(buildDiscordBoundParams("/new"));
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("ACP session reset in place");
-    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
-    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
-      reason: "new",
-    });
-  });
-
-  it("continues with trailing prompt text after successful ACP-bound /new", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
-    const params = buildDiscordBoundParams("/new continue with deployment");
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-    const mutableCtx = params.ctx as Record<string, unknown>;
-    expect(mutableCtx.BodyStripped).toBe("continue with deployment");
-    expect(mutableCtx.CommandBody).toBe("continue with deployment");
-    expect(mutableCtx.AcpDispatchTailAfterReset).toBe(true);
-    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("handles /reset failures without falling back to normal session reset flow", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
-    const result = await handleCommands(buildDiscordBoundParams("/reset"));
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("ACP session reset failed");
-    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
-    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
-      reason: "reset",
-    });
-  });
-
-  it("does not emit reset hooks when ACP reset fails", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: false, error: "backend unavailable" });
-    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
-
-    const result = await handleCommands(buildDiscordBoundParams("/reset"));
-
-    expect(result.shouldContinue).toBe(false);
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
-  it("keeps existing /new behavior for non-ACP sessions", async () => {
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const result = await handleCommands(buildParams("/new", cfg));
-
-    expect(result.shouldContinue).toBe(true);
-    expect(resetAcpSessionInPlaceMock).not.toHaveBeenCalled();
-  });
-
-  it("still targets configured ACP binding when runtime routing falls back to a non-ACP session", async () => {
-    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
-    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
-      channel: "discord",
-      accountId: "default",
-      conversationId: discordChannelId,
-      agentId: "codex",
-      mode: "persistent",
-    });
-    const params = buildDiscordBoundParams("/new");
-    params.sessionKey = fallbackSessionKey;
-    params.ctx.SessionKey = fallbackSessionKey;
-    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("ACP session reset unavailable");
-    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
-    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: configuredAcpSessionKey,
-      reason: "new",
-    });
-  });
-
-  it("emits reset hooks for the ACP session key when routing falls back to non-ACP session", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
-    const hookSpy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
-    const fallbackSessionKey = `agent:main:discord:channel:${discordChannelId}`;
-    const configuredAcpSessionKey = buildConfiguredAcpSessionKey({
-      channel: "discord",
-      accountId: "default",
-      conversationId: discordChannelId,
-      agentId: "codex",
-      mode: "persistent",
-    });
-    const fallbackEntry = {
-      sessionId: "fallback-session-id",
-      sessionFile: "/tmp/fallback-session.jsonl",
-    } as SessionEntry;
-    const configuredEntry = {
-      sessionId: "configured-acp-session-id",
-      sessionFile: "/tmp/configured-acp-session.jsonl",
-    } as SessionEntry;
-    const params = buildDiscordBoundParams("/new");
-    params.sessionKey = fallbackSessionKey;
-    params.ctx.SessionKey = fallbackSessionKey;
-    params.ctx.CommandTargetSessionKey = fallbackSessionKey;
-    params.sessionEntry = fallbackEntry;
-    params.previousSessionEntry = fallbackEntry;
-    params.sessionStore = {
-      [fallbackSessionKey]: fallbackEntry,
-      [configuredAcpSessionKey]: configuredEntry,
-    };
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("ACP session reset in place");
-    expect(hookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "command",
-        action: "new",
-        sessionKey: configuredAcpSessionKey,
         context: expect.objectContaining({
-          sessionEntry: configuredEntry,
-          previousSessionEntry: configuredEntry,
+          workspaceDir: testWorkspaceDir,
         }),
       }),
     );
-    hookSpy.mockRestore();
-  });
-
-  it("uses active ACP command target when conversation binding context is missing", async () => {
-    resetAcpSessionInPlaceMock.mockResolvedValue({ ok: true } as const);
-    const activeAcpTarget = "agent:codex:acp:binding:discord:default:feedface";
-    const params = buildParams(
-      "/new",
-      {
-        commands: { text: true },
-        channels: {
-          discord: {
-            allowFrom: ["*"],
-          },
-        },
-      } as OpenClawConfig,
-      {
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        AccountId: "default",
-        SenderId: "12345",
-        From: "discord:12345",
-      },
-    );
-    params.sessionKey = "discord:slash:12345";
-    params.ctx.SessionKey = "discord:slash:12345";
-    params.ctx.CommandSource = "native";
-    params.ctx.CommandTargetSessionKey = activeAcpTarget;
-    params.ctx.To = "user:12345";
-    params.ctx.OriginatingTo = "user:12345";
-
-    const result = await handleCommands(params);
-
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("ACP session reset in place");
-    expect(resetAcpSessionInPlaceMock).toHaveBeenCalledTimes(1);
-    expect(resetAcpSessionInPlaceMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: activeAcpTarget,
-      reason: "new",
-    });
+    spy.mockRestore();
   });
 });
 

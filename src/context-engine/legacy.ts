@@ -5,6 +5,7 @@ import type {
   ContextEngineInfo,
   AssembleResult,
   CompactResult,
+  ContextEngineRuntimeContext,
   IngestResult,
 } from "./types.js";
 
@@ -54,7 +55,7 @@ export class LegacyContextEngine implements ContextEngine {
     autoCompactionSummary?: string;
     isHeartbeat?: boolean;
     tokenBudget?: number;
-    legacyCompactionParams?: Record<string, unknown>;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
     // No-op: legacy flow persists context directly in SessionManager.
   }
@@ -67,26 +68,26 @@ export class LegacyContextEngine implements ContextEngine {
     currentTokenCount?: number;
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
-    legacyParams?: Record<string, unknown>;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<CompactResult> {
-    // Import dynamically to avoid circular dependencies
+    // Import through a dedicated runtime boundary so the lazy edge remains effective.
     const { compactEmbeddedPiSessionDirect } =
-      await import("../agents/pi-embedded-runner/compact.js");
+      await import("../agents/pi-embedded-runner/compact.runtime.js");
 
-    // legacyParams carries the full CompactEmbeddedPiSessionParams fields
+    // runtimeContext carries the full CompactEmbeddedPiSessionParams fields
     // set by the caller in run.ts. We spread them and override the fields
     // that come from the ContextEngine compact() signature directly.
-    const lp = params.legacyParams ?? {};
+    const runtimeContext = params.runtimeContext ?? {};
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- legacy bridge: legacyParams is an opaque bag matching CompactEmbeddedPiSessionParams
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
     const result = await compactEmbeddedPiSessionDirect({
-      ...lp,
+      ...runtimeContext,
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       tokenBudget: params.tokenBudget,
       force: params.force,
       customInstructions: params.customInstructions,
-      workspaceDir: (lp.workspaceDir as string) ?? process.cwd(),
+      workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
     } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
 
     return {

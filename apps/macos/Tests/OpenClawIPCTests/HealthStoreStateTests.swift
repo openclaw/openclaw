@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct HealthStoreStateTests {
-    @Test @MainActor func linkedChannelProbeFailureDegradesState() {
+struct HealthStoreStateTests {
+    @Test @MainActor func `linked channel probe failure degrades state`() {
         let snap = HealthSnapshot(
             ok: true,
             ts: 0,
