@@ -9,6 +9,18 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  deleteLockEntryFromDb,
+  deleteSkillPreviewFromDb,
+  getAllLockEntriesFromDb,
+  getCatalogSkillsFromDb,
+  getCatalogSkillVersionFromDb,
+  getClawhubSyncMeta,
+  getSkillPreviewFromDb,
+  replaceCatalogInDb,
+  setClawhubSyncMeta,
+  setSkillPreviewInDb,
+} from "../../infra/state-db/clawhub-sqlite.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -18,20 +30,9 @@ const execFileAsync = promisify(execFile);
 // ─── Path Resolver ────────────────────────────────────────────────────────────
 
 export function resolveClawHubPaths(workspaceDir: string) {
-  const clawhubDir = path.join(workspaceDir, ".openclaw", "clawhub");
   return {
-    clawhubDir,
-    catalogPath: path.join(clawhubDir, "catalog.json"),
-    previewsDir: path.join(clawhubDir, "previews"),
-    lockPath: path.join(clawhubDir, "clawhub.lock.json"),
     skillsDir: path.join(workspaceDir, "skills"),
   };
-}
-
-function ensureClawHubDirs(workspaceDir: string) {
-  const { clawhubDir, previewsDir } = resolveClawHubPaths(workspaceDir);
-  fs.mkdirSync(clawhubDir, { recursive: true });
-  fs.mkdirSync(previewsDir, { recursive: true });
 }
 
 // ─── Category Derivation ──────────────────────────────────────────────────────
@@ -299,8 +300,6 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       return;
     }
     const { workspaceDir } = resolved;
-    ensureClawHubDirs(workspaceDir);
-    const paths = resolveClawHubPaths(workspaceDir);
 
     // Fetch all skills from the ClawHub registry via paginated API calls.
     // The `clawhub explore` CLI is capped at 200; direct API pagination gets all ~15k skills.
@@ -317,21 +316,14 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Load existing catalog to compute diffs
-    let prevSkills: Record<string, unknown> = {};
-    try {
-      if (fs.existsSync(paths.catalogPath)) {
-        const prev = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8")) as {
-          skills?: Array<{ slug?: string; latestVersion?: { version?: string } }>;
-        };
-        for (const s of prev.skills ?? []) {
-          if (s.slug) {
-            prevSkills[s.slug] = s;
-          }
-        }
+    // Load existing catalog from SQLite to compute diffs
+    const prevCatalog = getCatalogSkillsFromDb(workspaceDir);
+    const prevSkills: Record<string, Record<string, unknown>> = {};
+    for (const s of prevCatalog) {
+      const slug = typeof s.slug === "string" ? s.slug : "";
+      if (slug) {
+        prevSkills[slug] = s;
       }
-    } catch {
-      /* ignore */
     }
 
     let newSkills = 0;
@@ -355,9 +347,7 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       } else if (newVersion && prevVersion && newVersion !== prevVersion) {
         updatedSkills++;
         // Invalidate preview cache for this skill
-        const previewPath = path.join(paths.previewsDir, `${slug}.json`);
-        if (fs.existsSync(previewPath)) {
-          fs.unlinkSync(previewPath);
+        if (deleteSkillPreviewFromDb(workspaceDir, slug)) {
           stalePreviewsInvalidated++;
         }
       }
@@ -366,14 +356,13 @@ export const clawhubHandlers: GatewayRequestHandlers = {
     });
 
     const syncedAt = new Date().toISOString();
-    const catalog = { syncedAt, totalSkills: skills.length, skills };
-    fs.writeFileSync(paths.catalogPath, JSON.stringify(catalog, null, 2), "utf8");
+    replaceCatalogInDb(workspaceDir, skills);
+    setClawhubSyncMeta(workspaceDir, { syncedAt, totalSkills: skills.length });
 
     respond(
       true,
       {
         syncedAt,
-        catalogPath: paths.catalogPath,
         totalSkills: skills.length,
         newSkills,
         updatedSkills,
@@ -391,23 +380,18 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
       return;
     }
-    const paths = resolveClawHubPaths(resolved.workspaceDir);
+    const { workspaceDir } = resolved;
 
-    if (!fs.existsSync(paths.catalogPath)) {
+    const syncMeta = getClawhubSyncMeta(workspaceDir);
+    const allSkills = getCatalogSkillsFromDb(workspaceDir);
+
+    if (!syncMeta) {
       respond(true, { syncedAt: null, stale: true, total: 0, filtered: 0, skills: [] }, undefined);
       return;
     }
 
-    let catalog: { syncedAt?: string; skills?: Array<Record<string, unknown>> };
-    try {
-      catalog = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8"));
-    } catch {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "failed to read catalog.json"));
-      return;
-    }
-
-    const stale = isCatalogStale(catalog.syncedAt);
-    let skills = catalog.skills ?? [];
+    const stale = isCatalogStale(syncMeta.syncedAt);
+    let skills = allSkills;
 
     // Filter by category
     const category = typeof p.category === "string" && p.category !== "all" ? p.category : null;
@@ -452,9 +436,9 @@ export const clawhubHandlers: GatewayRequestHandlers = {
     respond(
       true,
       {
-        syncedAt: catalog.syncedAt ?? null,
+        syncedAt: syncMeta.syncedAt,
         stale,
-        total: (catalog.skills ?? []).length,
+        total: allSkills.length,
         filtered: skills.length,
         skills,
       },
@@ -475,39 +459,17 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "slug is required"));
       return;
     }
-    const paths = resolveClawHubPaths(resolved.workspaceDir);
-    ensureClawHubDirs(resolved.workspaceDir);
+    const { workspaceDir } = resolved;
 
     // Determine expected version from catalog
-    let expectedVersion: string | null = null;
-    try {
-      if (fs.existsSync(paths.catalogPath)) {
-        const catalog = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8")) as {
-          skills?: Array<{ slug?: string; latestVersion?: { version?: string } }>;
-        };
-        const entry = (catalog.skills ?? []).find((s) => s.slug === slug);
-        expectedVersion = entry?.latestVersion?.version ?? null;
-      }
-    } catch {
-      /* ignore */
-    }
+    const expectedVersion = getCatalogSkillVersionFromDb(workspaceDir, slug);
 
-    // Check preview cache
-    const previewPath = path.join(paths.previewsDir, `${slug}.json`);
-    if (fs.existsSync(previewPath)) {
-      try {
-        const cached = JSON.parse(fs.readFileSync(previewPath, "utf8")) as {
-          slug: string;
-          version: string;
-          fetchedAt: string;
-          content: string;
-        };
-        if (!expectedVersion || cached.version === expectedVersion) {
-          respond(true, cached, undefined);
-          return;
-        }
-      } catch {
-        /* stale/corrupt, refetch */
+    // Check preview cache in SQLite
+    const cached = getSkillPreviewFromDb(workspaceDir, slug);
+    if (cached) {
+      if (!expectedVersion || cached.version === expectedVersion) {
+        respond(true, cached, undefined);
+        return;
       }
     }
 
@@ -553,7 +515,7 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       fetchedAt: new Date().toISOString(),
       content,
     };
-    fs.writeFileSync(previewPath, JSON.stringify(envelope, null, 2), "utf8");
+    setSkillPreviewInDb(workspaceDir, envelope);
     respond(true, envelope, undefined);
   },
 
@@ -571,12 +533,11 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       return;
     }
     const { workspaceDir } = resolved;
-    const paths = resolveClawHubPaths(workspaceDir);
-    ensureClawHubDirs(workspaceDir);
-    fs.mkdirSync(paths.skillsDir, { recursive: true });
+    const { skillsDir } = resolveClawHubPaths(workspaceDir);
+    fs.mkdirSync(skillsDir, { recursive: true });
 
     try {
-      await execFileAsync("clawhub", ["install", slug, "--dir", paths.skillsDir], {
+      await execFileAsync("clawhub", ["install", slug, "--dir", skillsDir], {
         timeout: 120_000,
       });
     } catch (err: unknown) {
@@ -601,7 +562,7 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const installedAt = path.join(paths.skillsDir, slug);
+    const installedAt = path.join(skillsDir, slug);
     respond(
       true,
       {
@@ -628,23 +589,15 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "slug is required"));
       return;
     }
-    const paths = resolveClawHubPaths(resolved.workspaceDir);
-    const skillDir = path.join(paths.skillsDir, slug);
+    const { skillsDir } = resolveClawHubPaths(resolved.workspaceDir);
+    const skillDir = path.join(skillsDir, slug);
 
     if (fs.existsSync(skillDir)) {
       fs.rmSync(skillDir, { recursive: true, force: true });
     }
 
-    // Remove from lockfile
-    if (fs.existsSync(paths.lockPath)) {
-      try {
-        const lock = JSON.parse(fs.readFileSync(paths.lockPath, "utf8")) as Record<string, unknown>;
-        delete lock[slug];
-        fs.writeFileSync(paths.lockPath, JSON.stringify(lock, null, 2), "utf8");
-      } catch {
-        /* ignore if corrupt */
-      }
-    }
+    // Remove from lock table
+    deleteLockEntryFromDb(resolved.workspaceDir, slug);
 
     respond(true, { ok: true, slug }, undefined);
   },
@@ -657,24 +610,18 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
       return;
     }
-    const paths = resolveClawHubPaths(resolved.workspaceDir);
+    const { workspaceDir } = resolved;
+    const { skillsDir } = resolveClawHubPaths(workspaceDir);
 
-    // Read lock file for version info
-    let lockData: Record<string, { version?: string }> = {};
-    if (fs.existsSync(paths.lockPath)) {
-      try {
-        lockData = JSON.parse(fs.readFileSync(paths.lockPath, "utf8"));
-      } catch {
-        /* ignore */
-      }
-    }
+    // Read lock entries from SQLite
+    const lockData = getAllLockEntriesFromDb(workspaceDir);
 
     // Cross-reference with skills/ folder
     let installedSlugs: string[] = [];
-    if (fs.existsSync(paths.skillsDir)) {
+    if (fs.existsSync(skillsDir)) {
       try {
         installedSlugs = fs
-          .readdirSync(paths.skillsDir, { withFileTypes: true })
+          .readdirSync(skillsDir, { withFileTypes: true })
           .filter((d) => d.isDirectory())
           .map((d) => d.name);
       } catch {
@@ -682,18 +629,8 @@ export const clawhubHandlers: GatewayRequestHandlers = {
       }
     }
 
-    // Enrich with catalog metadata
-    let catalogSkills: Array<Record<string, unknown>> = [];
-    if (fs.existsSync(paths.catalogPath)) {
-      try {
-        const catalog = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8")) as {
-          skills?: Array<Record<string, unknown>>;
-        };
-        catalogSkills = catalog.skills ?? [];
-      } catch {
-        /* ignore */
-      }
-    }
+    // Enrich with catalog metadata from SQLite
+    const catalogSkills = getCatalogSkillsFromDb(workspaceDir);
     const catalogBySlug = new Map(catalogSkills.map((s) => [s.slug as string, s]));
 
     const skills = installedSlugs.map((slug) => ({

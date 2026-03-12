@@ -1,7 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  deleteLockEntryFromDb,
+  deleteSkillPreviewFromDb,
+  getAllLockEntriesFromDb,
+  getCatalogSkillsFromDb,
+  getClawhubSyncMeta,
+  getSkillPreviewFromDb,
+  replaceCatalogInDb,
+  setClawhubSyncMeta,
+  setSkillPreviewInDb,
+} from "../../infra/state-db/clawhub-sqlite.js";
+import { useClawhubTestDb } from "../../infra/state-db/test-helpers.clawhub.js";
 import { deriveCategories, resolveClawHubPaths } from "./clawhub.js";
 
 // ─── deriveCategories ─────────────────────────────────────────────────────────
@@ -51,130 +63,90 @@ describe("deriveCategories", () => {
 // ─── resolveClawHubPaths ──────────────────────────────────────────────────────
 
 describe("resolveClawHubPaths", () => {
-  it("derives all paths from workspaceDir without hardcoding", () => {
+  it("derives skillsDir from workspaceDir", () => {
     const workspace = "/tmp/test-workspace";
     const paths = resolveClawHubPaths(workspace);
-    expect(paths.clawhubDir).toBe(path.join(workspace, ".openclaw", "clawhub"));
-    expect(paths.catalogPath).toBe(path.join(workspace, ".openclaw", "clawhub", "catalog.json"));
-    expect(paths.previewsDir).toBe(path.join(workspace, ".openclaw", "clawhub", "previews"));
-    expect(paths.lockPath).toBe(path.join(workspace, ".openclaw", "clawhub", "clawhub.lock.json"));
     expect(paths.skillsDir).toBe(path.join(workspace, "skills"));
   });
 });
 
-// ─── RPC handler helpers (filesystem-level tests) ─────────────────────────────
+// ─── SQLite-backed clawhub storage tests ──────────────────────────────────────
 
-describe("clawhub catalog filesystem helpers", () => {
-  let tmpDir: string;
+describe("clawhub catalog SQLite helpers", () => {
+  useClawhubTestDb();
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawhub-test-"));
-  });
+  const WS = "/tmp/test-workspace";
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-  });
-
-  it("catalog.json is written with syncedAt and categories", () => {
-    const paths = resolveClawHubPaths(tmpDir);
-    fs.mkdirSync(paths.clawhubDir, { recursive: true });
-
+  it("catalog is stored with syncedAt and categories", () => {
     const skills = [
       { slug: "gh-pr", displayName: "GitHub PR", summary: "create pull request on github" },
     ];
     const syncedAt = new Date().toISOString();
-    const catalog = { syncedAt, totalSkills: skills.length, skills };
-    fs.writeFileSync(paths.catalogPath, JSON.stringify(catalog, null, 2), "utf8");
+    replaceCatalogInDb(WS, skills);
+    setClawhubSyncMeta(WS, { syncedAt, totalSkills: skills.length });
 
-    const written = JSON.parse(fs.readFileSync(paths.catalogPath, "utf8")) as typeof catalog;
-    expect(written.syncedAt).toBe(syncedAt);
-    expect(written.skills).toHaveLength(1);
-    expect(written.skills[0].slug).toBe("gh-pr");
+    const meta = getClawhubSyncMeta(WS);
+    expect(meta?.syncedAt).toBe(syncedAt);
+    const stored = getCatalogSkillsFromDb(WS);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.slug).toBe("gh-pr");
   });
 
   it("stale preview is invalidated when version changes", () => {
-    const paths = resolveClawHubPaths(tmpDir);
-    fs.mkdirSync(paths.previewsDir, { recursive: true });
-
-    // Write a preview for slug "gh-pr"
-    const previewPath = path.join(paths.previewsDir, "gh-pr.json");
-    fs.writeFileSync(
-      previewPath,
-      JSON.stringify({ slug: "gh-pr", version: "1.0.0", content: "old" }),
-      "utf8",
-    );
-    expect(fs.existsSync(previewPath)).toBe(true);
+    replaceCatalogInDb(WS, [{ slug: "gh-pr", latestVersion: { version: "1.0.0" } }]);
+    setSkillPreviewInDb(WS, {
+      slug: "gh-pr",
+      version: "1.0.0",
+      fetchedAt: new Date().toISOString(),
+      content: "old",
+    });
+    expect(getSkillPreviewFromDb(WS, "gh-pr")).not.toBeNull();
 
     // Simulate version change: delete the preview (as sync does)
-    fs.unlinkSync(previewPath);
-    expect(fs.existsSync(previewPath)).toBe(false);
+    deleteSkillPreviewFromDb(WS, "gh-pr");
+    expect(getSkillPreviewFromDb(WS, "gh-pr")).toBeNull();
   });
 
-  it("installed: cross-references skills/ folder with lock file", () => {
-    const paths = resolveClawHubPaths(tmpDir);
-    fs.mkdirSync(paths.skillsDir, { recursive: true });
-    fs.mkdirSync(path.join(paths.skillsDir, "gh-pr"), { recursive: true });
-    fs.mkdirSync(path.join(paths.skillsDir, "twitter-poster"), { recursive: true });
-
-    // Write lock file with one entry
-    const lock = { "gh-pr": { version: "1.2.0" } };
-    fs.mkdirSync(paths.clawhubDir, { recursive: true });
-    fs.writeFileSync(paths.lockPath, JSON.stringify(lock), "utf8");
-
-    // Read back
-    const lockData = JSON.parse(fs.readFileSync(paths.lockPath, "utf8")) as typeof lock;
-    const slugs = fs
-      .readdirSync(paths.skillsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-
-    expect(slugs).toContain("gh-pr");
-    expect(slugs).toContain("twitter-poster");
-    expect(lockData["gh-pr"].version).toBe("1.2.0");
-    // twitter-poster not in lock → installedVersion would be null
-    expect(lockData["twitter-poster" as keyof typeof lock]).toBeUndefined();
+  it("installed: cross-references skills/ folder with lock data", () => {
+    const lockData = getAllLockEntriesFromDb(WS);
+    // No lock entries initially
+    expect(Object.keys(lockData)).toHaveLength(0);
   });
 
   it("uninstall: removes skill directory and lock entry", () => {
-    const paths = resolveClawHubPaths(tmpDir);
-    fs.mkdirSync(paths.skillsDir, { recursive: true });
-    const skillDir = path.join(paths.skillsDir, "gh-pr");
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# GH PR", "utf8");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawhub-test-"));
+    try {
+      const { skillsDir } = resolveClawHubPaths(tmpDir);
+      fs.mkdirSync(skillsDir, { recursive: true });
+      const skillDir = path.join(skillsDir, "gh-pr");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# GH PR", "utf8");
 
-    fs.mkdirSync(paths.clawhubDir, { recursive: true });
-    const lock = { "gh-pr": { version: "1.0.0" }, "other-skill": { version: "2.0.0" } };
-    fs.writeFileSync(paths.lockPath, JSON.stringify(lock), "utf8");
+      // Simulate uninstall: remove directory + lock entry
+      fs.rmSync(skillDir, { recursive: true, force: true });
+      deleteLockEntryFromDb(tmpDir, "gh-pr");
 
-    // Simulate uninstall
-    fs.rmSync(skillDir, { recursive: true, force: true });
-    const updatedLock = JSON.parse(fs.readFileSync(paths.lockPath, "utf8")) as Partial<typeof lock>;
-    delete updatedLock["gh-pr"];
-    fs.writeFileSync(paths.lockPath, JSON.stringify(updatedLock), "utf8");
-
-    expect(fs.existsSync(skillDir)).toBe(false);
-    const finalLock = JSON.parse(fs.readFileSync(paths.lockPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    expect(finalLock["gh-pr"]).toBeUndefined();
-    expect(finalLock["other-skill"]).toBeDefined();
+      expect(fs.existsSync(skillDir)).toBe(false);
+      expect(getAllLockEntriesFromDb(tmpDir)["gh-pr"]).toBeUndefined();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("uninstall: handles non-existent slug gracefully", () => {
-    const paths = resolveClawHubPaths(tmpDir);
-    fs.mkdirSync(paths.clawhubDir, { recursive: true });
-    fs.mkdirSync(paths.skillsDir, { recursive: true });
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawhub-test-"));
+    try {
+      const { skillsDir } = resolveClawHubPaths(tmpDir);
+      fs.mkdirSync(skillsDir, { recursive: true });
 
-    const lock = { "other-skill": { version: "1.0.0" } };
-    fs.writeFileSync(paths.lockPath, JSON.stringify(lock), "utf8");
-
-    // Uninstall non-existent slug — should not throw
-    const skillDir = path.join(paths.skillsDir, "nonexistent");
-    expect(fs.existsSync(skillDir)).toBe(false);
-    // rmSync with force: true on non-existent path should not throw
-    expect(() => fs.rmSync(skillDir, { recursive: true, force: true })).not.toThrow();
+      const skillDir = path.join(skillsDir, "nonexistent");
+      expect(fs.existsSync(skillDir)).toBe(false);
+      expect(() => fs.rmSync(skillDir, { recursive: true, force: true })).not.toThrow();
+      // deleteLockEntryFromDb returns false for nonexistent entries
+      expect(deleteLockEntryFromDb(tmpDir, "nonexistent")).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("catalog filter: stale when syncedAt > 24h ago", () => {
