@@ -12,7 +12,6 @@ import { parseLineWebhookBody } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
-const LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES = 4 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
 export async function readLineWebhookRequestBody(
@@ -65,23 +64,24 @@ export function createLineNodeWebhookHandler(params: {
       const signatureHeader = req.headers["x-line-signature"];
       const signature =
         typeof signatureHeader === "string"
-          ? signatureHeader
+          ? signatureHeader.trim()
           : Array.isArray(signatureHeader)
-            ? signatureHeader[0]
-            : undefined;
-      const hasSignature = typeof signature === "string" && signature.trim().length > 0;
-      const bodyLimit = hasSignature
-        ? Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES)
-        : Math.min(maxBodyBytes, LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES);
-      const rawBody = await readBody(req, bodyLimit, LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS);
+            ? (signatureHeader[0] ?? "").trim()
+            : "";
 
-      if (!hasSignature) {
+      if (!signature) {
         logVerbose("line: webhook missing X-Line-Signature header");
         res.statusCode = 400;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Missing X-Line-Signature header" }));
         return;
       }
+
+      const rawBody = await readBody(
+        req,
+        Math.min(maxBodyBytes, LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES),
+        LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+      );
 
       if (!validateLineSignature(rawBody, signature, params.channelSecret)) {
         logVerbose("line: webhook signature validation failed");

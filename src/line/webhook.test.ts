@@ -107,6 +107,14 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized signed payloads before JSON parsing", async () => {
+    const largeBody = JSON.stringify({ events: [], payload: "x".repeat(70 * 1024) });
+    const { res, onEvents } = await invokeWebhook({ body: largeBody });
+    expect(res.status).toHaveBeenCalledWith(413);
+    expect(res.json).toHaveBeenCalledWith({ error: "Payload too large" });
+    expect(onEvents).not.toHaveBeenCalled();
+  });
+
   it("rejects missing signature when events are non-empty", async () => {
     const { res, onEvents } = await invokeWebhook({
       body: JSON.stringify({ events: [{ type: "message" }] }),

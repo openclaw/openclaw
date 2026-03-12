@@ -5,6 +5,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
 import { parseLineWebhookBody } from "./webhook-utils.js";
 
+const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
+
 export interface LineWebhookOptions {
   channelSecret: string;
   onEvents: (body: WebhookRequestBody) => Promise<void>;
@@ -49,6 +51,10 @@ export function createLineWebhookMiddleware(
 
       if (!rawBody) {
         res.status(400).json({ error: "Missing raw request body for signature verification" });
+        return;
+      }
+      if (Buffer.byteLength(rawBody, "utf-8") > LINE_WEBHOOK_MAX_RAW_BODY_BYTES) {
+        res.status(413).json({ error: "Payload too large" });
         return;
       }
 
