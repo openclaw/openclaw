@@ -65,7 +65,7 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     service.restart.mockClear();
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({ environment: {} });
-    service.restart.mockResolvedValue(undefined);
+    service.restart.mockResolvedValue({ outcome: "completed" });
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
@@ -163,7 +163,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     service.isLoaded.mockClear();
     service.restart.mockClear();
     service.isLoaded.mockResolvedValue(true);
-    service.restart.mockResolvedValue(undefined);
+    service.restart.mockResolvedValue({ outcome: "completed" });
   });
 
   it("aborts start when config is invalid", async () => {

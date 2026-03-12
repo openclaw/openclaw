@@ -106,6 +106,9 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      // Venice returns "Insufficient USD or Diem balance" which has extra words
+      // between "insufficient" and "balance"
+      "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -148,6 +151,11 @@ describe("isBillingErrorMessage", () => {
       "Let me know if you need more details on any of these topics!";
     expect(longResponse.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longResponse)).toBe(false);
+  });
+  it("does not false-positive on short non-billing text that mentions insufficient and balance", () => {
+    const sample = "The evidence is insufficient to reconcile the final balance after compaction.";
+    expect(isBillingErrorMessage(sample)).toBe(false);
+    expect(classifyFailoverReason(sample)).toBeNull();
   });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
@@ -439,6 +447,18 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes billing errors even when text matches context overflow patterns", () => {
+    const samples = [
+      "402 Payment Required: request token limit exceeded for this billing plan",
+      "insufficient credits: request size exceeds your current plan limits",
+      "Your credit balance is too low. Maximum request token limit exceeded.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
 });
 
 describe("isTransientHttpError", () => {
@@ -507,6 +527,23 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: MALFORMED_RESPONSE",
       "Unhandled stop reason: malformed_response",
       "stop reason: MALFORMED_RESPONSE",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("matches network errno codes in serialized error messages", () => {
+    const samples = [
+      "Error: connect ETIMEDOUT 10.0.0.1:443",
+      "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443",
+      "Error: connect EHOSTUNREACH 10.0.0.1:443",
+      "Error: connect ENETUNREACH 10.0.0.1:443",
+      "Error: write EPIPE",
+      "Error: read ENETRESET",
+      "Error: connect EHOSTDOWN 192.168.1.1:443",
     ];
     for (const sample of samples) {
       expect(isTimeoutErrorMessage(sample)).toBe(true);
@@ -638,6 +675,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason(TOGETHER_ENGINE_OVERLOADED_MESSAGE)).toBe("overloaded");
     expect(classifyFailoverReason(GROQ_TOO_MANY_REQUESTS_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GROQ_SERVICE_UNAVAILABLE_MESSAGE)).toBe("overloaded");
+    // Venice 402 billing error with extra words between "insufficient" and "balance"
+    expect(
+      classifyFailoverReason(
+        "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
