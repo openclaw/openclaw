@@ -79,9 +79,11 @@ function appendConfiguredMediaLocalRoots(
       continue;
     }
     const trimmedRoot = root.trim();
-    const normalizedRoot = path.resolve(
-      trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot,
-    );
+    const expandedRoot = trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot;
+    if (expandedRoot.startsWith("~")) {
+      continue;
+    }
+    const normalizedRoot = path.resolve(expandedRoot);
     if (!roots.includes(normalizedRoot)) {
       roots.push(normalizedRoot);
     }

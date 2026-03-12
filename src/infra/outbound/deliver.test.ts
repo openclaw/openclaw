@@ -496,7 +496,7 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("prefers account-configured mediaLocalRoots for outbound delivery too", async () => {
+  it("includes account-configured mediaLocalRoots in outbound delivery", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
     await deliverTelegramPayload({
@@ -521,6 +521,36 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining(["/tmp/account-media"]),
+      }),
+    );
+  });
+
+  it("merges channel and account mediaLocalRoots together in outbound delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      accountId: "work",
+      cfg: {
+        channels: {
+          telegram: {
+            mediaLocalRoots: ["/tmp/channel-media"],
+            accounts: {
+              work: {
+                mediaLocalRoots: ["/tmp/account-media"],
+              },
+            },
+          },
+        },
+      },
+      payload: { text: "hi", mediaUrl: "file:///tmp/account-media/test.png" },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining(["/tmp/channel-media", "/tmp/account-media"]),
       }),
     );
   });
