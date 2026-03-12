@@ -1,15 +1,15 @@
-import http from "node:http";
 import { randomUUID } from "node:crypto";
+import http from "node:http";
 import type { Duplex } from "node:stream";
-import { type WebSocket, Server as WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CoreConfig } from "../core-bridge.js";
 import type { CallManager } from "../manager.js";
+import type { VoiceCallProvider } from "../providers/base.js";
 import {
   OpenAIRealtimeVoiceBridge,
   type RealtimeTool,
 } from "../providers/openai-realtime-voice.js";
-import type { VoiceCallProvider } from "../providers/base.js";
 import type { NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.js";
 
@@ -124,7 +124,9 @@ export class RealtimeCallHandler {
       to: params?.get("To") ?? undefined,
     });
     const wsUrl = `wss://${host}/voice/stream/realtime?token=${token}`;
-    console.log(`[voice-call] Returning realtime TwiML with WebSocket: wss://${host}/voice/stream/realtime`);
+    console.log(
+      `[voice-call] Returning realtime TwiML with WebSocket: wss://${host}/voice/stream/realtime`,
+    );
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -186,13 +188,17 @@ export class RealtimeCallHandler {
   ): OpenAIRealtimeVoiceBridge | null {
     const apiKey = this.openaiApiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      console.error("[voice-call] No OpenAI API key for realtime call (set streaming.openaiApiKey or OPENAI_API_KEY)");
+      console.error(
+        "[voice-call] No OpenAI API key for realtime call (set streaming.openaiApiKey or OPENAI_API_KEY)",
+      );
       ws.close(1011, "No API key");
       return null;
     }
 
     const callId = this.registerCallInManager(callSid, callerMeta);
-    console.log(`[voice-call] Realtime call: streamSid=${streamSid}, callSid=${callSid}, callId=${callId}`);
+    console.log(
+      `[voice-call] Realtime call: streamSid=${streamSid}, callSid=${callSid}, callId=${callId}`,
+    );
 
     // Declare as null first so closures can capture the reference before bridge is created.
     // By the time any callback fires, bridge will be fully assigned.

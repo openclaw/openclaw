@@ -427,7 +427,18 @@
           },
           "voice": {
             "type": "string",
-            "enum": ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"]
+            "enum": [
+              "alloy",
+              "ash",
+              "ballad",
+              "cedar",
+              "coral",
+              "echo",
+              "marin",
+              "sage",
+              "shimmer",
+              "verse"
+            ]
           },
           "instructions": {
             "type": "string"

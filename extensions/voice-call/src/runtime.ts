@@ -11,8 +11,8 @@ import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
-import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
   config: VoiceCallConfig;
