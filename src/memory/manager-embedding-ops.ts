@@ -768,11 +768,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(pathname, source);
       } catch {}
     }
-    if (this.fts.enabled && this.fts.available && this.provider) {
+    if (this.fts.enabled && this.fts.available) {
       try {
         this.db
-          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-          .run(pathname, source, this.provider.model);
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+          .run(pathname, source);
       } catch {}
     }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
@@ -805,73 +805,72 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
-    // FTS-only mode: skip indexing if no provider
-    if (!this.provider) {
-      log.debug("Skipping embedding indexing in FTS-only mode", {
-        path: entry.path,
-        source: options.source,
-      });
-      return;
-    }
-
+    const provider = this.provider;
+    const providerModel = provider?.model ?? "fts-only";
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
-      const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
-      if (!multimodalChunk) {
-        this.clearIndexedFileData(entry.path, options.source);
-        this.deleteFileRecord(entry.path, options.source);
-        return;
+      if (!provider) {
+        const text = entry.contentText?.trim() || entry.path;
+        chunks = [{ startLine: 1, endLine: 1, text, hash: entry.hash }];
+      } else {
+        const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
+        if (!multimodalChunk) {
+          this.clearIndexedFileData(entry.path, options.source);
+          this.deleteFileRecord(entry.path, options.source);
+          return;
+        }
+        structuredInputBytes = multimodalChunk.structuredInputBytes;
+        chunks = [multimodalChunk.chunk];
       }
-      structuredInputBytes = multimodalChunk.structuredInputBytes;
-      chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      chunks = enforceEmbeddingMaxInputTokens(
-        this.provider,
-        chunkMarkdown(content, this.settings.chunking).filter(
-          (chunk) => chunk.text.trim().length > 0,
-        ),
-        EMBEDDING_BATCH_MAX_TOKENS,
+      const rawChunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
       );
+      chunks = provider
+        ? enforceEmbeddingMaxInputTokens(provider, rawChunks, EMBEDDING_BATCH_MAX_TOKENS)
+        : rawChunks;
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }
     }
-    let embeddings: number[][];
-    try {
-      embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(chunks, entry, options.source)
-        : await this.embedChunksInBatches(chunks);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (
-        "kind" in entry &&
-        entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
-      ) {
-        log.warn("memory embeddings: skipping multimodal file rejected as too large", {
-          path: entry.path,
-          bytes: structuredInputBytes,
-          provider: this.provider.id,
-          model: this.provider.model,
-          error: message,
-        });
-        this.clearIndexedFileData(entry.path, options.source);
-        this.upsertFileRecord(entry, options.source);
-        return;
+    let embeddings: number[][] = chunks.map(() => []);
+    if (provider) {
+      try {
+        embeddings = this.batch.enabled
+          ? await this.embedChunksWithBatch(chunks, entry, options.source)
+          : await this.embedChunksInBatches(chunks);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (
+          "kind" in entry &&
+          entry.kind === "multimodal" &&
+          this.isStructuredInputTooLargeError(message)
+        ) {
+          log.warn("memory embeddings: skipping multimodal file rejected as too large", {
+            path: entry.path,
+            bytes: structuredInputBytes,
+            provider: provider.id,
+            model: provider.model,
+            error: message,
+          });
+          this.clearIndexedFileData(entry.path, options.source);
+          this.upsertFileRecord(entry, options.source);
+          return;
+        }
+        throw err;
       }
-      throw err;
     }
-    const sample = embeddings.find((embedding) => embedding.length > 0);
-    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
+    const sample = provider ? embeddings.find((embedding) => embedding.length > 0) : undefined;
+    const vectorReady = provider && sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
     this.clearIndexedFileData(entry.path, options.source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
       const id = hashText(
-        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${providerModel}`,
       );
       this.db
         .prepare(
@@ -891,7 +890,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk.startLine,
           chunk.endLine,
           chunk.hash,
-          this.provider.model,
+          providerModel,
           chunk.text,
           JSON.stringify(embedding),
           now,
@@ -915,7 +914,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             id,
             entry.path,
             options.source,
-            this.provider.model,
+            providerModel,
             chunk.startLine,
             chunk.endLine,
           );
