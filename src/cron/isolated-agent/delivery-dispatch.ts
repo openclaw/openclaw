@@ -390,18 +390,15 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
     if (isSilentReplyText(synthesizedText.toUpperCase(), SILENT_REPLY_TOKEN)) {
-
-    // If the final text still looks like an interim/status narration,
-    // suppress announce delivery instead of leaking chatty no-data updates.
-    if (isLikelyInterimCronMessage(synthesizedText)) {
-      deliveryAttempted = true;
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
-        deliveryAttempted,
+        delivered: true,
+        ...params.telemetry,
+      });
+    }
         ...params.telemetry,
       });
     }
