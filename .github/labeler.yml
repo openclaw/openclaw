@@ -309,6 +309,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: ernie":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ernie/**"
 "extensions: qianfan":
   - changed-files:
       - any-glob-to-any-file:

@@ -1,0 +1,27 @@
+{
+  "id": "ernie",
+  "providers": ["ernie"],
+  "providerAuthEnvVars": {
+    "ernie": ["ERNIE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "ernie",
+      "method": "api-key",
+      "choiceId": "ernie-api-key",
+      "choiceLabel": "ERNIE API key (Baidu Wenxin)",
+      "groupId": "ernie",
+      "groupLabel": "ERNIE",
+      "groupHint": "Qianfan API for ERNIE models",
+      "optionKey": "ernieApiKey",
+      "cliFlag": "--ernie-api-key",
+      "cliOption": "--ernie-api-key <key>",
+      "cliDescription": "ERNIE API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
