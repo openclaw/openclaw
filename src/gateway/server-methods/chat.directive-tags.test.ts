@@ -4,7 +4,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../protocol/client-info.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -654,6 +658,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         AccountId: undefined,
       }),
     );
+  });
+
+  it("chat.send does not synthesize sender metadata from control-ui clients", async () => {
+    createTranscriptFixture("openclaw-chat-send-control-ui-sender-meta-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-control-ui-sender-meta",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            displayName: "OpenClaw Control UI",
+          },
+        },
+      } as unknown,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toBeDefined();
+    expect(mockState.lastDispatchCtx).not.toHaveProperty("SenderId");
+    expect(mockState.lastDispatchCtx).not.toHaveProperty("SenderName");
+    expect(mockState.lastDispatchCtx).not.toHaveProperty("SenderUsername");
   });
 
   it("chat.send inherits external delivery context for CLI clients on configured main sessions", async () => {

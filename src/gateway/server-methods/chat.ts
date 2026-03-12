@@ -1261,9 +1261,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
-        SenderId: clientInfo?.id,
-        SenderName: clientInfo?.displayName,
-        SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
       };
 
