@@ -118,6 +118,11 @@ Session stores live under the state directory (default `~/.openclaw`):
 
 You can override the store path via `session.store` and `{agentId}` templating.
 
+Gateway and ACP session discovery also scans disk-backed agent stores under the
+default `agents/` root and under templated `session.store` roots. Discovered
+stores must stay inside that resolved agent root and use a regular
+`sessions.json` file. Symlinks and out-of-root paths are ignored.
+
 ## WebChat behavior
 
 WebChat attaches to the **selected agent** and defaults to the agent’s main

@@ -15,6 +15,7 @@ import {
   buildGroupDisplayName,
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
@@ -585,10 +586,11 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     return { storePath, store: combined };
   }
 
-  const agentIds = listConfiguredAgentIds(cfg);
+  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
   const combined: Record<string, SessionEntry> = {};
-  for (const agentId of agentIds) {
-    const storePath = resolveStorePath(storeConfig, { agentId });
+  for (const target of targets) {
+    const agentId = target.agentId;
+    const storePath = target.storePath;
     const store = loadSessionStore(storePath);
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
