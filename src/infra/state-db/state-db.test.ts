@@ -125,7 +125,7 @@ describe("schema", () => {
     const db = getStateDb(testEnv());
     runMigrations(db);
 
-    expect(getSchemaVersion(db)).toBe(4);
+    expect(getSchemaVersion(db)).toBe(5);
   });
 
   it("is idempotent — running twice does not error", async () => {
@@ -136,7 +136,7 @@ describe("schema", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(getSchemaVersion(db)).toBe(4);
+    expect(getSchemaVersion(db)).toBe(5);
   });
 
   it("enforces foreign key constraints", async () => {
@@ -324,7 +324,7 @@ describe("initStateDb", () => {
     const env = testEnv();
     const db = initStateDb(env);
 
-    expect(getSchemaVersion(db)).toBe(4);
+    expect(getSchemaVersion(db)).toBe(5);
     expect(listTables(db).length).toBeGreaterThan(0);
   });
 });
