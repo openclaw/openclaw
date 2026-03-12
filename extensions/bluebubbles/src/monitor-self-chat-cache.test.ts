@@ -36,6 +36,49 @@ describe("BlueBubbles self-chat cache", () => {
     ).toBe(true);
   });
 
+  it("canonicalizes DM scope across chatIdentifier and chatGuid", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    rememberBlueBubblesSelfChatCopy({
+      accountId: "default",
+      chatIdentifier: "+15551234567",
+      senderId: "+15551234567",
+      body: "hello",
+      timestamp: 123,
+    });
+
+    expect(
+      hasBlueBubblesSelfChatCopy({
+        accountId: "default",
+        chatGuid: "iMessage;-;+15551234567",
+        senderId: "+15551234567",
+        body: "hello",
+        timestamp: 123,
+      }),
+    ).toBe(true);
+
+    resetBlueBubblesSelfChatCache();
+
+    rememberBlueBubblesSelfChatCopy({
+      accountId: "default",
+      chatGuid: "iMessage;-;+15551234567",
+      senderId: "+15551234567",
+      body: "hello",
+      timestamp: 123,
+    });
+
+    expect(
+      hasBlueBubblesSelfChatCopy({
+        accountId: "default",
+        chatIdentifier: "+15551234567",
+        senderId: "+15551234567",
+        body: "hello",
+        timestamp: 123,
+      }),
+    ).toBe(true);
+  });
+
   it("expires entries after the ttl window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
