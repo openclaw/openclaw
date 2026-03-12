@@ -835,9 +835,15 @@ describe("normalizeModelSelection", () => {
               models: [
                 {
                   id: "gpt-5.4",
+                  name: "gpt-5.4",
                   reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 4096,
                 },
               ],
+              baseUrl: "https://api.openai.com",
             },
           },
         },
@@ -851,6 +857,7 @@ describe("normalizeModelSelection", () => {
           {
             provider: "openai-codex",
             id: "gpt-5.4",
+            name: "gpt-5.4",
             reasoning: true,
           },
         ],
