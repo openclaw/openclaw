@@ -73,31 +73,49 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "MM-API-Source": "OpenClaw",
-    },
-    body: JSON.stringify({
-      prompt,
-      image_url: imageDataUrl,
-    }),
-  });
-
-  const traceId = res.headers.get("Trace-Id") ?? "";
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      body: JSON.stringify({
+        prompt,
+        image_url: imageDataUrl,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
     throw new Error(
-      `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
-        body ? ` Body: ${body.slice(0, 400)}` : ""
-      }`,
+      `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
-  const json = (await res.json().catch(() => null)) as unknown;
+  const traceId = res.headers.get("Trace-Id") ?? "";
+  let json: unknown;
+  try {
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(
+        `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+          body ? ` Body: ${body.slice(0, 400)}` : ""
+        }`,
+      );
+    }
+
+    json = (await res.json().catch(() => null)) as unknown;
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("MiniMax VLM request failed")) {
+      throw err;
+    }
+    throw new Error(
+      `MiniMax VLM request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!isRecord(json)) {
     const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     throw new Error(`MiniMax VLM response was not JSON.${trace}`);
