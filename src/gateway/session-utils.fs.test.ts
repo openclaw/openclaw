@@ -7,6 +7,7 @@ import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readLatestSessionUsageFromTranscript,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -550,7 +551,9 @@ describe("readSessionMessages", () => {
         testCase.wrongStorePath,
         testCase.sessionFile,
       );
-      expect(out).toEqual([testCase.message]);
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject(testCase.message);
+      expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     }
   });
 });
@@ -645,6 +648,66 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]?.text).toBe("A  B");
+  });
+});
+
+describe("readLatestSessionUsageFromTranscript", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns the latest assistant usage snapshot and skips delivery mirrors", () => {
+    const sessionId = "usage-session";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1200,
+            output: 300,
+            cacheRead: 50,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toEqual({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1200,
+      outputTokens: 300,
+      cacheRead: 50,
+      totalTokens: 1250,
+      totalTokensFresh: true,
+      costUsd: 0.0042,
+    });
+  });
+
+  test("returns null when the transcript has no assistant usage snapshot", () => {
+    const sessionId = "usage-empty";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "hello" } },
+      { message: { role: "assistant", content: "hi" } },
+    ]);
+
+    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
   });
 });
 

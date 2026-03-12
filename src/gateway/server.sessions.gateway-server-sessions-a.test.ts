@@ -243,34 +243,63 @@ describe("gateway server sessions", () => {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
 
-  test("sessions.create creates a dashboard session entry and transcript", async () => {
+  test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
     const { dir, storePath } = await createSessionStoreDir();
+    piSdkMock.enabled = true;
+    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+      },
+    });
     const { ws } = await openClient();
 
     const created = await rpcReq<{
       key?: string;
       sessionId?: string;
-      entry?: { label?: string };
+      entry?: {
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+      };
     }>(ws, "sessions.create", {
       agentId: "ops",
       label: "Dashboard Chat",
+      model: "openai/gpt-test-a",
+      parentSessionKey: "main",
     });
 
     expect(created.ok).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
     expect(created.payload?.entry?.label).toBe("Dashboard Chat");
+    expect(created.payload?.entry?.providerOverride).toBe("openai");
+    expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+    expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
 
     const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
-      { sessionId?: string; label?: string }
+      {
+        sessionId?: string;
+        label?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        parentSessionKey?: string;
+      }
     >;
     const key = created.payload?.key as string;
     expect(rawStore[key]).toMatchObject({
       sessionId: created.payload?.sessionId,
       label: "Dashboard Chat",
+      providerOverride: "openai",
+      modelOverride: "gpt-test-a",
+      parentSessionKey: "agent:main:main",
     });
 
     const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
@@ -280,6 +309,23 @@ describe("gateway server sessions", () => {
       type: "session",
       id: created.payload?.sessionId,
     });
+
+    ws.close();
+  });
+
+  test("sessions.create rejects unknown parentSessionKey", async () => {
+    await createSessionStoreDir();
+    const { ws } = await openClient();
+
+    const created = await rpcReq(ws, "sessions.create", {
+      agentId: "ops",
+      parentSessionKey: "agent:main:missing",
+    });
+
+    expect(created.ok).toBe(false);
+    expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
+      "unknown parent session",
+    );
 
     ws.close();
   });
@@ -316,6 +362,96 @@ describe("gateway server sessions", () => {
       | undefined;
     expect(ctx?.Body).toContain("hello from create");
     expect(ctx?.SessionKey).toBe(created.payload?.key);
+
+    ws.close();
+  });
+
+  test("sessions.list surfaces transcript usage fallbacks and parent child relationships", async () => {
+    const { dir } = await createSessionStoreDir();
+    testState.agentConfig = {
+      models: {
+        "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+      },
+    };
+    await fs.writeFile(
+      path.join(dir, "sess-parent.jsonl"),
+      `${JSON.stringify({ type: "session", version: 1, id: "sess-parent" })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(dir, "sess-child.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_000,
+              cost: { total: 0.0042 },
+            },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent",
+          updatedAt: Date.now(),
+        },
+        "dashboard:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now() - 1_000,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          parentSessionKey: "agent:main:main",
+          totalTokens: 0,
+          totalTokensFresh: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        parentSessionKey?: string;
+        childSessions?: string[];
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        contextTokens?: number;
+        estimatedCostUsd?: number;
+      }>;
+    }>(ws, "sessions.list", {});
+
+    expect(listed.ok).toBe(true);
+    const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
+    const child = listed.payload?.sessions.find(
+      (session) => session.key === "agent:main:dashboard:child",
+    );
+    expect(parent?.childSessions).toEqual(["agent:main:dashboard:child"]);
+    expect(child?.parentSessionKey).toBe("agent:main:main");
+    expect(child?.totalTokens).toBe(3_000);
+    expect(child?.totalTokensFresh).toBe(true);
+    expect(child?.contextTokens).toBe(1_048_576);
+    expect(child?.estimatedCostUsd).toBe(0.0042);
 
     ws.close();
   });

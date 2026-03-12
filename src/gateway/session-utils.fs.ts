@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -553,6 +554,148 @@ export function readLastMessagePreviewFromTranscript(
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
+  });
+}
+
+export type SessionTranscriptUsageSnapshot = {
+  modelProvider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  costUsd?: number;
+};
+
+const USAGE_READ_SIZES = [16 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024];
+
+function extractTranscriptUsageCost(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const cost = (raw as { cost?: unknown }).cost;
+  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+    return undefined;
+  }
+  const total = (cost as { total?: unknown }).total;
+  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
+}
+
+function readTailChunk(fd: number, size: number, maxBytes: number): string | null {
+  const readLen = Math.min(size, maxBytes);
+  if (readLen <= 0) {
+    return null;
+  }
+  const readStart = Math.max(0, size - readLen);
+  const buf = Buffer.alloc(readLen);
+  fs.readSync(fd, buf, 0, readLen, readStart);
+  return buf.toString("utf-8");
+}
+
+function extractLatestUsageFromTranscriptChunk(
+  chunk: string,
+): SessionTranscriptUsageSnapshot | null {
+  const lines = chunk.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const message =
+        parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
+          ? (parsed.message as Record<string, unknown>)
+          : undefined;
+      if (!message) {
+        continue;
+      }
+      const role = typeof message.role === "string" ? message.role : undefined;
+      if (role && role !== "assistant") {
+        continue;
+      }
+      const usageRaw =
+        message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+          ? message.usage
+          : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
+            ? parsed.usage
+            : undefined;
+      const usage = normalizeUsage(usageRaw);
+      const totalTokens = deriveSessionTotalTokens({ usage });
+      const costUsd = extractTranscriptUsageCost(usageRaw);
+      const modelProvider =
+        typeof message.provider === "string"
+          ? message.provider.trim()
+          : typeof parsed.provider === "string"
+            ? parsed.provider.trim()
+            : undefined;
+      const model =
+        typeof message.model === "string"
+          ? message.model.trim()
+          : typeof parsed.model === "string"
+            ? parsed.model.trim()
+            : undefined;
+      const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
+      const hasMeaningfulUsage =
+        hasNonzeroUsage(usage) ||
+        (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) ||
+        (typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0);
+      const hasModelIdentity = Boolean(modelProvider || model);
+      if (!hasMeaningfulUsage && !hasModelIdentity) {
+        continue;
+      }
+      if (isDeliveryMirror && !hasMeaningfulUsage) {
+        continue;
+      }
+      return {
+        ...(modelProvider ? { modelProvider } : {}),
+        ...(model ? { model } : {}),
+        ...(typeof usage?.input === "number" ? { inputTokens: usage.input } : {}),
+        ...(typeof usage?.output === "number" ? { outputTokens: usage.output } : {}),
+        ...(typeof usage?.cacheRead === "number" ? { cacheRead: usage.cacheRead } : {}),
+        ...(typeof usage?.cacheWrite === "number" ? { cacheWrite: usage.cacheWrite } : {}),
+        ...(typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+          ? { totalTokens, totalTokensFresh: true }
+          : {}),
+        ...(typeof costUsd === "number" && Number.isFinite(costUsd) ? { costUsd } : {}),
+      };
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return null;
+}
+
+export function readLatestSessionUsageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): SessionTranscriptUsageSnapshot | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return null;
+    }
+    for (const maxBytes of USAGE_READ_SIZES) {
+      const chunk = readTailChunk(fd, size, maxBytes);
+      if (!chunk) {
+        continue;
+      }
+      const snapshot = extractLatestUsageFromTranscriptChunk(chunk);
+      if (snapshot) {
+        return snapshot;
+      }
+      if (maxBytes >= size) {
+        break;
+      }
+    }
+    return null;
   });
 }
 

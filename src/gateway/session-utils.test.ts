@@ -876,6 +876,71 @@ describe("listSessionsFromStore search", () => {
 
     expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
+
+  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    fs.writeFileSync(
+      path.join(tmpDir, "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_200,
+              cost: { total: 0.007725 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store: {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-6",
+            totalTokens: 0,
+            totalTokensFresh: false,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          } as SessionEntry,
+        },
+        opts: {},
+      });
+
+      expect(result.sessions[0]?.totalTokens).toBe(3_200);
+      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+      expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
+      expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("listSessionsFromStore subagent metadata", () => {
@@ -980,6 +1045,34 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+  test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {
+    resetSubagentRegistryForTests({ persist: false });
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:dashboard:child": {
+        sessionId: "sess-child",
+        updatedAt: now - 1_000,
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const main = result.sessions.find((session) => session.key === "agent:main:main");
+    const child = result.sessions.find((session) => session.key === "agent:main:dashboard:child");
+    expect(main?.childSessions).toEqual(["agent:main:dashboard:child"]);
+    expect(child?.parentSessionKey).toBe("agent:main:main");
   });
 
   test("maps timeout outcomes to timeout status and clamps negative runtime", () => {

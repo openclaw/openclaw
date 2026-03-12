@@ -403,19 +403,49 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const agentId = normalizeAgentId(
       typeof p.agentId === "string" && p.agentId.trim() ? p.agentId : resolveDefaultAgentId(cfg),
     );
+    const parentSessionKey =
+      typeof p.parentSessionKey === "string" && p.parentSessionKey.trim()
+        ? p.parentSessionKey.trim()
+        : undefined;
+    let canonicalParentSessionKey: string | undefined;
+    if (parentSessionKey) {
+      const parent = loadSessionEntry(parentSessionKey);
+      if (!parent.entry?.sessionId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown parent session: ${parentSessionKey}`),
+        );
+        return;
+      }
+      canonicalParentSessionKey = parent.canonicalKey;
+    }
     const key = buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const created = await updateSessionStore(target.storePath, async (store) => {
-      return await applySessionsPatchToStore({
+      const patched = await applySessionsPatchToStore({
         cfg,
         store,
         storeKey: target.canonicalKey,
         patch: {
           key: target.canonicalKey,
           label: typeof p.label === "string" ? p.label.trim() : undefined,
+          model: typeof p.model === "string" ? p.model.trim() : undefined,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (!patched.ok || !canonicalParentSessionKey) {
+        return patched;
+      }
+      const nextEntry: SessionEntry = {
+        ...patched.entry,
+        parentSessionKey: canonicalParentSessionKey,
+      };
+      store[target.canonicalKey] = nextEntry;
+      return {
+        ...patched,
+        entry: nextEntry,
+      };
     });
     if (!created.ok) {
       respond(false, undefined, created.error);

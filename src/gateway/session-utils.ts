@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { lookupContextTokens } from "../agents/context.js";
+import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
@@ -45,7 +45,10 @@ import {
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
+import {
+  readLatestSessionUsageFromTranscript,
+  readSessionTitleFieldsFromTranscript,
+} from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -60,6 +63,7 @@ export {
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readLatestSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
@@ -218,12 +222,33 @@ function resolveSessionRuntimeMs(
   return Math.max(0, (run.endedAt ?? now) - run.startedAt);
 }
 
+function resolvePositiveNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
   model?: string;
-  entry?: SessionEntry;
+  entry?: Pick<SessionEntry, "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite">;
+  explicitCostUsd?: number;
 }): number | undefined {
+  const explicitCostUsd = resolvePositiveNumber(params.explicitCostUsd);
+  if (explicitCostUsd !== undefined) {
+    return explicitCostUsd;
+  }
+  const input = resolvePositiveNumber(params.entry?.inputTokens);
+  const output = resolvePositiveNumber(params.entry?.outputTokens);
+  const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
+  const cacheWrite = resolvePositiveNumber(params.entry?.cacheWrite);
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined
+  ) {
+    return undefined;
+  }
   const cost = resolveModelCostConfig({
     provider: params.provider,
     model: params.model,
@@ -234,25 +259,90 @@ function resolveEstimatedSessionCostUsd(params: {
   }
   const estimated = estimateUsageCost({
     usage: {
-      input: params.entry?.inputTokens,
-      output: params.entry?.outputTokens,
-      cacheRead: params.entry?.cacheRead,
-      cacheWrite: params.entry?.cacheWrite,
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
     },
     cost,
   });
-  return typeof estimated === "number" && Number.isFinite(estimated) ? estimated : undefined;
+  return resolvePositiveNumber(estimated);
 }
 
-function resolveChildSessionKeys(controllerSessionKey: string): string[] | undefined {
-  const childSessions = Array.from(
-    new Set(
-      listSubagentRunsForController(controllerSessionKey)
-        .map((entry) => entry.childSessionKey)
-        .filter((value) => typeof value === "string" && value.trim().length > 0),
-    ),
+function resolveChildSessionKeys(
+  controllerSessionKey: string,
+  store: Record<string, SessionEntry>,
+): string[] | undefined {
+  const childSessionKeys = new Set(
+    listSubagentRunsForController(controllerSessionKey)
+      .map((entry) => entry.childSessionKey)
+      .filter((value) => typeof value === "string" && value.trim().length > 0),
   );
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry || key === controllerSessionKey) {
+      continue;
+    }
+    const spawnedBy = entry.spawnedBy?.trim();
+    const parentSessionKey = entry.parentSessionKey?.trim();
+    if (spawnedBy === controllerSessionKey || parentSessionKey === controllerSessionKey) {
+      childSessionKeys.add(key);
+    }
+  }
+  const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
+}
+
+function resolveTranscriptUsageFallback(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+  storePath: string;
+}): {
+  estimatedCostUsd?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  contextTokens?: number;
+} | null {
+  const entry = params.entry;
+  if (!entry?.sessionId) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(params.key);
+  const agentId = parsed?.agentId
+    ? normalizeAgentId(parsed.agentId)
+    : resolveDefaultAgentId(params.cfg);
+  const snapshot = readLatestSessionUsageFromTranscript(
+    entry.sessionId,
+    params.storePath,
+    entry.sessionFile,
+    agentId,
+  );
+  if (!snapshot) {
+    return null;
+  }
+  const contextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: snapshot.modelProvider,
+    model: snapshot.model,
+  });
+  const estimatedCostUsd = resolveEstimatedSessionCostUsd({
+    cfg: params.cfg,
+    provider: snapshot.modelProvider,
+    model: snapshot.model,
+    explicitCostUsd: snapshot.costUsd,
+    entry: {
+      inputTokens: snapshot.inputTokens,
+      outputTokens: snapshot.outputTokens,
+      cacheRead: snapshot.cacheRead,
+      cacheWrite: snapshot.cacheWrite,
+    },
+  });
+  return {
+    totalTokens: resolvePositiveNumber(snapshot.totalTokens),
+    totalTokensFresh: snapshot.totalTokensFresh === true,
+    contextTokens: resolvePositiveNumber(contextTokens),
+    estimatedCostUsd,
+  };
 }
 
 export function loadSessionEntry(sessionKey: string) {
@@ -983,9 +1073,6 @@ export function listSessionsFromStore(params: {
     })
     .map(([key, entry]) => {
       const updatedAt = entry?.updatedAt ?? null;
-      const total = resolveFreshSessionTotalTokens(entry);
-      const totalTokensFresh =
-        typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
       const parsed = parseGroupKey(key);
       const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
@@ -1014,14 +1101,43 @@ export function listSessionsFromStore(params: {
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
+      const transcriptUsage =
+        resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
+        resolvePositiveNumber(entry?.contextTokens) === undefined ||
+        resolveEstimatedSessionCostUsd({
+          cfg,
+          provider: modelProvider,
+          model,
+          entry,
+        }) === undefined
+          ? resolveTranscriptUsageFallback({ cfg, key, entry, storePath })
+          : null;
+      const totalTokens =
+        resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
+        resolvePositiveNumber(transcriptUsage?.totalTokens);
+      const totalTokensFresh =
+        typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+          ? true
+          : transcriptUsage?.totalTokensFresh === true;
       const subagentRun = getSubagentRunByChildSessionKey(key);
-      const childSessions = resolveChildSessionKeys(key);
-      const estimatedCostUsd = resolveEstimatedSessionCostUsd({
-        cfg,
-        provider: modelProvider,
-        model,
-        entry,
-      });
+      const childSessions = resolveChildSessionKeys(key, store);
+      const estimatedCostUsd =
+        resolveEstimatedSessionCostUsd({
+          cfg,
+          provider: modelProvider,
+          model,
+          entry,
+        }) ?? resolvePositiveNumber(transcriptUsage?.estimatedCostUsd);
+      const contextTokens =
+        resolvePositiveNumber(entry?.contextTokens) ??
+        resolvePositiveNumber(transcriptUsage?.contextTokens) ??
+        resolvePositiveNumber(
+          resolveContextTokensForModel({
+            cfg,
+            provider: modelProvider,
+            model,
+          }),
+        );
       return {
         key,
         spawnedBy: entry?.spawnedBy,
@@ -1047,18 +1163,19 @@ export function listSessionsFromStore(params: {
         sendPolicy: entry?.sendPolicy,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
-        totalTokens: total,
+        totalTokens,
         totalTokensFresh,
         estimatedCostUsd,
         status: resolveSessionRunStatus(subagentRun),
         startedAt: subagentRun?.startedAt,
         endedAt: subagentRun?.endedAt,
         runtimeMs: resolveSessionRuntimeMs(subagentRun, now),
+        parentSessionKey: entry?.parentSessionKey,
         childSessions,
         responseUsage: entry?.responseUsage,
         modelProvider,
         model,
-        contextTokens: entry?.contextTokens,
+        contextTokens,
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
