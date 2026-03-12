@@ -75,4 +75,57 @@ describe("normalizeStoredCronJobs", () => {
       channel: "slack",
     });
   });
+
+  it("does not report legacyPayloadKind when payload kind is already normalized (#44005)", () => {
+    const jobs = [
+      {
+        id: "already-normalized",
+        name: "test job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+        sessionTarget: "isolated",
+        delivery: { mode: "announce" },
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+      {
+        id: "already-normalized-system",
+        name: "test system job",
+        schedule: { kind: "every", everyMs: 60_000 },
+        enabled: true,
+        wakeMode: "now",
+        state: {},
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "ping" },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    // The key assertion: payload kind normalization should NOT be reported
+    expect(result.issues.legacyPayloadKind).toBeUndefined();
+  });
+
+  it("normalizes lowercase payload kind variants", () => {
+    const jobs = [
+      {
+        id: "needs-normalization",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentturn", message: "hello" },
+      },
+      {
+        id: "needs-normalization-system",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "SYSTEMEVENT", text: "ping" },
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect((jobs[0]?.payload as Record<string, unknown>)?.kind).toBe("agentTurn");
+    expect((jobs[1]?.payload as Record<string, unknown>)?.kind).toBe("systemEvent");
+  });
 });
