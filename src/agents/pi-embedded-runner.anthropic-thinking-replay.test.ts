@@ -107,18 +107,36 @@ function getPayloadAssistantMessages(payload: Record<string, unknown> | undefine
 }
 
 async function getReplayableMessages(sessionFile: string) {
+  return getReplayableMessagesForTarget(sessionFile, {
+    modelApi: "anthropic-messages",
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-6",
+  });
+}
+
+async function getReplayableMessagesForTarget(
+  sessionFile: string,
+  target: {
+    modelApi: string;
+    provider: string;
+    modelId: string;
+  },
+) {
   const reopened = SessionManager.open(sessionFile);
   const context = reopened.buildSessionContext();
-  return validateAnthropicTurns(
-    await sanitizeSessionHistory({
-      messages: context.messages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-      sessionManager: reopened,
-      sessionId: "test-session",
-    }),
-  ).filter(isLlmMessage);
+  const replayable = await sanitizeSessionHistory({
+    messages: context.messages,
+    modelApi: target.modelApi,
+    provider: target.provider,
+    modelId: target.modelId,
+    sessionManager: reopened,
+    sessionId: "test-session",
+  });
+  const validated =
+    target.provider === "anthropic" || target.modelApi === "anthropic-messages"
+      ? validateAnthropicTurns(replayable)
+      : replayable;
+  return validated.filter(isLlmMessage);
 }
 
 describe("anthropic thinking replay", () => {
@@ -245,6 +263,46 @@ describe("anthropic thinking replay", () => {
       provider: "openclaw",
       model: "gateway-injected",
       content: [{ type: "text", text: "resume from here" }],
+    });
+  });
+
+  it("keeps delivery-mirror assistant entries for non-anthropic replay", async () => {
+    const sessionFile = path.join(tempRoot, `session-${Date.now()}-openai.jsonl`);
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "persisted outbound reply" }],
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "continue",
+      timestamp: Date.now(),
+    });
+
+    const replayable = await getReplayableMessagesForTarget(sessionFile, {
+      modelApi: "openai-responses",
+      provider: "openai",
+      modelId: "gpt-5.2",
+    });
+
+    expect(replayable.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(replayable[1]).toMatchObject({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "persisted outbound reply" }],
     });
   });
 });

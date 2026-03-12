@@ -162,6 +162,16 @@ function dropSyntheticAssistantTranscriptMessages(messages: AgentMessage[]): Age
   return changed ? out : messages;
 }
 
+function shouldDropSyntheticAssistantTranscriptMessages(params: {
+  modelApi?: string | null;
+  provider?: string;
+}): boolean {
+  if (params.provider) {
+    return params.provider === "anthropic";
+  }
+  return params.modelApi === "anthropic-messages";
+}
+
 function parseMessageTimestamp(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -559,7 +569,9 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const replayableMessages = dropSyntheticAssistantTranscriptMessages(withInterSessionMarkers);
+  const replayableMessages = shouldDropSyntheticAssistantTranscriptMessages(params)
+    ? dropSyntheticAssistantTranscriptMessages(withInterSessionMarkers)
+    : withInterSessionMarkers;
   const sanitizedImages = await sanitizeSessionMessagesImages(
     replayableMessages,
     "session:history",
