@@ -610,6 +610,7 @@ function withApiKey(
   build: (params: {
     apiKey: string;
     discoveryApiKey?: string;
+    explicitProvider?: ProviderConfig;
   }) => ProviderConfig | Promise<ProviderConfig>,
 ): ImplicitProviderLoader {
   return async (ctx) => {
@@ -618,7 +619,11 @@ function withApiKey(
       return undefined;
     }
     return {
-      [providerKey]: await build({ apiKey, discoveryApiKey }),
+      [providerKey]: await build({
+        apiKey,
+        discoveryApiKey,
+        explicitProvider: ctx.explicitProviders?.[providerKey],
+      }),
     };
   };
 }
@@ -651,8 +656,38 @@ function mergeImplicitProviderSet(
 
 const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("minimax", async ({ apiKey }) => ({ ...buildMinimaxProvider(), apiKey })),
-  withApiKey("moonshot", async ({ apiKey }) => ({ ...buildMoonshotProvider(), apiKey })),
-  withApiKey("kimi-coding", async ({ apiKey }) => ({ ...buildKimiCodingProvider(), apiKey })),
+  withApiKey("moonshot", async ({ apiKey, explicitProvider }) => {
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    return {
+      ...buildMoonshotProvider(),
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      apiKey,
+    };
+  }),
+  withApiKey("kimi-coding", async ({ apiKey, explicitProvider }) => {
+    const builtInProvider = buildKimiCodingProvider();
+    const explicitBaseUrl = explicitProvider?.baseUrl;
+    const explicitHeaders = isRecord(explicitProvider?.headers)
+      ? (explicitProvider.headers as ProviderConfig["headers"])
+      : undefined;
+    return {
+      ...builtInProvider,
+      ...(typeof explicitBaseUrl === "string" && explicitBaseUrl.trim()
+        ? { baseUrl: explicitBaseUrl.trim() }
+        : {}),
+      ...(explicitHeaders
+        ? {
+            headers: {
+              ...builtInProvider.headers,
+              ...explicitHeaders,
+            },
+          }
+        : {}),
+      apiKey,
+    };
+  }),
   withApiKey("synthetic", async ({ apiKey }) => ({ ...buildSyntheticProvider(), apiKey })),
   withApiKey("venice", async ({ apiKey }) => ({ ...(await buildVeniceProvider()), apiKey })),
   withApiKey("xiaomi", async ({ apiKey }) => ({ ...buildXiaomiProvider(), apiKey })),
