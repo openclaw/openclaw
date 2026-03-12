@@ -211,8 +211,15 @@ export async function waitForGatewayHealthyRestart(params: {
       return snapshot;
     }
     // Tolerate stale processes during restart - they're expected to exit soon
-    // Don't give up immediately, continue waiting
+    // However, if runtime is not running and stale PIDs exist, return immediately
+    // to allow cleanup/retry logic to run (don't wait full timeout)
     if (snapshot.staleGatewayPids.length > 0) {
+      if (snapshot.runtime.status !== "running") {
+        // New process hasn't started yet and old processes are still around
+        // Return immediately to allow stale PID termination
+        return snapshot;
+      }
+      // Runtime is running but stale PIDs exist - wait briefly then recheck
       await sleep(delayMs);
       snapshot = await inspectGatewayRestart({
         service: params.service,
