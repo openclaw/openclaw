@@ -300,30 +300,8 @@ export function buildExcludeFilter(
     };
   }
 
-  // -----------------------------------------------------------------------
-  // Pre-compile patterns OUTSIDE the filter closure for performance.
-  // -----------------------------------------------------------------------
-
   // `ignore` handles gitignore-style patterns (trailing `/`, negation, etc.)
-  const ig = ignore().add(patterns as string[]);
-
-  // Pre-classify simple directory-prefix patterns for O(1) fast-path check.
-  // These are plain names without glob chars — check as string prefixes.
-  const prefixPatterns: Array<{ prefix: string; pattern: string }> = [];
-  for (const p of patterns) {
-    if (!/[*?{[]/.test(p)) {
-      prefixPatterns.push({
-        prefix: p.replace(/\/$/, ""),
-        pattern: p,
-      });
-    }
-  }
-
-  // P2-006: Pre-build per-pattern matchers for O(P) attribution instead of O(P × compile).
-  const patternMatchers = (patterns as string[]).map((p) => ({
-    pattern: p,
-    matcher: ignore().add(p),
-  }));
+  const ig = ignore().add(patterns);
 
   // Per-pattern counters — keyed by pattern string.
   const patternCounters = new Map<
@@ -349,7 +327,6 @@ export function buildExcludeFilter(
   const filter = (entryPath: string, stat: { size?: number }): boolean => {
     try {
       // Normalize to relative path with forward slashes — required by `ignore`.
-      // tar.c() filter receives relative paths (relative to cwd).
       let rel: string;
       if (isAbsolute(entryPath)) {
         rel = relative(baseDir, entryPath);
@@ -371,30 +348,31 @@ export function buildExcludeFilter(
         return true;
       }
 
-      // Fast path: prefix check for simple directory/file name patterns.
-      for (const { prefix, pattern } of prefixPatterns) {
-        if (rel === prefix || rel.startsWith(`${prefix}/`)) {
-          recordExclusion(pattern, stat.size ?? 0);
-          return false; // exclude — prunes entire subtree if directory
-        }
-      }
-
-      // Glob path: use `ignore` package for gitignore-compliant matching.
-      if (ig.ignores(rel)) {
-        // P2-006: Use pre-built matchers for attribution.
-        const matchedPattern = findMatchingPattern(rel, patternMatchers) ?? "(pattern)";
+      // Use ig.test() for matching + O(1) pattern attribution via .rule
+      const result = ig.test(rel);
+      if (result.ignored && !result.unignored) {
+        const matchedPattern = result.rule?.pattern ?? "(pattern)";
         recordExclusion(matchedPattern, stat.size ?? 0);
         return false;
       }
 
-      // P2-009: picomatch fallback removed — `ignore` handles all gitignore patterns.
+      // Directory-only patterns (trailing `/`) require a trailing `/` on the
+      // path for `ignore` to recognise it as a directory. Tar entries for
+      // directories may or may not include the trailing slash, so test both.
+      if (!rel.endsWith("/")) {
+        const dirResult = ig.test(`${rel}/`);
+        if (dirResult.ignored && !dirResult.unignored) {
+          const matchedPattern = dirResult.rule?.pattern ?? "(pattern)";
+          recordExclusion(matchedPattern, stat.size ?? 0);
+          return false;
+        }
+      }
 
       return true; // include
     } catch (err) {
       // FAIL-CLOSED: on any filter error, exclude the entry for safety.
-      console.warn(
-        `⚠️  Filter error for "${entryPath}", excluding for safety: ${(err as Error).message}`,
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️  Filter error for "${entryPath}", excluding for safety: ${message}`);
       recordExclusion("(filter-error)", 0);
       return false;
     }
@@ -410,27 +388,4 @@ export function buildExcludeFilter(
   };
 
   return { filter, getExcludedStats };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * P2-006: Uses pre-built matchers instead of creating new ignore() per call.
- */
-function findMatchingPattern(
-  relPath: string,
-  matchers: ReadonlyArray<{ pattern: string; matcher: ReturnType<typeof ignore> }>,
-): string | undefined {
-  for (const { pattern, matcher } of matchers) {
-    try {
-      if (matcher.ignores(relPath)) {
-        return pattern;
-      }
-    } catch {
-      // skip broken pattern
-    }
-  }
-  return undefined;
 }
