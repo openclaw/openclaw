@@ -72,19 +72,21 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
   },
 ];
 
-export const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-export const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
-export const text = (params: Parameters<typeof clackText>[0]) =>
+export const intro: typeof clackIntro = (message) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+export const outro: typeof clackOutro = (message) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+export const text: typeof clackText = (params) =>
   clackText({
     ...params,
     message: stylePromptMessage(params.message),
   });
-export const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+export const confirm: typeof clackConfirm = (params) =>
   clackConfirm({
     ...params,
     message: stylePromptMessage(params.message),
   });
-export const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+export const select: typeof clackSelect = (params) =>
   clackSelect({
     ...params,
     message: stylePromptMessage(params.message),
