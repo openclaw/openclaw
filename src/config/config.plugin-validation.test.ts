@@ -38,12 +38,15 @@ describe("config plugin validation", () => {
   let enumPluginDir = "";
   let bluebubblesPluginDir = "";
   let voiceCallSchemaPluginDir = "";
-  const envSnapshot = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
-  };
+  const suiteEnv = () =>
+    ({
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
+    }) satisfies NodeJS.ProcessEnv;
 
-  const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
+  const validateInSuite = (raw: unknown) =>
+    validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
@@ -102,8 +105,6 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
-    process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
     clearPluginManifestRegistryCache();
     // Warm the plugin manifest cache once so path-based validations can reuse
     // parsed manifests across test cases.
@@ -118,16 +119,6 @@ describe("config plugin validation", () => {
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
-    if (envSnapshot.OPENCLAW_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = envSnapshot.OPENCLAW_STATE_DIR;
-    }
-    if (envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS === undefined) {
-      delete process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
-    } else {
-      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
-    }
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
