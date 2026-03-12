@@ -25,6 +25,9 @@ export type OverviewProps = {
   onSessionKeyChange: (next: string) => void;
   onConnect: () => void;
   onRefresh: () => void;
+  onOpenCortexPreview: () => void;
+  onOpenCortexConflicts: () => void;
+  onOpenCortexSync: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -33,6 +36,15 @@ export function renderOverview(props: OverviewProps) {
         uptimeMs?: number;
         policy?: { tickIntervalMs?: number };
         authMode?: "none" | "token" | "password" | "trusted-proxy";
+        cortex?: {
+          enabled?: boolean;
+          mode?: string;
+          graphPath?: string;
+          lastCaptureAtMs?: number;
+          lastCaptureReason?: string;
+          lastCaptureStored?: boolean;
+          lastSyncPlatforms?: string[];
+        };
       }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
@@ -41,6 +53,15 @@ export function renderOverview(props: OverviewProps) {
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
+  const cortex = snapshot?.cortex;
+  const cortexSummary = !cortex?.enabled
+    ? t("common.disabled")
+    : `${cortex.mode ?? t("common.enabled")} · ${cortex.lastCaptureStored ? "stored" : "idle"}`;
+  const cortexDetail = !cortex?.enabled
+    ? "Prompt bridge not enabled"
+    : `Last capture ${
+        cortex.lastCaptureAtMs ? formatRelativeTimestamp(cortex.lastCaptureAtMs) : t("common.na")
+      }${cortex.lastCaptureReason ? ` · ${cortex.lastCaptureReason}` : ""}`;
 
   const pairingHint = (() => {
     if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
@@ -205,11 +226,7 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
+                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
               }}
               placeholder="ws://100.x.y.z:18789"
             />
@@ -302,6 +319,28 @@ export function renderOverview(props: OverviewProps) {
             <div class="stat-value">
               ${props.lastChannelsRefresh ? formatRelativeTimestamp(props.lastChannelsRefresh) : t("common.na")}
             </div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Cortex</div>
+            <div class="stat-value">${cortexSummary}</div>
+            <div class="muted" style="margin-top: 4px;">${cortexDetail}</div>
+            ${
+              cortex?.enabled
+                ? html`
+                    <div class="row" style="margin-top: 8px; gap: 8px; flex-wrap: wrap;">
+                      <button class="btn" @click=${() => props.onOpenCortexPreview()}>
+                        Preview in chat
+                      </button>
+                      <button class="btn" @click=${() => props.onOpenCortexConflicts()}>
+                        Conflicts in chat
+                      </button>
+                      <button class="btn" @click=${() => props.onOpenCortexSync()}>
+                        Sync coding
+                      </button>
+                    </div>
+                  `
+                : ""
+            }
           </div>
         </div>
         ${
