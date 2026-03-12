@@ -296,6 +296,38 @@ describe("applyJobPatch", () => {
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
   });
 
+  it("rejects Feishu delivery without target", () => {
+    const job = createIsolatedAgentTurnJob("job-feishu-no-target", {
+      mode: "announce",
+      channel: "feishu",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      "cron Feishu/Lark announce delivery requires delivery.to (for example user:<open_id> or chat:<chat_id>)",
+    );
+  });
+
+  it("rejects Lark delivery without target", () => {
+    const job = createIsolatedAgentTurnJob("job-lark-no-target", {
+      mode: "announce",
+      channel: "lark",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      "cron Feishu/Lark announce delivery requires delivery.to (for example user:<open_id> or chat:<chat_id>)",
+    );
+  });
+
+  it("accepts Feishu delivery with explicit user target", () => {
+    const job = createIsolatedAgentTurnJob("job-feishu-user", {
+      mode: "announce",
+      channel: "feishu",
+      to: "user:ou_xxx",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
   it("accepts Telegram delivery with t.me URL (no https)", () => {
     const job = createIsolatedAgentTurnJob("job-telegram-tme-no-https", {
       mode: "announce",
