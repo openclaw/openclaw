@@ -65,6 +65,38 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  describe("threading", () => {
+    it("uses replyToMode for channel messages and keeps direct messages off", () => {
+      const resolveReplyToMode = mattermostPlugin.threading?.resolveReplyToMode;
+      if (!resolveReplyToMode) {
+        return;
+      }
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            replyToMode: "all",
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          accountId: "default",
+          chatType: "channel",
+        }),
+      ).toBe("all");
+      expect(
+        resolveReplyToMode({
+          cfg,
+          accountId: "default",
+          chatType: "direct",
+        }),
+      ).toBe("off");
+    });
+  });
+
   describe("messageActions", () => {
     beforeEach(() => {
       resetMattermostReactionBotUserCacheForTests();

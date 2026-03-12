@@ -129,6 +129,35 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
 
+## Threading and sessions
+
+Use `channels.mattermost.replyToMode` to control whether channel and group replies stay in the
+main channel or start a thread under the triggering post.
+
+- `off` (default): only reply in a thread when the inbound post is already in one.
+- `first`: for top-level channel/group posts, start a thread under that post and route the
+  conversation to a thread-scoped session.
+- `all`: same behavior as `first` for Mattermost today.
+- Direct messages ignore this setting and stay non-threaded.
+
+Config example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      replyToMode: "all",
+    },
+  },
+}
+```
+
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root,
+  follow-up chunks and media continue in that same thread.
+
 ## Access control (DMs)
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
