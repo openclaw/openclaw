@@ -681,6 +681,49 @@ describe("backward compatibility: feishu channel alias lark", () => {
   });
 });
 
+describe("routing channel normalization", () => {
+  test("keeps extension channel ids distinct from built-in aliases", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "plugin-agent",
+          match: {
+            channel: "imsg",
+            accountId: "main",
+            peer: { kind: "group", id: "room-1" },
+          },
+        },
+        {
+          agentId: "builtin-agent",
+          match: {
+            channel: "imessage",
+            accountId: "main",
+            peer: { kind: "group", id: "room-1" },
+          },
+        },
+      ],
+    };
+
+    const extensionRoute = resolveAgentRoute({
+      cfg,
+      channel: "imsg",
+      accountId: "main",
+      peer: { kind: "group", id: "room-1" },
+    });
+    expect(extensionRoute.agentId).toBe("plugin-agent");
+    expect(extensionRoute.matchedBy).toBe("binding.peer");
+
+    const builtInRoute = resolveAgentRoute({
+      cfg,
+      channel: "imessage",
+      accountId: "main",
+      peer: { kind: "group", id: "room-1" },
+    });
+    expect(builtInRoute.agentId).toBe("builtin-agent");
+    expect(builtInRoute.matchedBy).toBe("binding.peer");
+  });
+});
+
 describe("role-based agent routing", () => {
   type DiscordBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 

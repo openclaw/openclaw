@@ -1,7 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -80,15 +79,7 @@ function normalizeToken(value: string | undefined | null): string {
 }
 
 function normalizeRoutingChannelId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return "";
-  }
-  const normalizedBuiltIn = normalizeChatChannelId(trimmed);
-  if (normalizedBuiltIn) {
-    return normalizedBuiltIn;
-  }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeToken(value);
   // Feishu plugin channel id is "feishu"; keep legacy "lark" bindings routable.
   if (lowered === "lark") {
     return "feishu";
