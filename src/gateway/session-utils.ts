@@ -715,6 +715,21 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+function isPrimaryAgentSessionKey(key: string, cfg: OpenClawConfig): boolean {
+  if (key === "global") {
+    return resolveMainSessionKey(cfg) === "global";
+  }
+  if (key === "main") {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (!parsed) {
+    return false;
+  }
+  const normalizedMainKey = normalizeMainKey(cfg.session?.mainKey);
+  return parsed.rest === normalizedMainKey || parsed.rest === "main";
+}
+
 export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -855,7 +870,9 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    sessions = sessions.filter(
+      (s) => isPrimaryAgentSessionKey(s.key, cfg) || (s.updatedAt ?? 0) >= cutoff,
+    );
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
