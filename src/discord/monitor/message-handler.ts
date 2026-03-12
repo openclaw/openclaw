@@ -1,4 +1,5 @@
 import type { Client } from "@buape/carbon";
+import { normalizeQueueMode } from "../../auto-reply/reply/queue/normalize.js";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -42,11 +43,20 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
+
+  const discordQueueMode =
+    normalizeQueueMode(
+      (params.cfg.messages?.queue?.byChannel as Record<string, string | undefined> | undefined)
+        ?.discord,
+    ) ?? normalizeQueueMode(params.cfg.messages?.queue?.mode);
+  const isSteerMode = discordQueueMode === "steer" || discordQueueMode === "steer-backlog";
+
   const inboundWorker = createDiscordInboundWorker({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
+    steerMode: isSteerMode,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{

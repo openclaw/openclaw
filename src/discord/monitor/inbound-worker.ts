@@ -1,3 +1,4 @@
+import { createActiveDispatchTracker } from "../../channels/active-dispatches.js";
 import { createRunStateMachine } from "../../channels/run-state-machine.js";
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
@@ -13,6 +14,7 @@ type DiscordInboundWorkerParams = {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   runTimeoutMs?: number;
+  steerMode?: boolean;
 };
 
 export type DiscordInboundWorker = {
@@ -73,14 +75,25 @@ export function createDiscordInboundWorker(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
   });
+  const dispatches = params.steerMode ? createActiveDispatchTracker() : undefined;
 
   return {
     enqueue(job) {
+      // When steer mode is active and another dispatch is already running for
+      // the same queue key, use a unique key so this job runs concurrently.
+      // This lets the steer check in get-reply-run.ts see the active run and
+      // inject the follow-up message via agent.steer().
+      const effectiveKey =
+        dispatches && dispatches.isActive(job.queueKey)
+          ? `${job.queueKey}:steer:${Date.now()}`
+          : job.queueKey;
+
       void runQueue
-        .enqueue(job.queueKey, async () => {
+        .enqueue(effectiveKey, async () => {
           if (!runState.isActive()) {
             return;
           }
+          dispatches?.mark(job.queueKey);
           runState.onRunStart();
           try {
             if (!runState.isActive()) {
@@ -94,6 +107,7 @@ export function createDiscordInboundWorker(
             });
           } finally {
             runState.onRunEnd();
+            dispatches?.clear(job.queueKey);
           }
         })
         .catch((error) => {

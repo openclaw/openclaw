@@ -13,21 +13,18 @@
  * dispatches complete.
  */
 
-const activeDispatches = new Map<string, number>();
+import { createActiveDispatchTracker } from "../channels/active-dispatches.js";
+
+const tracker = createActiveDispatchTracker();
 
 export function markTelegramDispatchActive(key: string): void {
-  activeDispatches.set(key, (activeDispatches.get(key) ?? 0) + 1);
+  tracker.mark(key);
 }
 
 export function clearTelegramDispatchActive(key: string): void {
-  const count = activeDispatches.get(key) ?? 0;
-  if (count <= 1) {
-    activeDispatches.delete(key);
-  } else {
-    activeDispatches.set(key, count - 1);
-  }
+  tracker.clear(key);
 }
 
 export function isTelegramDispatchActive(key: string): boolean {
-  return (activeDispatches.get(key) ?? 0) > 0;
+  return tracker.isActive(key);
 }
