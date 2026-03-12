@@ -20,7 +20,6 @@ import {
   resolveOllamaApiBase,
   type OllamaTagsResponse,
 } from "./ollama-models.js";
-import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
