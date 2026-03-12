@@ -1,5 +1,34 @@
 import SwiftUI
 
+// MARK: - Status Capsule
+
+/// Applies Liquid Glass (iOS 26+) or a manual dark capsule (iOS 18–25).
+/// Note: `glassEffect` requires building with Xcode 26+ (iOS 26 SDK).
+/// `#available(iOS 26, *)` is a runtime gate only — the symbol must exist at compile time.
+private struct TalkStatusCapsuleModifier: ViewModifier {
+    let seam: Color
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            // iOS 26+: native Liquid Glass capsule — tinted with the gateway seam color.
+            content
+                .glassEffect(.regular.tint(seam.opacity(0.18)), in: Capsule())
+        } else {
+            // iOS 18–25: manual dark capsule with seam-colored border.
+            content
+                .background(
+                    Capsule()
+                        .fill(Color.black.opacity(0.40))
+                        .overlay(
+                            Capsule().stroke(seam.opacity(0.22), lineWidth: 1)
+                        )
+                )
+        }
+    }
+}
+
+// MARK: - Orb
+
 struct TalkOrbOverlay: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var pulse: Bool = false
@@ -62,11 +91,7 @@ struct TalkOrbOverlay: View {
                     .foregroundStyle(Color.white.opacity(0.92))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.40))
-                            .overlay(
-                                Capsule().stroke(seam.opacity(0.22), lineWidth: 1)))
+                    .modifier(TalkStatusCapsuleModifier(seam: seam))
             }
 
             if self.appModel.talkMode.isListening {

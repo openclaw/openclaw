@@ -499,6 +499,9 @@ struct OpenClawApp: App {
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        // Register App Shortcuts so the system can discover OpenTalkModeIntent
+        // for Siri and the Action Button. Must be called at launch.
+        OpenClawShortcuts.updateAppShortcutParameters()
         let appModel = NodeAppModel()
         _appModel = State(initialValue: appModel)
         _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))

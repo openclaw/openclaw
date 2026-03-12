@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct RootTabs: View {
+    private enum Tab: Int {
+        case screen = 0
+        case voice = 1
+        case settings = 2
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -33,7 +39,7 @@ struct RootTabs: View {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
                     } else {
-                        self.selectedTab = 2
+                        self.selectedTab = Tab.settings.rawValue
                     }
                 })
                 .padding(.leading, 10)
@@ -73,7 +79,7 @@ struct RootTabs: View {
         .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
-            onOpenSettings: { self.selectedTab = 2 })
+            onOpenSettings: { self.selectedTab = Tab.settings.rawValue })
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
