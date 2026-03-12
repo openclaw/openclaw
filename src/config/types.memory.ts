@@ -46,6 +46,8 @@ export type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
+  /** Include reset transcript archives (`*.jsonl.reset.<timestamp>`) in QMD indexing. */
+  includeResetArchives?: boolean;
 };
 
 export type MemoryQmdUpdateConfig = {
