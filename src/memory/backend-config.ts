@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -281,9 +282,14 @@ function resolveDefaultCollections(
   if (!include) {
     return [];
   }
+  const memoryFile = path.join(workspaceDir, "MEMORY.md");
+  const includeAltMemoryFile = !fsSync.existsSync(memoryFile);
+
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    ...(includeAltMemoryFile
+      ? [{ path: workspaceDir, pattern: "memory.md", base: "memory-alt" }]
+      : []),
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({

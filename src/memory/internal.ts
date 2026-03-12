@@ -126,17 +126,24 @@ export async function listMemoryFiles(
     try {
       const stat = await fs.lstat(absPath);
       if (stat.isSymbolicLink() || !stat.isFile()) {
-        return;
+        return false;
       }
       if (!absPath.endsWith(".md")) {
-        return;
+        return false;
       }
       result.push(absPath);
-    } catch {}
+      return true;
+    } catch {
+      return false;
+    }
   };
 
-  await addMarkdownFile(memoryFile);
-  await addMarkdownFile(altMemoryFile);
+  // Prefer canonical MEMORY.md; only fall back to memory.md when MEMORY.md is absent.
+  // This avoids double-injection on case-insensitive filesystems (e.g., Windows NTFS).
+  const addedRoot = await addMarkdownFile(memoryFile);
+  if (!addedRoot) {
+    await addMarkdownFile(altMemoryFile);
+  }
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
