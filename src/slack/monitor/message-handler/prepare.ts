@@ -761,9 +761,10 @@ export async function prepareSlackMessage(params: {
   // shouldn't be marked since they weren't processed as thread context.
   // Channel-prefixed to prevent collisions when channelIsolation is also off.
   if (isThreadReply && threadTs && !ctx.threadIsolation) {
-    // Cap at 500 entries to prevent unbounded growth in long-running sessions.
+    // Evict oldest entry at 500 to prevent unbounded growth in long-running sessions.
+    // Set preserves insertion order, so values().next() yields the oldest entry.
     if (ctx.seenThreadIds.size >= 500) {
-      ctx.seenThreadIds.clear();
+      ctx.seenThreadIds.delete(ctx.seenThreadIds.values().next().value!);
     }
     ctx.seenThreadIds.add(`${message.channel}:${threadTs}`);
   }

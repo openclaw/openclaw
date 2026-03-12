@@ -610,6 +610,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(preparedA!.ctxPayload.SessionKey).toBe(preparedB!.ctxPayload.SessionKey);
     // But historyKeys must differ so they don't share history buckets
     expect(preparedA!.historyKey).not.toBe(preparedB!.historyKey);
+    // historyKey must be channel-prefixed to prevent cross-channel collisions
+    expect(preparedA!.historyKey).toBe("C123:100.000");
+    expect(preparedB!.historyKey).toBe("C123:200.000");
   });
 
   it("still injects thread starter and history when session exists and threadIsolation is false", async () => {
