@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as embeddedRunTesting,
+  setActiveEmbeddedRun,
+} from "../agents/pi-embedded-runner/runs.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
@@ -27,7 +31,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -105,6 +109,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
+  embeddedRunTesting.resetActiveEmbeddedRuns();
   if (testRegistry) {
     setActivePluginRegistry(testRegistry);
   }
@@ -1309,6 +1314,65 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {
       replySpy.mockRestore();
+    }
+  });
+
+  it("returns requests-in-flight without draining system events when the target session is active", async () => {
+    const tmpDir = await createCaseDir("hb-active-session-retry");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid-active",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    enqueueSystemEvent("Cron: continue background task", {
+      sessionKey,
+      contextKey: "cron:continue-background-task",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    setActiveEmbeddedRun("sid-active", {
+      queueMessage: async () => {},
+      isStreaming: () => false,
+      isCompacting: () => false,
+      abort: () => {},
+    });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "cron:continue-background-task",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(res).toEqual({ status: "skipped", reason: "requests-in-flight" });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(peekSystemEvents(sessionKey)).toEqual(["Cron: continue background task"]);
+    } finally {
+      replySpy.mockRestore();
+      embeddedRunTesting.resetActiveEmbeddedRuns();
     }
   });
 });
