@@ -960,6 +960,25 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   );
 }
 
+/**
+ * Checks for raw network-level failure strings that indicate a transient
+ * transport problem (DNS, TCP, TLS) rather than an HTTP-level error.
+ * These surface when the underlying fetch/socket layer fails before an
+ * HTTP status code is available.
+ */
+// Note: intentionally excludes "aborted" — AbortError / user cancellation must
+// not be classified as a transient transport failure (it would cause cancelled
+// runs to retry instead of terminating immediately).
+const TRANSIENT_NETWORK_ERROR_RE =
+  /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|socket hang up|network socket disconnected|Network connection lost|UND_ERR_CONNECT_TIMEOUT|request to .* failed, reason:/i;
+
+export function isTransientNetworkErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return TRANSIENT_NETWORK_ERROR_RE.test(raw);
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -993,6 +1012,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
       return "overloaded";
     }
     // Treat remaining transient 5xx provider failures as retryable transport issues.
+    return "timeout";
+  }
+  // Treat raw network-level failures as retryable transport issues
+  if (isTransientNetworkErrorMessage(raw)) {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {

@@ -49,6 +49,9 @@ const ERROR_PATTERNS = {
     /without sending (?:any )?chunks?/i,
     /\bstop reason:\s*(?:abort|error|malformed_response)\b/i,
     /\breason:\s*(?:abort|error|malformed_response)\b/i,
+    // Ollama surfaces network-level failures (e.g. fetch timeout, ECONNRESET) as a generic
+    // "error" stop reason with no further error classification. This is intentionally broad
+    // to catch those cases as retryable transport failures.
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response)\b/i,
   ],
   billing: [

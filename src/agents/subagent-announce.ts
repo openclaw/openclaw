@@ -110,6 +110,7 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   GATEWAY_TIMEOUT_PATTERN,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
+  /\bfetch failed\b/i,
 ];
 
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
