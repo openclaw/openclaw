@@ -75,6 +75,10 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        deliveryContract?: string;
+      };
+      expect(firstCall?.deliveryContract).toBe("shared");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
