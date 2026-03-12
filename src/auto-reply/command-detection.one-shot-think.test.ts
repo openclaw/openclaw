@@ -112,6 +112,16 @@ describe("hasControlCommand with one-shot think", () => {
   it("treats model alias tails as directive-only when config defines the alias", () => {
     expect(hasControlCommand("/think high /mini", cfgWithMiniAlias)).toBe(true);
   });
+
+  it("preserves bot-targeted one-shot detection when config omits agents", () => {
+    const cfgWithoutAgents = {} satisfies OpenClawConfig;
+
+    expect(
+      hasControlCommand("/think@openclaw high write me a poem", cfgWithoutAgents, {
+        botUsername: "openclaw",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isControlCommandMessage with one-shot think", () => {

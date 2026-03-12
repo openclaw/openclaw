@@ -132,7 +132,7 @@ export function hasControlCommand(
         const nextChar = normalizedBody.charAt(normalized.length);
         if (nextChar && /\s/.test(nextChar)) {
           // One-shot think: /think <level> <body> is not a control command.
-          if (isOneShotThinkMessage(trimmed, cfg, options)) {
+          if (parseOneShotThinkMessage(trimmed, cfg, options)) {
             return false;
           }
           return true;
@@ -148,14 +148,8 @@ export function hasControlCommand(
  * These should NOT be treated as control commands, they carry a message body
  * that needs AI processing, with the think level applied for that single message only.
  */
-export function isOneShotThinkMessage(
-  text?: string,
-  cfgOrOptions?: OpenClawConfig | CommandNormalizeOptions,
-  options?: CommandNormalizeOptions,
-): boolean {
-  const cfg = cfgOrOptions && "agents" in cfgOrOptions ? cfgOrOptions : undefined;
-  const normalizeOptions = cfg ? options : (cfgOrOptions as CommandNormalizeOptions | undefined);
-  return parseOneShotThinkMessage(text, cfg, normalizeOptions) !== null;
+export function isOneShotThinkMessage(text?: string, options?: CommandNormalizeOptions): boolean {
+  return parseOneShotThinkMessage(text, undefined, options) !== null;
 }
 
 export function isControlCommandMessage(
