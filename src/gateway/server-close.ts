@@ -1,10 +1,40 @@
 import type { Server as HttpServer } from "node:http";
+import path from "node:path";
 import type { WebSocketServer } from "ws";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { resolveSessionFilePath } from "../config/sessions.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { ensureGatewayTranscriptFile } from "./server-methods/chat-transcript-file.js";
+import { appendInjectedAssistantMessageToTranscript } from "./server-methods/chat-transcript-inject.js";
+import { loadSessionEntry } from "./session-utils.js";
+
+async function injectRestartAbortNotice(params: {
+  sessionKey: string;
+  sessionId: string;
+  runId: string;
+}) {
+  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
+  if (!storePath) {
+    return false;
+  }
+  const transcriptPath = resolveSessionFilePath(params.sessionId, entry, {
+    sessionsDir: path.dirname(storePath),
+    agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+  });
+  await ensureGatewayTranscriptFile({ transcriptPath, sessionId: params.sessionId });
+  const appended = appendInjectedAssistantMessageToTranscript({
+    transcriptPath,
+    label: "OpenClaw",
+    message: "The previous run was interrupted by a gateway restart before it could finish.",
+    idempotencyKey: `shutdown-abort:${params.runId}`,
+  });
+  return appended.ok;
+}
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -24,7 +54,17 @@ export function createGatewayCloseHandler(params: {
   mediaCleanup: ReturnType<typeof setInterval> | null;
   agentUnsub: (() => void) | null;
   heartbeatUnsub: (() => void) | null;
-  chatRunState: { clear: () => void };
+  chatRunState: { clear: () => void; abortedRuns: Map<string, number> };
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatRunBuffers: Map<string, string>;
+  chatDeltaSentAt: Map<string, number>;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => { sessionKey: string; clientRunId: string } | undefined;
+  agentRunSeq: Map<string, number>;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   browserControl: { stop: () => Promise<void> } | null;
@@ -81,6 +121,30 @@ export function createGatewayCloseHandler(params: {
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
+    const restartNoticeJobs: Promise<unknown>[] = [];
+    for (const [runId, entry] of params.chatAbortControllers.entries()) {
+      abortChatRunById(
+        {
+          chatAbortControllers: params.chatAbortControllers,
+          chatRunBuffers: params.chatRunBuffers,
+          chatDeltaSentAt: params.chatDeltaSentAt,
+          chatAbortedRuns: params.chatRunState.abortedRuns,
+          removeChatRun: params.removeChatRun,
+          agentRunSeq: params.agentRunSeq,
+          broadcast: params.broadcast,
+          nodeSendToSession: params.nodeSendToSession,
+        },
+        { runId, sessionKey: entry.sessionKey, stopReason: "shutdown" },
+      );
+      restartNoticeJobs.push(
+        injectRestartAbortNotice({
+          sessionKey: entry.sessionKey,
+          sessionId: entry.sessionId,
+          runId,
+        }),
+      );
+    }
+    await Promise.allSettled(restartNoticeJobs);
     params.broadcast("shutdown", {
       reason,
       restartExpectedMs,

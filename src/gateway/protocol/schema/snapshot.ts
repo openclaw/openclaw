@@ -35,6 +35,15 @@ export const SessionDefaultsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ActiveChatRunSnapshotSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    sessionKey: NonEmptyString,
+    startedAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const StateVersionSchema = Type.Object(
   {
     presence: Type.Integer({ minimum: 0 }),
@@ -52,6 +61,7 @@ export const SnapshotSchema = Type.Object(
     configPath: Type.Optional(NonEmptyString),
     stateDir: Type.Optional(NonEmptyString),
     sessionDefaults: Type.Optional(SessionDefaultsSchema),
+    activeChatRuns: Type.Optional(Type.Array(ActiveChatRunSnapshotSchema)),
     authMode: Type.Optional(
       Type.Union([
         Type.Literal("none"),

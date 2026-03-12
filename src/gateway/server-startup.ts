@@ -182,9 +182,7 @@ export async function startGatewaySidecars(params: {
   });
 
   if (shouldWakeFromRestartSentinel()) {
-    setTimeout(() => {
-      void scheduleRestartSentinelWake({ deps: params.deps });
-    }, 750);
+    void scheduleRestartSentinelWake({ deps: params.deps });
   }
 
   return { browserControl, pluginServices };
