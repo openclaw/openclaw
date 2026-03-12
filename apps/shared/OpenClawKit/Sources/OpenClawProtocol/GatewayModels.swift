@@ -520,6 +520,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionid: String?
     public let sessionkey: String?
     public let thinking: String?
+    public let model: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let channel: String?
@@ -547,6 +548,7 @@ public struct AgentParams: Codable, Sendable {
         sessionid: String?,
         sessionkey: String?,
         thinking: String?,
+        model: String?,
         deliver: Bool?,
         attachments: [AnyCodable]?,
         channel: String?,
@@ -573,6 +575,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.thinking = thinking
+        self.model = model
         self.deliver = deliver
         self.attachments = attachments
         self.channel = channel
@@ -601,6 +604,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case thinking
+        case model
         case deliver
         case attachments
         case channel

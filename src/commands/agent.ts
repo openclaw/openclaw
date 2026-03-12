@@ -32,6 +32,7 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -937,7 +938,8 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
-    const needsModelCatalog = hasAllowlist || hasStoredOverride;
+    const hasOneShotModelOverride = Boolean(opts.modelOverrideOnce?.trim());
+    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasOneShotModelOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
@@ -1000,13 +1002,42 @@ async function agentCommandInternal(
         model = normalizedStored.model;
       }
     }
+
+    // Snapshot the session's resolved provider BEFORE the per-turn override
+    // mutates it. This is used for auth profile reconciliation below so that
+    // a transient --model override doesn't permanently clear the session's
+    // auth profile when it happens to use a different provider.
+    const providerForAuthReconciliation = provider;
+
+    // Per-turn model override from CLI --model flag.
+    // This is intentionally NOT persisted to the session store — it applies
+    // to the current turn only, following the same pattern as --thinking.
+    const turnModelOverride = opts.modelOverrideOnce?.trim();
+    if (turnModelOverride) {
+      const parsed = parseModelRef(turnModelOverride, provider);
+      if (!parsed) {
+        throw new Error(
+          `Invalid --model value "${turnModelOverride}". Use format "provider/model" or a known model id.`,
+        );
+      }
+      const key = modelKey(parsed.provider, parsed.model);
+      if (isCliProvider(parsed.provider, cfg) || allowAnyModel || allowedModelKeys.has(key)) {
+        provider = parsed.provider;
+        model = parsed.model;
+      } else {
+        throw new Error(
+          `Model "${turnModelOverride}" is not allowed. Check agents.defaults.models in your config.`,
+        );
+      }
+    }
+
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
       if (authProfileId) {
         const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        if (!profile || profile.provider !== provider) {
+        if (!profile || profile.provider !== providerForAuthReconciliation) {
           if (sessionStore && sessionKey) {
             await clearSessionAuthProfileOverride({
               sessionEntry: entry,
