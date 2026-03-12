@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAllowedBlueBubblesSender,
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
@@ -179,5 +180,23 @@ describe("parseBlueBubblesAllowTarget", () => {
       kind: "handle",
       handle: "+19257864429",
     });
+  });
+});
+
+describe("isAllowedBlueBubblesSender", () => {
+  it("denies when allowFrom is empty", () => {
+    const allowed = isAllowedBlueBubblesSender({
+      allowFrom: [],
+      sender: "+15551234567",
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("allows wildcard entries", () => {
+    const allowed = isAllowedBlueBubblesSender({
+      allowFrom: ["*"],
+      sender: "+15551234567",
+    });
+    expect(allowed).toBe(true);
   });
 });

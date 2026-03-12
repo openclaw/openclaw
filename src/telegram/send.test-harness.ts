@@ -5,6 +5,7 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
     editMessageText: vi.fn(),
+    sendChatAction: vi.fn(),
     sendMessage: vi.fn(),
     sendPoll: vi.fn(),
     sendPhoto: vi.fn(),
@@ -27,11 +28,16 @@ const { loadConfig } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
+const { maybePersistResolvedTelegramTarget } = vi.hoisted(() => ({
+  maybePersistResolvedTelegramTarget: vi.fn(async () => {}),
+}));
+
 type TelegramSendTestMocks = {
   botApi: Record<string, MockFn>;
   botCtorSpy: MockFn;
   loadConfig: MockFn;
   loadWebMedia: MockFn;
+  maybePersistResolvedTelegramTarget: MockFn;
 };
 
 vi.mock("../web/media.js", () => ({
@@ -62,14 +68,20 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./target-writeback.js", () => ({
+  maybePersistResolvedTelegramTarget,
+}));
+
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
-  return { botApi, botCtorSpy, loadConfig, loadWebMedia };
+  return { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget };
 }
 
 export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
     loadWebMedia.mockReset();
+    maybePersistResolvedTelegramTarget.mockReset();
+    maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     botCtorSpy.mockReset();
     for (const fn of Object.values(botApi)) {
       fn.mockReset();

@@ -6,6 +6,17 @@ export type SessionState = {
   lastActivity: number;
   state: SessionStateValue;
   queueDepth: number;
+  toolCallHistory?: ToolCallRecord[];
+  toolLoopWarningBuckets?: Map<string, number>;
+  commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+};
+
+export type ToolCallRecord = {
+  toolName: string;
+  argsHash: string;
+  toolCallId?: string;
+  resultHash?: string;
+  timestamp: number;
 };
 
 export type SessionRef = {
@@ -56,10 +67,20 @@ function resolveSessionKey({ sessionKey, sessionId }: SessionRef) {
   return sessionKey ?? sessionId ?? "unknown";
 }
 
+function findStateBySessionId(sessionId: string): SessionState | undefined {
+  for (const state of diagnosticSessionStates.values()) {
+    if (state.sessionId === sessionId) {
+      return state;
+    }
+  }
+  return undefined;
+}
+
 export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
-  const existing = diagnosticSessionStates.get(key);
+  const existing =
+    diagnosticSessionStates.get(key) ?? (ref.sessionId && findStateBySessionId(ref.sessionId));
   if (existing) {
     if (ref.sessionId) {
       existing.sessionId = ref.sessionId;

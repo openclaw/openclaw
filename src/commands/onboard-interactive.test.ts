@@ -69,4 +69,17 @@ describe("runInteractiveOnboarding", () => {
       Number.MAX_SAFE_INTEGER;
     expect(restoreOrder).toBeLessThan(exitOrder);
   });
+
+  it("rethrows non-cancel errors after restoring terminal state", async () => {
+    const runtime = makeRuntime();
+    const err = new Error("boom");
+    mocks.runOnboardingWizard.mockRejectedValueOnce(err);
+
+    await expect(runInteractiveOnboarding({} as never, runtime)).rejects.toThrow("boom");
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("onboarding finish", {
+      resumeStdinIfPaused: false,
+    });
+  });
 });

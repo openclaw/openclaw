@@ -1,19 +1,22 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import type { SlackMonitorContext } from "../context.js";
-import type {
-  SlackChannelCreatedEvent,
-  SlackChannelIdChangedEvent,
-  SlackChannelRenamedEvent,
-} from "../types.js";
 import { resolveChannelConfigWrites } from "../../../channels/plugins/config-writes.js";
 import { loadConfig, writeConfigFile } from "../../../config/config.js";
 import { danger, warn } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
+import type { SlackMonitorContext } from "../context.js";
+import type {
+  SlackChannelCreatedEvent,
+  SlackChannelIdChangedEvent,
+  SlackChannelRenamedEvent,
+} from "../types.js";
 
-export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext }) {
-  const { ctx } = params;
+export function registerSlackChannelEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
 
   const enqueueChannelSystemEvent = (params: {
     kind: "created" | "renamed";
@@ -51,6 +54,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
@@ -69,6 +73,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
@@ -87,6 +92,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelIdChangedEvent;
         const oldChannelId = payload.old_channel_id;

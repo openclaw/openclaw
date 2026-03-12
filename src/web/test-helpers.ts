@@ -64,14 +64,23 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../media/store.js", () => ({
-  saveMediaBuffer: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
-    id: "mid",
-    path: "/tmp/mid",
-    size: _buf.length,
-    contentType,
-  })),
-}));
+vi.mock("../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/store.js")>();
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: vi.fn().mockImplementation(async (_buf: Buffer, contentType?: string) => ({
+      id: "mid",
+      path: "/tmp/mid",
+      size: _buf.length,
+      contentType,
+    })),
+  });
+  return mockModule;
+});
 
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
@@ -91,14 +100,37 @@ export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
-  // @ts-expect-error
-  baileys.makeWASocket = vi.fn(recreated.mod.makeWASocket);
-  // @ts-expect-error
-  baileys.useMultiFileAuthState = vi.fn(recreated.mod.useMultiFileAuthState);
-  // @ts-expect-error
-  baileys.fetchLatestBaileysVersion = vi.fn(recreated.mod.fetchLatestBaileysVersion);
-  // @ts-expect-error
-  baileys.makeCacheableSignalKeyStore = vi.fn(recreated.mod.makeCacheableSignalKeyStore);
+
+  const makeWASocket = vi.mocked(baileys.makeWASocket);
+  const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
+    (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
+  makeWASocket.mockReset();
+  makeWASocket.mockImplementation(makeWASocketImpl);
+
+  const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
+  const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
+    (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
+      ...args,
+    );
+  useMultiFileAuthState.mockReset();
+  useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
+
+  const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
+  const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
+    (
+      recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
+    )(...args);
+  fetchLatestBaileysVersion.mockReset();
+  fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
+
+  const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
+  const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
+    (
+      recreated.mod
+        .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
+    )(...args);
+  makeCacheableSignalKeyStore.mockReset();
+  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
 }
 
 export function getLastSocket(): MockBaileysSocket {

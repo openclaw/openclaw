@@ -1,8 +1,8 @@
-import type { ResolvedGatewayAuth } from "../../auth.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
+import type { ResolvedGatewayAuth } from "../../auth.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 
-export type AuthProvidedKind = "token" | "password" | "none";
+export type AuthProvidedKind = "token" | "device-token" | "password" | "none";
 
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
@@ -56,6 +56,9 @@ export function formatGatewayAuthFailureMessage(params: {
 
   if (authMode === "token" && authProvided === "none") {
     return `unauthorized: gateway token missing (${tokenHint})`;
+  }
+  if (authMode === "token" && authProvided === "device-token") {
+    return "unauthorized: device token rejected (pair/repair this device, or provide gateway token)";
   }
   if (authMode === "password" && authProvided === "none") {
     return `unauthorized: gateway password missing (${passwordHint})`;

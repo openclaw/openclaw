@@ -15,9 +15,21 @@ vi.mock("./index.js", () => {
             }
             const onAbort = () => reject(signal?.reason ?? new Error("aborted"));
             signal?.addEventListener("abort", onAbort, { once: true });
-            setTimeout(resolve, 50);
+            queueMicrotask(() => {
+              signal?.removeEventListener("abort", onAbort);
+              resolve();
+            });
           });
           res.json({ ok: true });
+        },
+      );
+      app.get(
+        "/echo/:id",
+        async (
+          req: { params?: Record<string, string> },
+          res: { json: (body: unknown) => void },
+        ) => {
+          res.json({ id: req.params?.id ?? null });
         },
       );
     },
@@ -41,6 +53,21 @@ describe("browser route dispatcher (abort)", () => {
     await expect(promise).resolves.toMatchObject({
       status: 500,
       body: { error: expect.stringContaining("timed out") },
+    });
+  });
+
+  it("returns 400 for malformed percent-encoding in route params", async () => {
+    const { createBrowserRouteDispatcher } = await import("./dispatcher.js");
+    const dispatcher = createBrowserRouteDispatcher({} as BrowserRouteContext);
+
+    await expect(
+      dispatcher.dispatch({
+        method: "GET",
+        path: "/echo/%E0%A4%A",
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { error: expect.stringContaining("invalid path parameter encoding") },
     });
   });
 });

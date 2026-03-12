@@ -12,6 +12,9 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../../config/config.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
@@ -59,15 +62,20 @@ export const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
+export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
+    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+  }
+  return snapshot.config;
+}
+
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.valid) {
-    const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
-    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
-  }
-  const next = mutator(snapshot.config);
+  const config = await loadValidConfigOrThrow();
+  const next = mutator(config);
   await writeConfigFile(next);
   return next;
 }
@@ -159,7 +167,8 @@ export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
 ): PrimaryFallbackConfig {
-  const next: PrimaryFallbackConfig = { ...existing };
+  const base = existing && typeof existing === "object" ? existing : undefined;
+  const next: PrimaryFallbackConfig = { ...base };
   if (patch.primary !== undefined) {
     next.primary = patch.primary;
   }
@@ -167,6 +176,37 @@ export function mergePrimaryFallbackConfig(
     next.fallbacks = patch.fallbacks;
   }
   return next;
+}
+
+export function applyDefaultModelPrimaryUpdate(params: {
+  cfg: OpenClawConfig;
+  modelRaw: string;
+  field: "model" | "imageModel";
+}): OpenClawConfig {
+  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+  const key = `${resolved.provider}/${resolved.model}`;
+
+  const nextModels = { ...params.cfg.agents?.defaults?.models };
+  if (!nextModels[key]) {
+    nextModels[key] = {};
+  }
+
+  const defaults = params.cfg.agents?.defaults ?? {};
+  const existing = toAgentModelListLike(
+    (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
+  );
+
+  return {
+    ...params.cfg,
+    agents: {
+      ...params.cfg.agents,
+      defaults: {
+        ...defaults,
+        [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
+        models: nextModels,
+      },
+    },
+  };
 }
 
 export { modelKey };

@@ -41,6 +41,99 @@ export function isConfigPathTruthyWithDefaults(
   return isTruthy(value);
 }
 
+export type RuntimeRequires = {
+  bins?: string[];
+  anyBins?: string[];
+  env?: string[];
+  config?: string[];
+};
+
+type RuntimeRequirementEvalParams = {
+  requires?: RuntimeRequires;
+  hasBin: (bin: string) => boolean;
+  hasAnyRemoteBin?: (bins: string[]) => boolean;
+  hasRemoteBin?: (bin: string) => boolean;
+  hasEnv: (envName: string) => boolean;
+  isConfigPathTruthy: (pathStr: string) => boolean;
+};
+
+export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+  const requires = params.requires;
+  if (!requires) {
+    return true;
+  }
+
+  const requiredBins = requires.bins ?? [];
+  if (requiredBins.length > 0) {
+    for (const bin of requiredBins) {
+      if (params.hasBin(bin)) {
+        continue;
+      }
+      if (params.hasRemoteBin?.(bin)) {
+        continue;
+      }
+      return false;
+    }
+  }
+
+  const requiredAnyBins = requires.anyBins ?? [];
+  if (requiredAnyBins.length > 0) {
+    const anyFound = requiredAnyBins.some((bin) => params.hasBin(bin));
+    if (!anyFound && !params.hasAnyRemoteBin?.(requiredAnyBins)) {
+      return false;
+    }
+  }
+
+  const requiredEnv = requires.env ?? [];
+  if (requiredEnv.length > 0) {
+    for (const envName of requiredEnv) {
+      if (!params.hasEnv(envName)) {
+        return false;
+      }
+    }
+  }
+
+  const requiredConfig = requires.config ?? [];
+  if (requiredConfig.length > 0) {
+    for (const configPath of requiredConfig) {
+      if (!params.isConfigPathTruthy(configPath)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export function evaluateRuntimeEligibility(
+  params: {
+    os?: string[];
+    remotePlatforms?: string[];
+    always?: boolean;
+  } & RuntimeRequirementEvalParams,
+): boolean {
+  const osList = params.os ?? [];
+  const remotePlatforms = params.remotePlatforms ?? [];
+  if (
+    osList.length > 0 &&
+    !osList.includes(resolveRuntimePlatform()) &&
+    !remotePlatforms.some((platform) => osList.includes(platform))
+  ) {
+    return false;
+  }
+  if (params.always === true) {
+    return true;
+  }
+  return evaluateRuntimeRequires({
+    requires: params.requires,
+    hasBin: params.hasBin,
+    hasRemoteBin: params.hasRemoteBin,
+    hasAnyRemoteBin: params.hasAnyRemoteBin,
+    hasEnv: params.hasEnv,
+    isConfigPathTruthy: params.isConfigPathTruthy,
+  });
+}
+
 export function resolveRuntimePlatform(): string {
   return process.platform;
 }

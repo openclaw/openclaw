@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
@@ -6,25 +6,32 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
-  getCustomProviderApiKey,
   resolveAuthProfileOrder,
   resolveEnvApiKey,
+  resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { shortenHomePath } from "../../utils.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 
 export type ModelAuthDetailMode = "compact" | "verbose";
 
-const maskApiKey = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "missing";
+function resolveStoredCredentialLabel(params: {
+  value: unknown;
+  refValue: unknown;
+  mode: ModelAuthDetailMode;
+}): string {
+  const masked = maskApiKey(typeof params.value === "string" ? params.value : "");
+  if (masked !== "missing") {
+    return masked;
   }
-  if (trimmed.length <= 16) {
-    return trimmed;
+  if (coerceSecretRef(params.refValue)) {
+    return params.mode === "compact" ? "(ref)" : "ref";
   }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
-};
+  return "missing";
+}
 
 export const resolveAuthLabel = async (
   provider: string,
@@ -39,37 +46,11 @@ export const resolveAuthLabel = async (
   });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   const providerKey = normalizeProviderId(provider);
-  const lastGood = (() => {
-    const map = store.lastGood;
-    if (!map) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(map)) {
-      if (normalizeProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
+  const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
   const nextProfileId = order[0];
   const now = Date.now();
-
-  const formatUntil = (timestampMs: number) => {
-    const remainingMs = Math.max(0, timestampMs - now);
-    const minutes = Math.round(remainingMs / 60_000);
-    if (minutes < 1) {
-      return "soon";
-    }
-    if (minutes < 60) {
-      return `${minutes}m`;
-    }
-    const hours = Math.round(minutes / 60);
-    if (hours < 48) {
-      return `${hours}h`;
-    }
-    const days = Math.round(hours / 24);
-    return `${days}d`;
-  };
+  const formatUntil = (timestampMs: number) =>
+    formatRemainingShort(timestampMs - now, { underMinuteLabel: "soon" });
 
   if (order.length > 0) {
     if (mode === "compact") {
@@ -92,12 +73,22 @@ export const resolveAuthLabel = async (
       }
 
       if (profile.type === "api_key") {
+        const keyLabel = resolveStoredCredentialLabel({
+          value: profile.key,
+          refValue: profile.keyRef,
+          mode,
+        });
         return {
-          label: `${profileId} api-key ${maskApiKey(profile.key ?? "")}${more}`,
+          label: `${profileId} api-key ${keyLabel}${more}`,
           source: "",
         };
       }
       if (profile.type === "token") {
+        const tokenLabel = resolveStoredCredentialLabel({
+          value: profile.token,
+          refValue: profile.tokenRef,
+          mode,
+        });
         const exp =
           typeof profile.expires === "number" &&
           Number.isFinite(profile.expires) &&
@@ -107,7 +98,7 @@ export const resolveAuthLabel = async (
               : ` exp ${formatUntil(profile.expires)}`
             : "";
         return {
-          label: `${profileId} token ${maskApiKey(profile.token)}${exp}${more}`,
+          label: `${profileId} token ${tokenLabel}${exp}${more}`,
           source: "",
         };
       }
@@ -153,10 +144,20 @@ export const resolveAuthLabel = async (
         return `${profileId}=missing${suffix}`;
       }
       if (profile.type === "api_key") {
+        const keyLabel = resolveStoredCredentialLabel({
+          value: profile.key,
+          refValue: profile.keyRef,
+          mode,
+        });
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=${maskApiKey(profile.key ?? "")}${suffix}`;
+        return `${profileId}=${keyLabel}${suffix}`;
       }
       if (profile.type === "token") {
+        const tokenLabel = resolveStoredCredentialLabel({
+          value: profile.token,
+          refValue: profile.tokenRef,
+          mode,
+        });
         if (
           typeof profile.expires === "number" &&
           Number.isFinite(profile.expires) &&
@@ -165,7 +166,7 @@ export const resolveAuthLabel = async (
           flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
         }
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=token:${maskApiKey(profile.token)}${suffix}`;
+        return `${profileId}=token:${tokenLabel}${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,
@@ -203,7 +204,7 @@ export const resolveAuthLabel = async (
     const label = isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey);
     return { label, source: mode === "verbose" ? envKey.source : "" };
   }
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider })?.apiKey;
   if (customKey) {
     return {
       label: maskApiKey(customKey),

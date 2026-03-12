@@ -1,8 +1,15 @@
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import { resolveCliName } from "./cli-name.js";
+import {
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+  resolveTempPathParts,
+} from "./nodes-media-utils.js";
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 
@@ -23,22 +30,6 @@ export type CameraClipPayload = {
   durationMs: number;
   hasAudio: boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const obj = asRecord(value);
@@ -73,72 +64,113 @@ export function cameraTempPath(opts: {
   tmpDir?: string;
   id?: string;
 }) {
-  const tmpDir = opts.tmpDir ?? os.tmpdir();
-  const id = opts.id ?? randomUUID();
+  const { tmpDir, id, ext } = resolveTempPathParts({
+    tmpDir: opts.tmpDir,
+    id: opts.id,
+    ext: opts.ext,
+  });
   const facingPart = opts.facing ? `-${opts.facing}` : "";
-  const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
   const cliName = resolveCliName();
   return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
-export async function writeUrlToFile(filePath: string, url: string) {
+export async function writeUrlToFile(
+  filePath: string,
+  url: string,
+  opts: { expectedHost: string },
+) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
   }
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
+  const expectedHost = normalizeHostname(opts.expectedHost);
+  if (!expectedHost) {
+    throw new Error("writeUrlToFile: expectedHost is required");
   }
-
-  const contentLengthRaw = res.headers.get("content-length");
-  const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
-  if (
-    typeof contentLength === "number" &&
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
-  ) {
+  if (normalizeHostname(parsed.hostname) !== expectedHost) {
     throw new Error(
-      `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+      `writeUrlToFile: url host ${parsed.hostname} must match node host ${opts.expectedHost}`,
     );
   }
 
-  const body = res.body;
-  if (!body) {
-    throw new Error(`failed to download ${url}: empty response body`);
-  }
+  const policy = {
+    allowPrivateNetwork: true,
+    allowedHostnames: [expectedHost],
+    hostnameAllowlist: [expectedHost],
+  };
 
-  const fileHandle = await fs.open(filePath, "w");
+  let release: () => Promise<void> = async () => {};
   let bytes = 0;
-  let thrown: unknown;
   try {
-    const reader = body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-      bytes += value.byteLength;
-      if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
-        throw new Error(
-          `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
-        );
-      }
-      await fileHandle.write(value);
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      auditContext: "writeUrlToFile",
+      policy,
+    });
+    release = guarded.release;
+    const finalUrl = new URL(guarded.finalUrl);
+    if (finalUrl.protocol !== "https:") {
+      throw new Error(`writeUrlToFile: redirect resolved to non-https URL ${guarded.finalUrl}`);
     }
-  } catch (err) {
-    thrown = err;
-  } finally {
-    await fileHandle.close();
-  }
+    if (normalizeHostname(finalUrl.hostname) !== expectedHost) {
+      throw new Error(
+        `writeUrlToFile: redirect host ${finalUrl.hostname} must match node host ${opts.expectedHost}`,
+      );
+    }
+    const res = guarded.response;
+    if (!res.ok) {
+      throw new Error(`failed to download ${url}: ${res.status} ${res.statusText}`);
+    }
 
-  if (thrown) {
-    await fs.unlink(filePath).catch(() => {});
-    throw thrown;
+    const contentLengthRaw = res.headers.get("content-length");
+    const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+    if (
+      typeof contentLength === "number" &&
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_CAMERA_URL_DOWNLOAD_BYTES
+    ) {
+      throw new Error(
+        `writeUrlToFile: content-length ${contentLength} exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+      );
+    }
+
+    const body = res.body;
+    if (!body) {
+      throw new Error(`failed to download ${url}: empty response body`);
+    }
+
+    const fileHandle = await fs.open(filePath, "w");
+    let thrown: unknown;
+    try {
+      const reader = body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+        bytes += value.byteLength;
+        if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+          throw new Error(
+            `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+          );
+        }
+        await fileHandle.write(value);
+      }
+    } catch (err) {
+      thrown = err;
+    } finally {
+      await fileHandle.close();
+    }
+
+    if (thrown) {
+      await fs.unlink(filePath).catch(() => {});
+      throw thrown;
+    }
+  } finally {
+    await release();
   }
 
   return { path: filePath, bytes };
@@ -148,4 +180,54 @@ export async function writeBase64ToFile(filePath: string, base64: string) {
   const buf = Buffer.from(base64, "base64");
   await fs.writeFile(filePath, buf);
   return { path: filePath, bytes: buf.length };
+}
+
+export function requireNodeRemoteIp(remoteIp?: string): string {
+  const normalized = remoteIp?.trim();
+  if (!normalized) {
+    throw new Error("camera URL payload requires node remoteIp");
+  }
+  return normalized;
+}
+
+export async function writeCameraPayloadToFile(params: {
+  filePath: string;
+  payload: { url?: string; base64?: string };
+  expectedHost?: string;
+  invalidPayloadMessage?: string;
+}) {
+  if (params.payload.url) {
+    await writeUrlToFile(params.filePath, params.payload.url, {
+      expectedHost: requireNodeRemoteIp(params.expectedHost),
+    });
+    return;
+  }
+  if (params.payload.base64) {
+    await writeBase64ToFile(params.filePath, params.payload.base64);
+    return;
+  }
+  throw new Error(params.invalidPayloadMessage ?? "invalid camera payload");
+}
+
+export async function writeCameraClipPayloadToFile(params: {
+  payload: CameraClipPayload;
+  facing: CameraFacing;
+  tmpDir?: string;
+  id?: string;
+  expectedHost?: string;
+}): Promise<string> {
+  const filePath = cameraTempPath({
+    kind: "clip",
+    facing: params.facing,
+    ext: params.payload.format,
+    tmpDir: params.tmpDir,
+    id: params.id,
+  });
+  await writeCameraPayloadToFile({
+    filePath,
+    payload: params.payload,
+    expectedHost: params.expectedHost,
+    invalidPayloadMessage: "invalid camera.clip payload",
+  });
+  return filePath;
 }

@@ -49,7 +49,7 @@ export const usageStylesPart3 = `
   }
   .sessions-card-count {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .sessions-card-meta {
     display: flex;
@@ -58,7 +58,7 @@ export const usageStylesPart3 = `
     gap: 12px;
     margin: 8px 0 10px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .sessions-card-stats {
     display: inline-flex;
@@ -69,7 +69,7 @@ export const usageStylesPart3 = `
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .sessions-sort select {
     padding: 4px 8px;
@@ -95,7 +95,7 @@ export const usageStylesPart3 = `
   }
   .sessions-card-hint {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-bottom: 8px;
   }
   .sessions-card .session-bars {
@@ -162,7 +162,7 @@ export const usageStylesPart3 = `
   }
   .session-detail-empty-desc {
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-bottom: 16px;
     line-height: 1.5;
   }
@@ -177,7 +177,7 @@ export const usageStylesPart3 = `
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .session-detail-empty-feature .icon {
     font-size: 16px;
@@ -232,7 +232,7 @@ export const usageStylesPart3 = `
     display: flex;
     gap: 10px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .session-detail-stats strong {
     color: var(--text);
@@ -255,7 +255,7 @@ export const usageStylesPart3 = `
   }
   .session-summary-title {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-bottom: 4px;
   }
   .session-summary-value {
@@ -264,7 +264,7 @@ export const usageStylesPart3 = `
   }
   .session-summary-meta {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-top: 4px;
   }
   .session-detail-row {
@@ -329,7 +329,7 @@ export const usageStylesPart3 = `
   }
   .context-breakdown-more {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-top: 4px;
   }
   .context-breakdown-header {
@@ -341,7 +341,7 @@ export const usageStylesPart3 = `
   .context-expand-btn {
     border: 1px solid var(--border);
     background: var(--bg-secondary);
-    color: var(--text-muted);
+    color: var(--muted);
     font-size: 11px;
     padding: 4px 8px;
     border-radius: 999px;
@@ -508,5 +508,44 @@ export const usageStylesPart3 = `
     .usage-hour-cell {
       height: 22px;
     }
+  }
+
+  /* ===== CHART AXIS ===== */
+  .ts-axis-label {
+    font-size: 5px;
+    fill: var(--muted);
+  }
+
+  /* ===== RANGE SELECTION HANDLES ===== */
+  .chart-handle-zone {
+    position: absolute;
+    top: 0;
+    width: 16px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    transform: translateX(-50%);
+  }
+
+  .timeseries-chart-wrapper {
+    position: relative;
+  }
+
+  .timeseries-reset-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    margin-left: 8px;
+  }
+
+  .timeseries-reset-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--border-strong);
   }
 `;

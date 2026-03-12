@@ -1,6 +1,6 @@
 import path from "node:path";
+import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -27,9 +27,12 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
+  requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort if the response body stops yielding data for this long (ms). */
+  readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
 };
@@ -79,19 +82,32 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
 }
 
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { url, fetchImpl, filePathHint, maxBytes, maxRedirects, ssrfPolicy, lookupFn } = options;
+  const {
+    url,
+    fetchImpl,
+    requestInit,
+    filePathHint,
+    maxBytes,
+    maxRedirects,
+    readIdleTimeoutMs,
+    ssrfPolicy,
+    lookupFn,
+  } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
   try {
-    const result = await fetchWithSsrFGuard({
-      url,
-      fetchImpl,
-      maxRedirects,
-      policy: ssrfPolicy,
-      lookupFn,
-    });
+    const result = await fetchWithSsrFGuard(
+      withStrictGuardedFetchMode({
+        url,
+        fetchImpl,
+        init: requestInit,
+        maxRedirects,
+        policy: ssrfPolicy,
+        lookupFn,
+      }),
+    );
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
@@ -129,15 +145,27 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }
     }
 
-    const buffer = maxBytes
-      ? await readResponseWithLimit(res, maxBytes, {
-          onOverflow: ({ maxBytes, res }) =>
-            new MediaFetchError(
-              "max_bytes",
-              `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
-            ),
-        })
-      : Buffer.from(await res.arrayBuffer());
+    let buffer: Buffer;
+    try {
+      buffer = maxBytes
+        ? await readResponseWithLimit(res, maxBytes, {
+            onOverflow: ({ maxBytes, res }) =>
+              new MediaFetchError(
+                "max_bytes",
+                `Failed to fetch media from ${res.url || url}: payload exceeds maxBytes ${maxBytes}`,
+              ),
+            chunkTimeoutMs: readIdleTimeoutMs,
+          })
+        : Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      if (err instanceof MediaFetchError) {
+        throw err;
+      }
+      throw new MediaFetchError(
+        "fetch_failed",
+        `Failed to fetch media from ${res.url || url}: ${String(err)}`,
+      );
+    }
     let fileNameFromUrl: string | undefined;
     try {
       const parsed = new URL(finalUrl);

@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import type { WebInboundMessage } from "./inbound.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
@@ -17,6 +17,15 @@ export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./tes
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyExport = any;
+type MockWebListener = {
+  close: () => Promise<void>;
+  onClose: Promise<WebListenerCloseReason>;
+  signalClose: () => void;
+  sendMessage: () => Promise<{ messageId: string }>;
+  sendPoll: () => Promise<{ messageId: string }>;
+  sendReaction: () => Promise<void>;
+  sendComposingTo: () => Promise<void>;
+};
 
 export const TEST_NET_IP = "203.0.113.10";
 
@@ -159,6 +168,18 @@ export function createWebListenerFactoryCapture(): AnyExport {
   return {
     listenerFactory,
     getOnMessage: () => capturedOnMessage,
+  };
+}
+
+export function createMockWebListener(): MockWebListener {
+  return {
+    close: vi.fn(async () => undefined),
+    onClose: new Promise<WebListenerCloseReason>(() => {}),
+    signalClose: vi.fn(),
+    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+    sendReaction: vi.fn(async () => undefined),
+    sendComposingTo: vi.fn(async () => undefined),
   };
 }
 

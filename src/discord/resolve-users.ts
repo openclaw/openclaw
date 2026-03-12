@@ -1,7 +1,10 @@
 import { fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
-import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import { normalizeDiscordToken } from "./token.js";
+import {
+  buildDiscordUnresolvedResults,
+  filterDiscordGuilds,
+  resolveDiscordAllowlistToken,
+} from "./resolve-allowlist-common.js";
 
 type DiscordUser = {
   id: string;
@@ -80,15 +83,26 @@ export async function resolveDiscordUserAllowlist(params: {
   entries: string[];
   fetcher?: typeof fetch;
 }): Promise<DiscordUserResolution[]> {
-  const token = normalizeDiscordToken(params.token);
+  const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return params.entries.map((input) => ({
+    return buildDiscordUnresolvedResults(params.entries, (input) => ({
       input,
       resolved: false,
     }));
   }
   const fetcher = params.fetcher ?? fetch;
-  const guilds = await listGuilds(token, fetcher);
+
+  // Lazy-load guilds: only fetch when an entry actually needs username search.
+  // This prevents listGuilds() failures (permissions, network) from blocking
+  // resolution of plain user-id entries that don't need guild data at all.
+  let guilds: DiscordGuildSummary[] | null = null;
+  const getGuilds = async (): Promise<DiscordGuildSummary[]> => {
+    if (!guilds) {
+      guilds = await listGuilds(token, fetcher);
+    }
+    return guilds;
+  };
+
   const results: DiscordUserResolution[] = [];
 
   for (const input of params.entries) {
@@ -108,12 +122,11 @@ export async function resolveDiscordUserAllowlist(params: {
       continue;
     }
 
-    const guildName = parsed.guildName?.trim();
-    const guildList = parsed.guildId
-      ? guilds.filter((g) => g.id === parsed.guildId)
-      : guildName
-        ? guilds.filter((g) => g.slug === normalizeDiscordSlug(guildName))
-        : guilds;
+    const allGuilds = await getGuilds();
+    const guildList = filterDiscordGuilds(allGuilds, {
+      guildId: parsed.guildId,
+      guildName: parsed.guildName?.trim(),
+    });
 
     let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;
     let matches = 0;

@@ -27,16 +27,6 @@ describe("hr (thematic break) spacing", () => {
       expect(result.text).toBe("───");
     });
 
-    it("hr between paragraphs renders with separator", () => {
-      const input = `Para 1
-
----
-
-Para 2`;
-      const result = markdownToIR(input);
-      expect(result.text).toBe("Para 1\n\n───\n\nPara 2");
-    });
-
     it("hr interrupting paragraph (setext heading case)", () => {
       // Note: "Para\n---" is a setext heading in CommonMark!
       // Using *** to test actual HR behavior

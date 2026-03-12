@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
@@ -15,6 +14,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
+import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function ensureSandboxWorkspaceLayout(params: {
@@ -64,6 +64,29 @@ async function ensureSandboxWorkspaceLayout(params: {
   return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
 }
 
+export async function resolveSandboxDockerUser(params: {
+  docker: SandboxDockerConfig;
+  workspaceDir: string;
+  stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
+}): Promise<SandboxDockerConfig> {
+  const configuredUser = params.docker.user?.trim();
+  if (configuredUser) {
+    return params.docker;
+  }
+  const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));
+  try {
+    const workspaceStat = await stat(params.workspaceDir);
+    const uid = Number.isInteger(workspaceStat.uid) ? workspaceStat.uid : null;
+    const gid = Number.isInteger(workspaceStat.gid) ? workspaceStat.gid : null;
+    if (uid === null || gid === null || uid < 0 || gid < 0) {
+      return params.docker;
+    }
+    return { ...params.docker, user: `${uid}:${gid}` };
+  } catch {
+    return params.docker;
+  }
+}
+
 function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
@@ -102,11 +125,17 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  const docker = await resolveSandboxDockerUser({
+    docker: cfg.docker,
+    workspaceDir,
+  });
+  const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
-    cfg,
+    cfg: resolvedCfg,
   });
 
   const evaluateEnabled =
@@ -132,7 +161,7 @@ export async function resolveSandboxContext(params: {
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
-    cfg,
+    cfg: resolvedCfg,
     evaluateEnabled,
     bridgeAuth,
   });
@@ -142,12 +171,12 @@ export async function resolveSandboxContext(params: {
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
-    workspaceAccess: cfg.workspaceAccess,
+    workspaceAccess: resolvedCfg.workspaceAccess,
     containerName,
-    containerWorkdir: cfg.docker.workdir,
-    docker: cfg.docker,
-    tools: cfg.tools,
-    browserAllowHostControl: cfg.browser.allowHostControl,
+    containerWorkdir: resolvedCfg.docker.workdir,
+    docker: resolvedCfg.docker,
+    tools: resolvedCfg.tools,
+    browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
   };
 

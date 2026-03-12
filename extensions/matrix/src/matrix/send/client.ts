@@ -1,14 +1,10 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig } from "../../types.js";
 import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
-import {
-  createMatrixClient,
-  isBunRuntime,
-  resolveMatrixAuth,
-  resolveSharedMatrixClient,
-} from "../client.js";
+import { createPreparedMatrixClient } from "../client-bootstrap.js";
+import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
 
 const getCore = () => getMatrixRuntime();
 
@@ -36,19 +32,19 @@ function findAccountConfig(
   return undefined;
 }
 
-export function resolveMediaMaxBytes(accountId?: string): number | undefined {
-  const cfg = getCore().config.loadConfig() as CoreConfig;
+export function resolveMediaMaxBytes(accountId?: string, cfg?: CoreConfig): number | undefined {
+  const resolvedCfg = cfg ?? (getCore().config.loadConfig() as CoreConfig);
   // Check account-specific config first (case-insensitive key matching)
   const accountConfig = findAccountConfig(
-    cfg.channels?.matrix?.accounts as Record<string, unknown> | undefined,
+    resolvedCfg.channels?.matrix?.accounts as Record<string, unknown> | undefined,
     accountId ?? "",
   );
   if (typeof accountConfig?.mediaMaxMb === "number") {
     return (accountConfig.mediaMaxMb as number) * 1024 * 1024;
   }
   // Fall back to top-level config
-  if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
-    return cfg.channels.matrix.mediaMaxMb * 1024 * 1024;
+  if (typeof resolvedCfg.channels?.matrix?.mediaMaxMb === "number") {
+    return resolvedCfg.channels.matrix.mediaMaxMb * 1024 * 1024;
   }
   return undefined;
 }
@@ -57,6 +53,7 @@ export async function resolveMatrixClient(opts: {
   client?: MatrixClient;
   timeoutMs?: number;
   accountId?: string;
+  cfg?: CoreConfig;
 }): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
   ensureNodeRuntime();
   if (opts.client) {
@@ -88,29 +85,15 @@ export async function resolveMatrixClient(opts: {
     const client = await resolveSharedMatrixClient({
       timeoutMs: opts.timeoutMs,
       accountId,
+      cfg: opts.cfg,
     });
     return { client, stopOnDone: false };
   }
-  const auth = await resolveMatrixAuth({ accountId });
-  const client = await createMatrixClient({
-    homeserver: auth.homeserver,
-    userId: auth.userId,
-    accessToken: auth.accessToken,
-    encryption: auth.encryption,
-    localTimeoutMs: opts.timeoutMs,
+  const auth = await resolveMatrixAuth({ accountId, cfg: opts.cfg });
+  const client = await createPreparedMatrixClient({
+    auth,
+    timeoutMs: opts.timeoutMs,
     accountId,
   });
-  if (auth.encryption && client.crypto) {
-    try {
-      const joinedRooms = await client.getJoinedRooms();
-      await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
-        joinedRooms,
-      );
-    } catch {
-      // Ignore crypto prep failures for one-off sends; normal sync will retry.
-    }
-  }
-  // @vector-im/matrix-bot-sdk uses start() instead of startClient()
-  await client.start();
   return { client, stopOnDone: true };
 }

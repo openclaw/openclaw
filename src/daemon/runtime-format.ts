@@ -1,3 +1,5 @@
+import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+
 export type ServiceRuntimeLike = {
   status?: string;
   state?: string;
@@ -14,14 +16,7 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   if (!runtime) {
     return null;
   }
-  const status = runtime.status ?? "unknown";
   const details: string[] = [];
-  if (runtime.pid) {
-    details.push(`pid ${runtime.pid}`);
-  }
-  if (runtime.state && runtime.state.toLowerCase() !== status) {
-    details.push(`state ${runtime.state}`);
-  }
   if (runtime.subState) {
     details.push(`sub ${runtime.subState}`);
   }
@@ -40,5 +35,10 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   if (runtime.detail) {
     details.push(runtime.detail);
   }
-  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
+  return formatRuntimeStatusWithDetails({
+    status: runtime.status,
+    pid: runtime.pid,
+    state: runtime.state,
+    details,
+  });
 }

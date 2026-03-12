@@ -1,6 +1,7 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
   isRequestBodyLimitError,
@@ -8,19 +9,25 @@ import {
   readRequestBodyWithLimit,
 } from "./http-body.js";
 
+type MockIncomingMessage = IncomingMessage & {
+  destroyed?: boolean;
+  destroy: (error?: Error) => MockIncomingMessage;
+  __unhandledDestroyError?: unknown;
+};
+
+async function waitForMicrotaskTurn(): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 function createMockRequest(params: {
   chunks?: string[];
   headers?: Record<string, string>;
   emitEnd?: boolean;
-}): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed?: boolean;
-    destroy: (error?: Error) => void;
-    __unhandledDestroyError?: unknown;
-  };
+}): MockIncomingMessage {
+  const req = new EventEmitter() as MockIncomingMessage;
   req.destroyed = false;
   req.headers = params.headers ?? {};
-  req.destroy = (error?: Error) => {
+  req.destroy = ((error?: Error) => {
     req.destroyed = true;
     if (error) {
       // Simulate Node's async 'error' emission on destroy(err). If no listener is
@@ -33,7 +40,8 @@ function createMockRequest(params: {
         }
       });
     }
-  };
+    return req;
+  }) as MockIncomingMessage["destroy"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {
@@ -50,24 +58,6 @@ function createMockRequest(params: {
   }
 
   return req;
-}
-
-function createMockResponse(): ServerResponse & { body?: string } {
-  const headers: Record<string, string> = {};
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
-      return res;
-    },
-    end: (body?: string) => {
-      res.headersSent = true;
-      res.body = body;
-      return res;
-    },
-  } as unknown as ServerResponse & { body?: string };
-  return res;
 }
 
 describe("http body limits", () => {
@@ -104,7 +94,7 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       emitEnd: false,
     });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
@@ -113,9 +103,9 @@ describe("http body limits", () => {
 
   it("guard rejects streamed oversized body", async () => {
     const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
-    const res = createMockResponse();
+    const res = createMockServerResponse();
     const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForMicrotaskTurn();
     expect(guard.isTripped()).toBe(true);
     expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
     expect(res.statusCode).toBe(413);
@@ -123,12 +113,26 @@ describe("http body limits", () => {
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
-  it("timeout surfaces typed error", async () => {
+  it("timeout surfaces typed error when timeoutMs is clamped", async () => {
     const req = createMockRequest({ emitEnd: false });
-    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 10 });
+    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 0 });
     await expect(promise).rejects.toSatisfy((error: unknown) =>
       isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT"),
     );
+    expect(req.__unhandledDestroyError).toBeUndefined();
+  });
+
+  it("guard clamps invalid maxBytes to one byte", async () => {
+    const req = createMockRequest({ chunks: ["ab"], emitEnd: false });
+    const res = createMockServerResponse();
+    const guard = installRequestBodyLimitGuard(req, res, {
+      maxBytes: Number.NaN,
+      responseFormat: "text",
+    });
+    await waitForMicrotaskTurn();
+    expect(guard.isTripped()).toBe(true);
+    expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
+    expect(res.statusCode).toBe(413);
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
@@ -141,7 +145,7 @@ describe("http body limits", () => {
       message: "PayloadTooLarge",
     });
     // Wait a tick for any async destroy(err) emission.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForMicrotaskTurn();
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 });

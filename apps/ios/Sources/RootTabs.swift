@@ -3,6 +3,7 @@ import SwiftUI
 struct RootTabs: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @State private var selectedTab: Int = 0
     @State private var voiceWakeToastText: String?
@@ -52,14 +53,14 @@ struct RootTabs: View {
             guard !trimmed.isEmpty else { return }
 
             self.toastDismissTask?.cancel()
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
                 self.voiceWakeToastText = trimmed
             }
 
             self.toastDismissTask = Task {
                 try? await Task.sleep(nanoseconds: 2_300_000_000)
                 await MainActor.run {
-                    withAnimation(.easeOut(duration: 0.25)) {
+                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
                         self.voiceWakeToastText = nil
                     }
                 }
@@ -69,38 +70,14 @@ struct RootTabs: View {
             self.toastDismissTask?.cancel()
             self.toastDismissTask = nil
         }
-        .confirmationDialog(
-            "Gateway",
+        .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
-            titleVisibility: .visible)
-        {
-            Button("Disconnect", role: .destructive) {
-                self.appModel.disconnectGateway()
-            }
-            Button("Open Settings") {
-                self.selectedTab = 2
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Disconnect from the gateway?")
-        }
+            onDisconnect: { self.appModel.disconnectGateway() },
+            onOpenSettings: { self.selectedTab = 2 })
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
-        }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
+        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private var statusActivity: StatusPill.Activity? {

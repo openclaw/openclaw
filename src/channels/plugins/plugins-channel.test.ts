@@ -6,6 +6,13 @@ import { normalizeSignalAccountInput } from "./onboarding/signal.js";
 import { telegramOutbound } from "./outbound/telegram.js";
 import { whatsappOutbound } from "./outbound/whatsapp.js";
 
+function expectWhatsAppTargetResolutionError(result: unknown) {
+  expect(result).toEqual({
+    ok: false,
+    error: expect.any(Error),
+  });
+}
+
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
     expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
@@ -37,9 +44,20 @@ describe("signal target normalization", () => {
     ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
   });
 
+  it("preserves case for base64-like group IDs without signal prefix", () => {
+    expect(
+      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
+    ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
+  });
+
   it("accepts uuid prefixes for target detection", () => {
     expect(looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
     expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
+  });
+
+  it("accepts signal-prefixed E.164 targets for detection", () => {
+    expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
+    expect(looksLikeSignalTargetId("signal:15551234567")).toBe(true);
   });
 
   it("accepts compact UUIDs for target detection", () => {
@@ -138,10 +156,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("returns error when implicit target is not in allowFrom", () => {
@@ -151,10 +166,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {

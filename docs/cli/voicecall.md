@@ -28,7 +28,7 @@ openclaw voicecall end --call-id <id>
 ```bash
 openclaw voicecall expose --mode serve
 openclaw voicecall expose --mode funnel
-openclaw voicecall unexpose
+openclaw voicecall expose --mode off
 ```
 
 Security note: only expose the webhook endpoint to networks you trust. Prefer Tailscale Serve over Funnel when possible.

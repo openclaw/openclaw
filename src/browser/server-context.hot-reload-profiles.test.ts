@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveBrowserConfig } from "./config.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
 
@@ -40,6 +41,12 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("server-context hot-reload profiles", () => {
+  let loadConfig: typeof import("../config/config.js").loadConfig;
+
+  beforeAll(async () => {
+    ({ loadConfig } = await import("../config/config.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     cfgProfiles = {
@@ -49,15 +56,13 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     // Start with only openclaw profile
     // 1. Prime the cache by calling loadConfig() first
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
 
     // Verify cache is primed (without desktop)
-    expect(cfg.browser.profiles.desktop).toBeUndefined();
+    expect(cfg.browser?.profiles?.desktop).toBeUndefined();
     const state = {
       server: null,
       port: 18791,
@@ -79,7 +84,7 @@ describe("server-context hot-reload profiles", () => {
 
     // 3. Verify without clearConfigCache, loadConfig() still returns stale cached value
     const staleCfg = loadConfig();
-    expect(staleCfg.browser.profiles.desktop).toBeUndefined(); // Cache is stale!
+    expect(staleCfg.browser?.profiles?.desktop).toBeUndefined(); // Cache is stale!
 
     // 4. Hot-reload should read fresh config for the lookup (createConfigIO().loadConfig()),
     // without flushing the global loadConfig cache.
@@ -97,12 +102,10 @@ describe("server-context hot-reload profiles", () => {
     // 6. Verify GLOBAL cache was NOT cleared - subsequent simple loadConfig() still sees STALE value
     // This confirms the fix: we read fresh config for the specific profile lookup without flushing the global cache
     const stillStaleCfg = loadConfig();
-    expect(stillStaleCfg.browser.profiles.desktop).toBeUndefined();
+    expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -123,8 +126,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("forProfile refreshes existing profile config after loadConfig cache updates", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -147,8 +148,6 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("listProfiles refreshes config before enumerating profiles", async () => {
-    const { loadConfig } = await import("../config/config.js");
-
     const cfg = loadConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
@@ -167,5 +166,43 @@ describe("server-context hot-reload profiles", () => {
       mode: "cached",
     });
     expect(Object.keys(state.resolved.profiles)).toContain("desktop");
+  });
+
+  it("marks existing runtime state for reconcile when profile invariants change", async () => {
+    const cfg = loadConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.cdpPort).toBe(19999);
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("cdpPort");
   });
 });
