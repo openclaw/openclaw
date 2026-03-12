@@ -9,6 +9,7 @@ export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
   channelData?: Record<string, unknown>;
+  audioAsVoice?: boolean;
 };
 
 export type OutboundPayloadJson = {
@@ -94,6 +95,7 @@ export function normalizeOutboundPayloads(
       text,
       mediaUrls,
       ...(hasChannelData ? { channelData } : {}),
+      ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
     });
   }
   return normalizedPayloads;
