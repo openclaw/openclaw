@@ -342,10 +342,13 @@ export async function createBackupArchive(
   );
 
   // Build the filter once (pre-compiled, outside the hot path).
+  // Canonicalize stateDir so short-path aliases (e.g. RUNNER~1 on Windows)
+  // don't cause relative() mismatches against realpath'd asset.sourcePath.
+  const canonicalStateDir = await fs.realpath(plan.stateDir).catch(() => plan.stateDir);
   const { filter: excludeFilter, getExcludedStats } = buildExcludeFilter(
     excludePatterns,
     patternSources,
-    plan.stateDir,
+    canonicalStateDir,
   );
 
   if (!opts.dryRun) {
