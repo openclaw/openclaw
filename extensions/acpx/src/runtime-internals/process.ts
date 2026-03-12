@@ -39,9 +39,12 @@ const ACPX_BLOCKED_OPENAI_ENV_KEYS = [
   "AZURE_OPENAI_API_KEY",
 ] as const;
 
-function buildChildEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
+function buildChildEnv(
+  extraEnv?: Record<string, string>,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...baseEnv,
     OPENCLAW_SHELL: "acp",
     ...(extraEnv ?? {}),
   };
@@ -176,7 +179,7 @@ export function spawnWithResolvedCommand(
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: buildChildEnv(inheritedEnv),
+    env: buildChildEnv(undefined, inheritedEnv),
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
