@@ -149,6 +149,7 @@ export function buildAgentContext(
   agentFilesList: AgentsFilesListResult | null,
   defaultId: string | null,
   agentIdentity?: AgentIdentityResult | null,
+  t?: (key: string, params?: Record<string, string>) => string,
 ): AgentContext {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -167,12 +168,19 @@ export function buildAgentContext(
   const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
+  const skillsLabel = t
+    ? skillFilter
+      ? t("agents.overview.selectedCount", { count: String(skillCount) })
+      : t("agents.overview.allSkills")
+    : skillFilter
+      ? `${skillCount} selected`
+      : "all skills";
   return {
     workspace,
     model: modelLabel,
     identityName,
     identityEmoji,
-    skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
+    skillsLabel,
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
 }
@@ -400,15 +408,19 @@ function resolveConfiguredModels(
 export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
+  t?: (key: string, params?: Record<string, string>) => string,
 ) {
   const options = resolveConfiguredModels(configForm);
   const hasCurrent = current ? options.some((option) => option.value === current) : false;
   if (current && !hasCurrent) {
-    options.unshift({ value: current, label: `Current (${current})` });
+    const label = t
+      ? t("agents.overview.currentModel", { model: current })
+      : `Current (${current})`;
+    options.unshift({ value: current, label });
   }
   if (options.length === 0) {
     return html`
-      <option value="" disabled>No configured models</option>
+      <option value="" disabled>${t ? t("agents.overview.noConfiguredModels") : "No configured models"}</option>
     `;
   }
   return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
