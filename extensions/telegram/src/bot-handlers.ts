@@ -392,8 +392,20 @@ export const registerTelegramHandlers = ({
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
-      const primaryEntry = captionMsg ?? entry.messages[0];
+      const allText = entry.messages
+        .map((m) => m.msg.caption || m.msg.text || "")
+        .filter(Boolean)
+        .join("\n\n");
+      const firstEntry = entry.messages[0];
+      const syntheticMsg = buildSyntheticTextMessage({
+        base: firstEntry.msg,
+        text: allText,
+        date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+      });
+      const primaryEntry = {
+        ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
+        msg: syntheticMsg,
+      };
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
@@ -485,8 +497,20 @@ export const registerTelegramHandlers = ({
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
-      const primaryEntry = captionMsg ?? entry.messages[0];
+      const allText = entry.messages
+        .map((m) => m.msg.caption || m.msg.text || "")
+        .filter(Boolean)
+        .join("\n\n");
+      const firstEntry = entry.messages[0];
+      const syntheticMsg = buildSyntheticTextMessage({
+        base: firstEntry.msg,
+        text: allText,
+        date: entry.messages.at(-1)?.msg.date ?? firstEntry.msg.date,
+      });
+      const primaryEntry = {
+        ctx: buildSyntheticContext(firstEntry.ctx, syntheticMsg),
+        msg: syntheticMsg,
+      };
       const chatId = primaryEntry.msg.chat.id;
 
       const allMedia: TelegramMediaRef[] = [];
