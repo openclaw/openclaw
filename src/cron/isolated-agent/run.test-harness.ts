@@ -69,7 +69,7 @@ vi.mock("../../agents/workspace.js", () => ({
 }));
 
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
+  loadModelCatalog: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../../agents/model-selection.js", async (importOriginal) => {

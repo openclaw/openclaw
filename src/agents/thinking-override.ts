@@ -14,10 +14,10 @@ export async function resolveThinkingLevelOverride(params: {
   catalog?: Parameters<typeof resolveThinkingDefault>[0]["catalog"];
   logger?: (line: string) => void;
 }): Promise<ThinkLevel> {
-  if (params.explicitOverride) {
+  if (params.explicitOverride && params.explicitOverride !== "adaptive") {
     return params.explicitOverride;
   }
-  if (params.sessionOverride) {
+  if (params.sessionOverride && params.sessionOverride !== "adaptive") {
     return params.sessionOverride;
   }
 

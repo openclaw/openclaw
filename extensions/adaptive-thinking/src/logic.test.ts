@@ -73,4 +73,17 @@ describe("adaptive-thinking extension logic", () => {
     expect(signals).toContain("long_context");
     expect(signals).toContain("coding");
   });
+
+  it("treats recentMessages: 0 as opting out of message inspection", () => {
+    expect(
+      resolveAdaptiveThinkingOverride({
+        config: { enabled: true, confidenceThreshold: 0.8, recentMessages: 0 },
+        event: {
+          prompt: "hello",
+          currentThinkingDefault: "low",
+          recentMessages: ["x".repeat(1300)],
+        },
+      }),
+    ).toBeUndefined();
+  });
 });

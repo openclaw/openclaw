@@ -54,6 +54,33 @@ describe("resolveThinkingLevelOverride", () => {
     ).resolves.toBe("medium");
   });
 
+  it("treats adaptive explicit/session overrides as plugin-eligible placeholders", async () => {
+    hookRunnerMock.mockReturnValue({
+      hasHooks: () => true,
+      runBeforeModelResolve: vi.fn(async () => ({ thinkingLevelOverride: "medium" })),
+    });
+
+    await expect(
+      resolveThinkingLevelOverride({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        prompt: "debug this failing test",
+        explicitOverride: "adaptive",
+      }),
+    ).resolves.toBe("medium");
+
+    await expect(
+      resolveThinkingLevelOverride({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        prompt: "debug this failing test",
+        sessionOverride: "adaptive",
+      }),
+    ).resolves.toBe("medium");
+  });
+
   it("falls back to resolved default when plugin returns no override", async () => {
     hookRunnerMock.mockReturnValue({
       hasHooks: () => true,

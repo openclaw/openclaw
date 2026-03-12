@@ -190,9 +190,9 @@ export function resolveAdaptiveThinkingOverride(params: {
     return undefined;
   }
   const currentThinkingDefault = normalizeThinkLevel(params.event.currentThinkingDefault) ?? "off";
-  const recentMessages = (params.event.recentMessages ?? []).slice(
-    -(params.config.recentMessages ?? 3),
-  );
+  const recentMessageLimit = params.config.recentMessages ?? 3;
+  const recentMessages =
+    recentMessageLimit === 0 ? [] : (params.event.recentMessages ?? []).slice(-recentMessageLimit);
   const decision = evaluateAdaptiveThinking({
     config: params.config,
     prompt: params.event.prompt,
