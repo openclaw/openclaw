@@ -165,6 +165,53 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   }
 }
 
+function sanitizePersistedSkillSnapshot(entry: SessionEntry): SessionEntry["skillsSnapshot"] {
+  const snapshot = entry.skillsSnapshot;
+  if (!snapshot) {
+    return undefined;
+  }
+  const needsTrim = snapshot.prompt !== undefined || snapshot.resolvedSkills !== undefined;
+  if (!needsTrim) {
+    return snapshot;
+  }
+  return {
+    skills: snapshot.skills,
+    skillFilter: snapshot.skillFilter,
+    version: snapshot.version,
+  };
+}
+
+function sanitizePersistedSessionEntry(entry: SessionEntry): SessionEntry {
+  const skillsSnapshot = sanitizePersistedSkillSnapshot(entry);
+  if (skillsSnapshot === entry.skillsSnapshot) {
+    return entry;
+  }
+  return {
+    ...entry,
+    skillsSnapshot,
+  };
+}
+
+function buildPersistedSessionStore(
+  store: Record<string, SessionEntry>,
+): Record<string, SessionEntry> {
+  let persistedStore: Record<string, SessionEntry> | undefined;
+  for (const [key, entry] of Object.entries(store)) {
+    const sanitizedEntry = sanitizePersistedSessionEntry(entry);
+    if (sanitizedEntry === entry) {
+      if (persistedStore) {
+        persistedStore[key] = entry;
+      }
+      continue;
+    }
+    if (!persistedStore) {
+      persistedStore = { ...store };
+    }
+    persistedStore[key] = sanitizedEntry;
+  }
+  return persistedStore ?? store;
+}
+
 export function clearSessionStoreCacheForTest(): void {
   clearSessionStoreCaches();
   for (const queue of LOCK_QUEUES.values()) {
@@ -455,9 +502,10 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const persistedStore = buildPersistedSessionStore(store);
+  const json = JSON.stringify(persistedStore, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    updateSessionStoreWriteCaches({ storePath, store: persistedStore, serialized: json });
     return;
   }
 
@@ -465,7 +513,7 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
         return;
       } catch (err) {
         const code = getErrorCode(err);
@@ -485,7 +533,7 @@ async function saveSessionStoreUnlocked(
   }
 
   try {
-    await writeSessionStoreAtomic({ storePath, store, serialized: json });
+    await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
   } catch (err) {
     const code = getErrorCode(err);
 
@@ -493,7 +541,7 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
       } catch (err2) {
         const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {
