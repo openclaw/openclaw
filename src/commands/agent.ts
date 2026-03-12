@@ -20,6 +20,7 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
+import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
@@ -90,6 +91,7 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
@@ -1083,9 +1085,10 @@ async function agentCommandInternal(
     let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    let messageChannel: ReturnType<typeof resolveMessageChannel> | undefined;
     try {
       const runContext = resolveAgentRunContext(opts);
-      const messageChannel = resolveMessageChannel(
+      messageChannel = resolveMessageChannel(
         runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
@@ -1211,12 +1214,20 @@ async function agentCommandInternal(
       const cacheWrite = usage.cacheWrite ?? 0;
       const promptTokens = input + cacheRead + cacheWrite;
       const totalTokens = usage.total ?? promptTokens + output;
+      const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
+      const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
+      const contextTokensUsed = agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? 0;
+      const costUsd = estimateUsageCost({
+        usage,
+        cost: resolveModelCostConfig({ provider: providerUsed, model: modelUsed, config: cfg }),
+      });
       emitDiagnosticEvent({
         type: "model.usage",
         sessionKey,
         sessionId,
-        provider: result.meta.agentMeta?.provider ?? fallbackProvider ?? provider,
-        model: result.meta.agentMeta?.model ?? fallbackModel ?? model,
+        channel: messageChannel?.channel,
+        provider: providerUsed,
+        model: modelUsed,
         usage: {
           input,
           output,
@@ -1226,6 +1237,12 @@ async function agentCommandInternal(
           total: totalTokens,
         },
         lastCallUsage: result.meta.agentMeta?.lastCallUsage,
+        context: {
+          limit: contextTokensUsed,
+          used: totalTokens,
+        },
+        costUsd,
+        durationMs: Date.now() - startedAt,
       });
     }
 

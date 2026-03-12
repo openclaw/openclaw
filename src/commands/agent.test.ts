@@ -11,7 +11,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
+import * as sessionPathsModule from "../config/sessions/paths.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -466,7 +466,7 @@ describe("agentCommand", () => {
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+      const resolveSessionFilePathSpy = vi.spyOn(sessionPathsModule, "resolveSessionFilePath");
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
@@ -476,7 +476,6 @@ describe("agentCommand", () => {
       expect(matchingCall?.[2]).toEqual(
         expect.objectContaining({
           agentId: "main",
-          sessionsDir: customStoreDir,
         }),
       );
     });
@@ -526,10 +525,29 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       configSpy.mockReturnValue({
         diagnostics: { enabled: true },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.2",
+                  name: "GPT-5.2",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 1_000, output: 2_000, cacheRead: 500, cacheWrite: 250 },
+                  contextWindow: 200_000,
+                  maxTokens: 100_000,
+                },
+              ],
+            },
+          },
+        },
         agents: {
           defaults: {
             model: { primary: "anthropic/claude-opus-4-5" },
             models: { "anthropic/claude-opus-4-5": {} },
+            contextTokens: 8_192,
             workspace: path.join(home, "openclaw"),
           },
         },
@@ -578,12 +596,20 @@ describe("agentCommand", () => {
         stop();
       }
 
-      expect(events.filter((evt) => evt.type === "model.usage")).toEqual([
+      const usageEvents = events.filter((evt) => evt.type === "model.usage");
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]).toEqual(
         expect.objectContaining({
           type: "model.usage",
           sessionKey: "agent:main:subagent:usage-telemetry-test",
           provider: "openai",
           model: "gpt-5.2",
+          durationMs: expect.any(Number),
+          costUsd: expect.any(Number),
+          context: expect.objectContaining({
+            limit: 8_192,
+            used: 165,
+          }),
           usage: expect.objectContaining({
             input: 120,
             output: 33,
@@ -597,7 +623,8 @@ describe("agentCommand", () => {
             total: 153,
           }),
         }),
-      ]);
+      );
+      expect(usageEvents[0]).toHaveProperty("channel", undefined);
 
       resetDiagnosticEventsForTest();
     });
