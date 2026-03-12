@@ -306,6 +306,7 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              sessionKey: props.sessionKey,
             });
           }
 
