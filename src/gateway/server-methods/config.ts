@@ -447,11 +447,15 @@ export const configHandlers: GatewayRequestHandlers = {
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.patch",
-      beforeRestart: async () => {
-        await transitionRestartSentinelStatus("in-progress", {
-          allowedCurrentStatuses: ["pending"],
-        });
-      },
+      ...(sentinelPath
+        ? {
+            beforeRestart: async () => {
+              await transitionRestartSentinelStatus("in-progress", {
+                allowedCurrentStatuses: ["pending"],
+              });
+            },
+          }
+        : {}),
       audit: {
         actor: actor.actor,
         deviceId: actor.deviceId,
@@ -512,11 +516,15 @@ export const configHandlers: GatewayRequestHandlers = {
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,
       reason: "config.apply",
-      beforeRestart: async () => {
-        await transitionRestartSentinelStatus("in-progress", {
-          allowedCurrentStatuses: ["pending"],
-        });
-      },
+      ...(sentinelPath
+        ? {
+            beforeRestart: async () => {
+              await transitionRestartSentinelStatus("in-progress", {
+                allowedCurrentStatuses: ["pending"],
+              });
+            },
+          }
+        : {}),
       audit: {
         actor: actor.actor,
         deviceId: actor.deviceId,
