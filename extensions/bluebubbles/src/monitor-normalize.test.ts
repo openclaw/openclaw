@@ -27,6 +27,23 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.chatGuid).toBe("iMessage;-;+15551234567");
   });
 
+  it('falls back to "me" when fromMe webhook sender handle and chatGuid handle are missing', () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-self-1",
+        text: "hello",
+        isGroup: false,
+        isFromMe: true,
+        handle: null,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.senderIdExplicit).toBe(false);
+  });
+
   it("marks explicit sender handles as explicit identity", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
@@ -95,6 +112,25 @@ describe("normalizeWebhookReaction", () => {
     expect(result?.senderId).toBe("+15551234567");
     expect(result?.senderIdExplicit).toBe(false);
     expect(result?.messageId).toBe("p:0/msg-1");
+    expect(result?.action).toBe("added");
+  });
+
+  it('falls back to "me" when fromMe reaction sender handle and chatGuid handle are missing', () => {
+    const result = normalizeWebhookReaction({
+      type: "updated-message",
+      data: {
+        guid: "msg-self-2",
+        associatedMessageGuid: "p:0/msg-1",
+        associatedMessageType: 2000,
+        isGroup: false,
+        isFromMe: true,
+        handle: null,
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.senderIdExplicit).toBe(false);
     expect(result?.action).toBe("added");
   });
 });
