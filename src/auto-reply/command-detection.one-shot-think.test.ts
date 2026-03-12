@@ -56,6 +56,12 @@ describe("isOneShotThinkMessage", () => {
     expect(isOneShotThinkMessage("/think 123 write me a poem")).toBe(false);
   });
 
+  it("rejects directive-only tails after the think level", () => {
+    expect(isOneShotThinkMessage("/think high /status")).toBe(false);
+    expect(isOneShotThinkMessage("/think high /exec host=sandbox")).toBe(false);
+    expect(isOneShotThinkMessage("/think high /queue interrupt")).toBe(false);
+  });
+
   it("rejects non-think commands", () => {
     expect(isOneShotThinkMessage("/status")).toBe(false);
     expect(isOneShotThinkMessage("/help")).toBe(false);
@@ -84,6 +90,12 @@ describe("hasControlCommand with one-shot think", () => {
   it("returns true for bare /think <level>", () => {
     expect(hasControlCommand("/think high")).toBe(true);
     expect(hasControlCommand("/think medium")).toBe(true);
+  });
+
+  it("returns true for /think <level> followed by directive-only tails", () => {
+    expect(hasControlCommand("/think high /status")).toBe(true);
+    expect(hasControlCommand("/think high /exec host=sandbox")).toBe(true);
+    expect(hasControlCommand("/think high /queue interrupt")).toBe(true);
   });
 });
 

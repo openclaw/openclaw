@@ -6,9 +6,27 @@ import {
   normalizeCommandBody,
 } from "./commands-registry.js";
 import { isAbortTrigger } from "./reply/abort.js";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import { normalizeThinkLevel } from "./thinking.js";
 
 const THINK_COMMAND_ALIASES = new Set(["think", "thinking", "t"]);
+
+function isDirectiveOnlyTail(text: string): boolean {
+  const parsed = parseInlineDirectives(text);
+  if (parsed.cleaned.trim().length > 0) {
+    return false;
+  }
+  return (
+    parsed.hasThinkDirective ||
+    parsed.hasVerboseDirective ||
+    parsed.hasReasoningDirective ||
+    parsed.hasElevatedDirective ||
+    parsed.hasExecDirective ||
+    parsed.hasStatusDirective ||
+    parsed.hasModelDirective ||
+    parsed.hasQueueDirective
+  );
+}
 
 function parseOneShotThinkMessage(
   text?: string,
@@ -53,7 +71,13 @@ function parseOneShotThinkMessage(
   if (!normalizeThinkLevel(rawLevel)) {
     return null;
   }
-  if (!body.trim()) {
+  const trimmedBody = body.trim();
+  if (!trimmedBody) {
+    return null;
+  }
+  // Keep directive-only tails on the control-command path so invalid inputs like
+  // `/think high /status` do not silently persist `/think high` as a session setting.
+  if (isDirectiveOnlyTail(trimmedBody)) {
     return null;
   }
   return { level: rawLevel, body };
