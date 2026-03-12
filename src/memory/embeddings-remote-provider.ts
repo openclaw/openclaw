@@ -38,6 +38,7 @@ export function createRemoteEmbeddingProvider(params: {
       ssrfPolicy: client.ssrfPolicy,
       body,
       errorPrefix: params.errorPrefix,
+      encodingFormat: client.encodingFormat,
     });
   };
 
