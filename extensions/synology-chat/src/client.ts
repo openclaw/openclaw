@@ -9,6 +9,57 @@ import * as https from "node:https";
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
 
+/**
+ * Maximum text length per message to Synology Chat.
+ * The API silently truncates around 2000 chars; we use 1800 for safety margin.
+ */
+export const SYNOLOGY_CHUNK_LIMIT = 1800;
+
+/**
+ * Split text into chunks that fit within Synology Chat's message size limit.
+ * Prefers splitting at newlines, then spaces, then hard-cuts as a last resort.
+ */
+export function splitTextForSynology(text: string, limit = SYNOLOGY_CHUNK_LIMIT): string[] {
+  if (text.length <= limit) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+  const minChunkSize = Math.floor(limit * 0.3);
+
+  while (remaining.length > 0) {
+    if (remaining.length <= limit) {
+      chunks.push(remaining);
+      break;
+    }
+
+    let splitAt = -1;
+
+    // Prefer splitting at a newline
+    const newlineIdx = remaining.lastIndexOf("\n", limit);
+    if (newlineIdx >= minChunkSize) {
+      splitAt = newlineIdx + 1;
+    }
+
+    // Fall back to splitting at a space
+    if (splitAt === -1) {
+      const spaceIdx = remaining.lastIndexOf(" ", limit);
+      if (spaceIdx >= minChunkSize) {
+        splitAt = spaceIdx + 1;
+      }
+    }
+
+    // Hard cut as last resort
+    if (splitAt === -1) {
+      splitAt = limit;
+    }
+
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  return chunks;
+}
+
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
 //   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
@@ -32,32 +83,13 @@ const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Send a text message to Synology Chat via the incoming webhook.
- *
- * @param incomingUrl - Synology Chat incoming webhook URL
- * @param text - Message text to send
- * @param userId - Optional user ID to mention with @
- * @returns true if sent successfully
+ * Send an encoded body to Synology Chat with rate limiting and retry.
  */
-export async function sendMessage(
-  incomingUrl: string,
-  text: string,
-  userId?: string | number,
-  allowInsecureSsl = true,
+async function sendWithRetry(
+  url: string,
+  body: string,
+  allowInsecureSsl: boolean,
 ): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
-
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
   const elapsed = now - lastSendTime;
@@ -71,7 +103,7 @@ export async function sendMessage(
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
+      const ok = await doPost(url, body, allowInsecureSsl);
       lastSendTime = Date.now();
       if (ok) return true;
     } catch {
@@ -84,6 +116,71 @@ export async function sendMessage(
   }
 
   return false;
+}
+
+/**
+ * Send a text message to Synology Chat via the incoming webhook (DM).
+ * Long messages are automatically split into chunks to prevent silent truncation.
+ *
+ * @param incomingUrl - Synology Chat incoming webhook URL
+ * @param text - Message text to send
+ * @param userId - Optional user ID to mention with @
+ * @returns true if all chunks sent successfully
+ */
+export async function sendMessage(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  const chunks = splitTextForSynology(text);
+  for (const chunk of chunks) {
+    const ok = await sendSingleDm(incomingUrl, chunk, userId, allowInsecureSsl);
+    if (!ok) return false;
+  }
+  return true;
+}
+
+async function sendSingleDm(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  const payloadObj: Record<string, any> = { text };
+  if (userId) {
+    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+    if (!isNaN(numericId)) {
+      payloadObj.user_ids = [numericId];
+    }
+  }
+  const payload = JSON.stringify(payloadObj);
+  const body = `payload=${encodeURIComponent(payload)}`;
+  return sendWithRetry(incomingUrl, body, allowInsecureSsl);
+}
+
+/**
+ * Send a text message to a Synology Chat channel via its incoming webhook.
+ * Long messages are automatically split into chunks to prevent silent truncation.
+ * Channel incoming webhooks don't support user_ids — the message appears as the bot.
+ *
+ * @param channelIncomingUrl - Channel-specific incoming webhook URL
+ * @param text - Message text to send
+ * @returns true if all chunks sent successfully
+ */
+export async function sendToChannel(
+  channelIncomingUrl: string,
+  text: string,
+  allowInsecureSsl = true,
+): Promise<boolean> {
+  const chunks = splitTextForSynology(text);
+  for (const chunk of chunks) {
+    const payload = JSON.stringify({ text: chunk });
+    const body = `payload=${encodeURIComponent(payload)}`;
+    const ok = await sendWithRetry(channelIncomingUrl, body, allowInsecureSsl);
+    if (!ok) return false;
+  }
+  return true;
 }
 
 /**

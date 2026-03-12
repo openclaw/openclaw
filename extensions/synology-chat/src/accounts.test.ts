@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { listAccountIds, resolveAccount } from "./accounts.js";
+import {
+  listAccountIds,
+  resolveAccount,
+  parseChannelTokensFromEnv,
+  parseChannelWebhooksFromEnv,
+} from "./accounts.js";
 
 // Save and restore env vars
 const originalEnv = { ...process.env };
@@ -143,5 +148,74 @@ describe("resolveAccount", () => {
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);
     expect(account.rateLimitPerMinute).toBe(30);
+  });
+
+  it("resolves group fields with defaults", () => {
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.channelTokens).toEqual({});
+    expect(account.channelWebhooks).toEqual({});
+    expect(account.groupPolicy).toBe("disabled");
+    expect(account.groupAllowFrom).toEqual([]);
+  });
+
+  it("resolves channelTokens and channelWebhooks from config", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          channelTokens: { "42": "tok-42" },
+          channelWebhooks: { "42": "https://nas/channel-42" },
+          groupPolicy: "open",
+          groupAllowFrom: "1,2,3",
+        },
+      },
+    };
+    const account = resolveAccount(cfg);
+    expect(account.channelTokens).toEqual({ "42": "tok-42" });
+    expect(account.channelWebhooks).toEqual({ "42": "https://nas/channel-42" });
+    expect(account.groupPolicy).toBe("open");
+    expect(account.groupAllowFrom).toEqual(["1", "2", "3"]);
+  });
+
+  it("merges channelTokens from env and config (config wins)", () => {
+    process.env.SYNOLOGY_CHANNEL_TOKEN_10 = "env-tok-10";
+    process.env.SYNOLOGY_CHANNEL_TOKEN_42 = "env-tok-42";
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          channelTokens: { "42": "config-tok-42" },
+        },
+      },
+    };
+    const account = resolveAccount(cfg);
+    expect(account.channelTokens["10"]).toBe("env-tok-10");
+    expect(account.channelTokens["42"]).toBe("config-tok-42"); // config wins
+    delete process.env.SYNOLOGY_CHANNEL_TOKEN_10;
+    delete process.env.SYNOLOGY_CHANNEL_TOKEN_42;
+  });
+});
+
+describe("parseChannelTokensFromEnv", () => {
+  it("parses SYNOLOGY_CHANNEL_TOKEN_* env vars", () => {
+    process.env.SYNOLOGY_CHANNEL_TOKEN_42 = "tok42";
+    process.env.SYNOLOGY_CHANNEL_TOKEN_99 = "tok99";
+    const result = parseChannelTokensFromEnv();
+    expect(result["42"]).toBe("tok42");
+    expect(result["99"]).toBe("tok99");
+    delete process.env.SYNOLOGY_CHANNEL_TOKEN_42;
+    delete process.env.SYNOLOGY_CHANNEL_TOKEN_99;
+  });
+
+  it("returns empty object when no matching env vars", () => {
+    expect(parseChannelTokensFromEnv()).toEqual({});
+  });
+});
+
+describe("parseChannelWebhooksFromEnv", () => {
+  it("parses SYNOLOGY_CHANNEL_WEBHOOK_* env vars", () => {
+    process.env.SYNOLOGY_CHANNEL_WEBHOOK_42 = "https://nas/42";
+    const result = parseChannelWebhooksFromEnv();
+    expect(result["42"]).toBe("https://nas/42");
+    delete process.env.SYNOLOGY_CHANNEL_WEBHOOK_42;
   });
 });

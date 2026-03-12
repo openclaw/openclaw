@@ -3,7 +3,11 @@
  * merges per-account overrides, falls back to environment variables.
  */
 
-import type { SynologyChatChannelConfig, ResolvedSynologyChatAccount } from "./types.js";
+import type {
+  SynologyChatChannelConfig,
+  ResolvedSynologyChatAccount,
+  GroupAccessPolicy,
+} from "./types.js";
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: any): SynologyChatChannelConfig | undefined {
@@ -32,6 +36,38 @@ function parseRateLimitPerMinute(raw: string | undefined): number {
 }
 
 /**
+ * Parse channel tokens from SYNOLOGY_CHANNEL_TOKEN_<id> env vars.
+ * Example: SYNOLOGY_CHANNEL_TOKEN_42=mytoken → { "42": "mytoken" }
+ */
+export function parseChannelTokensFromEnv(): Record<string, string> {
+  const result: Record<string, string> = {};
+  const prefix = "SYNOLOGY_CHANNEL_TOKEN_";
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(prefix) && value) {
+      const channelId = key.slice(prefix.length);
+      if (channelId) result[channelId] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Parse channel incoming webhook URLs from SYNOLOGY_CHANNEL_WEBHOOK_<id> env vars.
+ * Example: SYNOLOGY_CHANNEL_WEBHOOK_42=https://nas/... → { "42": "https://nas/..." }
+ */
+export function parseChannelWebhooksFromEnv(): Record<string, string> {
+  const result: Record<string, string> = {};
+  const prefix = "SYNOLOGY_CHANNEL_WEBHOOK_";
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith(prefix) && value) {
+      const channelId = key.slice(prefix.length);
+      if (channelId) result[channelId] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * List all configured account IDs for this channel.
  * Returns ["default"] if there's a base config, plus any named accounts.
  */
@@ -41,9 +77,16 @@ export function listAccountIds(cfg: any): string[] {
 
   const ids = new Set<string>();
 
-  // If base config has a token, there's a "default" account
+  // If base config has a bot token, channel tokens, or channel webhooks,
+  // there's a "default" account (supports channel-only setups without bot token)
   const hasBaseToken = channelCfg.token || process.env.SYNOLOGY_CHAT_TOKEN;
-  if (hasBaseToken) {
+  const hasChannelTokens =
+    Object.keys(channelCfg.channelTokens ?? {}).length > 0 ||
+    Object.keys(parseChannelTokensFromEnv()).length > 0;
+  const hasChannelWebhooks =
+    Object.keys(channelCfg.channelWebhooks ?? {}).length > 0 ||
+    Object.keys(parseChannelWebhooksFromEnv()).length > 0;
+  if (hasBaseToken || hasChannelTokens || hasChannelWebhooks) {
     ids.add("default");
   }
 
@@ -76,6 +119,24 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
   const envRateLimitValue = parseRateLimitPerMinute(process.env.SYNOLOGY_RATE_LIMIT);
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
 
+  // Channel tokens/webhooks: config > env vars
+  const envChannelTokens = parseChannelTokensFromEnv();
+  const envChannelWebhooks = parseChannelWebhooksFromEnv();
+
+  const channelTokens = {
+    ...envChannelTokens,
+    ...(channelCfg.channelTokens ?? {}),
+    ...(accountOverride.channelTokens ?? {}),
+  };
+  const channelWebhooks = {
+    ...envChannelWebhooks,
+    ...(channelCfg.channelWebhooks ?? {}),
+    ...(accountOverride.channelWebhooks ?? {}),
+  };
+
+  const groupPolicy: GroupAccessPolicy =
+    accountOverride.groupPolicy ?? channelCfg.groupPolicy ?? "disabled";
+
   // Merge: account override > base channel config > env var
   return {
     accountId: id,
@@ -92,5 +153,11 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
       accountOverride.rateLimitPerMinute ?? channelCfg.rateLimitPerMinute ?? envRateLimitValue,
     botName: accountOverride.botName ?? channelCfg.botName ?? envBotName,
     allowInsecureSsl: accountOverride.allowInsecureSsl ?? channelCfg.allowInsecureSsl ?? false,
+    channelTokens,
+    channelWebhooks,
+    groupPolicy,
+    groupAllowFrom: parseAllowedUserIds(
+      accountOverride.groupAllowFrom ?? channelCfg.groupAllowFrom,
+    ),
   };
 }
