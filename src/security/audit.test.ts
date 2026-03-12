@@ -2656,6 +2656,52 @@ description: test skill
     expectFinding(res, "hooks.default_session_key_unset", "warn");
   });
 
+  it("scores hooks.allowedAgentIds unset by gateway exposure", async () => {
+    const baseHooks = {
+      enabled: true,
+      token: "shared-gateway-token-1234567890",
+      defaultSessionKey: "hook:ingress",
+    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "local exposure",
+        cfg: { hooks: baseHooks },
+        expectedSeverity: "warn",
+      },
+      {
+        name: "remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
+        expectedSeverity: "critical",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "hooks.allowed_agent_ids_unset", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
+  });
+
+  it("treats wildcard hooks.allowedAgentIds as unrestricted routing", async () => {
+    const res = await audit({
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+        defaultSessionKey: "hook:ingress",
+        allowedAgentIds: ["*"],
+      },
+    });
+
+    expectFinding(res, "hooks.allowed_agent_ids_unset", "warn");
+  });
+
   it("scores hooks request sessionKey override by gateway exposure", async () => {
     const baseHooks = {
       enabled: true,
