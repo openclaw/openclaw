@@ -43,13 +43,23 @@ const skillCommandDebugOnce = new Set<string>();
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
-function compactSkillPaths(skills: Skill[]): Skill[] {
+function compactSkillPaths(skills: Skill[], workspaceDir?: string): Skill[] {
   const home = os.homedir();
+  const normalizedWorkspaceDir = workspaceDir ? path.resolve(workspaceDir) : null;
   if (!home) return skills;
   const prefix = home.endsWith(path.sep) ? home : home + path.sep;
   return skills.map((s) => ({
     ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+    filePath: (() => {
+      const resolvedFilePath = path.resolve(s.filePath);
+      if (normalizedWorkspaceDir) {
+        const rel = path.relative(normalizedWorkspaceDir, resolvedFilePath);
+        if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+          return rel;
+        }
+      }
+      return s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath;
+    })(),
   }));
 }
 
@@ -630,7 +640,7 @@ function resolveWorkspaceSkillPromptState(
   const prompt = [
     remoteNote,
     truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt, workspaceDir)),
   ]
     .filter(Boolean)
     .join("\n");

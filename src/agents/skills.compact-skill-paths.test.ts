@@ -15,6 +15,28 @@ async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
 }
 
 describe("compactSkillPaths", () => {
+  it("uses workspace-relative paths for workspace-local skill locations", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const skillDir = path.join(workspaceDir, "skills", "test-skill");
+
+      await writeSkill({
+        dir: skillDir,
+        name: "test-skill",
+        description: "A test skill for path compaction",
+      });
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+      });
+
+      expect(prompt).toContain("<location>skills/test-skill/SKILL.md</location>");
+      expect(prompt).not.toContain(
+        `${workspaceDir}${path.sep}skills${path.sep}test-skill${path.sep}SKILL.md`,
+      );
+    });
+  });
+
   it("replaces home directory prefix with ~ in skill locations", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const skillDir = path.join(workspaceDir, "skills", "test-skill");
@@ -35,7 +57,6 @@ describe("compactSkillPaths", () => {
       // when the skill is under the home directory (which tmpdir usually is on macOS)
       if (workspaceDir.startsWith(home)) {
         expect(prompt).not.toContain(home + path.sep);
-        expect(prompt).toContain("~/");
       }
 
       // The skill name and description should still be present
