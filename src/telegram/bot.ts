@@ -64,6 +64,11 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /**
+   * Optional hook for middleware that must run before bot handlers are registered.
+   * Useful for cross-cutting update lifecycle tracking used by polling watchdogs.
+   */
+  onBeforeHandlersRegister?: (bot: Bot) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -413,6 +418,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     textLimit,
     opts,
   });
+
+  // Allow callers to attach middleware that must execute before the first
+  // handler layer. This avoids relying on post-handler middleware ordering.
+  opts.onBeforeHandlersRegister?.(bot);
 
   registerTelegramNativeCommands({
     bot,

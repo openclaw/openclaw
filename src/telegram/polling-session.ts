@@ -15,6 +15,7 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
+const ACTIVE_HANDLER_WATCHDOG_BYPASS_MAX_MS = 10 * 60_000;
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
@@ -35,6 +36,8 @@ export class TelegramPollingSession {
   #restartAttempts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
+  #activeUpdateHandlers = 0;
+  #activeUpdateHandlersSinceMs: number | null = null;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
 
@@ -105,6 +108,8 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
+    this.#activeUpdateHandlers = 0;
+    this.#activeUpdateHandlersSinceMs = null;
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -116,6 +121,23 @@ export class TelegramPollingSession {
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
+        },
+        onBeforeHandlersRegister: (bot) => {
+          bot.use(async (_ctx, next) => {
+            this.#activeUpdateHandlers += 1;
+            if (this.#activeUpdateHandlers === 1) {
+              // Track when active processing started so watchdog bypass is bounded.
+              this.#activeUpdateHandlersSinceMs = Date.now();
+            }
+            try {
+              await next();
+            } finally {
+              this.#activeUpdateHandlers = Math.max(0, this.#activeUpdateHandlers - 1);
+              if (this.#activeUpdateHandlers === 0) {
+                this.#activeUpdateHandlersSinceMs = null;
+              }
+            }
+          });
         },
       });
     } catch (err) {
@@ -202,11 +224,31 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
-      const elapsed = Date.now() - lastGetUpdatesAt;
+      const now = Date.now();
+      const elapsed = now - lastGetUpdatesAt;
+      let bypassExpired = false;
+      if (this.#activeUpdateHandlers > 0) {
+        const activeElapsed =
+          this.#activeUpdateHandlersSinceMs === null ? 0 : now - this.#activeUpdateHandlersSinceMs;
+        if (activeElapsed <= ACTIVE_HANDLER_WATCHDOG_BYPASS_MAX_MS) {
+          return;
+        }
+        bypassExpired = true;
+      }
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
         stalledRestart = true;
+        const bypassDetail = (() => {
+          if (!bypassExpired) {
+            return "";
+          }
+          const activeElapsed =
+            this.#activeUpdateHandlersSinceMs === null
+              ? 0
+              : now - this.#activeUpdateHandlersSinceMs;
+          return `; watchdog bypass expired after ${formatDurationPrecise(activeElapsed)} with ${this.#activeUpdateHandlers} active handler(s)`;
+        })();
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}${bypassDetail}); forcing restart.`,
         );
         void stopRunner();
       }

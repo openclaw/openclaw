@@ -116,6 +116,18 @@ describe("createTelegramBot", () => {
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
   });
+  it("registers pre-handler middleware before Telegram handlers", () => {
+    const preHandlerHook = vi.fn();
+    createTelegramBot({
+      token: "tok",
+      onBeforeHandlersRegister: preHandlerHook,
+    });
+
+    expect(preHandlerHook).toHaveBeenCalledWith(expect.any(Object));
+    const hookOrder = preHandlerHook.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const firstHandlerOrder = onSpy.mock.invocationCallOrder[0] ?? 0;
+    expect(hookOrder).toBeLessThan(firstHandlerOrder);
+  });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
