@@ -17,10 +17,6 @@ export type DeviceBootstrapTokenRecord = {
   publicKey?: string;
   roles?: string[];
   scopes?: string[];
-  channel?: string;
-  senderId?: string;
-  accountId?: string;
-  threadId?: string;
   issuedAtMs: number;
   lastUsedAtMs?: number;
 };
@@ -28,11 +24,6 @@ export type DeviceBootstrapTokenRecord = {
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function mergeRoles(existing: string[] | undefined, role: string): string[] {
   const out = new Set<string>(existing ?? []);
@@ -80,10 +71,6 @@ async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): 
 
 export async function issueDeviceBootstrapToken(
   params: {
-    channel?: string;
-    senderId?: string;
-    accountId?: string;
-    threadId?: string;
     baseDir?: string;
   } = {},
 ): Promise<{ token: string; expiresAtMs: number }> {
@@ -94,10 +81,6 @@ export async function issueDeviceBootstrapToken(
     state[token] = {
       token,
       ts: issuedAtMs,
-      channel: normalizeOptionalString(params.channel),
-      senderId: normalizeOptionalString(params.senderId),
-      accountId: normalizeOptionalString(params.accountId),
-      threadId: normalizeOptionalString(params.threadId),
       issuedAtMs,
     };
     await persistState(state, params.baseDir);
