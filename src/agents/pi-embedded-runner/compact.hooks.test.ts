@@ -373,6 +373,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect.objectContaining({
         messageCount: 2,
         tokenCount: 20,
+        messages: expect.any(Array),
       }),
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
@@ -429,6 +430,10 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       messageCount: 0,
       tokenCount: 0,
     });
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messages: [] }),
+      expect.any(Object),
+    );
   });
 
   it("registers the Ollama api provider before compaction", async () => {
