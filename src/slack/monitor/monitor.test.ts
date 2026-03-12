@@ -107,6 +107,53 @@ describe("resolveSlackChannelConfig", () => {
       matchSource: "direct",
     });
   });
+
+  it("resolves requireMentionInThreads from direct channel entry", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true, requireMention: true, requireMentionInThreads: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ requireMention: true, requireMentionInThreads: false });
+  });
+
+  it("resolves requireMentionInThreads from wildcard fallback", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { "*": { requireMentionInThreads: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ requireMention: true, requireMentionInThreads: false });
+  });
+
+  it("resolves requireMentionInThreads from account-level default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true } },
+      defaultRequireMention: true,
+      defaultRequireMentionInThreads: false,
+    });
+    expect(res).toMatchObject({ requireMention: true, requireMentionInThreads: false });
+  });
+
+  it("prefers channel-level requireMentionInThreads over account default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true, requireMentionInThreads: true } },
+      defaultRequireMention: true,
+      defaultRequireMentionInThreads: false,
+    });
+    expect(res).toMatchObject({ requireMentionInThreads: true });
+  });
+
+  it("leaves requireMentionInThreads undefined when not configured anywhere", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true } },
+      defaultRequireMention: true,
+    });
+    expect(res?.requireMentionInThreads).toBeUndefined();
+  });
 });
 
 const baseParams = () => ({
