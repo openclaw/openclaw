@@ -69,6 +69,82 @@ function stripFrontmatter(content: string): string {
   return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, "");
 }
 
+// ── Build slug→virtualPath lookup from CATEGORY_ORDER ──────────────────────
+// Maps e.g. "architecture" → "architecture/overview", "agent-hierarchy" → "architecture/agent-hierarchy"
+const SLUG_TO_DOC_PATH: Record<string, string> = {};
+for (const cat of CATEGORY_ORDER) {
+  for (const slug of cat.pages) {
+    if (cat.id === "overview") {
+      SLUG_TO_DOC_PATH[slug] = "";
+    } else {
+      const virtualName = slug === cat.id ? "overview" : slug;
+      SLUG_TO_DOC_PATH[slug] = `${cat.id}/${virtualName}`;
+    }
+  }
+}
+
+/**
+ * Rewrite internal links in operator1 docs.
+ *
+ * 1. /operator1/<slug> → /docs/<category>/<virtualName>
+ *    (Mintlify root-relative links referencing operator1 docs)
+ * 2. /<openclaw-path> → /openclaw-docs/<openclaw-path>
+ *    (Links to OpenClaw docs like /gateway/configuration, /concepts/multi-agent)
+ */
+function rewriteOperator1Links(content: string): string {
+  let out = content;
+
+  // Rewrite ](/operator1/<slug>) to the correct /docs/ path
+  out = out.replace(
+    /\]\(\/operator1\/([^)#]+)(#[^)]*)?\)/g,
+    (_match, slug: string, anchor = "") => {
+      const docPath = SLUG_TO_DOC_PATH[slug];
+      if (docPath !== undefined) {
+        return `](/docs/${docPath}${anchor})`;
+      }
+      // Unknown slug — leave as /docs/<slug> (best effort)
+      return `](/docs/${slug}${anchor})`;
+    },
+  );
+
+  // Rewrite ](/docs/...) links that already use the /docs prefix — leave as-is
+  // (they're correct for ui-next routing)
+
+  // Rewrite other root-relative links that reference OpenClaw docs
+  // e.g. ](/gateway/configuration) → ](/openclaw-docs/gateway/configuration)
+  // But NOT ](/docs/...) which are already operator1 doc links
+  // And NOT external URLs
+  const openclawDocPrefixes = [
+    "start",
+    "concepts",
+    "install",
+    "gateway",
+    "channels",
+    "providers",
+    "tools",
+    "cli",
+    "platforms",
+    "plugins",
+    "automation",
+    "nodes",
+    "help",
+    "web",
+    "security",
+    "reference",
+    "debug",
+    "diagnostics",
+  ];
+  const prefixPattern = openclawDocPrefixes.join("|");
+  const openclawRe = new RegExp(`\\]\\(\\/(?:${prefixPattern})\\/([^)]+)\\)`, "g");
+  out = out.replace(openclawRe, (match) => {
+    // match is e.g. "](/gateway/configuration)"
+    // Insert /openclaw-docs prefix
+    return match.replace("](/", "](/openclaw-docs/");
+  });
+
+  return out;
+}
+
 // slug → raw content string (frontmatter stripped)
 const rawBySlug: Record<string, string> = {};
 for (const [path, raw] of Object.entries(rawDocs)) {
@@ -106,7 +182,7 @@ for (const cat of CATEGORY_ORDER) {
       data: {
         title: extractTitle(raw) || "Overview",
         description: extractDescription(raw),
-        content: stripFrontmatter(raw),
+        content: rewriteOperator1Links(stripFrontmatter(raw)),
         updated: extractUpdated(raw),
       } satisfies DocsPageData,
     });
@@ -138,7 +214,7 @@ for (const cat of CATEGORY_ORDER) {
         data: {
           title: extractTitle(raw) || virtualName,
           description: extractDescription(raw),
-          content: stripFrontmatter(raw),
+          content: rewriteOperator1Links(stripFrontmatter(raw)),
           updated: extractUpdated(raw),
         } satisfies DocsPageData,
       });

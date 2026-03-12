@@ -74,6 +74,123 @@ function stripFrontmatter(content: string): string {
   return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n/, "");
 }
 
+/**
+ * Convert Mintlify-specific JSX/HTML components into standard markdown.
+ * react-markdown (without rehype-raw) strips raw HTML, so these would
+ * otherwise render as literal text or vanish entirely.
+ */
+function sanitizeMintlifyContent(content: string): string {
+  let out = content;
+
+  // ── Remove Mintlify image blocks (logo images with dark/light variants) ──
+  // These reference /assets/* paths that don't exist in ui-next
+  out = out.replace(/<p\s+align="center">\s*<img[\s\S]*?<\/p>/g, "");
+
+  // ── Inline HTML: <p align="center"><strong>...</strong></p> → bold paragraph ──
+  out = out.replace(
+    /<p\s+align="center">\s*<strong>([\s\S]*?)<\/strong>(?:<br\s*\/?>)?\s*([\s\S]*?)<\/p>/g,
+    (_match, bold, rest) => {
+      const text = `**${bold.trim()}**`;
+      const extra = rest.trim();
+      return extra ? `${text}\n${extra}` : text;
+    },
+  );
+
+  // ── Remaining <p align="center"><img ...></p> → markdown image ──
+  out = out.replace(
+    /<p\s+align="center">\s*<img\s+src="([^"]+)"\s+alt="([^"]*)"[^/]*\/?\s*>\s*<\/p>/g,
+    "![$2]($1)",
+  );
+
+  // ── <Card title="..." href="...">content</Card> → linked list item ──
+  out = out.replace(
+    /<Card\s+title="([^"]+)"\s+href="([^"]+)"[^>]*>([\s\S]*?)<\/Card>/g,
+    (_match, title, href, body) => {
+      const desc = body.trim();
+      return desc ? `- **[${title}](${href})** — ${desc}` : `- **[${title}](${href})**`;
+    },
+  );
+
+  // ── <Card title="..." icon="...">content</Card> (no href) → bold list item ──
+  out = out.replace(/<Card\s+title="([^"]+)"[^>]*>([\s\S]*?)<\/Card>/g, (_match, title, body) => {
+    const desc = body.trim();
+    return desc ? `- **${title}** — ${desc}` : `- **${title}**`;
+  });
+
+  // ── <Columns>...</Columns> and <CardGroup ...>...</CardGroup> → unwrap ──
+  out = out.replace(/<\/?Columns>/g, "");
+  out = out.replace(/<\/?CardGroup[^>]*>/g, "");
+
+  // ── <Steps>/<Step title="..."> → numbered headings ──
+  out = out.replace(/<\/?Steps>/g, "");
+  let localStepCounter = 0;
+  out = out.replace(/<Step\s+title="([^"]*)"[^>]*>/g, (_match, title) => {
+    localStepCounter++;
+    return `#### Step ${localStepCounter}: ${title}`;
+  });
+  out = out.replace(/<\/Step>/g, "");
+
+  // ── <Tabs>/<Tab title="..."> → bold section headers ──
+  out = out.replace(/<\/?Tabs>/g, "");
+  out = out.replace(/<Tab\s+title="([^"]*)"[^>]*>/g, (_match, title) => `**${title}:**\n`);
+  out = out.replace(/<\/Tab>/g, "");
+
+  // ── <Accordion title="...">content</Accordion> → details-like block ──
+  out = out.replace(
+    /<Accordion\s+title="([^"]*)"[^>]*>/g,
+    (_match, title) => `<details>\n<summary>${title}</summary>\n`,
+  );
+  out = out.replace(/<\/Accordion>/g, "\n</details>\n");
+  out = out.replace(/<\/?AccordionGroup>/g, "");
+
+  // ── Callout blocks: <Tip>, <Note>, <Warning>, <Info>, <Check> → blockquotes ──
+  const calloutTypes: Record<string, string> = {
+    Tip: "💡 **Tip:**",
+    Note: "📝 **Note:**",
+    Warning: "⚠️ **Warning:**",
+    Info: "ℹ️ **Info:**",
+    Check: "✅ **Check:**",
+    Error: "❌ **Error:**",
+  };
+  for (const [tag, prefix] of Object.entries(calloutTypes)) {
+    const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "g");
+    out = out.replace(re, (_match, body: string) => {
+      const lines = body.trim().split("\n");
+      return lines.map((line, i) => (i === 0 ? `> ${prefix} ${line}` : `> ${line}`)).join("\n");
+    });
+  }
+
+  // ── <Frame>/<Frame ...> → strip (just wraps images) ──
+  out = out.replace(/<\/?Frame[^>]*>/g, "");
+
+  // ── <Tooltip ...>text</Tooltip> → just the text ──
+  out = out.replace(/<Tooltip[^>]*>([\s\S]*?)<\/Tooltip>/g, "$1");
+
+  // ── <img src="..." alt="..." ... /> → markdown image ──
+  out = out.replace(/<img\s+[^>]*src="([^"]+)"[^>]*alt="([^"]*)"[^>]*\/?>/g, "![$2]($1)");
+  out = out.replace(/<img\s+[^>]*alt="([^"]*)"[^>]*src="([^"]+)"[^>]*\/?>/g, "![$1]($2)");
+
+  // ── Remaining simple HTML: <strong>, <br>, <code> ──
+  out = out.replace(/<strong>([\s\S]*?)<\/strong>/g, "**$1**");
+  out = out.replace(/<br\s*\/?>/g, "\n");
+  out = out.replace(/<code>([\s\S]*?)<\/code>/g, "`$1`");
+
+  // ── Rewrite internal doc links: ](/start/foo) → ](/openclaw-docs/start/foo) ──
+  // Mintlify docs use root-relative paths like (/start/getting-started).
+  // In ui-next, these live under /openclaw-docs/*. Without rewriting,
+  // clicking a link navigates to a non-existent route.
+  // Match markdown links: ](/ but NOT ](http or ](// or ](/openclaw-docs/ (already rewritten)
+  out = out.replace(/\]\(\/(?!openclaw-docs\/)(?!\/|http)([^)]+)\)/g, "](/openclaw-docs/$1)");
+
+  // Also rewrite href= attributes in any remaining HTML-style links
+  out = out.replace(/href="\/(?!openclaw-docs\/)(?!\/|http)([^"]+)"/g, 'href="/openclaw-docs/$1"');
+
+  // ── Clean up excessive blank lines ──
+  out = out.replace(/\n{4,}/g, "\n\n\n");
+
+  return out;
+}
+
 function toTitleCase(slug: string): string {
   return slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -170,7 +287,7 @@ for (const f of byFolder.get("_root") ?? []) {
     data: {
       title,
       description: extractDescription(f.rawContent),
-      content: stripFrontmatter(f.rawContent),
+      content: sanitizeMintlifyContent(stripFrontmatter(f.rawContent)),
       updated: extractUpdated(f.rawContent),
     } satisfies DocsPageData,
   });
@@ -199,7 +316,7 @@ for (const folder of sectionIds) {
       data: {
         title,
         description: extractDescription(f.rawContent),
-        content: stripFrontmatter(f.rawContent),
+        content: sanitizeMintlifyContent(stripFrontmatter(f.rawContent)),
         updated: extractUpdated(f.rawContent),
       } satisfies DocsPageData,
     });
