@@ -20,46 +20,9 @@
 
 ---
 
-## Why Use This Fork?
+## About This Fork
 
-**v2026.3.11 of the upstream release contains an incomplete origin validation fix.**
-
-The upstream "security hardening" (GHSA-5wcw-8jjv-m286) provides reasonable security for **local-only installations** (direct browser access without a reverse proxy). However, it is NOT secure for reverse proxy deployments:
-
-### What IS reasonably secure (local-only):
-
-- Direct browser access to Gateway (no reverse proxy)
-- Origin validation works correctly
-
-### What is NOT secure (reverse proxy):
-
-- Running OpenClaw behind Tailscale, Nginx, Docker, Cloudflare, or any reverse proxy
-- The fix claims to handle proxies ("regardless of proxy headers") but provides NO actual X-Forwarded-Host handling
-- Users are forced into broken or insecure configurations:
-  1. Disable reverse proxy (not always possible), OR
-  2. Enable `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback: true` which reopens the bypass vulnerability
-
-### This fork provides proper security for ALL setups:
-
-- X-Forwarded-Host header parsing with comma-separated chain support
-- Cross-validation between Origin and X-Forwarded-Host
-- Trusted proxy gating (RFC 7239 compliance)
-- IPv6 support with bracket notation handling
-- Port normalization (:443, :80 stripping)
-
-Use this fork if you run OpenClaw behind a reverse proxy — or if you want proper security without dangerous workarounds.
-
----
-
-## Recommendations for OpenClaw Users
-
-**If using a reverse proxy:** Do not rely on the upstream v2026.3.11 patch alone.
-
-**Immediate Action:** Explicitly configure `gateway.controlUi.allowedOrigins` with your public URL(s). This is the most secure configuration on the upstream codebase.
-
-**Long-Term Solution:** Adopt a fork or patch that implements proxy-aware origin validation with trusted proxy gating, as described above.
-
-**The security of an agentic AI system depends on the correctness of its authentication boundaries.** Incomplete patches that force a choice between functionality and security are architectural failures, not solutions.
+This fork is used for development, PRs, and proposed fixes.
 
 ---
 
