@@ -140,7 +140,11 @@ export async function handleZaloWebhookRequest(
     targetsByPath: webhookTargets,
     allowMethods: ["POST"],
     handle: async ({ targets, path }) => {
-      const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
+      const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
+      const authBucket = targets.some((entry) => timingSafeEquals(entry.secret, headerToken))
+        ? "auth"
+        : "unauth";
+      const rateLimitKey = `${path}:${authBucket}:${req.socket.remoteAddress ?? "unknown"}`;
       const nowMs = Date.now();
       if (
         !applyBasicWebhookRequestGuards({
@@ -155,7 +159,6 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
       const target = resolveWebhookTargetWithAuthOrRejectSync({
         targets,
         res,
