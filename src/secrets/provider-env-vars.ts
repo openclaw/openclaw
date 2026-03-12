@@ -17,6 +17,7 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
   "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
   together: ["TOGETHER_API_KEY"],
+  featherless: ["FEATHERLESS_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
   qianfan: ["QIANFAN_API_KEY"],
   xai: ["XAI_API_KEY"],

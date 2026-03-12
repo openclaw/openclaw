@@ -542,6 +542,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("infers Featherless auth choice from --featherless-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-featherless-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        featherlessApiKey: "featherless-test-key", // pragma: allowlist secret
+      });
+
+      expect(cfg.auth?.profiles?.["featherless:default"]?.provider).toBe("featherless");
+      expect(cfg.auth?.profiles?.["featherless:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("featherless/MiniMaxAI/MiniMax-M2.5");
+      await expectApiKeyProfile({
+        profileId: "featherless:default",
+        provider: "featherless",
+        key: "featherless-test-key", // pragma: allowlist secret
+      });
+    });
+  });
+
   it("infers Together auth choice from --together-api-key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-together-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

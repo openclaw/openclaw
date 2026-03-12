@@ -18,6 +18,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "syntheticApiKey"
   | "veniceApiKey"
   | "togetherApiKey"
+  | "featherlessApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
   | "opencodeGoApiKey"
@@ -151,6 +152,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--together-api-key",
     cliOption: "--together-api-key <key>",
     description: "Together AI API key",
+  },
+  {
+    optionKey: "featherlessApiKey",
+    authChoice: "featherless-api-key",
+    cliFlag: "--featherless-api-key",
+    cliOption: "--featherless-api-key <key>",
+    description: "Featherless AI API key",
   },
   {
     optionKey: "huggingfaceApiKey",

@@ -5,6 +5,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
+  applyFeatherlessConfig,
   applyHuggingfaceConfig,
   applyKilocodeConfig,
   applyKimiCodeConfig,
@@ -25,6 +26,7 @@ import {
   applyXaiConfig,
   applyXiaomiConfig,
   setAnthropicApiKey,
+  setFeatherlessApiKey,
   setGeminiApiKey,
   setHuggingfaceApiKey,
   setKilocodeApiKey,
@@ -470,6 +472,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "together:default",
             provider: "together",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["featherless-api-key"],
+      provider: "featherless",
+      flagValue: params.opts.featherlessApiKey,
+      flagName: "--featherless-api-key",
+      envVar: "FEATHERLESS_API_KEY",
+      profileId: "featherless:default",
+      setCredential: withStorage(setFeatherlessApiKey),
+      applyConfig: (cfg) =>
+        applyFeatherlessConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "featherless:default",
+            provider: "featherless",
             mode: "api_key",
           }),
         ),

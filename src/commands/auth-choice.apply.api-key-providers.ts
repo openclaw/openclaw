@@ -6,6 +6,8 @@ import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
+  applyFeatherlessConfig,
+  applyFeatherlessProviderConfig,
   applyKilocodeConfig,
   applyKilocodeProviderConfig,
   applyKimiCodeConfig,
@@ -38,6 +40,7 @@ import {
   applyVercelAiGatewayProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  FEATHERLESS_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
@@ -45,6 +48,7 @@ import {
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
+  setFeatherlessApiKey,
   setKilocodeApiKey,
   setKimiCodingApiKey,
   setLitellmApiKey,
@@ -262,6 +266,23 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "Get your API key at: https://api.together.xyz/settings/api-keys",
     ].join("\n"),
     noteTitle: "Together AI",
+  },
+  "featherless-api-key": {
+    provider: "featherless",
+    profileId: "featherless:default",
+    expectedProviders: ["featherless"],
+    envLabel: "FEATHERLESS_API_KEY",
+    promptMessage: "Enter Featherless AI API key",
+    setCredential: setFeatherlessApiKey,
+    defaultModel: FEATHERLESS_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyFeatherlessConfig,
+    applyProviderConfig: applyFeatherlessProviderConfig,
+    noteDefault: FEATHERLESS_DEFAULT_MODEL_REF,
+    noteMessage: [
+      "Featherless AI provides serverless inference for 25,000+ open-source models with flat-rate pricing.",
+      "Get your API key at: https://featherless.ai/register",
+    ].join("\n"),
+    noteTitle: "Featherless AI",
   },
   "qianfan-api-key": {
     provider: "qianfan",

@@ -1,4 +1,9 @@
 import {
+  buildFeatherlessModelDefinition,
+  FEATHERLESS_BASE_URL,
+  FEATHERLESS_MODEL_CATALOG,
+} from "../agents/featherless-models.js";
+import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -36,6 +41,7 @@ import {
   KILOCODE_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  FEATHERLESS_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -359,6 +365,36 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyTogetherProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, TOGETHER_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Featherless AI provider configuration without changing the default model.
+ * Registers Featherless models and sets up the provider, but preserves existing model selection.
+ */
+export function applyFeatherlessProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[FEATHERLESS_DEFAULT_MODEL_REF] = {
+    ...models[FEATHERLESS_DEFAULT_MODEL_REF],
+    alias: models[FEATHERLESS_DEFAULT_MODEL_REF]?.alias ?? "Featherless AI",
+  };
+
+  const featherlessModels = FEATHERLESS_MODEL_CATALOG.map(buildFeatherlessModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "featherless",
+    api: "openai-completions",
+    baseUrl: FEATHERLESS_BASE_URL,
+    catalogModels: featherlessModels,
+  });
+}
+
+/**
+ * Apply Featherless AI provider configuration AND set Featherless as the default model.
+ * Use this when Featherless is the primary provider choice during onboarding.
+ */
+export function applyFeatherlessConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyFeatherlessProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, FEATHERLESS_DEFAULT_MODEL_REF);
 }
 
 /**
