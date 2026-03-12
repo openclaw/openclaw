@@ -371,4 +371,40 @@ describe("runUpdate", () => {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });
+
+  it("surfaces update.run payload failures", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: "permission denied",
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe("Update failed: permission denied");
+    expect(state.updateRunning).toBe(false);
+  });
+
+  it("surfaces skipped update results", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: {
+        status: "skipped",
+        reason: "package manager unsupported",
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe("Update skipped: package manager unsupported");
+    expect(state.updateRunning).toBe(false);
+  });
 });
