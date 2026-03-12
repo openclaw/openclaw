@@ -381,10 +381,11 @@ async function waitForPidExit(pid: number): Promise<boolean> {
       process.kill(pid, 0);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH" || code === "EPERM") {
+      // ESRCH → process is gone (desired outcome).
+      // EPERM → process still exists but we can't signal it; keep polling.
+      if (code === "ESRCH") {
         return true;
       }
-      return true;
     }
     await sleepMs(RESTART_PID_WAIT_INTERVAL_MS);
   }
