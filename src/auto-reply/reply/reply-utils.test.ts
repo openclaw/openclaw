@@ -11,6 +11,7 @@ import {
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
+import { hasSuspiciousReplyLeakage } from "./suspicious-reply.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -210,6 +211,40 @@ describe("normalizeReplyPayload", () => {
         ],
       },
     });
+  });
+
+  it("suppresses suspicious internal orchestration leakage", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.exec commentary to=functions.exec ＿json",
+          '{"command":"ls ~/.openclaw/agents/main/sessions/ | head -20","yieldMs":10000}',
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["suspicious"]);
+  });
+
+  it("keeps explanatory text that merely mentions leaked markers", () => {
+    const result = normalizeReplyPayload({
+      text: "The leaked prefix was assistant to=functions.exec, which should never be sent.",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toContain("assistant to=functions.exec");
+  });
+
+  it("does not flag fenced code samples as suspicious by default", () => {
+    expect(
+      hasSuspiciousReplyLeakage(
+        ["```text", "assistant to=functions.exec", '{"command":"ls","yieldMs":1000}', "```"].join(
+          "\n",
+        ),
+      ),
+    ).toBe(false);
   });
 });
 
