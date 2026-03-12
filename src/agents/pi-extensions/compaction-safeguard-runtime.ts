@@ -16,6 +16,14 @@ export type CompactionSafeguardRuntimeValue = {
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  /** Compaction provider: "default" (LLM) or "morph" (Morph fast compaction API). */
+  provider?: "default" | "morph";
+  /** Morph API base URL. */
+  morphApiUrl?: string;
+  /** Morph API key. */
+  morphApiKey?: string;
+  /** Morph compression ratio (0.05–1.0). */
+  compressionRatio?: number;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

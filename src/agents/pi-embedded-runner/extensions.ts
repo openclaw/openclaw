@@ -58,7 +58,12 @@ function buildContextPruningFactory(params: {
 }
 
 function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+  const compaction = cfg?.agents?.defaults?.compaction;
+  // Morph provider requires the safeguard extension path
+  if (compaction?.provider === "morph") {
+    return "safeguard";
+  }
+  return compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionFactories(params: {
@@ -88,6 +93,10 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
+      provider: compactionCfg?.provider,
+      morphApiUrl: compactionCfg?.morphApiUrl,
+      morphApiKey: compactionCfg?.morphApiKey,
+      compressionRatio: compactionCfg?.compressionRatio,
     });
     factories.push(compactionSafeguardExtension);
   }
