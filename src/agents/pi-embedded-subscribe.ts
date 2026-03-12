@@ -66,6 +66,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastReasoningSent: undefined,
     compactionInFlight: false,
     pendingCompactionRetry: 0,
+    pendingCompactionRetryStarts: 0,
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
@@ -245,6 +246,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const noteCompactionRetry = () => {
     state.pendingCompactionRetry += 1;
+    state.pendingCompactionRetryStarts += 1;
     ensureCompactionPromise();
   };
 
@@ -259,6 +261,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.compactionRetryReject = undefined;
       state.compactionRetryPromise = null;
     }
+  };
+
+  const markCompactionRetryStarted = () => {
+    if (state.pendingCompactionRetryStarts <= 0) {
+      return;
+    }
+    state.pendingCompactionRetryStarts -= 1;
+    ensureCompactionPromise();
   };
 
   const maybeResolveCompactionWait = () => {
@@ -633,6 +643,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     trimMessagingToolSent,
     ensureCompactionPromise,
     noteCompactionRetry,
+    markCompactionRetryStarted,
     resolveCompactionRetry,
     maybeResolveCompactionWait,
     recordAssistantUsage,
