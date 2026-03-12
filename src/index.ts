@@ -30,11 +30,13 @@ import {
 import { assertSupportedRuntime } from "./infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "./logging.js";
+import { initializeLangfuse } from "./observability/langfuse.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
 loadDotEnv({ quiet: true });
 normalizeEnv();
+await initializeLangfuse(process.env);
 ensureOpenClawCliOnPath();
 
 // Capture all console output into structured logs while keeping stdout/stderr behavior.

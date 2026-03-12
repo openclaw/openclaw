@@ -197,6 +197,8 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
+  let deliveryJson: ReturnType<typeof buildOutboundResultEnvelope> | undefined;
+
   const deliveryPayloads = normalizeOutboundPayloads(payloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
@@ -219,7 +221,7 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
+      const deliveryResults = await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
@@ -233,8 +235,45 @@ export async function deliverAgentCommandResult(params: {
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      const firstDelivery = deliveryResults[0];
+      if (firstDelivery) {
+        deliveryJson = buildOutboundResultEnvelope({
+          delivery: {
+            channel: deliveryChannel,
+            to: deliveryTarget,
+            via: "direct",
+            messageId: firstDelivery.messageId,
+            mediaUrl: null,
+            ...("chatId" in firstDelivery && firstDelivery.chatId
+              ? { chatId: firstDelivery.chatId }
+              : {}),
+            ...("channelId" in firstDelivery && firstDelivery.channelId
+              ? { channelId: firstDelivery.channelId }
+              : {}),
+            ...("roomId" in firstDelivery && firstDelivery.roomId
+              ? { roomId: firstDelivery.roomId }
+              : {}),
+            ...("conversationId" in firstDelivery && firstDelivery.conversationId
+              ? { conversationId: firstDelivery.conversationId }
+              : {}),
+            ...("timestamp" in firstDelivery && firstDelivery.timestamp
+              ? { timestamp: firstDelivery.timestamp }
+              : {}),
+            ...("toJid" in firstDelivery && firstDelivery.toJid
+              ? { toJid: firstDelivery.toJid }
+              : {}),
+            ...(firstDelivery.meta ? { meta: firstDelivery.meta } : {}),
+          },
+        });
+      }
     }
   }
 
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return {
+    payloads: normalizedPayloads,
+    meta: result.meta,
+    ...(deliveryJson && "delivery" in deliveryJson && deliveryJson.delivery
+      ? { delivery: deliveryJson.delivery }
+      : {}),
+  };
 }
