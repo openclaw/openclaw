@@ -343,13 +343,15 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
 
 const WEB_SEARCH_PROVIDER_IDS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
 type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDER_IDS)[number];
-type WebSearchConfig = OpenClawConfig["tools"] extends infer T
-  ? T extends { web?: infer W }
-    ? W extends { search?: infer S }
-      ? S
+type WebSearchConfig = NonNullable<
+  OpenClawConfig["tools"] extends infer T
+    ? T extends { web?: infer W }
+      ? W extends { search?: infer S }
+        ? S
+        : never
       : never
     : never
-  : never;
+>;
 
 function resolveConfiguredWebSearchProvider(
   search: WebSearchConfig | undefined,
