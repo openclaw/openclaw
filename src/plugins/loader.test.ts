@@ -563,6 +563,66 @@ describe("loadOpenClawPlugins", () => {
     );
   });
 
+  it("does not reuse cached registries when env-resolved install paths change", () => {
+    useNoBundledPlugins();
+    const openclawHome = makeTempDir();
+    const ignoredHome = makeTempDir();
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const plugin = writePlugin({
+      id: "tracked-install-cache",
+      dir: pluginDir,
+      filename: "index.cjs",
+      body: `module.exports = { id: "tracked-install-cache", register() {} };`,
+    });
+
+    const options = {
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["tracked-install-cache"],
+          installs: {
+            "tracked-install-cache": {
+              source: "path" as const,
+              installPath: "~/plugins/tracked-install-cache",
+              sourcePath: "~/plugins/tracked-install-cache",
+            },
+          },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins({
+      ...options,
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: openclawHome,
+        HOME: ignoredHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    });
+    const secondHome = makeTempDir();
+    const secondOptions = {
+      ...options,
+      env: {
+        ...process.env,
+        OPENCLAW_HOME: secondHome,
+        HOME: ignoredHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    };
+    const second = loadOpenClawPlugins(secondOptions);
+    const third = loadOpenClawPlugins(secondOptions);
+
+    expect(second).not.toBe(first);
+    expect(third).toBe(second);
+  });
+
   it("normalizes bundled plugin env overrides against the provided env", () => {
     const bundledDir = makeTempDir();
     const homeDir = path.dirname(bundledDir);

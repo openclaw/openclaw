@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -175,6 +176,7 @@ export const __testing = {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  installs?: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
@@ -182,8 +184,25 @@ function buildCacheKey(params: {
     loadPaths: params.plugins.loadPaths,
     env: params.env,
   });
+  const installs = Object.fromEntries(
+    Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
+      pluginId,
+      {
+        ...install,
+        installPath:
+          typeof install.installPath === "string"
+            ? resolveUserPath(install.installPath, params.env)
+            : install.installPath,
+        sourcePath:
+          typeof install.sourcePath === "string"
+            ? resolveUserPath(install.sourcePath, params.env)
+            : install.sourcePath,
+      },
+    ]),
+  );
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
+    installs,
     loadPaths,
   })}`;
 }
@@ -479,6 +498,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
+    installs: cfg.plugins?.installs,
     env,
   });
   const cacheEnabled = options.cache !== false;
