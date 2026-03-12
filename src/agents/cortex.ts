@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentCortexConfig } from "../config/types.agent-defaults.js";
 import { getCortexModeOverride } from "../memory/cortex-mode-overrides.js";
 import {
+  getCortexStatus,
   ingestCortexMemoryFromText,
   listCortexMemoryConflicts,
   previewCortexContext,
@@ -91,7 +92,7 @@ const HIGH_SIGNAL_PATTERNS = [
   /\bI dislike\b/i,
   /\bI am focused on\b/i,
   /\bI'm focused on\b/i,
-  /\bI’m focused on\b/i,
+  /\bI've been focused on\b/i,
   /\bI work with\b/i,
   /\bI work on\b/i,
 ];
@@ -258,11 +259,16 @@ export async function resolveAgentCortexPromptContext(params: {
     return {};
   }
   try {
+    const status = await getCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: cortex.graphPath,
+    });
     const preview = await previewCortexContext({
       workspaceDir: params.workspaceDir,
       graphPath: cortex.graphPath,
       policy: cortex.mode,
       maxChars: cortex.maxChars,
+      status,
     });
     return preview.context ? { context: preview.context } : {};
   } catch (error) {
@@ -392,10 +398,15 @@ export async function resolveAgentCortexConflictNotice(params: {
     return null;
   }
   try {
+    const status = await getCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: cortex.graphPath,
+    });
     const conflicts = await listCortexMemoryConflicts({
       workspaceDir: params.workspaceDir,
       graphPath: cortex.graphPath,
       minSeverity: params.minSeverity ?? DEFAULT_CORTEX_CONFLICT_SEVERITY,
+      status,
     });
     const topConflict = conflicts
       .filter((entry) => entry.id && entry.summary)
@@ -448,6 +459,10 @@ export async function ingestAgentCortexMemoryCandidate(params: {
     return decision;
   }
   try {
+    const status = await getCortexStatus({
+      workspaceDir: params.workspaceDir,
+      graphPath: cortex.graphPath,
+    });
     await ingestCortexMemoryFromText({
       workspaceDir: params.workspaceDir,
       graphPath: cortex.graphPath,
@@ -459,6 +474,7 @@ export async function ingestAgentCortexMemoryCandidate(params: {
         channelId: params.channelId,
         provider: params.provider,
       },
+      status,
     });
     let syncedCodingContext = false;
     let syncPlatforms: string[] | undefined;
@@ -476,6 +492,7 @@ export async function ingestAgentCortexMemoryCandidate(params: {
             graphPath: cortex.graphPath,
             policy: syncPolicy.policy,
             platforms: syncPolicy.platforms,
+            status,
           });
           syncedCodingContext = true;
           syncPlatforms = syncResult.platforms;
