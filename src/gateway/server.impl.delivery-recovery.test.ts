@@ -54,11 +54,15 @@ function createChannelManager(snapshots: RuntimeSnapshot[]): ChannelManager {
 }
 
 function createTestLog() {
-  const infoMock = vi.fn<[msg: string], void>();
-  const warnMock = vi.fn<[msg: string], void>();
+  const infoMock = vi.fn((msg: string) => {
+    void msg;
+  });
+  const warnMock = vi.fn((msg: string) => {
+    void msg;
+  });
   return {
-    info: infoMock as (msg: string) => void,
-    warn: warnMock as (msg: string) => void,
+    info: infoMock,
+    warn: warnMock,
     infoMock,
     warnMock,
   };
