@@ -243,11 +243,9 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
   const model = memorySearch.model;
   const remote = memorySearch.remote;
 
-  // Helper to check if apiKey is configured (either directly or via env/provider auth)
-  const hasApiKey = remote?.apiKey || process.env[`${provider?.toUpperCase()}_API_KEY`];
-
-  // Helper to check if model can use provider defaults
-  const hasModel = model || provider === "ollama"; // Ollama has default models
+  // Helper to check if apiKey is configured directly in config
+  // Note: Environment variable checking is done at runtime by resolveMemorySearchConfig
+  const hasApiKey = !!remote?.apiKey;
 
   // Validate openai provider
   if (provider === "openai") {
@@ -256,7 +254,7 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
         path: "agents.defaults.memorySearch",
         message:
           "memorySearch.provider=openai requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey or OPENAI_API_KEY environment variable. " +
+          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure OPENAI_API_KEY is available at runtime. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $OPENAI_API_KEY",
       });
     }
@@ -276,7 +274,7 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
         path: "agents.defaults.memorySearch",
         message:
           "memorySearch.provider=gemini requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey or GEMINI_API_KEY environment variable. " +
+          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure GEMINI_API_KEY is available at runtime. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $GEMINI_API_KEY",
       });
     }
@@ -290,7 +288,7 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
         path: "agents.defaults.memorySearch",
         message:
           "memorySearch.provider=voyage requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey or VOYAGE_API_KEY environment variable. " +
+          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure VOYAGE_API_KEY is available at runtime. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $VOYAGE_API_KEY",
       });
     }
@@ -304,7 +302,7 @@ function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIss
         path: "agents.defaults.memorySearch",
         message:
           "memorySearch.provider=mistral requires an API key. " +
-          "Set agents.defaults.memorySearch.remote.apiKey or MISTRAL_API_KEY environment variable. " +
+          "Set agents.defaults.memorySearch.remote.apiKey in config or ensure MISTRAL_API_KEY is available at runtime. " +
           "Example: agents.defaults.memorySearch.remote.apiKey: $MISTRAL_API_KEY",
       });
     }
