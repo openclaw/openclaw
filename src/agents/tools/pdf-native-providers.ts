@@ -60,9 +60,9 @@ export async function anthropicAnalyzePdf(params: {
   content.push({ type: "text", text: params.prompt });
 
   const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  let json: unknown;
+  let res: Response;
   try {
-    const res = await fetch(`${baseUrl}/v1/messages`, {
+    res = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -77,21 +77,27 @@ export async function anthropicAnalyzePdf(params: {
       }),
       signal: AbortSignal.timeout(120_000),
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(
-        `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
-      );
-    }
-
-    json = (await res.json().catch(() => null)) as unknown;
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("Anthropic PDF request failed")) {
-      throw err;
-    }
     throw new Error(
       `Anthropic PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch (err) {
+    throw new Error(
+      `Anthropic PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
   if (!isRecord(json)) {
@@ -153,9 +159,9 @@ export async function geminiAnalyzePdf(params: {
     .replace(/\/v1beta$/, "");
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  let json: unknown;
+  let res: Response;
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -163,21 +169,27 @@ export async function geminiAnalyzePdf(params: {
       }),
       signal: AbortSignal.timeout(120_000),
     });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(
-        `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
-      );
-    }
-
-    json = (await res.json().catch(() => null)) as unknown;
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("Gemini PDF request failed")) {
-      throw err;
-    }
     throw new Error(
       `Gemini PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch (err) {
+    throw new Error(
+      `Gemini PDF request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
   if (!isRecord(json)) {
