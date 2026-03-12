@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -154,7 +153,7 @@ private object SystemMotionDataSource : MotionDataSource {
                 val value = event?.values?.firstOrNull()
                 if (!resumed.compareAndSet(false, true)) return
                 sensorManager.unregisterListener(this)
-                cont.resume(value)
+                cont.resume(value, null)
               }
 
               override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -162,7 +161,7 @@ private object SystemMotionDataSource : MotionDataSource {
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
             sensorManager.unregisterListener(listener)
-            cont.resume(null)
+            cont.resume(null, null)
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
@@ -201,7 +200,7 @@ private object SystemMotionDataSource : MotionDataSource {
                     averageDelta = sumDelta / count,
                   )
                   sensorManager.unregisterListener(this)
-                  cont.resume(result)
+                  cont.resume(result, null)
                 }
               }
 
@@ -209,7 +208,7 @@ private object SystemMotionDataSource : MotionDataSource {
             }
           val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
           if (!registered) {
-            cont.resume(null)
+            cont.resume(null, null)
             return@suspendCancellableCoroutine
           }
           cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
