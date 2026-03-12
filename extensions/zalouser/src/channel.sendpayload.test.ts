@@ -5,6 +5,7 @@ import {
   primeSendMock,
 } from "../../../src/test-utils/send-payload-contract.js";
 import { zalouserPlugin } from "./channel.js";
+import { setZalouserRuntime } from "./runtime.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
@@ -38,6 +39,14 @@ describe("zalouserPlugin outbound sendPayload", () => {
   let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
 
   beforeEach(async () => {
+    setZalouserRuntime({
+      channel: {
+        text: {
+          resolveChunkMode: vi.fn(() => "length"),
+          resolveTextChunkLimit: vi.fn(() => 1200),
+        },
+      },
+    } as never);
     const mod = await import("./send.js");
     mockedSend = vi.mocked(mod.sendMessageZalouser);
     mockedSend.mockClear();
@@ -55,7 +64,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "1471383327500481391",
       "hello group",
-      expect.objectContaining({ isGroup: true }),
+      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g1" });
   });
@@ -71,7 +80,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "987654321",
       "hello",
-      expect.objectContaining({ isGroup: false }),
+      expect.objectContaining({ isGroup: false, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-d1" });
   });
@@ -87,14 +96,37 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(mockedSend).toHaveBeenCalledWith(
       "g-1471383327500481391",
       "hello native group",
-      expect.objectContaining({ isGroup: true }),
+      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
     );
     expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
   });
 
+  it("passes long markdown through once so formatting happens before chunking", async () => {
+    const text = `**${"a".repeat(2501)}**`;
+    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-code" });
+
+    const result = await zalouserPlugin.outbound!.sendPayload!({
+      ...baseCtx({ text }),
+      to: "987654321",
+    });
+
+    expect(mockedSend).toHaveBeenCalledTimes(1);
+    expect(mockedSend).toHaveBeenCalledWith(
+      "987654321",
+      text,
+      expect.objectContaining({
+        isGroup: false,
+        textMode: "markdown",
+        textChunkMode: "length",
+        textChunkLimit: 1200,
+      }),
+    );
+    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-code" });
+  });
+
   installSendPayloadContractSuite({
     channel: "zalouser",
-    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
+    chunking: { mode: "passthrough", longTextLength: 3000 },
     createHarness: ({ payload, sendResults }) => {
       primeSendMock(mockedSend, { ok: true, messageId: "zlu-1" }, sendResults);
       return {
