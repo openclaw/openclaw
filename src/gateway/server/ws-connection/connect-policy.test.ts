@@ -424,6 +424,20 @@ describe("ws connect policy", () => {
       }),
     ).toBe(false);
 
+    // Backend client authenticating via device-token (derived from initial shared-secret pairing) is trusted.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe(true);
+
     // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
     expect(
       shouldSkipBackendSelfPairing({

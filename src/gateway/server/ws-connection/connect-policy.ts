@@ -90,7 +90,12 @@ export function shouldSkipBackendSelfPairing(params: {
   if (!isGatewayBackendClient) {
     return false;
   }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  // device-token is a derived credential issued after initial shared-secret pairing, so it
+  // carries equivalent trust for the internal backend path.
+  const usesSharedSecretAuth =
+    params.authMethod === "token" ||
+    params.authMethod === "password" ||
+    params.authMethod === "device-token";
   // When auth is disabled entirely (mode="none"), there is no shared secret to verify, but a
   // local client with no browser origin and the correct gateway-client/backend identity is still
   // a trusted internal connection.
