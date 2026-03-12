@@ -408,6 +408,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         ephemeral: true,
       },
       typingReaction: "hourglass_flowing_sand",
+      socketMode: {
+        clientPingTimeout: 15000, // ms; SDK default 5000 is too aggressive
+        serverPingTimeout: 30000, // ms; SDK default 30000
+        pingPongLoggingEnabled: false,
+      },
       textChunkLimit: 4000,
       chunkMode: "length",
       streaming: "partial", // off | partial | block | progress (preview mode)
@@ -430,6 +435,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 **Thread session isolation:** `thread.historyScope` is per-thread (default) or shared across channel. `thread.inheritParent` copies parent channel transcript to new threads.
 
 - `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
+- `socketMode` tunes the underlying `@slack/socket-mode` client. `clientPingTimeout` (ms) controls how long to wait for a pong; the SDK default of 5000 ms is too aggressive for many environments (recommended: 15000-30000). `serverPingTimeout` (ms) controls the server ping wait (default: 30000). `pingPongLoggingEnabled` logs ping/pong at DEBUG level.
 
 | Action group | Default | Notes                  |
 | ------------ | ------- | ---------------------- |
