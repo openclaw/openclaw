@@ -267,9 +267,19 @@ async function assertSecurePath(params: {
   if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
     const uid = process.getuid();
     if (stat.uid !== uid) {
-      throw new Error(
-        `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
-      );
+      // On macOS, system binaries in SIP-protected paths are owned by root:wheel.
+      // These are tamper-proof via SIP, so root ownership is acceptable there.
+      const macOSSystemPaths = ["/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/"];
+      const isRootOwnedSystemBinary =
+        process.platform === "darwin" &&
+        stat.uid === 0 &&
+        macOSSystemPaths.some((p) => effectivePath.startsWith(p));
+
+      if (!isRootOwnedSystemBinary) {
+        throw new Error(
+          `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
+        );
+      }
     }
   }
   return effectivePath;
