@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="OpenClaw vsock-to-TCP bridge for VNC (port 5900)"
+
+depend() {
+    need desktop
+}
+
+start() {
+    ebegin "Starting vsock-to-TCP bridge (vsock:5900 -> tcp:127.0.0.1:5900)"
+    start-stop-daemon --start --background \
+        --pidfile /run/vnc-vsock.pid --make-pidfile \
+        --exec /usr/bin/socat -- \
+            VSOCK-LISTEN:5900,fork TCP:127.0.0.1:5900
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping vsock-to-TCP bridge"
+    start-stop-daemon --stop --pidfile /run/vnc-vsock.pid
+    eend $?
+}

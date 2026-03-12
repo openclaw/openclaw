@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+description="OpenClaw envd guest agent"
+command="/usr/local/bin/envd"
+command_background=true
+pidfile="/run/envd.pid"
+output_log="/var/log/envd.log"
+error_log="/var/log/envd.err"
+
+depend() {
+    need localmount
+    after bootmisc
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /run
+}
+
+respawn_delay=1
+respawn_max=0

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package envd.v1;
+
+option go_package = "github.com/openclaw/vm-runner/gen/go/envd/v1;envdv1";
+
+// HealthService provides a readiness check for envd.
+service HealthService {
+  // Check returns the current health status of the envd agent.
+  rpc Check(CheckRequest) returns (CheckResponse);
+}
+
+message CheckRequest {}
+
+message CheckResponse {
+  ServingStatus status = 1;
+}
+
+enum ServingStatus {
+  SERVING_STATUS_UNSPECIFIED = 0;
+  SERVING_STATUS_SERVING = 1;
+  SERVING_STATUS_NOT_SERVING = 2;
+}

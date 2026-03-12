@@ -1,13 +1,12 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ISandboxProvider, SandboxBackend } from "./provider.js";
 import { DockerProvider } from "./providers/docker-provider.js";
-// FirecrackerProvider added in PR2
+import { FirecrackerProvider } from "./providers/firecracker-provider.js";
 import { GVisorProvider } from "./providers/gvisor-provider.js";
 
 const log = createSubsystemLogger("sandbox-resolver");
 
-const DETECTION_ORDER: Array<Exclude<SandboxBackend, "auto">> = ["gvisor", "docker"];
-// Firecracker added to DETECTION_ORDER in PR2
+const DETECTION_ORDER: Array<Exclude<SandboxBackend, "auto">> = ["firecracker", "gvisor", "docker"];
 
 let cachedProvider: ISandboxProvider | null = null;
 /** Stores the *requested* backend (including "auto"), not the resolved one. */
@@ -20,8 +19,7 @@ function createProvider(backend: Exclude<SandboxBackend, "auto">): ISandboxProvi
     case "gvisor":
       return new GVisorProvider();
     case "firecracker":
-      // FirecrackerProvider added in PR2
-      throw new Error("Firecracker backend available in PR2");
+      return new FirecrackerProvider();
     default: {
       const _exhaustive: never = backend;
       void _exhaustive;
