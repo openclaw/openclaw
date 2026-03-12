@@ -29,6 +29,17 @@ describe("ChatLog", () => {
     expect(rendered).toContain("recreated");
   });
 
+  it("does not append duplicate assistant components when a run is started twice", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startAssistant("first", "run-dup");
+    chatLog.startAssistant("second", "run-dup");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("second");
+    expect(rendered).not.toContain("first");
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("drops stale tool references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
