@@ -222,13 +222,14 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
-    const modelLabel = pad(
-      truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
-        CRON_MODEL_PAD,
-      ),
-      CRON_MODEL_PAD,
-    );
+    // Resolve model to string: handle both legacy string format and new {primary, fallbacks} object format
+    const modelValue =
+      job.payload.kind === "agentTurn"
+        ? typeof job.payload.model === "string"
+          ? job.payload.model
+          : ((job.payload.model as { primary?: string } | undefined)?.primary ?? "-")
+        : undefined;
+    const modelLabel = pad(truncate(modelValue ?? "-", CRON_MODEL_PAD), CRON_MODEL_PAD);
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") {

@@ -729,3 +729,59 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
   });
 });
+
+// Regression test for #44084: cron list crashes when payload.model is an object
+describe("printCronList - model object format (#44084)", async () => {
+  const { printCronList } = await import("./cron-cli/shared.js");
+
+  it("handles legacy string model format", () => {
+    const mockJob = {
+      id: "job-1",
+      name: "Test Job",
+      schedule: { kind: "interval", expr: "*/5 * * * *" } as CronSchedule,
+      payload: { kind: "agentTurn" as const, model: "openai/gpt-4" },
+      sessionTarget: "default",
+      agentId: "test-agent",
+      enabled: true,
+      state: { nextRunAtMs: 1000, lastRunAtMs: 1000, lastError: null },
+    } as unknown as CronJob;
+
+    // Should not throw
+    expect(() => printCronList([mockJob])).not.toThrow();
+  });
+
+  it("handles new object model format with primary/fallbacks", () => {
+    const mockJob = {
+      id: "job-2",
+      name: "Test Job with Fallbacks",
+      schedule: { kind: "interval", expr: "*/5 * * * *" } as CronSchedule,
+      payload: {
+        kind: "agentTurn" as const,
+        model: { primary: "openai/gpt-4", fallbacks: ["anthropic/claude-3"] },
+      },
+      sessionTarget: "default",
+      agentId: "test-agent",
+      enabled: true,
+      state: { nextRunAtMs: 1000, lastRunAtMs: 1000, lastError: null },
+    } as unknown as CronJob;
+
+    // Should not throw - this was the bug in #44084
+    expect(() => printCronList([mockJob])).not.toThrow();
+  });
+
+  it("handles object model format without primary field", () => {
+    const mockJob = {
+      id: "job-3",
+      name: "Test Job Empty Object",
+      schedule: { kind: "interval", expr: "*/5 * * * *" } as CronSchedule,
+      payload: { kind: "agentTurn" as const, model: {} },
+      sessionTarget: "default",
+      agentId: "test-agent",
+      enabled: true,
+      state: { nextRunAtMs: 1000, lastRunAtMs: 1000, lastError: null },
+    } as unknown as CronJob;
+
+    // Should not throw, should display "-" for missing primary
+    expect(() => printCronList([mockJob])).not.toThrow();
+  });
+});
