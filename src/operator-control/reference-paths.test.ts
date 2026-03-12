@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveOperatorReferenceSourcePath } from "./reference-paths.js";
 
 describe("operator reference paths", () => {
@@ -24,5 +28,45 @@ describe("operator reference paths", () => {
         sourcePath: "/tmp/custom/operator-review-handle-vocabulary.yaml",
       }),
     ).toBe(path.resolve("/tmp/custom/operator-review-handle-vocabulary.yaml"));
+  });
+
+  it("falls back to the default workspace when config is invalid", async () => {
+    await withTempDir("operator-reference-invalid-config-", async (homeDir) => {
+      const stateDir = path.join(homeDir, ".openclaw");
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            defaults: {
+              memorySearch: {
+                fallback: "invalid-provider",
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      await withEnvAsync(
+        {
+          HOME: homeDir,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+          CLAWDBOT_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          CLAWDBOT_STATE_DIR: undefined,
+        },
+        async () => {
+          expect(resolveOperatorReferenceSourcePath("agents.yaml")).toBe(
+            path.join(homeDir, ".openclaw", "workspace", "memory", "reference", "agents.yaml"),
+          );
+        },
+      );
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+    });
   });
 });

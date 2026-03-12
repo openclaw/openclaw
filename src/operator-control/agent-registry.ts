@@ -2,10 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { saveJsonFile } from "../infra/json-file.js";
+import { resolveOperatorReferenceWorkspaceDir } from "./reference-paths.js";
 
 export type CompiledOperatorAgentRecord = {
   id: string;
@@ -141,9 +140,9 @@ function resolveAgentsRegistrySourcePath(params?: {
   if (params?.sourcePath?.trim()) {
     return path.resolve(params.sourcePath);
   }
-  const workspaceDir =
-    params?.workspaceDir?.trim() ||
-    resolveAgentWorkspaceDir(loadConfig(), resolveDefaultAgentId(loadConfig()));
+  const workspaceDir = resolveOperatorReferenceWorkspaceDir({
+    workspaceDir: params?.workspaceDir,
+  });
   return path.join(workspaceDir, "memory", "reference", "agents.yaml");
 }
 
