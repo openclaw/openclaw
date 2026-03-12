@@ -582,21 +582,96 @@ async function resolveSubagentCompletionOrigin(params: {
   }
 }
 
+function readQueuedAnnounceAgentResponse(response: unknown): {
+  status?: string;
+  runId?: string;
+} {
+  if (!response || typeof response !== "object") {
+    return {};
+  }
+  const payload = response as {
+    status?: unknown;
+    runId?: unknown;
+  };
+  return {
+    status: typeof payload.status === "string" ? payload.status.trim().toLowerCase() : undefined,
+    runId:
+      typeof payload.runId === "string" && payload.runId.trim() ? payload.runId.trim() : undefined,
+  };
+}
+
+function buildQueuedAnnounceId(item: AnnounceQueueItem): string {
+  const baseAnnounceId = resolveQueueAnnounceId({
+    announceId: item.announceId,
+    sessionKey: item.sessionKey,
+    enqueuedAt: item.enqueuedAt,
+  });
+  const retryAttempt =
+    typeof item.retryAttempt === "number" && Number.isFinite(item.retryAttempt)
+      ? Math.max(0, Math.floor(item.retryAttempt))
+      : 0;
+  return retryAttempt > 0 ? `${baseAnnounceId}:retry:${retryAttempt}` : baseAnnounceId;
+}
+
+function readPendingRunIds(item: AnnounceQueueItem): string[] {
+  const fromList = Array.isArray(item.pendingRunIds) ? item.pendingRunIds : [];
+  const fromLegacy = item.pendingRunId ? [item.pendingRunId] : [];
+  return Array.from(new Set([...fromList, ...fromLegacy].filter((runId) => Boolean(runId))));
+}
+
+function writePendingRunIds(item: AnnounceQueueItem, runIds: string[] | undefined): void {
+  if (!runIds || runIds.length === 0) {
+    item.pendingRunId = undefined;
+    item.pendingRunIds = undefined;
+    return;
+  }
+  item.pendingRunId = runIds[runIds.length - 1];
+  item.pendingRunIds = runIds;
+}
+
 async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
+  const isTopLevelCompletion = item.expectsCompletionMessage === true && !requesterIsSubagent;
+  const pendingRunIds = isTopLevelCompletion ? readPendingRunIds(item) : [];
+  if (isTopLevelCompletion && pendingRunIds.length > 0) {
+    let shouldRetryWithFreshAnnounce = false;
+    for (let idx = 0; idx < pendingRunIds.length; idx++) {
+      const pendingRunId = pendingRunIds[idx];
+      const waitResult = await callGateway<{ status?: string }>({
+        method: "agent.wait",
+        params: {
+          runId: pendingRunId,
+          timeoutMs: announceTimeoutMs,
+        },
+        timeoutMs: announceTimeoutMs,
+      });
+      const waitStatus =
+        typeof waitResult?.status === "string" ? waitResult.status.trim().toLowerCase() : undefined;
+      if (waitStatus === "ok") {
+        continue;
+      }
+      if (waitStatus === "timeout" || !waitStatus) {
+        writePendingRunIds(item, pendingRunIds.slice(idx));
+        throw new Error(`completion announce still pending for run ${pendingRunId}`);
+      }
+      writePendingRunIds(item, undefined);
+      item.retryAttempt = (item.retryAttempt ?? 0) + 1;
+      shouldRetryWithFreshAnnounce = true;
+      break;
+    }
+    if (!shouldRetryWithFreshAnnounce) {
+      writePendingRunIds(item, undefined);
+      return;
+    }
+  }
+
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
-  const idempotencyKey = buildAnnounceIdempotencyKey(
-    resolveQueueAnnounceId({
-      announceId: item.announceId,
-      sessionKey: item.sessionKey,
-      enqueuedAt: item.enqueuedAt,
-    }),
-  );
-  await callGateway({
+  const idempotencyKey = buildAnnounceIdempotencyKey(buildQueuedAnnounceId(item));
+  const response = await callGateway<{ status?: string; runId?: string }>({
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
@@ -617,6 +692,25 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     },
     timeoutMs: announceTimeoutMs,
   });
+  if (!isTopLevelCompletion) {
+    return;
+  }
+  const { status, runId } = readQueuedAnnounceAgentResponse(response);
+  if (status === "ok") {
+    return;
+  }
+  if (runId) {
+    const nextPendingRunIds = readPendingRunIds(item);
+    if (!nextPendingRunIds.includes(runId)) {
+      nextPendingRunIds.push(runId);
+    }
+    writePendingRunIds(item, nextPendingRunIds);
+    throw new Error(`completion announce accepted for run ${runId}`);
+  }
+  item.retryAttempt = (item.retryAttempt ?? 0) + 1;
+  throw new Error(
+    `completion announce did not reach a terminal state for ${buildQueuedAnnounceId(item)}`,
+  );
 }
 
 function resolveRequesterStoreKey(
@@ -670,6 +764,9 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  expectsCompletionMessage?: boolean;
+  pendingRunId?: string;
+  pendingRunIds?: string[];
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none"> {
   if (params.signal?.aborted) {
@@ -689,7 +786,18 @@ async function maybeQueueSubagentAnnounce(params: {
   });
   const isActive = isEmbeddedPiRunActive(sessionId);
 
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const pendingRunIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(params.pendingRunIds) ? params.pendingRunIds : []),
+        ...(params.pendingRunId ? [params.pendingRunId] : []),
+      ].filter((runId) => Boolean(runId)),
+    ),
+  );
+  const hasPendingCompletionRun = pendingRunIds.length > 0;
+  const shouldSteer =
+    (queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog") &&
+    !hasPendingCompletionRun;
   if (shouldSteer) {
     const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
     if (steered) {
@@ -717,6 +825,9 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        expectsCompletionMessage: params.expectsCompletionMessage,
+        pendingRunId: params.pendingRunId,
+        pendingRunIds: pendingRunIds.length > 0 ? pendingRunIds : params.pendingRunIds,
       },
       settings: queueSettings,
       send: sendAnnounce,
@@ -754,6 +865,10 @@ async function sendSubagentAnnounceDirectly(params: {
     cfg,
     params.targetRequesterSessionKey,
   );
+  const requesterEntry = loadRequesterSessionEntry(canonicalRequesterSessionKey).entry;
+  const requesterSessionId =
+    typeof requesterEntry?.sessionId === "string" ? requesterEntry.sessionId.trim() : "";
+  const requesterRunActive = requesterSessionId ? isEmbeddedPiRunActive(requesterSessionId) : false;
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
@@ -785,7 +900,9 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
-    await runAnnounceDeliveryWithRetry({
+    const waitForFinalDelivery =
+      !params.expectsCompletionMessage || params.requesterIsSubagent || !requesterRunActive;
+    const directResponse = await runAnnounceDeliveryWithRetry<{ status?: string; runId?: string }>({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
@@ -811,10 +928,24 @@ async function sendSubagentAnnounceDirectly(params: {
             },
             idempotencyKey: params.directIdempotencyKey,
           },
-          expectFinal: true,
+          // Busy top-level requesters stop at gateway acceptance so cleanup can
+          // hand the accepted run off to the queue without blocking the caller lane.
+          expectFinal: waitForFinalDelivery,
           timeoutMs: announceTimeoutMs,
         }),
     });
+
+    if (params.expectsCompletionMessage && !params.requesterIsSubagent && requesterRunActive) {
+      const { status, runId } = readQueuedAnnounceAgentResponse(directResponse);
+      if (status === "accepted" && runId) {
+        return {
+          delivered: false,
+          path: "direct",
+          pendingRunId: runId,
+          pendingRunIds: [runId],
+        };
+      }
+    }
 
     return {
       delivered: true,
@@ -849,6 +980,8 @@ async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  let pendingRunId: string | undefined;
+  let pendingRunIds: string[] | undefined;
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
@@ -864,10 +997,13 @@ async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        expectsCompletionMessage: params.expectsCompletionMessage,
+        pendingRunId,
+        pendingRunIds,
         signal: params.signal,
       }),
-    direct: async () =>
-      await sendSubagentAnnounceDirectly({
+    direct: async () => {
+      const result = await sendSubagentAnnounceDirectly({
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,
@@ -881,7 +1017,11 @@ async function deliverSubagentAnnouncement(params: {
         expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
-      }),
+      });
+      pendingRunId = result.pendingRunId;
+      pendingRunIds = result.pendingRunIds;
+      return result;
+    },
   });
 }
 

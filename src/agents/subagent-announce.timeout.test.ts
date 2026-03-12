@@ -23,14 +23,40 @@ let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
 } | null = null;
+let rejectFinalCompletionAnnounce = false;
+let embeddedRunActive = false;
+let acceptedRunIds: string[] = ["announce-run-1"];
+let waitStatusByRunId: Record<string, string> = {};
+const queueEmbeddedPiMessageMock = vi.fn(() => false);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: GatewayCall) => {
     gatewayCalls.push(request);
+    if (
+      rejectFinalCompletionAnnounce &&
+      request.method === "agent" &&
+      request.expectFinal === true &&
+      request.params?.sessionKey === "agent:main:main"
+    ) {
+      throw new Error("unexpected final wait on requester session");
+    }
     if (request.method === "chat.history") {
       return { messages: [] };
     }
-    return {};
+    if (
+      request.method === "agent" &&
+      request.expectFinal === false &&
+      request.params?.sessionKey === "agent:main:main"
+    ) {
+      const nextRunId = acceptedRunIds.shift() ?? `announce-run-${gatewayCalls.length}`;
+      return { status: "accepted", runId: nextRunId };
+    }
+    if (request.method === "agent.wait") {
+      const runId = typeof request.params?.runId === "string" ? request.params.runId : "";
+      const status = waitStatusByRunId[runId] ?? "ok";
+      return { status, runId };
+    }
+    return { status: "ok" };
   }),
 }));
 
@@ -54,8 +80,8 @@ vi.mock("./subagent-depth.js", () => ({
 }));
 
 vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  queueEmbeddedPiMessage: () => false,
+  isEmbeddedPiRunActive: () => embeddedRunActive,
+  queueEmbeddedPiMessage: (...args: unknown[]) => queueEmbeddedPiMessageMock(...args),
   waitForEmbeddedPiRunEnd: async () => true,
 }));
 
@@ -113,6 +139,10 @@ async function runAnnounceFlowForTest(
   });
 }
 
+async function waitForAsyncCallbacks(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function findGatewayCall(predicate: (call: GatewayCall) => boolean): GatewayCall | undefined {
   return gatewayCalls.find(predicate);
 }
@@ -129,6 +159,12 @@ describe("subagent announce timeout config", () => {
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
     fallbackRequesterResolution = null;
+    rejectFinalCompletionAnnounce = false;
+    embeddedRunActive = false;
+    acceptedRunIds = ["announce-run-1"];
+    waitStatusByRunId = {};
+    queueEmbeddedPiMessageMock.mockReset();
+    queueEmbeddedPiMessageMock.mockReturnValue(false);
   });
 
   it("uses 60s timeout by default for direct announce agent call", async () => {
@@ -150,7 +186,7 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("honors configured announce timeout for completion direct agent call", async () => {
+  it("waits for final completion delivery when the requester session is idle", async () => {
     setConfiguredAnnounceTimeout(90_000);
     await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
@@ -161,9 +197,101 @@ describe("subagent announce timeout config", () => {
     });
 
     const completionDirectAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
     );
+    expect(completionDirectAgentCall?.expectFinal).toBe(true);
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
+  });
+
+  it("regression, busy requester completions hand accepted runs to the queue", async () => {
+    rejectFinalCompletionAnnounce = true;
+    embeddedRunActive = true;
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "main-session-1",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runAnnounceFlowForTest("run-no-final-wait", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await waitForAsyncCallbacks();
+
+    expect(didAnnounce).toBe(true);
+    const completionDirectAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
+    );
+    expect(completionDirectAgentCall?.expectFinal).toBe(false);
+    expect(findGatewayCall((call) => call.method === "agent.wait")?.params?.runId).toBe(
+      "announce-run-1",
+    );
+  });
+
+  it("regression, collect mode preserves every accepted completion run id", async () => {
+    rejectFinalCompletionAnnounce = true;
+    embeddedRunActive = true;
+    acceptedRunIds = ["announce-run-1", "announce-run-2"];
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "main-session-collect",
+        queueDebounceMs: 25,
+        queueMode: "collect",
+      },
+    };
+
+    await runAnnounceFlowForTest("run-no-final-wait-collect-1", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await runAnnounceFlowForTest("run-no-final-wait-collect-2", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    const waitedRunIds = gatewayCalls
+      .filter((call) => call.method === "agent.wait")
+      .map((call) => (typeof call.params?.runId === "string" ? call.params.runId : ""));
+    expect(waitedRunIds).toEqual(expect.arrayContaining(["announce-run-1", "announce-run-2"]));
+  });
+
+  it("regression, accepted completion fallback bypasses steer injection", async () => {
+    rejectFinalCompletionAnnounce = true;
+    embeddedRunActive = true;
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "main-session-steer",
+        queueDebounceMs: 0,
+        queueMode: "steer",
+      },
+    };
+
+    const didAnnounce = await runAnnounceFlowForTest("run-no-steer-dup", {
+      requesterOrigin: {
+        channel: "discord",
+        to: "12345",
+      },
+      expectsCompletionMessage: true,
+    });
+    await waitForAsyncCallbacks();
+
+    expect(didAnnounce).toBe(true);
+    expect(queueEmbeddedPiMessageMock).not.toHaveBeenCalled();
+    expect(findGatewayCall((call) => call.method === "agent.wait")?.params?.runId).toBe(
+      "announce-run-1",
+    );
   });
 
   it("regression, skips parent announce while descendants are still pending", async () => {
@@ -190,10 +318,11 @@ describe("subagent announce timeout config", () => {
 
     expect(didAnnounce).toBe(true);
     const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
+      (call) => call.method === "agent" && call.params?.sessionKey === "agent:main:main",
     );
     const internalEvents =
       (directAgentCall?.params?.internalEvents as Array<{ announceType?: string }>) ?? [];
+    expect(directAgentCall?.expectFinal).toBe(true);
     expect(internalEvents[0]?.announceType).toBe("cron job");
   });
 
@@ -210,6 +339,7 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.params?.sessionKey).toBe(cronSessionKey);
+    expect(directAgentCall?.expectFinal).toBe(true);
     expect(directAgentCall?.params?.deliver).toBe(false);
     expect(directAgentCall?.params?.channel).toBeUndefined();
     expect(directAgentCall?.params?.to).toBeUndefined();

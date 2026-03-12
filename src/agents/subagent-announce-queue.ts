@@ -33,6 +33,10 @@ export type AnnounceQueueItem = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  expectsCompletionMessage?: boolean;
+  pendingRunId?: string;
+  pendingRunIds?: string[];
+  retryAttempt?: number;
 };
 
 export type AnnounceQueueSettings = {
@@ -153,6 +157,20 @@ function scheduleAnnounceDrain(key: string) {
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
           const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
+          const pendingRunIds = Array.from(
+            new Set(
+              items.flatMap((item) => {
+                const ids: string[] = [];
+                if (Array.isArray(item.pendingRunIds)) {
+                  ids.push(...item.pendingRunIds);
+                }
+                if (item.pendingRunId) {
+                  ids.push(item.pendingRunId);
+                }
+                return ids;
+              }),
+            ),
+          );
           const last = items.at(-1);
           if (!last) {
             break;
@@ -161,6 +179,11 @@ function scheduleAnnounceDrain(key: string) {
             ...last,
             prompt,
             internalEvents: internalEvents.length > 0 ? internalEvents : last.internalEvents,
+            pendingRunIds: pendingRunIds.length > 0 ? pendingRunIds : last.pendingRunIds,
+            pendingRunId:
+              pendingRunIds.length > 0
+                ? pendingRunIds[pendingRunIds.length - 1]
+                : last.pendingRunId,
           });
           queue.items.splice(0, items.length);
           if (summary) {
