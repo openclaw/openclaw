@@ -165,7 +165,12 @@ func main() {
 	pb.RegisterSandboxServiceServer(s, server.NewSandboxServer(mgr, jl))
 	pb.RegisterExecServiceServer(s, server.NewExecServer(mgr, connCache))
 	pb.RegisterFileServiceServer(s, server.NewFileServer(mgr, connCache))
-	pb.RegisterBrowserServiceServer(s, server.NewBrowserServer(mgr, connCache, cfg.VNCProxyPort))
+	// Create VNC proxy early so BrowserServer can register auth tokens.
+	var vncProxy *server.VNCProxy
+	if cfg.VNCProxyPort > 0 {
+		vncProxy = server.NewVNCProxy(mgr)
+	}
+	pb.RegisterBrowserServiceServer(s, server.NewBrowserServer(mgr, connCache, cfg.VNCProxyPort, vncProxy))
 
 	// Register health service (TypeScript client expects grpc.health.v1.Health)
 	healthServer := health.NewServer()
@@ -189,8 +194,7 @@ func main() {
 	defer sweeper.Stop()
 
 	// 7a. Start VNC WebSocket proxy HTTP listener (separate from gRPC Unix socket)
-	if cfg.VNCProxyPort > 0 {
-		vncProxy := server.NewVNCProxy(mgr)
+	if vncProxy != nil {
 		httpMux := http.NewServeMux()
 		httpMux.HandleFunc("/vnc", vncProxy.HandleWS)
 		// Protect /debug/vars — only expose on loopback, not publicly.

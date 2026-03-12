@@ -125,7 +125,8 @@ export class ExecBrowserHelper {
 
   /**
    * Build a Node.js script that connects to an existing Playwright browser
-   * session via CDP, gets the first page, and executes the provided body code.
+   * session via the Playwright WebSocket protocol, gets the first page,
+   * and executes the provided body code.
    *
    * The body code has access to variables: `browser`, `page`, `session`.
    * It must assign the result to the `__result` variable.
@@ -141,7 +142,7 @@ const fs = require('fs');
 const { chromium } = require('playwright');
 (async () => {
   const session = JSON.parse(fs.readFileSync(${JSON.stringify(sessionFile)}, 'utf8'));
-  const browser = await chromium.connectOverCDP(session.wsEndpoint);
+  const browser = await chromium.connect(session.wsEndpoint);
   const contexts = browser.contexts();
   const ctx = contexts.length > 0 ? contexts[0] : await browser.newContext();
   const pages = ctx.pages();
@@ -150,7 +151,7 @@ const { chromium } = require('playwright');
   ${bodyCode}
   const output = ${JSON.stringify(markers.start)} + '\\n' + JSON.stringify(__result) + '\\n' + ${JSON.stringify(markers.end)};
   process.stdout.write(output);
-  await browser.disconnect();
+  await browser.close();
 })().catch(e => { process.stderr.write(e.message); process.exit(1); });
 `.trim();
   }
@@ -167,21 +168,26 @@ const { chromium } = require('playwright');
     const vw = DEFAULT_VIEWPORT_WIDTH;
     const vh = DEFAULT_VIEWPORT_HEIGHT;
 
-    // Script that launches Chromium persistently and writes session info.
+    // Script that launches Chromium persistently via launchServer and writes session info.
+    // launchServer() returns a BrowserServer with a wsEndpoint() for remote connections.
     const sessionFile = this.sessionFilePath(containerName);
     const launchScript = `
 const fs = require('fs');
 const { chromium } = require('playwright');
 (async () => {
-  const browser = await chromium.launch({
+  const server = await chromium.launchServer({
     headless: ${headless},
     args: ['--no-sandbox', '--disable-dev-shm-usage']
   });
+  const wsEndpoint = server.wsEndpoint();
+  if (!wsEndpoint) { process.stderr.write('Chromium launched but wsEndpoint is empty'); process.exit(1); }
+  // Connect to create initial context and page
+  const browser = await chromium.connect(wsEndpoint);
   const context = await browser.newContext({ viewport: { width: ${vw}, height: ${vh} } });
   await context.newPage();
-  const wsEndpoint = browser.wsEndpoint ? browser.wsEndpoint() : '';
-  if (!wsEndpoint) { process.stderr.write('Chromium launched but wsEndpoint is empty'); process.exit(1); }
-  const sessionData = { wsEndpoint, pid: process.pid };
+  await browser.close();
+  const pid = server.process().pid;
+  const sessionData = { wsEndpoint, pid };
   fs.writeFileSync(${JSON.stringify(sessionFile)}, JSON.stringify(sessionData), { mode: 0o600 });
   // Keep process alive
   await new Promise(() => {});
