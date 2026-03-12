@@ -102,6 +102,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "commonstack",
+    label: "CommonStack",
+    hint: "API key",
+    choices: ["commonstack-api-key"],
+  },
+  {
     value: "kilocode",
     label: "Kilo Gateway",
     hint: "API key (OpenRouter-compatible)",
@@ -250,6 +256,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Cloud and local open models",
   },
   ...buildProviderAuthChoiceOptions(),
+  { value: "commonstack-api-key", label: "CommonStack API key" },
   {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",

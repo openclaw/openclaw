@@ -13,6 +13,7 @@ import { applyPrimaryModel } from "../../model-picker.js";
 import { configureOllamaNonInteractive } from "../../ollama-setup.js";
 import {
   applyAuthProfileConfig,
+  applyCommonstackConfig,
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
@@ -38,6 +39,7 @@ import {
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setCommonstackApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
@@ -668,6 +670,36 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyLitellmConfig(nextConfig);
+  }
+
+  if (authChoice === "commonstack-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "commonstack",
+      cfg: baseConfig,
+      flagValue: opts.commonstackApiKey,
+      flagName: "--commonstack-api-key",
+      envVar: "COMMONSTACK_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setCommonstackApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "commonstack:default",
+      provider: "commonstack",
+      mode: "api_key",
+    });
+    const result = await applyCommonstackConfig(nextConfig, {
+      nonInteractive: true,
+    });
+    return result.config;
   }
 
   if (authChoice === "ai-gateway-api-key") {

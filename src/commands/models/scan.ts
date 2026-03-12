@@ -1,6 +1,10 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import {
+  type ModelScanResult,
+  scanCommonstackModels,
+  scanOpenRouterModels,
+} from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
@@ -129,91 +133,28 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
-export async function modelsScanCommand(
-  opts: {
-    minParams?: string;
-    maxAgeDays?: string;
-    provider?: string;
-    maxCandidates?: string;
-    timeout?: string;
-    concurrency?: string;
-    yes?: boolean;
-    input?: boolean;
-    setDefault?: boolean;
-    setImage?: boolean;
-    json?: boolean;
-    probe?: boolean;
+async function applyScanResults(
+  results: ModelScanResult[],
+  params: {
+    providerLabel: string;
+    probe: boolean;
+    maxCandidates: number;
+    opts: {
+      yes?: boolean;
+      input?: boolean;
+      setDefault?: boolean;
+      setImage?: boolean;
+      json?: boolean;
+    };
+    runtime: RuntimeEnv;
   },
-  runtime: RuntimeEnv,
-) {
-  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
-    throw new Error("--min-params must be >= 0");
-  }
-  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
-    throw new Error("--max-age-days must be >= 0");
-  }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
-    throw new Error("--max-candidates must be > 0");
-  }
-  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
-  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-    throw new Error("--timeout must be > 0");
-  }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
-    throw new Error("--concurrency must be > 0");
-  }
-
-  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
-  const probe = opts.probe ?? true;
-  let storedKey: string | undefined;
-  if (probe) {
-    try {
-      const resolved = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg,
-      });
-      storedKey = resolved.apiKey;
-    } catch {
-      storedKey = undefined;
-    }
-  }
-  const results = await withProgressTotals(
-    {
-      label: "Scanning OpenRouter models...",
-      indeterminate: false,
-      enabled: opts.json !== true,
-    },
-    async (update) =>
-      await scanOpenRouterModels({
-        apiKey: storedKey ?? undefined,
-        minParamB: minParams,
-        maxAgeDays,
-        providerFilter: opts.provider,
-        timeoutMs: timeout,
-        concurrency,
-        probe,
-        onProgress: ({ phase, completed, total }) => {
-          if (phase !== "probe") {
-            return;
-          }
-          const labelBase = probe ? "Probing models" : "Scanning models";
-          update({
-            completed,
-            total,
-            label: `${labelBase} (${completed}/${total})`,
-          });
-        },
-      }),
-  );
+): Promise<void> {
+  const { providerLabel, probe, maxCandidates, opts, runtime } = params;
 
   if (!probe) {
     if (!opts.json) {
       runtime.log(
-        `Found ${results.length} OpenRouter free models (metadata only; pass --probe to test tools/images).`,
+        `Found ${results.length} ${providerLabel} models (metadata only; pass --probe to test tools/images).`,
       );
       printScanTable(sortScanResults(results), runtime);
     } else {
@@ -224,7 +165,7 @@ export async function modelsScanCommand(
 
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
-    throw new Error("No tool-capable OpenRouter free models found.");
+    throw new Error(`No tool-capable ${providerLabel} models found.`);
   }
 
   const sorted = sortScanResults(results);
@@ -286,7 +227,7 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
       if (!nextModels[entry]) {
@@ -356,4 +297,138 @@ export async function modelsScanCommand(
   if (opts.setImage && selectedImages.length > 0) {
     runtime.log(`Image model: ${selectedImages[0]}`);
   }
+}
+
+export async function modelsScanCommand(
+  opts: {
+    minParams?: string;
+    maxAgeDays?: string;
+    provider?: string;
+    scanProvider?: string;
+    maxCandidates?: string;
+    timeout?: string;
+    concurrency?: string;
+    yes?: boolean;
+    input?: boolean;
+    setDefault?: boolean;
+    setImage?: boolean;
+    json?: boolean;
+    probe?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
+  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
+    throw new Error("--min-params must be >= 0");
+  }
+  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
+  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
+    throw new Error("--max-age-days must be >= 0");
+  }
+  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
+  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
+    throw new Error("--max-candidates must be > 0");
+  }
+  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
+  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+    throw new Error("--timeout must be > 0");
+  }
+  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
+  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
+    throw new Error("--concurrency must be > 0");
+  }
+
+  const scanProvider = opts.scanProvider?.toLowerCase() || "openrouter";
+  if (scanProvider !== "openrouter" && scanProvider !== "commonstack") {
+    throw new Error("--scan-provider must be 'openrouter' or 'commonstack'");
+  }
+
+  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
+  const probe = opts.probe ?? true;
+  let storedKey: string | undefined;
+  if (probe) {
+    try {
+      const resolved = await resolveApiKeyForProvider({
+        provider: scanProvider,
+        cfg,
+      });
+      storedKey = resolved.apiKey;
+    } catch {
+      storedKey = undefined;
+    }
+  }
+
+  if (scanProvider === "commonstack") {
+    const results = await withProgressTotals(
+      {
+        label: "Scanning CommonStack models...",
+        indeterminate: false,
+        enabled: opts.json !== true,
+      },
+      async (update) =>
+        await scanCommonstackModels({
+          apiKey: storedKey ?? undefined,
+          timeoutMs: timeout,
+          concurrency,
+          probe,
+          onProgress: ({ phase, completed, total }) => {
+            if (phase !== "probe") {
+              return;
+            }
+            const labelBase = probe ? "Probing models" : "Scanning models";
+            update({
+              completed,
+              total,
+              label: `${labelBase} (${completed}/${total})`,
+            });
+          },
+        }),
+    );
+
+    await applyScanResults(results, {
+      providerLabel: "CommonStack",
+      probe,
+      maxCandidates,
+      opts,
+      runtime,
+    });
+    return;
+  }
+
+  const results = await withProgressTotals(
+    {
+      label: "Scanning OpenRouter models...",
+      indeterminate: false,
+      enabled: opts.json !== true,
+    },
+    async (update) =>
+      await scanOpenRouterModels({
+        apiKey: storedKey ?? undefined,
+        minParamB: minParams,
+        maxAgeDays,
+        providerFilter: opts.provider,
+        timeoutMs: timeout,
+        concurrency,
+        probe,
+        onProgress: ({ phase, completed, total }) => {
+          if (phase !== "probe") {
+            return;
+          }
+          const labelBase = probe ? "Probing models" : "Scanning models";
+          update({
+            completed,
+            total,
+            label: `${labelBase} (${completed}/${total})`,
+          });
+        },
+      }),
+  );
+
+  await applyScanResults(results, {
+    providerLabel: "OpenRouter",
+    probe,
+    maxCandidates,
+    opts,
+    runtime,
+  });
 }

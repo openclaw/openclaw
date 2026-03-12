@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { scanOpenRouterModels } from "./model-scan.js";
+import { scanCommonstackModels, scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {
   return withFetchPreconnect(
@@ -79,5 +79,75 @@ describe("scanOpenRouterModels", () => {
         }),
       ).rejects.toThrow(/Missing OpenRouter API key/);
     });
+  });
+});
+
+describe("scanCommonstackModels", () => {
+  it("lists models without probing", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          created: 1763447647,
+          id: "openai/gpt-oss-120b",
+          object: "model",
+          owned_by: "OpenAI",
+        },
+        {
+          created: 1770383826,
+          id: "anthropic/claude-sonnet-4-5",
+          object: "model",
+          owned_by: "Anthropic",
+        },
+      ],
+      object: "list",
+    });
+
+    const results = await scanCommonstackModels({
+      fetchImpl,
+      probe: false,
+      apiKey: "sk-test-key", // pragma: allowlist secret
+    });
+
+    expect(results.map((entry) => entry.id)).toEqual([
+      "openai/gpt-oss-120b",
+      "anthropic/claude-sonnet-4-5",
+    ]);
+
+    const [first, second] = results;
+    expect(first).toBeTruthy();
+    if (!first) {
+      throw new Error("Expected first model result.");
+    }
+    expect(first.provider).toBe("commonstack");
+    expect(first.modelRef).toBe("commonstack/openai/gpt-oss-120b");
+    expect(first.name).toBe("openai/gpt-oss-120b");
+    expect(first.contextLength).toBeNull();
+    expect(first.pricing).toBeNull();
+    expect(first.createdAtMs).toBe(1763447647000);
+    expect(first.tool.skipped).toBe(true);
+
+    expect(second).toBeTruthy();
+    if (!second) {
+      throw new Error("Expected second model result.");
+    }
+    expect(second.provider).toBe("commonstack");
+    expect(second.createdAtMs).toBe(1770383826000);
+  });
+
+  it("requires an API key", async () => {
+    const fetchImpl = createFetchFixture({ data: [], object: "list" });
+    const prev = process.env.COMMONSTACK_API_KEY;
+    try {
+      delete process.env.COMMONSTACK_API_KEY;
+      await expect(scanCommonstackModels({ fetchImpl, apiKey: "" })).rejects.toThrow(
+        /Missing CommonStack API key/,
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.COMMONSTACK_API_KEY;
+      } else {
+        process.env.COMMONSTACK_API_KEY = prev;
+      }
+    }
   });
 });

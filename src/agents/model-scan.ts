@@ -11,6 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const COMMONSTACK_MODELS_URL = "https://api.commonstack.ai/api/v1/ai/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
 
@@ -46,6 +47,13 @@ type OpenRouterModelPricing = {
   internalReasoning: number;
 };
 
+type CommonstackModelMeta = {
+  id: string;
+  created: number | null;
+  object: string;
+  owned_by: string;
+};
+
 export type ProbeResult = {
   ok: boolean;
   latencyMs: number | null;
@@ -79,6 +87,15 @@ export type OpenRouterScanOptions = {
   minParamB?: number;
   maxAgeDays?: number;
   providerFilter?: string;
+  probe?: boolean;
+  onProgress?: (update: { phase: "catalog" | "probe"; completed: number; total: number }) => void;
+};
+
+export type CommonstackScanOptions = {
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  concurrency?: number;
   probe?: boolean;
   onProgress?: (update: { phase: "catalog" | "probe"; completed: number; total: number }) => void;
 };
@@ -494,5 +511,119 @@ export async function scanOpenRouterModels(
   );
 }
 
-export { OPENROUTER_MODELS_URL };
-export type { OpenRouterModelMeta, OpenRouterModelPricing };
+async function fetchCommonstackModels(
+  fetchImpl: typeof fetch,
+  apiKey: string,
+): Promise<CommonstackModelMeta[]> {
+  const res = await fetchImpl(COMMONSTACK_MODELS_URL, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`CommonStack /models failed: HTTP ${res.status}`);
+  }
+
+  const payload = (await res.json()) as { data?: unknown };
+  const entries = Array.isArray(payload?.data) ? payload.data : [];
+
+  return entries
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const obj = entry as Record<string, unknown>;
+      const id = typeof obj.id === "string" ? obj.id.trim() : "";
+      if (!id) {
+        return null;
+      }
+      const created =
+        typeof obj.created === "number" && Number.isFinite(obj.created) ? obj.created : null;
+      const object = typeof obj.object === "string" ? obj.object.trim() : "model";
+      const owned_by = typeof obj.owned_by === "string" ? obj.owned_by.trim() : "";
+
+      return { id, created, object, owned_by } satisfies CommonstackModelMeta;
+    })
+    .filter((entry): entry is CommonstackModelMeta => Boolean(entry));
+}
+
+export async function scanCommonstackModels(
+  options: CommonstackScanOptions = {},
+): Promise<ModelScanResult[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const probe = options.probe ?? true;
+  const apiKey = options.apiKey?.trim() || getEnvApiKey("commonstack") || "";
+
+  if (!apiKey) {
+    throw new Error("Missing CommonStack API key. Set COMMONSTACK_API_KEY to run models scan.");
+  }
+
+  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
+
+  const catalog = await fetchCommonstackModels(fetchImpl, apiKey);
+
+  options.onProgress?.({
+    phase: "probe",
+    completed: 0,
+    total: catalog.length,
+  });
+
+  const baseModel = getModel("openai", "gpt-4o-mini") as unknown as OpenAIModel;
+
+  return mapWithConcurrency(
+    catalog,
+    concurrency,
+    async (entry) => {
+      const model: OpenAIModel = {
+        ...baseModel,
+        id: entry.id,
+        name: entry.id,
+        provider: "commonstack",
+        baseUrl: "https://api.commonstack.ai/v1",
+        contextWindow: baseModel.contextWindow,
+        input: ["text"],
+      };
+
+      const toolResult = probe
+        ? await probeTool(model, apiKey, timeoutMs)
+        : { ok: false, latencyMs: null, skipped: true };
+
+      const imageResult = { ok: false, latencyMs: null, skipped: true };
+
+      const createdAtMs = entry.created ? entry.created * 1000 : null;
+
+      return {
+        id: entry.id,
+        name: entry.id,
+        provider: "commonstack",
+        modelRef: `commonstack/${entry.id}`,
+        contextLength: null,
+        maxCompletionTokens: null,
+        supportedParametersCount: 0,
+        supportsToolsMeta: false,
+        modality: "text",
+        inferredParamB: inferParamBFromIdOrName(entry.id),
+        createdAtMs,
+        pricing: null,
+        isFree: false,
+        tool: toolResult,
+        image: imageResult,
+      } satisfies ModelScanResult;
+    },
+    {
+      onProgress: (completed, total) =>
+        options.onProgress?.({
+          phase: "probe",
+          completed,
+          total,
+        }),
+    },
+  );
+}
+
+export { OPENROUTER_MODELS_URL, COMMONSTACK_MODELS_URL };
+export type { OpenRouterModelMeta, OpenRouterModelPricing, CommonstackModelMeta };
