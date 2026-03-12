@@ -26,3 +26,12 @@ export {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
+export { OpenClawSchema } from "./zod-schema.js";
+export {
+  resolveConfigSecrets,
+  configNeedsSecretResolution,
+  clearSecretCache,
+  SecretResolutionError,
+  UnknownSecretProviderError,
+} from "./secret-resolution.js";
+export type { SecretsConfig, SecretProvider } from "./secret-resolution.js";
