@@ -1,4 +1,3 @@
-import { resolveModelAuthMode } from "../agents/model-auth.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 const MEMORY_DOCS_URL = "https://docs.openclaw.ai/concepts/memory";
@@ -83,46 +82,44 @@ function toIssue(error: ReturnType<typeof createValidationError>): ConfigValidat
   };
 }
 
-function hasResolvableOpenAiCredential(cfg: OpenClawConfig): boolean {
-  const mode = resolveModelAuthMode("openai", cfg);
-  return mode === "api-key" || mode === "mixed";
-}
-
 function validateSingleMemorySearch(
   memorySearch: NonNullable<OpenClawConfig["agents"]>["defaults"]["memorySearch"],
   configPath: string,
-  cfg: OpenClawConfig,
 ): ConfigValidationIssue[] {
   const provider = memorySearch?.provider;
   if (!provider) {
     return [];
   }
 
-  if (provider === "openai" && !hasResolvableOpenAiCredential(cfg)) {
-    return [
-      toIssue(
-        createValidationError({
-          provider,
-          configPath,
-          missing: ["apiKey (config/auth profile/environment)"],
-          message: "Missing OpenAI embedding credential for memory search.",
-        }),
-      ),
-    ];
-  }
-
   if (provider === "ollama") {
     const baseUrl = memorySearch?.remote?.baseUrl;
-    // Reject only if baseUrl is explicitly set to an empty or whitespace string
-    // Allow omitting baseUrl - runtime will use default http://127.0.0.1:11434
-    if (baseUrl !== undefined && (typeof baseUrl !== "string" || baseUrl.trim().length === 0)) {
+    // For per-agent configs (configPath contains .list[), require baseUrl
+    // For defaults, allow omitting baseUrl - runtime will use default http://127.0.0.1:11434
+    const isPerAgent = configPath.includes(".list[");
+    if (isPerAgent) {
+      // Per-agent configs must have baseUrl defined
+      if (baseUrl === undefined) {
+        return [
+          toIssue(
+            createValidationError({
+              provider,
+              configPath,
+              missing: ["host (baseUrl)"],
+              message: "Missing Ollama host configuration for memory search.",
+            }),
+          ),
+        ];
+      }
+    }
+    // Reject if baseUrl is explicitly set to an empty or whitespace string
+    if (typeof baseUrl === "string" && baseUrl.trim().length === 0) {
       return [
         toIssue(
           createValidationError({
             provider,
             configPath,
-            missing: ["host (agents.defaults.memorySearch.remote.baseUrl)"],
-            message: "Missing Ollama host configuration for memory search.",
+            missing: ["non-empty baseUrl"],
+            message: "Ollama baseUrl must be a non-empty string.",
           }),
         ),
       ];
@@ -142,7 +139,7 @@ export function validateMemorySearchProviderConfig(cfg: OpenClawConfig): ConfigV
   // Validate defaults
   const defaultsMemorySearch = cfg.agents?.defaults?.memorySearch;
   if (defaultsMemorySearch) {
-    issues.push(...validateSingleMemorySearch(defaultsMemorySearch, CANONICAL_MEMORY_PATH, cfg));
+    issues.push(...validateSingleMemorySearch(defaultsMemorySearch, CANONICAL_MEMORY_PATH));
   }
 
   // Validate per-agent overrides
@@ -152,7 +149,7 @@ export function validateMemorySearchProviderConfig(cfg: OpenClawConfig): ConfigV
       const agent = agentList[i];
       if (agent?.memorySearch) {
         const agentPath = `agents.list[${i}].memorySearch`;
-        issues.push(...validateSingleMemorySearch(agent.memorySearch, agentPath, cfg));
+        issues.push(...validateSingleMemorySearch(agent.memorySearch, agentPath));
       }
     }
   }

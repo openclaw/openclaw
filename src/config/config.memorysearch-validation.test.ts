@@ -305,7 +305,7 @@ describe("validateConfigObject - memorySearch", () => {
     expect(result.ok).toBe(false);
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0]?.path).toBe("agents.list[0].memorySearch");
-    expect(result.issues[0]?.message).toContain("Missing Ollama host configuration");
+    expect(result.issues[0]?.message).toContain("host (baseUrl)");
   });
 
   it("accepts valid per-agent memorySearch configurations", () => {
@@ -355,14 +355,16 @@ describe("validateConfigObject - memorySearch", () => {
             id: "agent-1",
             memorySearch: {
               provider: "ollama",
-              // Missing baseUrl
+              // Missing baseUrl - should be caught
             },
           },
           {
             id: "agent-2",
             memorySearch: {
-              provider: "openai",
-              // Missing apiKey
+              provider: "ollama",
+              remote: {
+                baseUrl: "", // Empty baseUrl - should also be caught
+              },
             },
           },
         ],
