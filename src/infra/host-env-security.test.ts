@@ -232,40 +232,45 @@ describe("git env exploit regression", () => {
       `openclaw-git-exec-path-marker-${process.pid}-${Date.now()}`,
     );
     try {
+      try {
+        fs.unlinkSync(marker);
+      } catch {
+        // no-op
+      }
+      fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
+      fs.chmodSync(helperPath, 0o755);
+
+      const target = "https://127.0.0.1:1/does-not-matter";
+      const unsafeEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        GIT_EXEC_PATH: helperDir,
+        GIT_TERMINAL_PROMPT: "0",
+      };
+
+      await new Promise<void>((resolve) => {
+        const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
+        child.once("error", () => resolve());
+        child.once("close", () => resolve());
+      });
+
+      expect(fs.existsSync(marker)).toBe(true);
       fs.unlinkSync(marker);
-    } catch {
-      // no-op
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv: unsafeEnv,
+      });
+
+      await new Promise<void>((resolve) => {
+        const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
+        child.once("error", () => resolve());
+        child.once("close", () => resolve());
+      });
+
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(helperDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
     }
-    fs.writeFileSync(helperPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, "utf8");
-    fs.chmodSync(helperPath, 0o755);
-
-    const target = "https://127.0.0.1:1/does-not-matter";
-    const unsafeEnv = {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      GIT_EXEC_PATH: helperDir,
-      GIT_TERMINAL_PROMPT: "0",
-    };
-
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: unsafeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
-
-    expect(fs.existsSync(marker)).toBe(true);
-    fs.unlinkSync(marker);
-
-    const safeEnv = sanitizeHostExecEnv({
-      baseEnv: unsafeEnv,
-    });
-
-    await new Promise<void>((resolve) => {
-      const child = spawn(gitPath, ["ls-remote", target], { env: safeEnv, stdio: "ignore" });
-      child.once("error", () => resolve());
-      child.once("close", () => resolve());
-    });
-
-    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it("blocks GIT_SSH_COMMAND override so git cannot execute helper payloads", async () => {
