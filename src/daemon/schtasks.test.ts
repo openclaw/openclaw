@@ -184,6 +184,29 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("skips the UTF-8 code page bootstrap line before parsing the real command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          "chcp 65001>nul",
+          '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\幻14\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway run',
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\幻14\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+            "gateway",
+            "run",
+          ],
+        });
+      },
+    );
+  });
+
   it("returns null when script does not exist", async () => {
     await withScheduledTaskScript({}, async (env) => {
       const result = await readScheduledTaskCommand(env);

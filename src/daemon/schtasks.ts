@@ -37,6 +37,10 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
   return path.join(stateDir, scriptName);
 }
 
+function isCmdUtf8BootstrapLine(value: string): boolean {
+  return /^@?chcp(?:\.com|\.exe)?\s+65001(?:\s*>\s*nul)?$/i.test(value.trim());
+}
+
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
 // Keep their quoting strategies separate so each parser gets the encoding it expects.
 function quoteSchtasksArg(value: string): string {
@@ -77,6 +81,9 @@ export async function readScheduledTaskCommand(
       }
       const lower = line.toLowerCase();
       if (line.startsWith("@echo")) {
+        continue;
+      }
+      if (isCmdUtf8BootstrapLine(line)) {
         continue;
       }
       if (lower.startsWith("rem ")) {
@@ -186,7 +193,7 @@ function buildTaskScript({
   workingDirectory,
   environment,
 }: GatewayServiceRenderArgs): string {
-  const lines: string[] = ["@echo off"];
+  const lines: string[] = ["@echo off", "chcp 65001>nul"];
   const trimmedDescription = description?.trim();
   if (trimmedDescription) {
     assertNoCmdLineBreak(trimmedDescription, "Task description");

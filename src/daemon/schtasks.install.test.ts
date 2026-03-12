@@ -61,6 +61,7 @@ describe("installScheduledTask", () => {
       });
 
       const script = await fs.readFile(scriptPath, "utf8");
+      expect(script).toContain("chcp 65001>nul");
       expect(script).toContain('cd /d "C:\\temp\\poc&calc"');
       expect(script).toContain(
         'node gateway.js --display-name "safe&whoami" --percent "%%TEMP%%" --bang "^!token^!"',
@@ -149,6 +150,47 @@ describe("installScheduledTask", () => {
       const script = await fs.readFile(scriptPath, "utf8");
       expect(script).not.toContain('set "PATH=');
       expect(script).toContain('set "OPENCLAW_GATEWAY_PORT=18789"');
+    });
+  });
+
+  it("bootstraps UTF-8 before emitting non-ASCII paths into the task script", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      const { scriptPath } = await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\幻14\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "run",
+        ],
+        workingDirectory: "C:\\Users\\幻14\\projects\\openclaw",
+        environment: {
+          OPENCLAW_PROFILE_LABEL: "杭州-默认",
+        },
+      });
+
+      const script = await fs.readFile(scriptPath, "utf8");
+      expect(script).toContain("@echo off\r\nchcp 65001>nul\r\n");
+      expect(script).toContain("cd /d C:\\Users\\幻14\\projects\\openclaw");
+      expect(script).toContain(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\幻14\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run',
+      );
+      expect(script).toContain('set "OPENCLAW_PROFILE_LABEL=杭州-默认"');
+
+      const parsed = await readScheduledTaskCommand(env);
+      expect(parsed).toMatchObject({
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\幻14\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "run",
+        ],
+        workingDirectory: "C:\\Users\\幻14\\projects\\openclaw",
+        environment: {
+          OPENCLAW_PROFILE_LABEL: "杭州-默认",
+        },
+      });
     });
   });
 });
