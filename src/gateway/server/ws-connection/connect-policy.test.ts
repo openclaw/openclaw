@@ -332,6 +332,7 @@ describe("ws connect policy", () => {
       }),
     ).toBe(true);
 
+    // Remote backend client with valid shared-secret auth is now trusted (gateway.mode=remote support).
     expect(
       shouldSkipBackendSelfPairing({
         connectParams: makeConnectParams(
@@ -343,7 +344,7 @@ describe("ws connect policy", () => {
         sharedAuthOk: true,
         authMethod: "token",
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       shouldSkipBackendSelfPairing({
@@ -420,6 +421,34 @@ describe("ws connect policy", () => {
         hasBrowserOriginHeader: false,
         sharedAuthOk: false,
         authMethod: "none",
+      }),
+    ).toBe(false);
+
+    // Remote backend client (gateway.mode=remote) with valid shared-secret auth is trusted.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(true);
+
+    // Remote backend client with browser origin header is still rejected.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams: makeConnectParams(
+          GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          GATEWAY_CLIENT_MODES.BACKEND,
+        ),
+        isLocalClient: false,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
       }),
     ).toBe(false);
 
