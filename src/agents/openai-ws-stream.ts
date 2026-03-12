@@ -368,6 +368,8 @@ export function convertMessagesToInputItems(
           pushAssistantText();
           const callIdRaw = toNonEmptyString(block.id);
           const toolName = toNonEmptyString(block.name);
+          // Skip tool calls without valid name - this can happen when switching models
+          // and the context contains function_response from a different model format
           if (!callIdRaw || !toolName) {
             continue;
           }
