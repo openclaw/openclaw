@@ -52,6 +52,7 @@ type MessageSendParams = {
     agentId?: string;
     text?: string;
     mediaUrls?: string[];
+    idempotencyKey?: string;
   };
   abortSignal?: AbortSignal;
   silent?: boolean;
@@ -232,6 +233,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             ...params.mirror,
             text: mirrorText || params.content,
             mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
     });
