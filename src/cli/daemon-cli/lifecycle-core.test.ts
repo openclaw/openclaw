@@ -64,7 +64,7 @@ describe("runServiceRestart token drift", () => {
     service.readCommand.mockResolvedValue({
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
-    service.restart.mockResolvedValue(undefined);
+    service.restart.mockResolvedValue({ outcome: "completed" });
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
@@ -175,5 +175,25 @@ describe("runServiceRestart token drift", () => {
     const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
+  });
+
+  it("skips restart health checks when restart is only scheduled", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+    const result = await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      postRestartCheck,
+    });
+
+    expect(result).toBe(true);
+    expect(postRestartCheck).not.toHaveBeenCalled();
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { result?: string; message?: string };
+    expect(payload.result).toBe("scheduled");
+    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 });
