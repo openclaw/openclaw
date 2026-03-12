@@ -249,7 +249,7 @@ describe("web_fetch with scrapingbee provider", () => {
     expect(sbUrl.searchParams.get("return_page_markdown")).toBe("true");
   });
 
-  it("falls back to direct fetch when ScrapingBee fails", async () => {
+  it("throws when ScrapingBee provider fails", async () => {
     const apiKeyField = ["api", "Key"].join("");
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
@@ -260,14 +260,7 @@ describe("web_fetch with scrapingbee provider", () => {
           text: async () => "internal error",
         } as Response);
       }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        url,
-        headers: makeHeaders({ "content-type": "text/html" }),
-        text: async () =>
-          "<html><head><title>Direct</title></head><body><article><p>Direct fetch content</p></article></body></html>",
-      } as Response);
+      return Promise.reject(new Error("should not direct-fetch"));
     });
 
     const tool = createFetchTool({
@@ -275,9 +268,9 @@ describe("web_fetch with scrapingbee provider", () => {
       scrapingbee: { [apiKeyField]: "sb-test-key" },
     });
 
-    const result = await tool?.execute?.("call", { url: "https://example.com/fallback" });
-    const details = result?.details as { extractor?: string; text?: string };
-    expect(details.text).toContain("Direct fetch content");
+    await expect(tool?.execute?.("call", { url: "https://example.com/fallback" })).rejects.toThrow(
+      "ScrapingBee fetch failed",
+    );
   });
 
   it("sends render_js param when configured", async () => {
@@ -365,5 +358,28 @@ describe("web_fetch with firecrawl as primary provider", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("Firecrawl primary content");
+  });
+
+  it("throws when firecrawl provider fails instead of silently falling back", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev")) {
+        return Promise.resolve({
+          ok: false,
+          status: 403,
+          json: async () => ({ success: false, error: "blocked" }),
+        } as Response);
+      }
+      return Promise.reject(new Error("should not direct-fetch"));
+    });
+
+    const tool = createFetchTool({
+      provider: "firecrawl",
+      firecrawl: { [apiKeyField]: "fc-test-key" },
+    });
+
+    await expect(tool?.execute?.("call", { url: "https://example.com/fc-fail" })).rejects.toThrow(
+      "Firecrawl fetch failed",
+    );
   });
 });

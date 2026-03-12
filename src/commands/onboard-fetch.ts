@@ -1,8 +1,7 @@
+import type { FetchProvider } from "../agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { isFirecrawlAuthenticated } from "./onboard-search.js";
-
-export type FetchProvider = "readability" | "firecrawl" | "scrapingbee";
 
 type FetchProviderEntry = {
   value: FetchProvider;

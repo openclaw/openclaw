@@ -545,7 +545,7 @@ type FirecrawlRuntimeParams = {
   firecrawlTimeoutSeconds: number;
 };
 
-type FetchProvider = "readability" | "firecrawl" | "scrapingbee";
+export type FetchProvider = "readability" | "firecrawl" | "scrapingbee";
 
 type ScrapingBeeRuntimeParams = {
   scrapingBeeApiKey?: string;
@@ -637,7 +637,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
 
-  // Provider "firecrawl": try Firecrawl first, fall through to Readability on failure.
+  // Provider "firecrawl": use Firecrawl as primary extractor.
   if (params.provider === "firecrawl" && params.firecrawlEnabled && params.firecrawlApiKey) {
     const start = Date.now();
     try {
@@ -652,8 +652,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (payload) {
         return { ...payload, provider: "firecrawl" };
       }
-    } catch {
-      // Firecrawl failed — fall through to Readability path.
+    } catch (err) {
+      logDebug(
+        `[web-fetch] Firecrawl provider failed for ${redactUrlForDebugLog(params.url)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new Error(
+        `Firecrawl fetch failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        { cause: err },
+      );
     }
   }
 
@@ -696,8 +702,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       };
       writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
       return payload;
-    } catch {
-      // ScrapingBee failed — fall through to direct fetch path.
+    } catch (err) {
+      logDebug(
+        `[web-fetch] ScrapingBee provider failed for ${redactUrlForDebugLog(params.url)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new Error(
+        `ScrapingBee fetch failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        { cause: err },
+      );
     }
   }
 
