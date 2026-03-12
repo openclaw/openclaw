@@ -120,16 +120,7 @@ export function createSetThinkingLevelTool(opts?: {
         });
       }
 
-      const currentRequestedLevel = options.getRequestedThinkingLevel?.() ?? requestedLevel;
-      const resolution = resolveEffectiveThinking({
-        requested: currentRequestedLevel,
-        capabilities: resolveThinkingCapabilities({
-          provider: options.provider,
-          model: options.modelId,
-          reasoningSupported: options.reasoningSupported,
-        }),
-      });
-      const effectiveLevel = resolution.status === "unsupported" ? "off" : resolution.effective;
+      const effectiveLevel = requestedResolution.effective;
       const runtimeEffectiveLevel = effectiveLevel === "on" ? "low" : effectiveLevel;
 
       options.applyEffectiveThinkingLevel?.(runtimeEffectiveLevel);
@@ -137,11 +128,11 @@ export function createSetThinkingLevelTool(opts?: {
       return jsonResult({
         ok: true,
         priorRequestedLevel: priorRequestedLevel ?? null,
-        currentRequestedLevel,
+        currentRequestedLevel: requestedLevel,
         effectiveLevel,
         scope,
         persisted,
-        explanation: formatEffectiveThinkingResolution(resolution),
+        explanation: formatEffectiveThinkingResolution(requestedResolution),
       });
     },
   };

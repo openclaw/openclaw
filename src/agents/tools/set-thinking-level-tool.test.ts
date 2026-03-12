@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { createSetThinkingLevelTool } from "./set-thinking-level-tool.js";
 
 function createThinkingState(params?: {
-  defaultLevel?: string;
-  sessionLevel?: string;
-  turnLevel?: string;
+  defaultLevel?: ThinkLevel;
+  sessionLevel?: ThinkLevel;
+  turnLevel?: ThinkLevel;
 }) {
   const state = {
     defaultLevel: params?.defaultLevel ?? "off",
@@ -19,7 +20,7 @@ function createThinkingState(params?: {
   return {
     state,
     getCurrent: () => state.turnLevel ?? state.sessionLevel ?? state.defaultLevel,
-    setForScope: (scope: "turn" | "session", level: string) => {
+    setForScope: (scope: "turn" | "session", level: ThinkLevel) => {
       if (scope === "turn") {
         state.turnLevel = level;
         return;
@@ -40,7 +41,7 @@ async function createSessionFixture() {
   const sessionKey = "agent:main:main";
   const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
   await updateSessionStore(storePath, (store) => {
-    store[sessionKey] = { sessionId: "sess-1", thinkingLevel: "low" };
+    store[sessionKey] = { sessionId: "sess-1", updatedAt: Date.now(), thinkingLevel: "low" };
   });
   return { root, cfg, sessionKey, storePath };
 }
@@ -142,6 +143,7 @@ describe("set_thinking_level tool", () => {
       delete store[fixture.sessionKey];
       store[legacySessionKey] = {
         sessionId: "sess-legacy",
+        updatedAt: Date.now(),
         thinkingLevel: "minimal",
         label: "Legacy Session",
       };

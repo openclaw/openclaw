@@ -333,9 +333,7 @@ export function applyExtraParamsToAgent(
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId })) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
+    log.debug(`applying SiliconFlow thinking=off->null compat wrapper for ${provider}/${modelId}`);
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 

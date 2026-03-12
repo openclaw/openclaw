@@ -407,7 +407,7 @@ describe("applyExtraParamsToAgent", () => {
       return {} as ReturnType<StreamFn>;
     };
     const agent = { streamFn: baseStreamFn };
-    const thinkingState = { current: "off" as const };
+    const thinkingState: { current: "off" | "high" } = { current: "off" };
 
     applyExtraParamsToAgent(
       agent,

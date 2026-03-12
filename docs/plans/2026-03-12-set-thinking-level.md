@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Shared thinking resolution
+## Task 1: Shared thinking resolution
 
 **Files:**
 
@@ -49,7 +49,7 @@ Run: `pnpm test src/auto-reply/thinking.test.ts`
 
 Expected: PASS
 
-### Task 2: Dynamic run-local thinking state
+## Task 2: Dynamic run-local thinking state
 
 **Files:**
 
@@ -79,7 +79,7 @@ Run: `pnpm test src/agents/pi-embedded-runner-extraparams.test.ts`
 
 Expected: PASS
 
-### Task 3: `set_thinking_level` tool
+## Task 3: `set_thinking_level` tool
 
 **Files:**
 
@@ -114,7 +114,7 @@ Run: `pnpm test src/agents/openclaw-tools.set-thinking-level.test.ts`
 
 Expected: PASS
 
-### Task 4: Focused regression verification
+## Task 4: Focused regression verification
 
 **Files:**
 
