@@ -105,6 +105,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
+        autoThreshold: z.number().min(0.5).max(0.95).optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
