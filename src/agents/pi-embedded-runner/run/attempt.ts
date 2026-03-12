@@ -148,6 +148,186 @@ type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
+const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
+
+// Persist a hidden context reminder so the next turn knows why the runner stopped.
+function buildSessionsYieldContextMessage(message: string): string {
+  return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
+}
+
+// Return a synthetic aborted response so pi-agent-core unwinds without a real provider call.
+function createYieldAbortedResponse(model: { api?: string; provider?: string; id?: string }): {
+  [Symbol.asyncIterator]: () => AsyncGenerator<never, void, unknown>;
+  result: () => Promise<{
+    role: "assistant";
+    content: Array<{ type: "text"; text: string }>;
+    stopReason: "aborted";
+    api: string;
+    provider: string;
+    model: string;
+    usage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      totalTokens: number;
+      cost: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+    };
+    timestamp: number;
+  }>;
+} {
+  const message = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "" }],
+    stopReason: "aborted" as const,
+    api: model.api ?? "",
+    provider: model.provider ?? "",
+    model: model.id ?? "",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    timestamp: Date.now(),
+  };
+  return {
+    async *[Symbol.asyncIterator]() {},
+    result: async () => message,
+  };
+}
+
+// Queue a hidden steering message so pi-agent-core skips any remaining tool calls.
+function queueSessionsYieldInterruptMessage(activeSession: {
+  agent: { steer: (message: AgentMessage) => void };
+}) {
+  activeSession.agent.steer({
+    role: "custom",
+    customType: SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE,
+    content: "[sessions_yield interrupt]",
+    display: false,
+    details: { source: "sessions_yield" },
+    timestamp: Date.now(),
+  });
+}
+
+// Append the caller-provided yield payload as a hidden session message once the run is idle.
+async function persistSessionsYieldContextMessage(
+  activeSession: {
+    sendCustomMessage: (
+      message: {
+        customType: string;
+        content: string;
+        display: boolean;
+        details?: Record<string, unknown>;
+      },
+      options?: { triggerTurn?: boolean },
+    ) => Promise<void>;
+  },
+  message: string,
+) {
+  await activeSession.sendCustomMessage(
+    {
+      customType: SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE,
+      content: buildSessionsYieldContextMessage(message),
+      display: false,
+      details: { source: "sessions_yield", message },
+    },
+    { triggerTurn: false },
+  );
+}
+
+// Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+function stripSessionsYieldArtifacts(activeSession: {
+  messages: AgentMessage[];
+  agent: { replaceMessages: (messages: AgentMessage[]) => void };
+  sessionManager?: unknown;
+}) {
+  const strippedMessages = activeSession.messages.slice();
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as
+      | AgentMessage
+      | { role?: string; customType?: string; stopReason?: string };
+    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
+      strippedMessages.pop();
+      continue;
+    }
+    if (
+      last?.role === "custom" &&
+      "customType" in last &&
+      last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+    ) {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
+  }
+  if (strippedMessages.length !== activeSession.messages.length) {
+    activeSession.agent.replaceMessages(strippedMessages);
+  }
+
+  const sessionManager = activeSession.sessionManager as
+    | {
+        fileEntries?: Array<{
+          type?: string;
+          id?: string;
+          parentId?: string | null;
+          message?: { role?: string; stopReason?: string };
+          customType?: string;
+        }>;
+        byId?: Map<string, { id: string }>;
+        leafId?: string | null;
+        _rewriteFile?: () => void;
+      }
+    | undefined;
+  const fileEntries = sessionManager?.fileEntries;
+  const byId = sessionManager?.byId;
+  if (!fileEntries || !byId) {
+    return;
+  }
+
+  let changed = false;
+  while (fileEntries.length > 1) {
+    const last = fileEntries.at(-1);
+    if (!last || last.type === "session") {
+      break;
+    }
+    const isYieldAbortAssistant =
+      last.type === "message" &&
+      last.message?.role === "assistant" &&
+      last.message?.stopReason === "aborted";
+    const isYieldInterruptMessage =
+      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
+      break;
+    }
+    fileEntries.pop();
+    if (last.id) {
+      byId.delete(last.id);
+    }
+    sessionManager.leafId = last.parentId ?? null;
+    changed = true;
+  }
+  if (changed) {
+    sessionManager._rewriteFile?.();
+  }
+}
+
 export function isOllamaCompatProvider(model: {
   provider?: string;
   baseUrl?: string;
@@ -245,19 +425,71 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    // Keep whitespace-only placeholders unchanged so they do not collapse to
-    // empty names (which can later surface as toolName="" loops).
+function resolveCaseInsensitiveAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const folded = rawName.toLowerCase();
+  let caseInsensitiveMatch: string | null = null;
+  for (const name of allowedToolNames) {
+    if (name.toLowerCase() !== folded) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+      return null;
+    }
+    caseInsensitiveMatch = name;
+  }
+  return caseInsensitiveMatch;
+}
+
+function resolveExactAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  if (allowedToolNames.has(rawName)) {
     return rawName;
   }
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return trimmed;
+  const normalized = normalizeToolName(rawName);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  return (
+    resolveCaseInsensitiveAllowedToolName(rawName, allowedToolNames) ??
+    resolveCaseInsensitiveAllowedToolName(normalized, allowedToolNames)
+  );
+}
+
+function buildStructuredToolNameCandidates(rawName: string): string[] {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return [];
   }
 
-  const candidateNames = new Set<string>([trimmed, normalizeToolName(trimmed)]);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (value: string) => {
+    const candidate = value.trim();
+    if (!candidate || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    candidates.push(candidate);
+  };
+
+  addCandidate(trimmed);
+  addCandidate(normalizeToolName(trimmed));
+
   const normalizedDelimiter = trimmed.replace(/\//g, ".");
+  addCandidate(normalizedDelimiter);
+  addCandidate(normalizeToolName(normalizedDelimiter));
+
   const segments = normalizedDelimiter
     .split(".")
     .map((segment) => segment.trim())
@@ -265,11 +497,23 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   if (segments.length > 1) {
     for (let index = 1; index < segments.length; index += 1) {
       const suffix = segments.slice(index).join(".");
-      candidateNames.add(suffix);
-      candidateNames.add(normalizeToolName(suffix));
+      addCandidate(suffix);
+      addCandidate(normalizeToolName(suffix));
     }
   }
 
+  return candidates;
+}
+
+function resolveStructuredAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+
+  const candidateNames = buildStructuredToolNameCandidates(rawName);
   for (const candidate of candidateNames) {
     if (allowedToolNames.has(candidate)) {
       return candidate;
@@ -277,23 +521,116 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   }
 
   for (const candidate of candidateNames) {
-    const folded = candidate.toLowerCase();
-    let caseInsensitiveMatch: string | null = null;
-    for (const name of allowedToolNames) {
-      if (name.toLowerCase() !== folded) {
-        continue;
-      }
-      if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-        return candidate;
-      }
-      caseInsensitiveMatch = name;
-    }
+    const caseInsensitiveMatch = resolveCaseInsensitiveAllowedToolName(candidate, allowedToolNames);
     if (caseInsensitiveMatch) {
       return caseInsensitiveMatch;
     }
   }
 
-  return trimmed;
+  return null;
+}
+
+function inferToolNameFromToolCallId(
+  rawId: string | undefined,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!rawId || !allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const id = rawId.trim();
+  if (!id) {
+    return null;
+  }
+
+  const candidateTokens = new Set<string>();
+  const addToken = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    candidateTokens.add(trimmed);
+    candidateTokens.add(trimmed.replace(/[:._/-]\d+$/, ""));
+    candidateTokens.add(trimmed.replace(/\d+$/, ""));
+
+    const normalizedDelimiter = trimmed.replace(/\//g, ".");
+    candidateTokens.add(normalizedDelimiter);
+    candidateTokens.add(normalizedDelimiter.replace(/[:._-]\d+$/, ""));
+    candidateTokens.add(normalizedDelimiter.replace(/\d+$/, ""));
+
+    for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i]) {
+      const stripped = normalizedDelimiter.replace(prefixPattern, "");
+      if (stripped !== normalizedDelimiter) {
+        candidateTokens.add(stripped);
+        candidateTokens.add(stripped.replace(/[:._-]\d+$/, ""));
+        candidateTokens.add(stripped.replace(/\d+$/, ""));
+      }
+    }
+  };
+
+  const preColon = id.split(":")[0] ?? id;
+  for (const seed of [id, preColon]) {
+    addToken(seed);
+  }
+
+  let singleMatch: string | null = null;
+  for (const candidate of candidateTokens) {
+    const matched = resolveStructuredAllowedToolName(candidate, allowedToolNames);
+    if (!matched) {
+      continue;
+    }
+    if (singleMatch && singleMatch !== matched) {
+      return null;
+    }
+    singleMatch = matched;
+  }
+
+  return singleMatch;
+}
+
+function looksLikeMalformedToolNameCounter(rawName: string): boolean {
+  const normalizedDelimiter = rawName.trim().replace(/\//g, ".");
+  return (
+    /^(?:functions?|tools?)[._-]?/i.test(normalizedDelimiter) &&
+    /(?:[:._-]\d+|\d+)$/.test(normalizedDelimiter)
+  );
+}
+
+function normalizeToolCallNameForDispatch(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+  rawToolCallId?: string,
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged unless we can safely infer
+    // a canonical name from toolCallId and allowlist.
+    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+
+  const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);
+  if (exact) {
+    return exact;
+  }
+  // Some providers put malformed toolCallId-like strings into `name`
+  // itself (for example `functionsread3`). Recover conservatively from the
+  // name token before consulting the separate id so explicit names like
+  // `someOtherTool` are preserved.
+  const inferredFromName = inferToolNameFromToolCallId(trimmed, allowedToolNames);
+  if (inferredFromName) {
+    return inferredFromName;
+  }
+
+  // If the explicit name looks like a provider-mangled tool-call id with a
+  // numeric suffix, fail closed when inference is ambiguous instead of routing
+  // to whichever structured candidate happens to match.
+  if (looksLikeMalformedToolNameCounter(trimmed)) {
+    return trimmed;
+  }
+
+  return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -369,13 +706,21 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
       continue;
     }
-    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
-    if (normalized !== typedBlock.name) {
-      typedBlock.name = normalized;
+    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (typeof typedBlock.name === "string") {
+      const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames, rawId);
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+      continue;
+    }
+    const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
+    if (inferred) {
+      typedBlock.name = inferred;
     }
   }
   normalizeToolCallIdsInMessage(message);
@@ -1121,6 +1466,13 @@ export async function runEmbeddedAttempt(
       config: params.config,
       sessionAgentId,
     });
+    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
+    let yieldDetected = false;
+    let yieldMessage: string | null = null;
+    // Late-binding reference so onYield can abort the session (declared after tool creation)
+    let abortSessionForYield: (() => void) | null = null;
+    let queueYieldInterruptForSession: (() => void) | null = null;
+    let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -1165,6 +1517,13 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          onYield: (message) => {
+            yieldDetected = true;
+            yieldMessage = message;
+            queueYieldInterruptForSession?.();
+            runAbortController.abort("sessions_yield");
+            abortSessionForYield?.();
+          },
         });
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -1475,6 +1834,12 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      abortSessionForYield = () => {
+        yieldAbortSettled = Promise.resolve(activeSession.abort());
+      };
+      queueYieldInterruptForSession = () => {
+        queueSessionsYieldInterruptMessage(activeSession);
+      };
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1646,6 +2011,17 @@ export async function runEmbeddedAttempt(
         };
       }
 
+      const innerStreamFn = activeSession.agent.streamFn;
+      activeSession.agent.streamFn = (model, context, options) => {
+        const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
+          return createYieldAbortedResponse(model) as unknown as Awaited<
+            ReturnType<typeof innerStreamFn>
+          >;
+        }
+        return innerStreamFn(model, context, options);
+      };
+
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
       // names on the live response stream before tool execution.
@@ -1746,6 +2122,7 @@ export async function runEmbeddedAttempt(
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
+      let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
@@ -2075,8 +2452,29 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt));
           }
         } catch (err) {
-          promptError = err;
-          promptErrorSource = "prompt";
+          // Yield-triggered abort is intentional — treat as clean stop, not error.
+          // Check the abort reason to distinguish from external aborts (timeout, user cancel)
+          // that may race after yieldDetected is set.
+          yieldAborted =
+            yieldDetected &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === "sessions_yield";
+          if (yieldAborted) {
+            aborted = false;
+            // Ensure the session abort has fully settled before proceeding.
+            if (yieldAbortSettled) {
+              // eslint-disable-next-line @typescript-eslint/await-thenable -- abort() returns Promise<void> per AgentSession.d.ts
+              await yieldAbortSettled;
+            }
+            stripSessionsYieldArtifacts(activeSession);
+            if (yieldMessage) {
+              await persistSessionsYieldContextMessage(activeSession, yieldMessage);
+            }
+          } else {
+            promptError = err;
+            promptErrorSource = "prompt";
+          }
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
@@ -2103,12 +2501,16 @@ export async function runEmbeddedAttempt(
             await params.onBlockReplyFlush();
           }
 
-          const compactionRetryWait = await waitForCompactionRetryWithAggregateTimeout({
-            waitForCompactionRetry,
-            abortable,
-            aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-            isCompactionStillInFlight: isCompactionInFlight,
-          });
+          // Skip compaction wait when yield aborted the run — the signal is
+          // already tripped and abortable() would immediately reject.
+          const compactionRetryWait = yieldAborted
+            ? { timedOut: false }
+            : await waitForCompactionRetryWithAggregateTimeout({
+                waitForCompactionRetry,
+                abortable,
+                aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+                isCompactionStillInFlight: isCompactionInFlight,
+              });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
             if (!isProbeSession) {
@@ -2365,6 +2767,7 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        yieldDetected: yieldDetected || undefined,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.
