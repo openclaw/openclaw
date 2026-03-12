@@ -401,9 +401,7 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-if (( \${+functions[compdef]} )); then
-  compdef _${rootCmd}_root_completion ${rootCmd}
-fi
+[ -n "$ZSH_VERSION" ] && (( \${+functions[compdef]} )) && compdef _${rootCmd}_root_completion ${rootCmd}
 `;
   return script;
 }
