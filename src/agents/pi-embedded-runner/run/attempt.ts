@@ -51,6 +51,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { buildMemoryRecallBeforeResponse } from "../../memory-recall-before-response.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1966,6 +1967,35 @@ export async function runEmbeddedAttempt(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
             );
           }
+        }
+
+        const memoryRecall = await abortable(
+          buildMemoryRecallBeforeResponse({
+            config: params.config,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            prompt: effectivePrompt,
+          }),
+        );
+        if (memoryRecall.error && memoryRecall.error !== "empty_prompt") {
+          if (memoryRecall.enforced) {
+            throw new Error(
+              `memory recall enforcement failed before response generation: ${memoryRecall.error}`,
+            );
+          }
+          log.warn(
+            `memory recall skipped (advisory mode): agent=${sessionAgentId} run=${params.runId} reason=${memoryRecall.error}`,
+          );
+        }
+        if (memoryRecall.systemPromptAddition) {
+          systemPromptText = prependSystemPromptAddition({
+            systemPrompt: systemPromptText,
+            systemPromptAddition: memoryRecall.systemPromptAddition,
+          });
+          applySystemPromptOverrideToSession(activeSession, systemPromptText);
+          log.debug(
+            `memory recall injected into system prompt: agent=${sessionAgentId} run=${params.runId}`,
+          );
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);

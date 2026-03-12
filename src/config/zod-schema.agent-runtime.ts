@@ -692,6 +692,16 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    recallBeforeResponse: z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.union([z.literal("advisory"), z.literal("enforce")]).optional(),
+        maxResults: z.number().int().positive().optional(),
+        minScore: z.number().min(0).max(1).optional(),
+        maxChars: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
