@@ -126,7 +126,11 @@ import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
-import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import {
+  DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
+  flushPendingToolResultsAfterIdle,
+  waitForAgentIdleBestEffort,
+} from "../wait-for-idle-before-flush.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   selectCompactionTimeoutSnapshot,
@@ -1789,6 +1793,34 @@ export async function runEmbeddedAttempt(
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
+          }
+
+          // FIX: Wait for the agent to be truly idle after prompt() returns.
+          // pi-coding-agent's auto-retry mechanism (for "fetch failed", rate limits, etc.)
+          // calls agent.continue() via setTimeout after the initial prompt() resolves.
+          // The retry's waitForRetry() promise resolves as soon as the retried model produces
+          // a non-error assistant message (e.g. a tool call), BEFORE the tool execution loop
+          // completes and the model processes tool results. This causes the run to finish
+          // without a final text response — the tool results are written to the session but
+          // never fed back to the model. Waiting for agent idle ensures the full tool loop
+          // (model → tool call → tool result → model → final text) completes before we
+          // proceed to capture the session snapshot and build the reply.
+          // See: https://github.com/openclaw/openclaw/issues/8643 (related race condition)
+          if (activeSession.isStreaming) {
+            log.debug(
+              `agent still streaming after prompt returned (auto-retry tool loop in progress): runId=${params.runId}`,
+            );
+            // Wrap in abortable() so run cancellation (user abort, timeout) interrupts
+            // the wait instead of blocking for the full 30s fallback timeout.
+            // waitForAgentIdleBestEffort returns true if timeout fired (agent still streaming).
+            const timedOut = await abortable(
+              waitForAgentIdleBestEffort(activeSession.agent, DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS),
+            );
+            log.debug(
+              timedOut
+                ? `post-prompt idle wait timed out (agent may still be streaming): runId=${params.runId}`
+                : `agent idle after post-prompt wait: runId=${params.runId}`,
+            );
           }
         } catch (err) {
           promptError = err;
