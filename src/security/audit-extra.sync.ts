@@ -352,14 +352,14 @@ type WebSearchConfig = OpenClawConfig["tools"] extends infer T
   : never;
 
 function resolveConfiguredWebSearchProvider(
-  search: WebSearchConfig,
+  search: WebSearchConfig | undefined,
 ): WebSearchProviderId | undefined {
   const raw = typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   return WEB_SEARCH_PROVIDER_IDS.find((provider) => provider === raw);
 }
 
 function hasWebSearchKeyForProvider(
-  search: WebSearchConfig,
+  search: WebSearchConfig | undefined,
   env: NodeJS.ProcessEnv,
   provider: WebSearchProviderId,
 ): boolean {
