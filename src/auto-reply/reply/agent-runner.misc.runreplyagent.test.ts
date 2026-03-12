@@ -10,6 +10,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-e
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
+import { BILLING_ERROR_USER_MESSAGE } from "../../agents/pi-embedded-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
@@ -222,6 +223,20 @@ describe("runReplyAgent onAgentRunStart", () => {
     expect(result).toMatchObject({
       text: expect.stringContaining('No API key found for provider "anthropic".'),
     });
+  });
+
+  it("returns billing message for mixed-signal error", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "HTTP 402 Payment Required: insufficient credits. Request size exceeds model context window.",
+      ),
+    );
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(payload?.text).not.toContain("Context overflow");
   });
 
   it("emits start callback when cli runner starts", async () => {
