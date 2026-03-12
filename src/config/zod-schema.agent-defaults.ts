@@ -164,6 +164,7 @@ export const AgentDefaultsSchema = z
     subagents: z
       .object({
         maxConcurrent: z.number().int().positive().optional(),
+        allowAgents: z.array(z.string()).optional(),
         maxSpawnDepth: z
           .number()
           .int()
