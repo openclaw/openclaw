@@ -36,9 +36,6 @@ function migrateLegacyDmStoreKeys(store: Record<string, SessionEntry>): void {
     }
     // Replace :dm: (case-insensitive) with :direct: and lowercase the entire key.
     const newKey = key.toLowerCase().replace(/:dm:/g, ":direct:");
-    if (newKey === key) {
-      continue;
-    }
     const oldEntry = store[key];
     const existingEntry = store[newKey];
     if (!oldEntry) {
