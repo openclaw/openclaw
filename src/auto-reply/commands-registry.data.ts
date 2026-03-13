@@ -694,6 +694,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "defaultModel",
+      nativeName: "default_model",
+      description: "Show or set the default model (persists to config).",
+      textAlias: "/default_model",
+      category: "options",
+      args: [
+        {
+          name: "model",
+          description: "Model id to set as default (provider/model or id)",
+          type: "string",
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "models",
       nativeName: "models",
       description: "List model providers or provider models.",

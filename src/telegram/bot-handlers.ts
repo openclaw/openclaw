@@ -1,6 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent, normalizeProviderId } from "../agents/model-selection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -15,7 +15,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import {
   loadSessionStore,
@@ -71,6 +71,7 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import type { ButtonRow } from "./model-buttons.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -1261,6 +1262,143 @@ export const registerTelegramHandlers = ({
             throw editErr;
           }
         }
+        return;
+      }
+
+      // Default model selection callback handler (defmdl_list_{prov}_{pg}, defmdl_sel_{model})
+      if (data.startsWith("defmdl_")) {
+        const defModelData = data.slice("defmdl_".length);
+
+        // Parse list callback: list_{provider}_{page}
+        const listMatch = defModelData.match(/^list_([a-z0-9_-]+)_(\d+)$/i);
+        // Parse select callback: sel_{provider/model}
+        const selMatch = defModelData.match(/^sel_(.+)$/);
+
+        const modelData = await buildModelsProviderData(cfg);
+        const { byProvider } = modelData;
+
+        const editMessageWithButtons = async (text: string, buttons: ButtonRow[]) => {
+          const keyboard = buildInlineKeyboard(buttons);
+          try {
+            await editCallbackMessage(text, keyboard ? { reply_markup: keyboard } : undefined);
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (errStr.includes("no text in the message")) {
+              try {
+                await deleteCallbackMessage();
+              } catch {}
+              await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard } : undefined);
+            } else if (!errStr.includes("message is not modified")) {
+              throw editErr;
+            }
+          }
+        };
+
+        if (listMatch) {
+          // Show model list for a provider
+          const provider = listMatch[1];
+          const page = parseInt(listMatch[2], 10);
+          const modelSet = byProvider.get(provider);
+          if (!modelSet || modelSet.size === 0) {
+            await editMessageWithButtons(`No models for ${provider}.`, []);
+            return;
+          }
+          const models = [...modelSet].toSorted();
+          const pageSize = 8;
+          const totalPages = Math.max(1, Math.ceil(models.length / pageSize));
+          const safePage = Math.max(1, Math.min(page, totalPages));
+          const startIndex = (safePage - 1) * pageSize;
+          const pageModels = models.slice(startIndex, startIndex + pageSize);
+
+          const rows: ButtonRow[] = [];
+          for (const model of pageModels) {
+            const callbackData = `defmdl_sel_${provider}/${model}`;
+            if (Buffer.byteLength(callbackData, "utf-8") <= 64) {
+              rows.push([{ text: model, callback_data: callbackData }]);
+            }
+          }
+
+          // Pagination
+          if (totalPages > 1) {
+            const pagRow: ButtonRow = [];
+            if (safePage > 1) {
+              pagRow.push({
+                text: "◀ Prev",
+                callback_data: `defmdl_list_${provider}_${safePage - 1}`,
+              });
+            }
+            if (safePage < totalPages) {
+              pagRow.push({
+                text: "Next ▶",
+                callback_data: `defmdl_list_${provider}_${safePage + 1}`,
+              });
+            }
+            rows.push(pagRow);
+          }
+
+          await editMessageWithButtons(
+            `Select default model for ${provider} (${models.length} models, page ${safePage}/${totalPages}):`,
+            rows,
+          );
+          return;
+        }
+
+        if (selMatch) {
+          // Model selected - write to config
+          const rawModel = selMatch[1];
+          const slashIdx = rawModel.indexOf("/");
+          if (slashIdx < 0) {
+            await editMessageWithButtons("❌ Invalid model selection.", []);
+            return;
+          }
+          const provider = rawModel.slice(0, slashIdx);
+          const modelId = rawModel.slice(slashIdx + 1);
+          const normalizedModel = `${normalizeProviderId(provider)}/${modelId}`;
+
+          // Read and update config
+          const snapshot = await readConfigFileSnapshot();
+          if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
+            await editMessageWithButtons("⚠️ Config file is invalid.", []);
+            return;
+          }
+
+          const configBase = structuredClone(snapshot.parsed as Record<string, unknown>);
+          const agentsSection = (configBase.agents ??= {}) as Record<string, unknown>;
+          const defaultsSection = (agentsSection.defaults ??= {}) as Record<string, unknown>;
+          const modelSection = (defaultsSection.model ??= {} as Record<string, unknown>);
+          const oldModelRaw =
+            typeof modelSection === "object" && modelSection !== null
+              ? (modelSection as Record<string, unknown>).primary
+              : modelSection;
+          const oldModel = typeof oldModelRaw === "string" ? oldModelRaw : "not set";
+
+          if (typeof modelSection === "object" && modelSection !== null) {
+            (modelSection as Record<string, unknown>).primary = normalizedModel;
+          } else {
+            defaultsSection.model = { primary: normalizedModel };
+          }
+
+          try {
+            await writeConfigFile(configBase as unknown as OpenClawConfig);
+            await editMessageWithButtons(
+              [
+                `✅ **Default model updated!**`,
+                "",
+                `**Before:** \`${oldModel ?? "not set"}\``,
+                `**After:** \`${normalizedModel}\``,
+                "",
+                "• Config file updated (persists across restarts)",
+                "• New sessions will use this model",
+              ].join("\n"),
+              [],
+            );
+          } catch (err) {
+            await editMessageWithButtons(`⚠️ Failed to write config: ${String(err)}`, []);
+          }
+          return;
+        }
+
+        // Unknown defmdl callback
         return;
       }
 

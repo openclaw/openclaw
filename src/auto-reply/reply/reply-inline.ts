@@ -5,8 +5,9 @@ const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/commands", "/commands"],
   ["/whoami", "/whoami"],
   ["/id", "/whoami"],
+  ["/default_model", "/default_model"],
 ]);
-const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id|default_model)(?=$|\s|:)/i;
 
 const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
 
