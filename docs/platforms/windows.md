@@ -22,6 +22,33 @@ Native Windows companion apps are planned.
 - [Install & updates](/install/updating)
 - Official WSL2 guide (Microsoft): [https://learn.microsoft.com/windows/wsl/install](https://learn.microsoft.com/windows/wsl/install)
 
+## Native Windows status
+
+Native Windows CLI flows are improving, but WSL2 is still the recommended path.
+
+What works well on native Windows today:
+
+- website installer via `install.ps1`
+- local CLI use such as `openclaw --version`, `openclaw doctor`, and `openclaw plugins list --json`
+- embedded local-agent/provider smoke such as:
+
+```powershell
+openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOWS-HATCH-OK."
+```
+
+Current caveats:
+
+- `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
+- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` currently use Windows Scheduled Tasks
+- on some native Windows setups, Scheduled Task install may require running PowerShell as Administrator
+
+If you want the native CLI only, without gateway service install, use one of these:
+
+```powershell
+openclaw onboard --non-interactive --skip-health
+openclaw gateway run
+```
+
 ## Gateway
 
 - [Gateway runbook](/gateway)
