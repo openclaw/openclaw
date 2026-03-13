@@ -436,6 +436,83 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("detects mention when mentionedUsers is empty but content contains bot mention", async () => {
+    const channelId = "channel-content-mention";
+    const guildId = "guild-content-mention";
+    const message = createMessage({
+      id: "m-content-mention",
+      channelId,
+      content: "hello <@openclaw-bot> can you help?",
+      mentionedUsers: [], // Discord API didn't populate this
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
+  });
+
+  it("detects mention when mentionedUsers is empty but content contains legacy nickname mention", async () => {
+    const channelId = "channel-legacy-mention";
+    const guildId = "guild-legacy-mention";
+    const message = createMessage({
+      id: "m-legacy-mention",
+      channelId,
+      content: "hey <@!openclaw-bot> what's up",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Bob",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
+  });
+
+  it("drops guild message when mentionedUsers is empty and content has no mention", async () => {
+    const channelId = "channel-no-mention";
+    const guildId = "guild-no-mention";
+    const message = createMessage({
+      id: "m-no-mention",
+      channelId,
+      content: "just a regular message",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Carol",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-1";
     const guildId = "guild-other-mention-1";
