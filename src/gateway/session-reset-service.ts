@@ -338,6 +338,8 @@ export async function performGatewaySessionReset(params: {
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
+      lastAccountId: currentEntry?.lastAccountId,
+      lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
       inputTokens: 0,
       outputTokens: 0,
