@@ -88,8 +88,8 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   if (!normalized) {
     return undefined;
   }
-  if (normalized === INTERNAL_MESSAGE_CHANNEL) {
-    return INTERNAL_MESSAGE_CHANNEL;
+  if (RESERVED_CHANNEL_IDS.has(normalized)) {
+    return normalized;
   }
   const builtIn = normalizeChatChannelId(normalized);
   if (builtIn) {
