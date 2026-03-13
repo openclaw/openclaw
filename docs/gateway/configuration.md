@@ -472,7 +472,7 @@ Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate
     openclaw gateway call config.apply --params '{
       "raw": "{ agents: { defaults: { workspace: \"~/.openclaw/workspace\" } } }",
       "baseHash": "<hash>",
-      "sessionKey": "agent:main:whatsapp:dm:+15555550123"
+      "sessionKey": "agent:main:whatsapp:direct:+15555550123"
     }'
     ```
 
