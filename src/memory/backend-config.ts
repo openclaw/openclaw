@@ -16,6 +16,7 @@ import type {
 } from "../config/types.memory.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveCliSpawnInvocation } from "./qmd-process.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -375,14 +376,14 @@ export async function checkQmdBinaryAvailable(
   const isWindows = process.platform === "win32";
   const hasPath = /[\\/]/.test(command) || path.isAbsolute(command);
 
-  // Resolve command to absolute path for security (avoid CWD search on Windows)
-  let resolvedCommand: string;
-  if (isWindows && !hasPath) {
-    // For bare command names on Windows, use PATH-only resolution (exclude CWD)
-    resolvedCommand = resolveWindowsExecutablePath(command, process.env);
-  } else {
-    resolvedCommand = command;
-  }
+  // Resolve command using the same logic as runtime spawn to handle Windows shims correctly
+  // This ensures consistency between the probe and actual execution
+  const spawnInvocation = resolveCliSpawnInvocation({
+    command,
+    args: ["--version"],
+    env: process.env,
+    packageName: "openclaw",
+  });
 
   // Only use cwd when command has explicit path (relative or absolute)
   // Never use workspace cwd for bare command names to avoid executing malicious binaries
@@ -390,12 +391,14 @@ export async function checkQmdBinaryAvailable(
 
   try {
     // Try to run `qmd --version` to verify the binary works
-    await execFileAsync(resolvedCommand, ["--version"], {
+    await execFileAsync(spawnInvocation.command, spawnInvocation.argv, {
       timeout: timeoutMs,
       encoding: "utf8",
       cwd: effectiveCwd,
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
     });
-    return { available: true, path: resolvedCommand };
+    return { available: true, path: spawnInvocation.command };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // Check for various "not found" error patterns across platforms
