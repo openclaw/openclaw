@@ -24,6 +24,7 @@
 - `r: testflight`: close requests asking for TestFlight access/builds. OpenClaw does not provide TestFlight distribution yet, so use the standard response (“Not available, build from source.”) instead of ad-hoc replies.
 - `r: third-party-extension`: close with guidance to ship as third-party plugin.
 - `r: moltbook`: close + lock as off-topic (not affiliated).
+- `r: spam`: close + lock as spam (`lock_reason: spam`).
 - `invalid`: close invalid items (issues are closed as `not_planned`; PRs are closed).
 - `dirty`: close PRs with too many unrelated/unexpected changes (PR-only label).
 
@@ -117,6 +118,7 @@
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+- Written English: use American spelling and grammar in code, comments, docs, and UI strings (e.g. "color" not "colour", "behavior" not "behaviour", "analyze" not "analyse").
 
 ## Release Channels (Naming)
 
