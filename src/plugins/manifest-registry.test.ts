@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -10,10 +10,23 @@ import {
 } from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+const previousUmask = process.umask(0o022);
+
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirSafe(dir);
   tempDirs.push(dir);
   return dir;
 }
@@ -133,6 +146,10 @@ afterEach(() => {
   }
 });
 
+afterAll(() => {
+  process.umask(previousUmask);
+});
+
 describe("loadPluginManifestRegistry", () => {
   it("emits duplicate warning for truly distinct plugins with same id", () => {
     const dirA = makeTempDir();
@@ -214,7 +231,7 @@ describe("loadPluginManifestRegistry", () => {
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
-    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    mkdirSafe(path.join(dir, "sub"));
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
     writeManifest(dir, manifest);
 
@@ -274,8 +291,8 @@ describe("loadPluginManifestRegistry", () => {
     const bundledB = makeTempDir();
     const matrixA = path.join(bundledA, "matrix");
     const matrixB = path.join(bundledB, "matrix");
-    fs.mkdirSync(matrixA, { recursive: true });
-    fs.mkdirSync(matrixB, { recursive: true });
+    mkdirSafe(matrixA);
+    mkdirSafe(matrixB);
     writeManifest(matrixA, {
       id: "matrix",
       name: "Matrix A",
@@ -317,8 +334,8 @@ describe("loadPluginManifestRegistry", () => {
     const homeB = makeTempDir();
     const demoA = path.join(homeA, "plugins", "demo");
     const demoB = path.join(homeB, "plugins", "demo");
-    fs.mkdirSync(demoA, { recursive: true });
-    fs.mkdirSync(demoB, { recursive: true });
+    mkdirSafe(demoA);
+    mkdirSafe(demoB);
     writeManifest(demoA, {
       id: "demo",
       name: "Demo A",

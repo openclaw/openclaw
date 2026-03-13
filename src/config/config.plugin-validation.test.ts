@@ -5,13 +5,25 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
+async function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fs.chmod(dir, 0o755);
+}
+
+async function mkdirSafe(dir: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await chmodSafeDir(dir);
+}
+
 async function writePluginFixture(params: {
   dir: string;
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
 }) {
-  await fs.mkdir(params.dir, { recursive: true });
+  await mkdirSafe(params.dir);
   await fs.writeFile(
     path.join(params.dir, "index.js"),
     `export default { id: "${params.id}", register() {} };`,
@@ -32,6 +44,7 @@ async function writePluginFixture(params: {
 }
 
 describe("config plugin validation", () => {
+  const previousUmask = process.umask(0o022);
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
@@ -53,8 +66,9 @@ describe("config plugin validation", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
+    await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
-    await fs.mkdir(suiteHome, { recursive: true });
+    await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
     bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
@@ -122,6 +136,7 @@ describe("config plugin validation", () => {
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
+    process.umask(previousUmask);
   });
 
   it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
