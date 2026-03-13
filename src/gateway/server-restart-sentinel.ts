@@ -33,6 +33,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   if (!sessionKey) {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(message, { sessionKey: mainSessionKey });
+    wakeRecentlyActiveSessions(message, mainSessionKey, payload.ts);
     return;
   }
 
@@ -60,6 +61,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   const to = origin?.to;
   if (!channel || !to) {
     enqueueSystemEvent(message, { sessionKey });
+    wakeRecentlyActiveSessions(message, sessionKey, payload.ts);
     return;
   }
 
@@ -72,6 +74,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
   });
   if (!resolved.ok) {
     enqueueSystemEvent(message, { sessionKey });
+    wakeRecentlyActiveSessions(message, sessionKey, payload.ts);
     return;
   }
 
