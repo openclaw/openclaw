@@ -21,8 +21,12 @@ function sanitizeExtension(extension?: string): string {
   return `.${token}`;
 }
 
+function basenameAcrossSeparators(fileName: string): string {
+  return path.win32.basename(path.posix.basename(fileName));
+}
+
 function sanitizeFileName(fileName: string): string {
-  const base = path.basename(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
+  const base = basenameAcrossSeparators(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
   const normalized = base.replace(/^-+|-+$/g, "");
   return normalized || "download.bin";
 }

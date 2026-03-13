@@ -68,4 +68,24 @@ describe("withTempDownloadPath", () => {
     expect(path.basename(capturedPath)).toBe("evil.bin");
     expect(capturedPath).not.toContain("..");
   });
+
+  it("strips Windows path segments from fileName on non-Windows hosts", async () => {
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+    let capturedPath = "";
+    await withTempDownloadPath(
+      {
+        prefix: "line-media",
+        fileName: "..\\private\\voice-note.m4a",
+      },
+      async (tmpPath) => {
+        capturedPath = tmpPath;
+      },
+    );
+
+    const resolved = path.resolve(capturedPath);
+    const rel = path.relative(tmpRoot, resolved);
+    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.basename(capturedPath)).toBe("voice-note.m4a");
+    expect(capturedPath).not.toContain("private");
+  });
 });
