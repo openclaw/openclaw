@@ -223,11 +223,52 @@ Run these checks sequentially via exec:
    ```
 
    (Where PUSH_REPO_OWNER is the owner portion of `PUSH_REPO`)
-   If the response array is non-empty, remove that issue from the processing list and report:
 
-   > "Skipping #{N} — PR already exists: {html_url}"
+   If the response array is non-empty, an existing PR was found. Extract the PR details: `number`, `html_url`, `created_at`, `head.sha`.
 
-   If all issues are skipped, report and stop (or loop back if in watch mode).
+   **Check CI status:**
+   Fetch the combined status for the PR's head commit:
+
+   ```
+   curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+     "https://api.github.com/repos/{SOURCE_REPO}/commits/{head_sha}/status"
+   ```
+
+   Extract the `state` field from the response. Possible values: `success`, `failure`, `pending`, `error`.
+
+   **Also check for GitHub Actions check runs:**
+
+   ```
+   curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+     "https://api.github.com/repos/{SOURCE_REPO}/commits/{head_sha}/check-runs"
+   ```
+
+   Extract the `conclusion` field from each check run. Possible values: `success`, `failure`, `neutral`, `cancelled`, `timed_out`, `action_required`, `stale`, `null` (still running).
+
+   **Determine overall CI status:**
+   - If commit status `state` is `success` AND all check runs have `conclusion` of `success` or `neutral` or `skipped` → CI is passing
+   - If any check run has `conclusion` of `failure`, `timed_out`, or `action_required` → CI is failing
+   - If commit status `state` is `failure` or `error` → CI is failing
+   - If any check run is still running (`conclusion` is `null`) or commit status is `pending` → CI is in progress
+
+   **Decision logic:**
+   - If CI is passing → skip this issue entirely:
+     > "Skipping #{N} — PR already exists with passing CI: {html_url}"
+     > Log: `skipping_dispatch_pr_exists` (as required by acceptance criteria)
+   - If CI is failing or in progress → check PR age:
+     Calculate age: `current_time - created_at` in minutes.
+
+     If age < 60 minutes → skip (agent might still be fixing it):
+
+     > "Skipping #{N} — PR exists ({age}m old), CI {status}, likely still being fixed: {html_url}"
+     > Log: `skipping_dispatch_pr_exists`
+
+     If age >= 60 minutes AND CI is failing → allow dispatch (PR is stale, needs new attempt):
+
+     > "Found stale PR #{N} ({age}m old, CI failing) — will dispatch new fix attempt: {html_url}"
+     > Do NOT skip this issue — it will proceed to spawning.
+
+   If all issues are skipped after this check, report and stop (or loop back if in watch mode).
 
 6. **Check for in-progress branches (no PR yet = sub-agent still working):**
    For each remaining issue number N (not already skipped by the PR check above), check if a `fix/issue-{N}` branch exists on the **push repo** (which may be a fork, not origin):
