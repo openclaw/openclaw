@@ -135,9 +135,7 @@ describe("diffs tool", () => {
       mode: "file",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -227,9 +225,7 @@ describe("diffs tool", () => {
       after: "two\n",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).mode).toBe("file");
-    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expectArtifactOnlyFileResult(screenshotter, result);
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -432,6 +428,15 @@ function createToolWithScreenshotter(
     defaults,
     screenshotter,
   });
+}
+
+function expectArtifactOnlyFileResult(
+  screenshotter: DiffScreenshotter,
+  result: { details?: Record<string, unknown> } | null | undefined,
+) {
+  expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
+  expect((result?.details as Record<string, unknown>).mode).toBe("file");
+  expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
 }
 
 function createPngScreenshotter(
