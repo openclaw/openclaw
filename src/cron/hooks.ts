@@ -1,5 +1,7 @@
 // Authored by: cc (Claude Code) | 2026-03-13
+import path from "node:path";
 import type { CronConfig, CronHookEntry, CronLifecycleHookPoint } from "../config/types.cron.js";
+import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { Logger } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
@@ -150,9 +152,17 @@ function matchesFilter(entry: CronHookEntry, job: CronJob, workflow: string): bo
 }
 
 async function loadHookModule(scriptPath: string): Promise<unknown> {
-  // Dynamic import works for .cjs (via jiti/bun) and .ts files.
-  const mod = await import(scriptPath);
-  return mod.default ?? mod;
+  // URL-scheme specifiers (file://, data:, etc.) are passed through directly.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(scriptPath)) {
+    const mod = (await import(scriptPath)) as Record<string, unknown>;
+    return mod.default ?? mod;
+  }
+  // Resolve relative paths against cwd (the OC home dir at runtime).
+  const resolved = path.isAbsolute(scriptPath)
+    ? scriptPath
+    : path.resolve(process.cwd(), scriptPath);
+  const mod = await importFileModule({ modulePath: resolved, cacheBust: true });
+  return resolveFunctionModuleExport({ mod, fallbackExportNames: ["default"] });
 }
 
 function createTimeout(ms: number): { promise: Promise<never>; clear: () => void } {
