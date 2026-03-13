@@ -2,6 +2,7 @@ import * as dns from "node:dns";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { attachFetchTransportHints } from "../infra/net/fetch-transport-hints.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -135,6 +136,16 @@ function buildTelegramConnectOptions(params: {
   }
 
   return Object.keys(connect).length > 0 ? connect : null;
+}
+
+function attachTelegramTransportHints(
+  fetchImpl: typeof fetch,
+  connect: ReturnType<typeof buildTelegramConnectOptions>,
+): typeof fetch {
+  if (!connect) {
+    return fetchImpl;
+  }
+  return attachFetchTransportHints(fetchImpl, { connect: { ...connect } });
 }
 
 function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -351,14 +362,19 @@ export function resolveTelegramFetch(
     : proxyFetch
       ? resolveWrappedFetch(proxyFetch)
       : undiciSourceFetch;
+  const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
+  const baseConnect = buildTelegramConnectOptions({
+    autoSelectFamily: autoSelectDecision.value,
+    dnsResultOrder,
+    forceIpv4: false,
+  });
 
   // Preserve fully caller-owned custom fetch implementations.
   // OpenClaw proxy fetches are metadata-tagged and continue into resolver-scoped policy.
   if (proxyFetch && !explicitProxyUrl) {
-    return sourceFetch;
+    return attachTelegramTransportHints(sourceFetch, baseConnect);
   }
 
-  const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
   const defaultDispatcherResolution = createTelegramDispatcher({
     autoSelectFamily: autoSelectDecision.value,
@@ -389,7 +405,7 @@ export function resolveTelegramFetch(
     return stickyIpv4Dispatcher;
   };
 
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
@@ -421,4 +437,6 @@ export function resolveTelegramFetch(
       throw err;
     }
   }) as typeof fetch;
+
+  return attachTelegramTransportHints(resolvedFetch, baseConnect);
 }

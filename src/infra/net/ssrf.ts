@@ -329,9 +329,13 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  connectHints?: Record<string, unknown>,
+): Dispatcher {
   return new Agent({
     connect: {
+      ...connectHints,
       lookup: pinned.lookup,
     },
   });

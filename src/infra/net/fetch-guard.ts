@@ -1,6 +1,7 @@
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
+import { readFetchTransportHints } from "./fetch-transport-hints.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
@@ -145,6 +146,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   if (!fetcher) {
     throw new Error("fetch is not available");
   }
+  const transportHints = readFetchTransportHints(fetcher as typeof fetch);
 
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
@@ -196,7 +198,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+        dispatcher = createPinnedDispatcher(pinned, transportHints?.connect);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

@@ -34,4 +34,28 @@ describe("createPinnedDispatcher", () => {
       | undefined;
     expect(firstCallArg?.connect?.autoSelectFamily).toBeUndefined();
   });
+
+  it("preserves caller transport hints while overriding lookup", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const previousLookup = vi.fn();
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.220"],
+      lookup,
+    };
+
+    createPinnedDispatcher(pinned, {
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 300,
+      lookup: previousLookup,
+    });
+
+    expect(agentCtor).toHaveBeenCalledWith({
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+        lookup,
+      },
+    });
+  });
 });
