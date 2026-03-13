@@ -43,6 +43,42 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   return buildSystemRunPreparePayload(params);
 }
 
+function getTestConfigPath() {
+  return path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
+}
+
+async function writeOpenClawConfig(config: Record<string, unknown>, pretty = false) {
+  const configPath = getTestConfigPath();
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, pretty ? 2 : undefined));
+}
+
+function mockPendingApprovalRegistration() {
+  vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    if (method === "exec.approval.request") {
+      return { status: "accepted", id: "approval-id" };
+    }
+    if (method === "exec.approval.waitDecision") {
+      return { decision: null };
+    }
+    return { ok: true };
+  });
+}
+
+function expectApprovalUnavailableText(result: {
+  details: { status?: string };
+  content: Array<{ type?: string; text?: string }>;
+}) {
+  expect(result.details.status).toBe("approval-unavailable");
+  const text = result.content.find((part) => part.type === "text")?.text ?? "";
+  expect(text).not.toContain("/approve");
+  expect(text).not.toContain("npm view diver name version description");
+  expect(text).not.toContain("Pending command:");
+  expect(text).not.toContain("Host:");
+  expect(text).not.toContain("CWD:");
+  return text;
+}
+
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
@@ -551,29 +587,16 @@ describe("exec approvals", () => {
   });
 
   it("returns an unavailable approval message instead of a local /approve prompt when discord exec approvals are disabled", async () => {
-    const configPath = path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        channels: {
-          discord: {
-            enabled: true,
-            execApprovals: { enabled: false },
-          },
+    await writeOpenClawConfig({
+      channels: {
+        discord: {
+          enabled: true,
+          execApprovals: { enabled: false },
         },
-      }),
-    );
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
+      },
     });
+
+    mockPendingApprovalRegistration();
 
     const tool = createExecTool({
       host: "gateway",
@@ -588,49 +611,29 @@ describe("exec approvals", () => {
       command: "npm view diver name version description",
     });
 
-    expect(result.details.status).toBe("approval-unavailable");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const text = expectApprovalUnavailableText(result);
     expect(text).toContain("chat exec approvals are not enabled on Discord");
     expect(text).toContain("Web UI or terminal UI");
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("npm view diver name version description");
-    expect(text).not.toContain("Pending command:");
-    expect(text).not.toContain("Host:");
-    expect(text).not.toContain("CWD:");
   });
 
   it("tells Telegram users that allowed approvers were DMed when Telegram approvals are disabled but Discord DM approvals are enabled", async () => {
-    const configPath = path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          channels: {
-            telegram: {
-              enabled: true,
-              execApprovals: { enabled: false },
-            },
-            discord: {
-              enabled: true,
-              execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-            },
+    await writeOpenClawConfig(
+      {
+        channels: {
+          telegram: {
+            enabled: true,
+            execApprovals: { enabled: false },
+          },
+          discord: {
+            enabled: true,
+            execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
           },
         },
-        null,
-        2,
-      ),
+      },
+      true,
     );
 
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
-    });
+    mockPendingApprovalRegistration();
 
     const tool = createExecTool({
       host: "gateway",
@@ -645,14 +648,8 @@ describe("exec approvals", () => {
       command: "npm view diver name version description",
     });
 
-    expect(result.details.status).toBe("approval-unavailable");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const text = expectApprovalUnavailableText(result);
     expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("npm view diver name version description");
-    expect(text).not.toContain("Pending command:");
-    expect(text).not.toContain("Host:");
-    expect(text).not.toContain("CWD:");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {
