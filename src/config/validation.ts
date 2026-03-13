@@ -6,7 +6,9 @@ import {
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import {
   hasAvatarUriScheme,
@@ -222,6 +224,13 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function joinConfigPath(base: string, path: string): string {
+  if (!path) {
+    return base;
+  }
+  return `${base}.${path}`;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -325,6 +334,15 @@ function validateConfigObjectWithPluginsBase(
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const activeChannelPlugins = new Map(
+    (getActivePluginRegistry()?.channels ?? [])
+      .map((entry) => entry.plugin)
+      .flatMap((plugin) => {
+        const id = typeof plugin?.id === "string" ? plugin.id.trim() : "";
+        return id ? [[id, plugin] as const] : [];
+      }),
+  );
+  let discoveredChannelPlugins: typeof activeChannelPlugins | null = null;
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -388,7 +406,40 @@ function validateConfigObjectWithPluginsBase(
     return info.normalizedPlugins;
   };
 
+  const builtInChannelIds = new Set<string>(CHANNEL_IDS);
+  const ensureDiscoveredChannelPlugins = () => {
+    if (discoveredChannelPlugins) {
+      return discoveredChannelPlugins;
+    }
+    discoveredChannelPlugins = new Map<string, (typeof activeChannelPlugins extends Map<string, infer V> ? V : never)>();
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadOpenClawPlugins({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+      cache: false,
+      activate: false,
+    });
+    for (const entry of registry.channels) {
+      const id = typeof entry.plugin?.id === "string" ? entry.plugin.id.trim() : "";
+      if (!id || discoveredChannelPlugins.has(id)) {
+        continue;
+      }
+      discoveredChannelPlugins.set(id, entry.plugin);
+    }
+    return discoveredChannelPlugins;
+  };
+  const resolveChannelPlugin = (channelId: string) => {
+    const active = activeChannelPlugins.get(channelId);
+    if (active) {
+      return active;
+    }
+    return ensureDiscoveredChannelPlugins().get(channelId);
+  };
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+  for (const channelId of activeChannelPlugins.keys()) {
+    allowedChannels.add(channelId);
+  }
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -403,6 +454,9 @@ function validateConfigObjectWithPluginsBase(
             allowedChannels.add(channelId);
           }
         }
+        if (resolveChannelPlugin(trimmed)) {
+          allowedChannels.add(trimmed);
+        }
       }
       if (!allowedChannels.has(trimmed)) {
         issues.push({
@@ -415,6 +469,9 @@ function validateConfigObjectWithPluginsBase(
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
+    heartbeatChannelIds.add(channelId.toLowerCase());
+  }
+  for (const channelId of activeChannelPlugins.keys()) {
     heartbeatChannelIds.add(channelId.toLowerCase());
   }
 
@@ -444,6 +501,10 @@ function validateConfigObjectWithPluginsBase(
           }
         }
       }
+      const discoveredPlugin = resolveChannelPlugin(trimmed);
+      if (discoveredPlugin?.id) {
+        heartbeatChannelIds.add(String(discoveredPlugin.id).toLowerCase());
+      }
     }
     if (heartbeatChannelIds.has(normalized)) {
       return;
@@ -458,6 +519,58 @@ function validateConfigObjectWithPluginsBase(
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+    }
+  }
+
+  if (config.channels && isRecord(config.channels)) {
+    const channels = config.channels as Record<string, unknown>;
+    for (const [channelId, channelConfig] of Object.entries(channels)) {
+      if (
+        channelId === "defaults" ||
+        channelId === "modelByChannel" ||
+        builtInChannelIds.has(channelId)
+      ) {
+        continue;
+      }
+      const configSchema = resolveChannelPlugin(channelId)?.configSchema;
+      if (!configSchema) {
+        continue;
+      }
+      if (typeof configSchema.safeParse === "function") {
+        const parsed = configSchema.safeParse(channelConfig);
+        if (parsed.success) {
+          channels[channelId] = parsed.data ?? channelConfig;
+          continue;
+        }
+        for (const issue of parsed.error.issues) {
+          const mapped = mapZodIssueToConfigIssue(issue);
+          issues.push({
+            ...mapped,
+            path: joinConfigPath(`channels.${channelId}`, mapped.path),
+          });
+        }
+        continue;
+      }
+
+      const schemaResult = validateJsonSchemaValue({
+        schema: configSchema.schema,
+        cacheKey: `channel:${channelId}`,
+        value: channelConfig,
+      });
+      if (schemaResult.ok) {
+        continue;
+      }
+      for (const error of schemaResult.errors) {
+        issues.push({
+          path:
+            error.path === "<root>"
+              ? `channels.${channelId}`
+              : `channels.${channelId}.${error.path}`,
+          message: error.message,
+          allowedValues: error.allowedValues,
+          allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+        });
+      }
     }
   }
 

@@ -43,6 +43,11 @@ export type ChannelConfigUiHint = {
 export type ChannelConfigSchema = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, ChannelConfigUiHint>;
+  safeParse?: (
+    value: unknown,
+  ) =>
+    | { success: true; data?: unknown }
+    | { success: false; error: { issues: Array<{ path: Array<PropertyKey>; message: string }> } };
 };
 
 // oxlint-disable-next-line typescript/no-explicit-any

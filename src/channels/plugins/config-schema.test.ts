@@ -33,4 +33,37 @@ describe("buildChannelConfigSchema", () => {
       properties: { enabled: { type: "boolean" } },
     });
   });
+
+  it("does not mark defaulted fields as required in the generated schema", () => {
+    const schema = z.object({
+      enabled: z.boolean().default(true),
+      mode: z.enum(["on", "off"]).optional(),
+    });
+
+    const result = buildChannelConfigSchema(schema);
+
+    expect((result.schema.required as string[] | undefined) ?? []).not.toContain("enabled");
+  });
+
+  it("retains safeParse behavior for refinements that JSON schema cannot express", () => {
+    const schema = z
+      .object({
+        mode: z.enum(["open", "closed"]).default("closed"),
+        allowFrom: z.array(z.string()).optional(),
+      })
+      .superRefine((value, ctx) => {
+        if (value.mode === "open" && !value.allowFrom?.includes("*")) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["allowFrom"],
+            message: 'mode="open" requires allowFrom to include "*"',
+          });
+        }
+      });
+
+    const result = buildChannelConfigSchema(schema);
+
+    expect(result.safeParse?.({ mode: "open", allowFrom: ["alice"] }).success).toBe(false);
+    expect(result.safeParse?.({ mode: "open", allowFrom: ["*"] }).success).toBe(true);
+  });
 });

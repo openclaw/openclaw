@@ -168,7 +168,7 @@
       },
       "provider": {
         "type": "string",
-        "enum": ["telnyx", "twilio", "plivo", "mock"]
+        "enum": ["telnyx", "twilio", "plivo", "mock", "log"]
       },
       "telnyx": {
         "type": "object",

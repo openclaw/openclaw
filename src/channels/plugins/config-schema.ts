@@ -10,6 +10,8 @@ type ExtendableZodObject = ZodTypeAny & {
   extend: (shape: Record<string, ZodTypeAny>) => ZodTypeAny;
 };
 
+type JsonSchemaNode = Record<string, unknown>;
+
 export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
@@ -32,14 +34,54 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
   }) as T;
 }
 
+function isJsonSchemaNode(value: unknown): value is JsonSchemaNode {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeGeneratedJsonSchema(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeGeneratedJsonSchema(entry));
+  }
+  if (!isJsonSchemaNode(value)) {
+    return value;
+  }
+
+  const next: JsonSchemaNode = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, normalizeGeneratedJsonSchema(child)]),
+  );
+
+  const properties = isJsonSchemaNode(next.properties) ? next.properties : null;
+  const required = Array.isArray(next.required)
+    ? next.required.filter((key): key is string => typeof key === "string")
+    : null;
+  if (properties && required) {
+    const filtered = required.filter((key) => {
+      const propertySchema = properties[key];
+      return !(isJsonSchemaNode(propertySchema) && Object.hasOwn(propertySchema, "default"));
+    });
+    if (filtered.length > 0) {
+      next.required = filtered;
+    } else {
+      delete next.required;
+    }
+  }
+
+  return next;
+}
+
 export function buildChannelConfigSchema(schema: ZodTypeAny): ChannelConfigSchema {
   const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
   if (typeof schemaWithJson.toJSONSchema === "function") {
     return {
-      schema: schemaWithJson.toJSONSchema({
-        target: "draft-07",
-        unrepresentable: "any",
-      }) as Record<string, unknown>,
+      schema: normalizeGeneratedJsonSchema(
+        schemaWithJson.toJSONSchema({
+          target: "draft-07",
+          unrepresentable: "any",
+        }),
+      ) as Record<string, unknown>,
+      ...(typeof schema.safeParse === "function"
+        ? { safeParse: schema.safeParse.bind(schema) }
+        : {}),
     };
   }
 
