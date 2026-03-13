@@ -109,6 +109,107 @@ class MockContextEngine implements ContextEngine {
   }
 }
 
+class LegacySessionKeyStrictEngine implements ContextEngine {
+  readonly info: ContextEngineInfo = {
+    id: "legacy-sessionkey-strict",
+    name: "Legacy SessionKey Strict Engine",
+  };
+  readonly assembleCalls: Array<Record<string, unknown>> = [];
+  readonly compactCalls: Array<Record<string, unknown>> = [];
+
+  private rejectSessionKey(params: { sessionKey?: string }): void {
+    if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
+      throw new Error("Unrecognized key(s) in object: 'sessionKey'");
+    }
+  }
+
+  async ingest(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    message: AgentMessage;
+    isHeartbeat?: boolean;
+  }): Promise<IngestResult> {
+    return { ingested: true };
+  }
+
+  async assemble(params: {
+    sessionId: string;
+    sessionKey?: string;
+    messages: AgentMessage[];
+    tokenBudget?: number;
+  }): Promise<AssembleResult> {
+    this.assembleCalls.push({ ...params });
+    this.rejectSessionKey(params);
+    return {
+      messages: params.messages,
+      estimatedTokens: 7,
+    };
+  }
+
+  async compact(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    tokenBudget?: number;
+    compactionTarget?: "budget" | "threshold";
+    customInstructions?: string;
+    runtimeContext?: Record<string, unknown>;
+  }): Promise<CompactResult> {
+    this.compactCalls.push({ ...params });
+    this.rejectSessionKey(params);
+    return {
+      ok: true,
+      compacted: true,
+      result: {
+        tokensBefore: 50,
+        tokensAfter: 25,
+      },
+    };
+  }
+}
+
+class SessionKeyRuntimeErrorEngine implements ContextEngine {
+  readonly info: ContextEngineInfo = {
+    id: "sessionkey-runtime-error",
+    name: "SessionKey Runtime Error Engine",
+  };
+  assembleCalls = 0;
+
+  async ingest(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    message: AgentMessage;
+    isHeartbeat?: boolean;
+  }): Promise<IngestResult> {
+    return { ingested: true };
+  }
+
+  async assemble(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    messages: AgentMessage[];
+    tokenBudget?: number;
+  }): Promise<AssembleResult> {
+    this.assembleCalls += 1;
+    throw new Error("sessionKey lookup failed");
+  }
+
+  async compact(_params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    tokenBudget?: number;
+    compactionTarget?: "budget" | "threshold";
+    customInstructions?: string;
+    runtimeContext?: Record<string, unknown>;
+  }): Promise<CompactResult> {
+    return {
+      ok: true,
+      compacted: false,
+    };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Engine contract tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -324,6 +425,52 @@ describe("Registry tests", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // 3. Default engine selection
 // ═══════════════════════════════════════════════════════════════════════════
+
+describe("Legacy sessionKey compatibility", () => {
+  it("retries strict legacy engines without sessionKey", async () => {
+    const engineId = `legacy-sessionkey-${Date.now().toString(36)}`;
+    const strictEngine = new LegacySessionKeyStrictEngine();
+    registerContextEngine(engineId, () => strictEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const assembled = await engine.assemble({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      messages: [makeMockMessage()],
+    });
+    const compacted = await engine.compact({
+      sessionId: "s1",
+      sessionKey: "agent:main:test",
+      sessionFile: "/tmp/session.json",
+    });
+
+    expect(assembled.estimatedTokens).toBe(7);
+    expect(compacted.compacted).toBe(true);
+    expect(strictEngine.assembleCalls).toHaveLength(2);
+    expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.compactCalls).toHaveLength(2);
+    expect(strictEngine.compactCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+    expect(strictEngine.compactCalls[1]).not.toHaveProperty("sessionKey");
+  });
+
+  it("does not retry non-compat runtime errors", async () => {
+    const engineId = `sessionkey-runtime-${Date.now().toString(36)}`;
+    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine();
+    registerContextEngine(engineId, () => runtimeErrorEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await expect(
+      engine.assemble({
+        sessionId: "s1",
+        sessionKey: "agent:main:test",
+        messages: [makeMockMessage()],
+      }),
+    ).rejects.toThrow("sessionKey lookup failed");
+    expect(runtimeErrorEngine.assembleCalls).toBe(1);
+  });
+});
 
 describe("Default engine selection", () => {
   // Ensure both legacy and a custom test engine are registered before these tests.
