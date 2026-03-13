@@ -14,6 +14,15 @@ describe("shared/entry-metadata", () => {
     });
   });
 
+  it("keeps metadata precedence even when metadata values are blank", () => {
+    expect(
+      resolveEmojiAndHomepage({
+        metadata: { emoji: "", homepage: "   " },
+        frontmatter: { emoji: "🙂", homepage: "https://example.com" },
+      }),
+    ).toEqual({});
+  });
+
   it("falls back through frontmatter homepage aliases and drops blanks", () => {
     expect(
       resolveEmojiAndHomepage({
@@ -29,5 +38,12 @@ describe("shared/entry-metadata", () => {
         frontmatter: { url: "   " },
       }),
     ).toEqual({});
+    expect(
+      resolveEmojiAndHomepage({
+        frontmatter: { url: " https://openclaw.ai/install " },
+      }),
+    ).toEqual({
+      homepage: "https://openclaw.ai/install",
+    });
   });
 });
