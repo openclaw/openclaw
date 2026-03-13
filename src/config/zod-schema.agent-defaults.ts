@@ -32,7 +32,7 @@ export const AgentDefaultsSchema = z
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
           })
-          .strict(),
+          .passthrough(),
       )
       .optional(),
     workspace: z.string().optional(),
