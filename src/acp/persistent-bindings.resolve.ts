@@ -21,10 +21,10 @@ import {
 
 function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "discord" || normalized === "telegram") {
-    return normalized;
+  if (!normalized) {
+    return null;
   }
-  return null;
+  return normalized;
 }
 
 function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
@@ -52,7 +52,7 @@ function parseConfiguredBindingSessionKey(params: {
     return null;
   }
   const tokens = rest.split(":");
-  if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
+  if (tokens.length < 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
   const channel = normalizeBindingChannel(tokens[2]);
@@ -164,26 +164,47 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
       }
       continue;
     }
-    const parsedTopic = parseTelegramTopicConversation({
-      conversationId: targetConversationId,
-    });
-    if (!parsedTopic || !parsedTopic.chatId.startsWith("-")) {
+    if (channel === "telegram") {
+      const parsedTopic = parseTelegramTopicConversation({
+        conversationId: targetConversationId,
+      });
+      if (!parsedTopic || !parsedTopic.chatId.startsWith("-")) {
+        continue;
+      }
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "telegram",
+        accountId: parsedSessionKey.accountId,
+        conversationId: parsedTopic.canonicalConversationId,
+        parentConversationId: parsedTopic.chatId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        if (accountMatchPriority === 2) {
+          return spec;
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = spec;
+        }
+      }
       continue;
     }
-    const spec = toConfiguredBindingSpec({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: parsedSessionKey.accountId,
-      conversationId: parsedTopic.canonicalConversationId,
-      parentConversationId: parsedTopic.chatId,
-      binding,
-    });
-    if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
-      if (accountMatchPriority === 2) {
-        return spec;
-      }
-      if (!wildcardMatch) {
-        wildcardMatch = spec;
+    // Generic plugin channel: flat conversation ID matching
+    {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
+        accountId: parsedSessionKey.accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        if (accountMatchPriority === 2) {
+          return spec;
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = spec;
+        }
       }
     }
   }
@@ -335,6 +356,55 @@ export function resolveConfiguredAcpBindingRecord(params: {
       };
     }
     return null;
+  }
+
+  // Generic plugin channel: flat conversation ID matching (no thread inheritance,
+  // no topic parsing). This enables ACP bindings on any channel (Bridge, Matrix, etc.)
+  {
+    let wildcardMatch: AgentAcpBinding | null = null;
+    for (const binding of listAcpBindings(params.cfg)) {
+      const bindingChannel = normalizeBindingChannel(binding.match.channel);
+      if (!bindingChannel || bindingChannel !== channel) {
+        continue;
+      }
+      const accountMatchPriority = resolveAccountMatchPriority(binding.match.accountId, accountId);
+      if (accountMatchPriority === 0) {
+        continue;
+      }
+      const bindingConversationId = resolveBindingConversationId(binding);
+      if (!bindingConversationId || bindingConversationId !== conversationId) {
+        continue;
+      }
+      if (accountMatchPriority === 2) {
+        const spec = toConfiguredBindingSpec({
+          cfg: params.cfg,
+          channel,
+          accountId,
+          conversationId,
+          binding,
+        });
+        return {
+          spec,
+          record: toConfiguredAcpBindingRecord(spec),
+        };
+      }
+      if (!wildcardMatch) {
+        wildcardMatch = binding;
+      }
+    }
+    if (wildcardMatch) {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel,
+        accountId,
+        conversationId,
+        binding: wildcardMatch,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
   }
 
   return null;
