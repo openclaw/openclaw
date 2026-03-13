@@ -140,3 +140,98 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("config-guard gates repairNotLoaded (#43602 + #35862)", () => {
+  let runServiceStart: typeof import("./lifecycle-core.js").runServiceStart;
+  let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+
+  beforeAll(async () => {
+    ({ runServiceStart, runServiceRestart } = await import("./lifecycle-core.js"));
+  });
+
+  beforeEach(() => {
+    resetLifecycleRuntimeLogs();
+    readConfigFileSnapshotMock.mockReset();
+    setConfigSnapshot({ exists: true, valid: true });
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({});
+    resetLifecycleServiceMocks();
+    service.isLoaded.mockResolvedValue(false);
+  });
+
+  it("start: aborts before repairNotLoaded when config is invalid", async () => {
+    const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+    const serviceWithRepair = { ...service, repairNotLoaded };
+    setConfigSnapshot({
+      exists: true,
+      valid: false,
+      issues: [{ path: "agents.defaults.model", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceStart({
+        serviceNoun: "Gateway",
+        service: serviceWithRepair,
+        renderStartHints: () => [],
+        opts: { json: true },
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(repairNotLoaded).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("start: proceeds with repair when config is valid", async () => {
+    const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+    const serviceWithRepair = { ...service, repairNotLoaded };
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service: serviceWithRepair,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(repairNotLoaded).toHaveBeenCalledTimes(1);
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("restart: aborts before repairNotLoaded when config is invalid", async () => {
+    const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+    const serviceWithRepair = { ...service, repairNotLoaded };
+    setConfigSnapshot({
+      exists: true,
+      valid: false,
+      issues: [{ path: "agents.defaults.model", message: "Unrecognized key" }],
+    });
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service: serviceWithRepair,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onNotLoaded: async () => null,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(repairNotLoaded).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("restart: proceeds with repair when config is valid", async () => {
+    const repairNotLoaded = vi.fn().mockResolvedValue({ ok: true });
+    const serviceWithRepair = { ...service, repairNotLoaded };
+
+    const result = await runServiceRestart({
+      serviceNoun: "Gateway",
+      service: serviceWithRepair,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => null,
+    });
+
+    expect(result).toBe(true);
+    expect(repairNotLoaded).toHaveBeenCalledTimes(1);
+  });
+});

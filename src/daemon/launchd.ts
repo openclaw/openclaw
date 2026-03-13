@@ -325,7 +325,15 @@ export async function repairLaunchAgentBootstrap(args: {
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    // Race condition: another process (or macOS itself) may have bootstrapped
+    // the service between our isLoaded check and this call.  Exit code 130 or
+    // "already exists in domain" means the service is already registered — treat
+    // as success and proceed to kickstart.  See #26088 for prior art.
+    const bootDetail = (boot.stderr || boot.stdout).trim().toLowerCase();
+    const alreadyLoaded = boot.code === 130 || bootDetail.includes("already exists in domain");
+    if (!alreadyLoaded) {
+      return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    }
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
