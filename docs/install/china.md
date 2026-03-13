@@ -279,7 +279,7 @@ A practical setup for China users — use Qwen for daily tasks (no proxy needed,
 
 ## Local LLM via Ollama
 
-For fully offline operation without any proxy, run models locally via Ollama:
+Running models locally via Ollama eliminates the need for LLM API proxy access. Note that the initial setup (installing Ollama and downloading models) still requires internet — after that, inference is fully offline.
 
 ```bash
 # Install Ollama
@@ -315,7 +315,7 @@ Configure OpenClaw:
 }
 ```
 
-This requires no network access at all. Suitable for air-gapped environments. See [Ollama provider docs](/concepts/model-providers#ollama) for more options.
+For truly air-gapped environments, download the Ollama installer and model files from a machine with internet access, then transfer via USB or internal network. See [Ollama provider docs](/concepts/model-providers#ollama) for more options.
 
 ## Troubleshooting
 
