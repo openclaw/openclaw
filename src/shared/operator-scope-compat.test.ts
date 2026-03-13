@@ -86,4 +86,31 @@ describe("roleScopesAllow", () => {
       }),
     ).toBe(false);
   });
+
+  it("normalizes blank and duplicate scopes before evaluating", () => {
+    expect(
+      roleScopesAllow({
+        role: " operator ",
+        requestedScopes: [" operator.read ", "operator.read", "   "],
+        allowedScopes: [" operator.write ", "operator.write", ""],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unsatisfied operator write scopes and empty allowed scopes", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["   "],
+      }),
+    ).toBe(false);
+  });
 });
