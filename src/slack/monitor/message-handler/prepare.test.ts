@@ -570,6 +570,151 @@ describe("slack prepareSlackMessage inbound contract", () => {
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
+
+  it("preserves pinned owner route on main-scoped DMs", async () => {
+    const { storePath } = makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath, dmScope: "main" },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    // Treat this as a DM.
+    slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
+    // Pin a single owner (UOWNER).
+    slackCtx.allowFrom = ["slack:UOWNER"];
+
+    // First: owner sends a DM, establishing the main-session route.
+    const ownerPrepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({ channel: "D0ACP6B1T8V", user: "UOWNER", ts: "600.000" }),
+    );
+    expect(ownerPrepared).toBeTruthy();
+
+    // Then: non-owner sender must not overwrite the pinned main-session route.
+    const otherPrepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createSlackMessage({ channel: "D0ACP6B1T8V", user: "UOTHER", ts: "601.000" }),
+    );
+    expect(otherPrepared).toBeTruthy();
+
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[ownerPrepared!.route.mainSessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext?.to).toBe("user:UOWNER");
+  });
+
+  it("preserves pinned owner route on threaded main-scoped DMs", async () => {
+    const { storePath } = makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath, dmScope: "main" },
+        channels: { slack: { enabled: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
+    slackCtx.allowFrom = ["slack:UOWNER"];
+
+    const ownerPrepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({ channel: "D0ACP6B1T8V", user: "UOWNER", ts: "700.000" }),
+    );
+    expect(ownerPrepared).toBeTruthy();
+
+    const threadSessionKey = String(ownerPrepared!.ctxPayload.SessionKey ?? "");
+    expect(threadSessionKey).toContain(":thread:700.000");
+
+    const otherPrepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "D0ACP6B1T8V",
+        user: "UOTHER",
+        ts: "701.000",
+        thread_ts: "700.000",
+        parent_user_id: "UOWNER",
+      }),
+    );
+    expect(otherPrepared).toBeTruthy();
+    expect(otherPrepared!.ctxPayload.SessionKey).toBe(threadSessionKey);
+
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[threadSessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext?.to).toBe("user:UOWNER");
+  });
+
+  it("persists channel delivery route for top-level channel sessions", async () => {
+    const { storePath } = makeTmpStorePath();
+    const slackCtx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: false,
+      asChannel: true,
+    });
+    slackCtx.cfg = {
+      ...slackCtx.cfg,
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({ channel: "C123", channel_type: "channel", ts: "600.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    const sessionKey = String(prepared?.ctxPayload.SessionKey ?? "");
+    expect(sessionKey).not.toBe("");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[sessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "600.000",
+    });
+  });
+
+  it("persists thread delivery route for channel thread sessions", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "700.000" }],
+    });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "please fix",
+      ts: "701.000",
+      thread_ts: "700.000",
+      parent_user_id: "U2",
+    });
+
+    expect(prepared).toBeTruthy();
+    const sessionKey = String(prepared?.ctxPayload.SessionKey ?? "");
+    expect(sessionKey).not.toBe("");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    const entry = store[sessionKey];
+    expect(entry).toBeTruthy();
+    expect(entry.deliveryContext).toMatchObject({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "700.000",
+    });
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {

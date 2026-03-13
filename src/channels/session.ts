@@ -65,17 +65,21 @@ export async function recordInboundSession(params: {
     return;
   }
   const targetSessionKey = normalizeSessionStoreKey(update.sessionKey);
-  await updateLastRoute({
-    storePath,
-    sessionKey: targetSessionKey,
-    deliveryContext: {
-      channel: update.channel,
-      to: update.to,
-      accountId: update.accountId,
-      threadId: update.threadId,
-    },
-    // Avoid leaking inbound origin metadata into a different target session.
-    ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
-    groupResolution,
-  });
+  try {
+    await updateLastRoute({
+      storePath,
+      sessionKey: targetSessionKey,
+      deliveryContext: {
+        channel: update.channel,
+        to: update.to,
+        accountId: update.accountId,
+        threadId: update.threadId,
+      },
+      // Avoid leaking inbound origin metadata into a different target session.
+      ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
+      groupResolution,
+    });
+  } catch (err) {
+    params.onRecordError(err);
+  }
 }
