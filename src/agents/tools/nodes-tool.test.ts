@@ -7,7 +7,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
-  listNodes: vi.fn(async () => []),
+  listNodes: vi.fn(async () => [] as Array<{ nodeId: string; commands?: string[] }>),
   resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
 
@@ -53,6 +53,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
     screenMocks.writeScreenRecordToFile.mockClear();
   });
 
+  it("marks nodes as owner-only", () => {
+    const tool = createNodesTool();
+    expect(tool.ownerOnly).toBe(true);
+  });
+
   it("caps durationMs schema at 300000", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {
@@ -84,5 +89,51 @@ describe("createNodesTool screen_record duration guardrails", () => {
         }),
       }),
     );
+  });
+
+  it("omits rawCommand when preparing wrapped argv execution", async () => {
+    nodeUtilsMocks.listNodes.mockResolvedValue([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+      },
+    ]);
+    gatewayMocks.callGatewayTool.mockImplementation(async (_method, _opts, payload) => {
+      if (payload?.command === "system.run.prepare") {
+        return {
+          payload: {
+            plan: {
+              argv: ["bash", "-lc", "echo hi"],
+              cwd: null,
+              commandText: 'bash -lc "echo hi"',
+              commandPreview: "echo hi",
+              agentId: null,
+              sessionKey: null,
+            },
+          },
+        };
+      }
+      if (payload?.command === "system.run") {
+        return { payload: { ok: true } };
+      }
+      throw new Error(`unexpected command: ${String(payload?.command)}`);
+    });
+    const tool = createNodesTool();
+
+    await tool.execute("call-1", {
+      action: "run",
+      node: "macbook",
+      command: ["bash", "-lc", "echo hi"],
+    });
+
+    const prepareCall = gatewayMocks.callGatewayTool.mock.calls.find(
+      (call) => call[2]?.command === "system.run.prepare",
+    )?.[2];
+    expect(prepareCall).toBeTruthy();
+    expect(prepareCall?.params).toMatchObject({
+      command: ["bash", "-lc", "echo hi"],
+      agentId: "main",
+    });
+    expect(prepareCall?.params).not.toHaveProperty("rawCommand");
   });
 });

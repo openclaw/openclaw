@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -96,6 +99,33 @@ describe("LINE accounts", () => {
       expect(account.channelAccessToken).toBe("");
       expect(account.channelSecret).toBe("");
       expect(account.tokenSource).toBe("none");
+    });
+
+    it.runIf(process.platform !== "win32")("rejects symlinked token and secret files", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
+      const tokenFile = path.join(dir, "token.txt");
+      const tokenLink = path.join(dir, "token-link.txt");
+      const secretFile = path.join(dir, "secret.txt");
+      const secretLink = path.join(dir, "secret-link.txt");
+      fs.writeFileSync(tokenFile, "file-token\n", "utf8");
+      fs.writeFileSync(secretFile, "file-secret\n", "utf8");
+      fs.symlinkSync(tokenFile, tokenLink);
+      fs.symlinkSync(secretFile, secretLink);
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            tokenFile: tokenLink,
+            secretFile: secretLink,
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+      expect(account.channelAccessToken).toBe("");
+      expect(account.channelSecret).toBe("");
+      expect(account.tokenSource).toBe("none");
+      fs.rmSync(dir, { recursive: true, force: true });
     });
   });
 
