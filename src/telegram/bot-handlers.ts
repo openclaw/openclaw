@@ -1265,16 +1265,28 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Default model selection callback handler (defmdl_list_{prov}_{pg}, defmdl_sel_{model})
+      // Default model selection callback handler (defmdl_list_{prov}_{pg}, defmdl_sel_{model}, defmdl_s/{model})
       if (data.startsWith("defmdl_")) {
         const defModelData = data.slice("defmdl_".length);
 
+        // Resolve session state for agent-aware model data
+        const defSessionState = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+          senderId,
+        });
+
         // Parse list callback: list_{provider}_{page}
         const listMatch = defModelData.match(/^list_([a-z0-9_-]+)_(\d+)$/i);
-        // Parse select callback: sel_{provider/model}
+        // Parse select callback (standard): sel_{provider/model}
         const selMatch = defModelData.match(/^sel_(.+)$/);
+        // Parse select callback (compact): s/{model}
+        const compactSelMatch = defModelData.match(/^s\/(.+)$/);
 
-        const modelData = await buildModelsProviderData(cfg);
+        const modelData = await buildModelsProviderData(cfg, defSessionState.agentId);
         const { byProvider } = modelData;
 
         const editMessageWithButtons = async (text: string, buttons: ButtonRow[]) => {
@@ -1312,8 +1324,17 @@ export const registerTelegramHandlers = ({
 
           const rows: ButtonRow[] = [];
           for (const model of pageModels) {
-            const callbackData = `defmdl_sel_${provider}/${model}`;
-            if (Buffer.byteLength(callbackData, "utf-8") <= 64) {
+            // Standard format
+            const standardCallback = `defmdl_sel_${provider}/${model}`;
+            // Compact fallback for long model IDs
+            const compactCallback = `defmdl_s/${model}`;
+            const callbackData =
+              Buffer.byteLength(standardCallback, "utf-8") <= 64
+                ? standardCallback
+                : Buffer.byteLength(compactCallback, "utf-8") <= 64
+                  ? compactCallback
+                  : null;
+            if (callbackData) {
               rows.push([{ text: model, callback_data: callbackData }]);
             }
           }
@@ -1343,9 +1364,30 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        if (selMatch) {
+        const resolvedSelModel = selMatch
+          ? selMatch[1]
+          : compactSelMatch
+            ? compactSelMatch[1]
+            : null;
+
+        if (resolvedSelModel) {
+          // Authorization check: config writes require allowlist-level access
+          const selSenderAuthorization = authorizeTelegramEventSender({
+            chatId,
+            chatTitle: callbackMessage?.chat?.title,
+            isGroup,
+            senderId,
+            senderUsername: callback.from?.username ?? "",
+            mode: "callback-allowlist",
+            context: { cfg, accountId },
+          });
+          if (!selSenderAuthorization.allowed) {
+            await editMessageWithButtons("❌ Not authorized to change default model.", []);
+            return;
+          }
+
           // Model selected - write to config
-          const rawModel = selMatch[1];
+          const rawModel = resolvedSelModel;
           const slashIdx = rawModel.indexOf("/");
           if (slashIdx < 0) {
             await editMessageWithButtons("❌ Invalid model selection.", []);
@@ -1384,7 +1426,7 @@ export const registerTelegramHandlers = ({
               [
                 `✅ **Default model updated!**`,
                 "",
-                `**Before:** \`${oldModel ?? "not set"}\``,
+                `**Before:** \`${oldModel}\``,
                 `**After:** \`${normalizedModel}\``,
                 "",
                 "• Config file updated (persists across restarts)",
