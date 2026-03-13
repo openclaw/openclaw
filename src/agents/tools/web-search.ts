@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "tavily"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -333,6 +333,22 @@ type KimiConfig = {
   model?: string;
 };
 
+type TavilyConfig = {
+  apiKey?: string;
+  searchDepth?: string;
+};
+
+type TavilySearchResponse = {
+  results?: Array<{
+    title?: string;
+    url?: string;
+    content?: string;
+    score?: number;
+    raw_content?: string;
+  }>;
+  query?: string;
+};
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -593,6 +609,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "tavily") {
+    return {
+      error: "missing_tavily_api_key",
+      message:
+        "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure tools.web.search.tavily.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -620,6 +644,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "tavily") {
+    return "tavily";
   }
 
   // Auto-detect provider from available API keys (alphabetical order)
@@ -663,6 +690,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "perplexity" from available API keys',
       );
       return "perplexity";
+    }
+    // Tavily
+    const tavilyConfig = resolveTavilyConfig(search);
+    if (resolveTavilyApiKey(tavilyConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "tavily" from available API keys',
+      );
+      return "tavily";
     }
   }
 
@@ -889,6 +924,41 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   return fromConfig || DEFAULT_KIMI_BASE_URL;
 }
 
+function resolveTavilyConfig(search?: WebSearchConfig): TavilyConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const tavily = "tavily" in search ? search.tavily : undefined;
+  if (!tavily || typeof tavily !== "object") {
+    return {};
+  }
+  return tavily as TavilyConfig;
+}
+
+function resolveTavilyApiKey(tavily?: TavilyConfig): string | undefined {
+  const fromConfig = normalizeApiKey(tavily?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.TAVILY_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveTavilySearchDepth(tavily?: TavilyConfig, search?: unknown): string {
+  const fromTavily =
+    tavily && "searchDepth" in tavily && typeof tavily.searchDepth === "string"
+      ? tavily.searchDepth.trim()
+      : "";
+  const fromSearch =
+    search &&
+    typeof search === "object" &&
+    "searchDepth" in search &&
+    typeof (search as { searchDepth: unknown }).searchDepth === "string"
+      ? (search as { searchDepth: string }).searchDepth.trim()
+      : "";
+  return fromTavily || fromSearch || "basic";
+}
+
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
   if (!search || typeof search !== "object") {
     return {};
@@ -1017,6 +1087,65 @@ async function runGeminiSearch(params: {
       }
 
       return { content, citations };
+    },
+  );
+}
+
+async function runTavilySearch(params: {
+  query: string;
+  apiKey: string;
+  searchDepth: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
+  const endpoint = "https://api.tavily.com/search";
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          query: params.query,
+          search_depth: params.searchDepth,
+          include_raw_content: false,
+          include_images: false,
+          include_answer: false,
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const safeDetail = (detailResult.text || res.statusText).replace(
+          /tvly-[a-zA-Z0-9]+/g,
+          "tvly-***",
+        );
+        throw new Error(`Tavily API error (${res.status}): ${safeDetail}`);
+      }
+
+      let data: TavilySearchResponse;
+      try {
+        data = (await res.json()) as TavilySearchResponse;
+      } catch (err) {
+        throw new Error(`Tavily API returned invalid JSON`, { cause: err });
+      }
+
+      const results = data.results || [];
+      const content = results.map((r, i) => `[${i + 1}] ${r.title}\n${r.content}`).join("\n\n");
+
+      const citations = results
+        .map((r) => ({
+          url: r.url || "",
+          title: r.title || undefined,
+        }))
+        .filter((c) => c.url !== "");
+
+      return { content: content || "No response", citations };
     },
   );
 }
@@ -1603,6 +1732,7 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  tavilySearchDepth?: string;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1769,6 +1899,32 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "tavily") {
+    const { content, citations } = await runTavilySearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      searchDepth: params.tavilySearchDepth ?? "basic",
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: citations.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content, "web_search"),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1909,23 +2065,26 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const tavilyConfig = resolveTavilyConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
   const description =
-    provider === "perplexity"
-      ? perplexitySchemaTransportHint === "chat_completions"
-        ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
-        : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+    provider === "tavily"
+      ? "Search the web using Tavily Search API. Returns relevant search results with content snippets and URLs."
+      : provider === "perplexity"
+        ? perplexitySchemaTransportHint === "chat_completions"
+          ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
+          : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1949,7 +2108,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "tavily"
+                  ? resolveTavilyApiKey(tavilyConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -2186,6 +2347,7 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        tavilySearchDepth: resolveTavilySearchDepth(tavilyConfig, search),
       });
       return jsonResult(result);
     },
