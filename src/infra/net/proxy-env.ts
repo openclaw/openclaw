@@ -54,7 +54,7 @@ export function hasEnvHttpProxyConfigured(
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
 
-const SOCKS_PROTOCOL_RE = /^socks[45h]?:\/\//i;
+const SOCKS_PROTOCOL_RE = /^socks(?:4|5h?)?:\/\//i;
 
 /**
  * Rewrite proxy URLs whose protocol is unsupported by undici's

@@ -67,6 +67,15 @@ describe("applyGlobalProxyDispatcher", () => {
     });
   });
 
+  it("rewrites socks5h:// ALL_PROXY to http:// for EnvHttpProxyAgent compatibility", () => {
+    process.env.ALL_PROXY = "socks5h://127.0.0.1:7897";
+    applyGlobalProxyDispatcher();
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
+      httpProxy: "http://127.0.0.1:7897",
+      httpsProxy: "http://127.0.0.1:7897",
+    });
+  });
+
   it("passes http:// ALL_PROXY as-is", () => {
     process.env.ALL_PROXY = "http://127.0.0.1:7897";
     applyGlobalProxyDispatcher();
