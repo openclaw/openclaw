@@ -175,13 +175,21 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
+type ArchiveEntry = {
+  path: string;
+  isDirectory: boolean;
+};
+
+async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
+  const entries: ArchiveEntry[] = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push(entry.path);
+      entries.push({
+        path: entry.path,
+        isDirectory: entry.type === "Directory",
+      });
     },
   });
   return entries;
@@ -289,8 +297,18 @@ async function extractEntryContent(params: {
 async function verifyAssetChecksums(params: {
   archivePath: string;
   manifest: BackupManifest;
-  normalizedEntries: string[];
+  archiveEntries: ArchiveEntry[];
 }): Promise<void> {
+  // Map normalized paths to raw paths, excluding directory entries
+  const normalizedToRaw = new Map<string, string>();
+  for (const entry of params.archiveEntries) {
+    if (entry.isDirectory) {
+      continue;
+    }
+    const normalized = normalizeArchivePath(entry.path, "Archive entry");
+    normalizedToRaw.set(normalized, entry.path);
+  }
+
   for (const asset of params.manifest.assets) {
     if (!asset.sha256) {
       continue;
@@ -298,10 +316,9 @@ async function verifyAssetChecksums(params: {
 
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Asset archive path");
 
-    // Collect all archive entries that belong to this asset
-    const assetEntries = params.normalizedEntries
+    // Collect all file entries that belong to this asset
+    const assetEntries = [...normalizedToRaw.keys()]
       .filter((entry) => entry === assetArchivePath || isArchivePathWithin(entry, assetArchivePath))
-      .filter((entry) => !entry.endsWith("/"))
       .toSorted();
 
     if (assetEntries.length === 0) {
@@ -311,10 +328,11 @@ async function verifyAssetChecksums(params: {
     }
 
     if (assetEntries.length === 1 && assetEntries[0] === assetArchivePath) {
-      // Single file asset
+      // Single file asset: use raw path for extraction
+      const rawPath = normalizedToRaw.get(assetEntries[0])!;
       const content = await extractEntryContent({
         archivePath: params.archivePath,
-        entryPath: assetEntries[0],
+        entryPath: rawPath,
       });
       const computed = createHash("sha256").update(content).digest("hex");
       if (computed !== asset.sha256) {
@@ -331,9 +349,10 @@ async function verifyAssetChecksums(params: {
         if (!relativePath) {
           continue;
         }
+        const rawPath = normalizedToRaw.get(entryPath)!;
         const content = await extractEntryContent({
           archivePath: params.archivePath,
-          entryPath,
+          entryPath: rawPath,
         });
         const sha256 = createHash("sha256").update(content).digest("hex");
         fileHashes.push({ relativePath, sha256 });
@@ -389,14 +408,14 @@ export async function backupVerifyCommand(
   opts: BackupVerifyOptions,
 ): Promise<BackupVerifyResult> {
   const archivePath = resolveUserPath(opts.archive);
-  const rawEntries = await listArchiveEntries(archivePath);
-  if (rawEntries.length === 0) {
+  const archiveEntries = await listArchiveEntries(archivePath);
+  if (archiveEntries.length === 0) {
     throw new Error("Backup archive is empty.");
   }
 
-  const entries = rawEntries.map((entry) => ({
-    raw: entry,
-    normalized: normalizeArchivePath(entry, "Archive entry"),
+  const entries = archiveEntries.map((entry) => ({
+    raw: entry.path,
+    normalized: normalizeArchivePath(entry.path, "Archive entry"),
   }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
@@ -423,7 +442,7 @@ export async function backupVerifyCommand(
     await verifyAssetChecksums({
       archivePath,
       manifest,
-      normalizedEntries: [...normalizedEntrySet],
+      archiveEntries,
     });
   }
 
@@ -434,7 +453,7 @@ export async function backupVerifyCommand(
     createdAt: manifest.createdAt,
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
-    entryCount: rawEntries.length,
+    entryCount: archiveEntries.length,
     schemaVersion: manifest.schemaVersion,
     checksumsVerified: hasChecksums,
   };
