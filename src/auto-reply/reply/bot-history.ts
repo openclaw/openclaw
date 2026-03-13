@@ -106,6 +106,21 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
 
 type StoreOptions = { storePath?: string };
 
+/**
+ * Normalize `to` to match the OriginatingTo format used by each channel's
+ * inbound handler. This ensures recording and flushing use the same key.
+ *
+ * Telegram: OriginatingTo is always "telegram:{chatId}", but cron delivery.to
+ *   may be a bare chatId when set explicitly by the job config.
+ * Other channels: delivery.to already matches OriginatingTo format.
+ */
+export function normalizeToForBotHistory(channel: string, to: string): string {
+  if (channel === "telegram" && !to.startsWith("telegram:")) {
+    return `telegram:${to}`;
+  }
+  return to;
+}
+
 export async function readBotHistoryEntries(
   query: { channel: string; to: string; accountId?: string; threadId?: string },
   opts?: StoreOptions,
@@ -201,7 +216,7 @@ export async function flushBotHistoryToTranscript(params: {
     const result = await appendAssistantMessageToSessionTranscript({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      text: entry.text,
+      text: `[Sent via scheduled task (${entry.source ?? "cron"})]\n${entry.text}`,
     });
     if (result.ok) {
       flushedIds.push(entry.id);

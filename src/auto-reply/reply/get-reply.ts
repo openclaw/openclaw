@@ -176,9 +176,14 @@ export async function getReplyFromConfig(
 
   // Flush pending bot messages (e.g. cron deliveries) into the current
   // session transcript so the LLM sees them as prior assistant messages.
-  // OriginatingChannel and OriginatingTo are optional on MsgContext;
-  // skip flush when either is missing (e.g. internal/non-channel messages).
-  if (finalized.OriginatingChannel && finalized.OriginatingTo) {
+  // Only for group chats — DM cron runs share the main session, so the
+  // agent turn already writes to the same transcript.
+  if (
+    cfg.session?.cronHistoryFlush &&
+    isGroup &&
+    finalized.OriginatingChannel &&
+    finalized.OriginatingTo
+  ) {
     await flushBotHistoryToTranscript({
       channel: finalized.OriginatingChannel,
       to: finalized.OriginatingTo,
