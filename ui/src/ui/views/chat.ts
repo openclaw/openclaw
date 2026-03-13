@@ -354,12 +354,16 @@ function handleDragOver(e: DragEvent) {
 }
 
 function handleDrop(e: DragEvent, props: ChatProps) {
-  const allFiles = Array.from(e.dataTransfer?.files ?? []);
-  if (allFiles.length === 0) {
+  const types = e.dataTransfer?.types;
+  if (!types || !Array.from(types).includes("Files")) {
     return;
   }
   e.preventDefault();
   e.stopPropagation();
+  const allFiles = Array.from(e.dataTransfer?.files ?? []);
+  if (allFiles.length === 0) {
+    return;
+  }
   const files = allFiles.filter((file) => file.type.startsWith("image/"));
   if (files.length === 0) {
     return;
@@ -1073,11 +1077,7 @@ export function renderChat(props: ChatProps) {
   };
 
   return html`
-    <section
-      class="card chat"
-      @drop=${(e: DragEvent) => handleDrop(e, props)}
-      @dragover=${(e: DragEvent) => e.preventDefault()}
-    >
+    <section class="card chat">
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
