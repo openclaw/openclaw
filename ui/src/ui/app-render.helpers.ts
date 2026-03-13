@@ -219,6 +219,7 @@ export function renderChatControls(state: AppViewState) {
 
   return html`
     <div class="chat-controls">
+      <span style="display: inline-flex" data-tooltip=${refreshLabel}>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -240,11 +241,13 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        aria-label=${refreshLabel} data-tooltip=${refreshLabel}
+        aria-label=${refreshLabel}
       >
         ${refreshIcon}
       </button>
+      </span>
       <span class="chat-controls__separator">|</span>
+      <span style="display: inline-flex" data-tooltip=${thinkingLabel}>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
@@ -258,10 +261,12 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        aria-label=${thinkingLabel} data-tooltip=${thinkingLabel}
+        aria-label=${thinkingLabel}
       >
         ${icons.brain}
       </button>
+      </span>
+      <span style="display: inline-flex" data-tooltip=${focusLabel}>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
@@ -275,20 +280,23 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        aria-label=${focusLabel} data-tooltip=${focusLabel}
+        aria-label=${focusLabel}
       >
         ${focusIcon}
       </button>
+      </span>
+      <span style="display: inline-flex" data-tooltip=${cronLabel}>
       <button
         class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
         @click=${() => {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        aria-label=${cronLabel} data-tooltip=${cronLabel}
+        aria-label=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
+      </span>
     </div>
   `;
 }
