@@ -574,7 +574,8 @@ per-session MCP server injection.
 
 Recommended flow:
 
-1. Enable Chrome remote debugging in Chrome at `chrome://inspect/#remote-debugging`.
+1. If you plan to use `--autoConnect`, enable Chrome remote debugging in Chrome
+   at `chrome://inspect/#remote-debugging`.
 2. Install and enable the `acpx` plugin.
 3. Add `chrome-devtools-mcp` under `plugins.entries.acpx.config.mcpServers`.
 4. Run your ACP agent through OpenClaw as usual.
@@ -608,6 +609,9 @@ Example:
 Notes:
 
 - Chrome DevTools MCP `--autoConnect` requires Chrome 144 or newer.
+- If you prefer a manual CDP connection instead of `--autoConnect`, launch
+  Chrome with `--remote-debugging-port=<port>` and point the MCP server at that
+  browser with its `--browserUrl`/`--wsEndpoint` options instead.
 - `--autoConnect` can expose the current live Chrome session for the selected
   browser profile, so prefer a dedicated Chrome profile for automation.
 - If you only need OpenClaw to control specific existing tabs, the built-in
