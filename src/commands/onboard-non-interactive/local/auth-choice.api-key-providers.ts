@@ -5,6 +5,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
+  applyAvianConfig,
   applyHuggingfaceConfig,
   applyKilocodeConfig,
   applyKimiCodeConfig,
@@ -25,6 +26,7 @@ import {
   applyXaiConfig,
   applyXiaomiConfig,
   setAnthropicApiKey,
+  setAvianApiKey,
   setGeminiApiKey,
   setHuggingfaceApiKey,
   setKilocodeApiKey,
@@ -487,6 +489,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "huggingface:default",
             provider: "huggingface",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["avian-api-key"],
+      provider: "avian",
+      flagValue: params.opts.avianApiKey,
+      flagName: "--avian-api-key",
+      envVar: "AVIAN_API_KEY",
+      profileId: "avian:default",
+      setCredential: withStorage(setAvianApiKey),
+      applyConfig: (cfg) =>
+        applyAvianConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "avian:default",
+            provider: "avian",
             mode: "api_key",
           }),
         ),

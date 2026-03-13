@@ -19,15 +19,11 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
-  applyAvianConfig,
-  applyAvianProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
-  AVIAN_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-  setAvianApiKey,
   setCloudflareAiGatewayConfig,
   setGeminiApiKey,
   setZaiApiKey,
