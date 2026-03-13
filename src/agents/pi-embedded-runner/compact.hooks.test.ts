@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -395,7 +396,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: undefined,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: path.resolve("/tmp/workspace"),
     });
   });
 
