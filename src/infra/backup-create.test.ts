@@ -64,7 +64,7 @@ describe("formatBackupCreateSummary", () => {
             displayPath: "~/.openclaw/config.json",
           },
           {
-            kind: "oauth",
+            kind: "credentials",
             sourcePath: "/oauth",
             archivePath: "archive/oauth",
             displayPath: "~/.openclaw/oauth",
@@ -77,7 +77,7 @@ describe("formatBackupCreateSummary", () => {
       "Backup archive: /tmp/openclaw-backup.tar.gz",
       "Included 2 paths:",
       "- config: ~/.openclaw/config.json",
-      "- oauth: ~/.openclaw/oauth",
+      "- credentials: ~/.openclaw/oauth",
       "Dry run only; archive was not written.",
     ]);
   });

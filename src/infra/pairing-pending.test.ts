@@ -19,7 +19,7 @@ describe("rejectPendingPairingRequest", () => {
   });
 
   it("removes the request, persists, and returns the dynamic id key", async () => {
-    const state = {
+    const state: { pendingById: Record<string, { accountId: string }> } = {
       pendingById: {
         keep: { accountId: "keep-me" },
         reject: { accountId: "acct-42" },
@@ -33,7 +33,7 @@ describe("rejectPendingPairingRequest", () => {
         idKey: "accountId",
         loadState: async () => state,
         persistState,
-        getId: (pending) => pending.accountId,
+        getId: (pending: { accountId: string }) => pending.accountId,
       }),
     ).resolves.toEqual({
       requestId: "reject",
