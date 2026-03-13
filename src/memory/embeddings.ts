@@ -83,6 +83,7 @@ export type EmbeddingProviderOptions = {
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    organizationId?: string;
     headers?: Record<string, string>;
   };
   model: string;

@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveKilocodeOrgId } from "../../providers/kilocode-shared.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
@@ -414,7 +415,9 @@ export function applyExtraParamsToAgent(
     // Also skip for models known to reject reasoning.effort (e.g. x-ai/*).
     const kilocodeThinkingLevel =
       modelId === "kilo/auto" || isProxyReasoningUnsupported(modelId) ? undefined : thinkingLevel;
-    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel);
+    // Resolve org ID from config (organizationId field or headers) with env var fallback.
+    const kilocodeOrgId = resolveKilocodeOrgId(cfg?.models?.providers?.kilocode);
+    agent.streamFn = createKilocodeWrapper(agent.streamFn, kilocodeThinkingLevel, kilocodeOrgId);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {

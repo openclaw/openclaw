@@ -6,11 +6,31 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
+  resolveKilocodeOrgId,
 } from "../providers/kilocode-shared.js";
 
 const log = createSubsystemLogger("kilocode-models");
 
 export const KILOCODE_MODELS_URL = `${KILOCODE_BASE_URL}models`;
+
+/**
+ * Build the models URL for Kilocode, using an org-scoped path when an
+ * organization ID is configured. This mirrors the behavior of opencode's
+ * `fetchKiloModels`, which routes to `/api/organizations/{orgId}/models`
+ * when an org ID is present.
+ *
+ * KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/"
+ * Org-scoped URL   = "https://api.kilo.ai/api/organizations/{orgId}/models"
+ * Default URL      = "https://api.kilo.ai/api/gateway/models"
+ */
+export function buildKilocodeModelsUrl(orgId?: string): string {
+  if (!orgId) {
+    return KILOCODE_MODELS_URL;
+  }
+  // Strip the "gateway/" segment and substitute the org-scoped path.
+  const apiBase = KILOCODE_BASE_URL.replace(/gateway\/?$/, "");
+  return `${apiBase}organizations/${orgId}/models`;
+}
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 
@@ -138,14 +158,19 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     return buildStaticCatalog();
   }
 
+  const orgId = resolveKilocodeOrgId();
+  const modelsUrl = buildKilocodeModelsUrl(orgId);
+
   try {
-    const response = await fetch(KILOCODE_MODELS_URL, {
+    const response = await fetch(modelsUrl, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
     });
 
     if (!response.ok) {
-      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
+      log.warn(
+        `Failed to discover models from ${modelsUrl}: HTTP ${response.status}, using static catalog`,
+      );
       return buildStaticCatalog();
     }
 

@@ -79,6 +79,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.experimental.sessionMemory",
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
+  "agents.defaults.memorySearch.remote.organizationId",
   "agents.defaults.memorySearch.remote.headers",
   "agents.defaults.memorySearch.remote.batch.enabled",
   "agents.defaults.memorySearch.remote.batch.wait",
