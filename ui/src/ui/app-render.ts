@@ -633,7 +633,31 @@ export function renderApp(state: AppViewState) {
                 overviewLogLines: state.overviewLogLines,
                 showGatewayToken: state.overviewShowGatewayToken,
                 showGatewayPassword: state.overviewShowGatewayPassword,
-                onSettingsChange: (next) => state.applySettings(next),
+                vncConfigDirty: state.vncConfigDirty,
+                onSettingsChange: (next) => {
+                  // Only mark dirty if VNC fields changed
+                  const vncChanged =
+                    next.vncWsUrl !== state.settings.vncWsUrl ||
+                    next.vncPassword !== state.settings.vncPassword ||
+                    next.vncTarget !== state.settings.vncTarget;
+
+                  if (vncChanged) {
+                    state.vncConfigDirty = true;
+                  }
+
+                  // For VNC fields, we update local state but don't persist immediately
+                  // This allows the Save button to be the trigger for persistence
+                  // For other fields, we persist immediately as before
+                  if (vncChanged) {
+                    state.settings = next;
+                  } else {
+                    state.applySettings(next);
+                  }
+                },
+                onSaveVncConfig: () => {
+                  state.applySettings(state.settings);
+                  state.vncConfigDirty = false;
+                },
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;

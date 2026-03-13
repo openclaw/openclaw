@@ -298,6 +298,7 @@ export type AppViewState = {
     streamMode: boolean;
     overviewShowGatewayToken: boolean;
     overviewShowGatewayPassword: boolean;
+    vncConfigDirty: boolean;
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;

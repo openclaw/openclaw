@@ -48,7 +48,9 @@ export type OverviewProps = {
   overviewLogLines: string[];
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
+  vncConfigDirty?: boolean;
   onSettingsChange: (next: UiSettings) => void;
+  onSaveVncConfig?: () => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onToggleGatewayTokenVisibility: () => void;
@@ -325,7 +327,7 @@ export function renderOverview(props: OverviewProps) {
         <div class="card-title">Remote Desktop</div>
         <div class="card-sub">Configure VNC connection details</div>
         <div class="ov-access-grid" style="margin-top: 16px;">
-          <label class="field ov-access-grid__full">
+          <label class="field">
             <span>WebSocket URL</span>
             <input
               .value=${props.settings.vncWsUrl ?? ""}
@@ -336,7 +338,7 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://localhost:8081"
             />
           </label>
-           <label class="field ov-access-grid__full">
+           <label class="field">
             <span>Target (Host:Port)</span>
             <input
               .value=${props.settings.vncTarget ?? ""}
@@ -359,6 +361,24 @@ export function renderOverview(props: OverviewProps) {
               placeholder="VNC Password"
             />
           </label>
+        </div>
+        <div style="margin-top: 16px; display: flex; justify-content: flex-start;">
+          <button 
+            class="btn primary" 
+            style=${
+              props.vncConfigDirty
+                ? "background-color: #2196f3; border-color: #2196f3;"
+                : "background-color: #666; border-color: #666; cursor: default; opacity: 0.8;"
+            }
+            @click=${() => {
+              if (props.vncConfigDirty && props.onSaveVncConfig) {
+                props.onSaveVncConfig();
+              }
+            }}
+            ?disabled=${!props.vncConfigDirty}
+          >
+            ${props.vncConfigDirty ? "Save Config" : "Saved"}
+          </button>
         </div>
       </div>
 
