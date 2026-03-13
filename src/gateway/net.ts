@@ -312,12 +312,26 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
-  if (bindHost !== "127.0.0.1") {
+  const canBind = opts?.canBindToHost ?? canBindToHost;
+
+  if (bindHost === "127.0.0.1") {
+    // Loopback mode: also try IPv6 loopback
+    if (await canBind("::1")) {
+      return [bindHost, "::1"];
+    }
     return [bindHost];
   }
-  const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
-    return [bindHost, "::1"];
+
+  if (bindHost === "0.0.0.0") {
+    // LAN mode: already binds all interfaces including loopback
+    return [bindHost];
+  }
+
+  // Non-loopback specific IP (tailnet, custom): also bind loopback for internal calls
+  // This ensures sessions_spawn and other internal gateway calls work when gateway
+  // is bound to a specific IP like a Tailscale address.
+  if (await canBind("127.0.0.1")) {
+    return [bindHost, "127.0.0.1"];
   }
   return [bindHost];
 }
