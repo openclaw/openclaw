@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { replyWithClaude, NoApiKeyError } from "@/lib/claude";
@@ -16,7 +16,11 @@ function verifyTwilioSignature(
   const expected = createHmac("sha1", authToken)
     .update(url + sorted)
     .digest("base64");
-  return expected === twilioSignature;
+  try {
+    return timingSafeEqual(Buffer.from(expected), Buffer.from(twilioSignature));
+  } catch {
+    return false;
+  }
 }
 
 async function sendTwilioMessage(
@@ -74,7 +78,7 @@ export async function POST(
     const reply = await replyWithClaude(userId, "whatsapp", messageBody);
     await sendTwilioMessage(ch.token, ch.notes, to, from, reply);
   } catch (err) {
-    const msg = err instanceof NoApiKeyError ? NO_KEY_MSG : "An error occurred. Please try again.";
+    const msg = err instanceof NoApiKeyError ? `⚠️ No ${(err as NoApiKeyError).message.split(":")[1] ?? "AI"} API key configured. Add it in Settings → AI Settings, or upgrade to a paid plan.` : "An error occurred. Please try again.";
     await sendTwilioMessage(ch.token, ch.notes, to, from, msg);
   }
 

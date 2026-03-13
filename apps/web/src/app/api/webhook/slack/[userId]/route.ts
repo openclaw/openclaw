@@ -71,7 +71,7 @@ export async function POST(
         const reply = await replyWithClaude(userId, "slack", text);
         await postSlackMessage(ch.token, event.channel, reply);
       } catch (err) {
-        const msg = err instanceof NoApiKeyError ? NO_KEY_MSG : "An error occurred. Please try again.";
+        const msg = err instanceof NoApiKeyError ? `⚠️ No ${(err as NoApiKeyError).message.split(":")[1] ?? "AI"} API key configured. Add it in Settings → AI Settings, or upgrade to a paid plan.` : "An error occurred. Please try again.";
         await postSlackMessage(ch.token, event.channel, msg);
       }
     }

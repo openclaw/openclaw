@@ -32,6 +32,9 @@ export async function GET() {
 export async function PATCH(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if ((session.user as { role?: string }).role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json() as { patch: unknown; baseHash: string };
   if (!body.patch || typeof body.baseHash !== "string") {

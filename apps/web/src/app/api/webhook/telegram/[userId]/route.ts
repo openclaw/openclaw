@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { replyWithClaude, NoApiKeyError } from "@/lib/claude";
@@ -31,6 +32,20 @@ export async function POST(
     where: { userId_channel: { userId, channel: "telegram" } },
   });
   if (!ch?.token || !ch.enabled) return NextResponse.json({ ok: true });
+
+  // Verify the secret token set via Telegram's setWebhook secret_token param
+  // (stored in ch.notes). Reject requests without a valid token.
+  const incomingSecret = req.headers.get("x-telegram-bot-api-secret-token") ?? "";
+  if (!ch.notes) {
+    return new NextResponse("Webhook not configured", { status: 403 });
+  }
+  try {
+    if (!timingSafeEqual(Buffer.from(incomingSecret), Buffer.from(ch.notes))) {
+      return new NextResponse("Invalid secret", { status: 401 });
+    }
+  } catch {
+    return new NextResponse("Invalid secret", { status: 401 });
+  }
 
   const chatId = msg.chat.id;
 
