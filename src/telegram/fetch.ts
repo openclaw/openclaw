@@ -231,6 +231,7 @@ function resolveTelegramDispatcherPolicy(params: {
 function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   dispatcher: TelegramDispatcher;
   mode: TelegramDispatcherMode;
+  effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
     const proxyOptions = policy.proxyTls
@@ -243,6 +244,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       return {
         dispatcher: new ProxyAgent(proxyOptions),
         mode: "explicit-proxy",
+        effectivePolicy: policy,
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -264,6 +266,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       return {
         dispatcher: new EnvHttpProxyAgent(proxyOptions),
         mode: "env-proxy",
+        effectivePolicy: policy,
       };
     } catch (err) {
       log.warn(
@@ -271,15 +274,20 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+      const directPolicy: PinnedDispatcherPolicy = {
+        mode: "direct",
+        ...(policy.connect ? { connect: { ...policy.connect } } : {}),
+      };
       return {
         dispatcher: new Agent(
-          policy.connect
+          directPolicy.connect
             ? ({
-                connect: { ...policy.connect },
+                connect: { ...directPolicy.connect },
               } satisfies ConstructorParameters<typeof Agent>[0])
             : undefined,
         ),
         mode: "direct",
+        effectivePolicy: directPolicy,
       };
     }
   }
@@ -293,6 +301,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         : undefined,
     ),
     mode: "direct",
+    effectivePolicy: policy,
   };
 }
 
@@ -483,7 +492,7 @@ export function resolveTelegramTransport(
   return {
     fetch: resolvedFetch,
     sourceFetch,
-    pinnedDispatcherPolicy: defaultDispatcherResolution.policy,
+    pinnedDispatcherPolicy: defaultDispatcher.effectivePolicy,
   };
 }
 
