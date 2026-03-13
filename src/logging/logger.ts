@@ -238,6 +238,7 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
     toPinoLikeLogger(
       logger.getSubLogger({
         name: bindings ? JSON.stringify(bindings) : undefined,
+        minLevel: logger.settings.minLevel,
       }),
       level,
     );
