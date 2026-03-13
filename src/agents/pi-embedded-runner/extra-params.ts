@@ -365,6 +365,7 @@ function resolveDynamicTemperature(params: {
   merged: Record<string, unknown>;
   override?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
+  reasoningLevel?: ReasoningLevel;
 }): number | undefined {
   if (typeof params.merged.temperature === "number") {
     return undefined;
@@ -387,7 +388,9 @@ function resolveDynamicTemperature(params: {
   if (explicitConfigs.length > 0) {
     isThinkingActive = explicitConfigs.some((val) => !isThinkingDisabled(val));
   } else {
-    isThinkingActive = params.thinkingLevel != null && params.thinkingLevel !== "off";
+    const thinkLevelActive = params.thinkingLevel != null && params.thinkingLevel !== "off";
+    const reasoningLevelActive = params.reasoningLevel != null && params.reasoningLevel !== "off";
+    isThinkingActive = thinkLevelActive || reasoningLevelActive;
   }
 
   if (isThinkingActive) {
@@ -441,6 +444,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  reasoningLevel?: ReasoningLevel,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -463,7 +467,12 @@ export function applyExtraParamsToAgent(
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
 
-  const dynamicTemperature = resolveDynamicTemperature({ merged, override, thinkingLevel });
+  const dynamicTemperature = resolveDynamicTemperature({
+    merged,
+    override,
+    thinkingLevel,
+    reasoningLevel,
+  });
 
   // availableToolNames is used strictly for dynamic temperature resolution.
   // We must strip it before passing it to the stream parameters to prevent

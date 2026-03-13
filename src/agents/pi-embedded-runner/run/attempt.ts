@@ -1937,6 +1937,7 @@ export async function runEmbeddedAttempt(
         },
         params.thinkLevel,
         sessionAgentId,
+        params.reasoningLevel,
       );
 
       if (cacheTrace) {

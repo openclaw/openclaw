@@ -2621,4 +2621,27 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, { messages: [] }, {});
     expect(calls[0]?.temperature).toBe(0.3);
   });
+
+  it("does not apply dynamic temperature when reasoningLevel is 'on'", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "anthropic",
+      "claude-sonnet-4-6",
+      {
+        availableToolNames: new Set(["web_search"]),
+      },
+      "off",
+      undefined,
+      "on",
+    );
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    } as Model<"anthropic-messages">;
+    void agent.streamFn?.(model, { messages: [] }, {});
+    expect(calls[0]?.temperature).toBeUndefined();
+  });
 });
