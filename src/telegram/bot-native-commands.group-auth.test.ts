@@ -1,26 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import type { TelegramAccountConfig } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
-
-const getPluginCommandSpecs = vi.hoisted(() => vi.fn(() => []));
-const matchPluginCommand = vi.hoisted(() => vi.fn(() => null));
-const executePluginCommand = vi.hoisted(() => vi.fn(async () => ({ text: "ok" })));
-
-vi.mock("../plugins/commands.js", () => ({
-  getPluginCommandSpecs,
-  matchPluginCommand,
-  executePluginCommand,
-}));
-
-const deliverReplies = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./bot/delivery.js", () => ({ deliverReplies }));
-
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn(async () => []),
-}));
+import {
+  createNativeCommandsHarness,
+  createTelegramGroupCommandContext,
+  findNotAuthorizedCalls,
+} from "./bot-native-commands.test-helpers.js";
 
 describe("native command auth in groups", () => {
   function setup(params: {
@@ -32,32 +18,12 @@ describe("native command auth in groups", () => {
     groupConfig?: Record<string, unknown>;
     resolveGroupPolicy?: () => ChannelGroupPolicy;
   }) {
-    const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const bot = {
-      api: {
-        setMyCommands: vi.fn().mockResolvedValue(undefined),
-        sendMessage,
-      },
-      command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
-        handlers[name] = handler;
-      },
-    } as const;
-
-    registerTelegramNativeCommands({
-      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    return createNativeCommandsHarness({
       cfg: params.cfg ?? ({} as OpenClawConfig),
-      runtime: {} as unknown as RuntimeEnv,
-      accountId: "default",
       telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
       allowFrom: params.allowFrom ?? [],
       groupAllowFrom: params.groupAllowFrom ?? [],
-      replyToMode: "off",
-      textLimit: 4000,
       useAccessGroups: params.useAccessGroups ?? false,
-      nativeEnabled: true,
-      nativeSkillsEnabled: false,
-      nativeDisabledExplicit: false,
       resolveGroupPolicy:
         params.resolveGroupPolicy ??
         (() =>
@@ -65,15 +31,8 @@ describe("native command auth in groups", () => {
             allowlistEnabled: false,
             allowed: true,
           }) as ChannelGroupPolicy),
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: params.groupConfig as undefined,
-        topicConfig: undefined,
-      }),
-      shouldSkipUpdate: () => false,
-      opts: { token: "token" },
+      groupConfig: params.groupConfig,
     });
-
-    return { handlers, sendMessage };
   }
 
   it("authorizes native commands in groups when sender is in groupAllowFrom", async () => {
@@ -83,23 +42,11 @@ describe("native command auth in groups", () => {
       // no allowFrom — sender is NOT in DM allowlist
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "testuser" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext();
 
     await handlers.status?.(ctx);
 
-    // should NOT send "not authorized" rejection
-    const notAuthCalls = sendMessage.mock.calls.filter(
-      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
-    );
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls).toHaveLength(0);
   });
 
@@ -117,22 +64,11 @@ describe("native command auth in groups", () => {
       useAccessGroups: true,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "testuser" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext();
 
     await handlers.status?.(ctx);
 
-    const notAuthCalls = sendMessage.mock.calls.filter(
-      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
-    );
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls).toHaveLength(0);
   });
 
@@ -149,16 +85,7 @@ describe("native command auth in groups", () => {
       useAccessGroups: true,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "testuser" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext();
 
     await handlers.status?.(ctx);
 
@@ -189,16 +116,7 @@ describe("native command auth in groups", () => {
         }) as ChannelGroupPolicy,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "testuser" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext();
 
     await handlers.status?.(ctx);
 
@@ -226,16 +144,7 @@ describe("native command auth in groups", () => {
         }) as ChannelGroupPolicy,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "testuser" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext();
 
     await handlers.status?.(ctx);
 
@@ -253,22 +162,13 @@ describe("native command auth in groups", () => {
       useAccessGroups: true,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "intruder" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext({
+      username: "intruder",
+    });
 
     await handlers.status?.(ctx);
 
-    const notAuthCalls = sendMessage.mock.calls.filter(
-      (call) => typeof call[1] === "string" && call[1].includes("not authorized"),
-    );
+    const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls.length).toBeGreaterThan(0);
   });
 
@@ -279,16 +179,9 @@ describe("native command auth in groups", () => {
       useAccessGroups: true,
     });
 
-    const ctx = {
-      message: {
-        chat: { id: -100999, type: "supergroup", is_forum: true },
-        from: { id: 12345, username: "intruder" },
-        message_thread_id: 42,
-        message_id: 1,
-        date: 1700000000,
-      },
-      match: "",
-    };
+    const ctx = createTelegramGroupCommandContext({
+      username: "intruder",
+    });
 
     await handlers.status?.(ctx);
 
