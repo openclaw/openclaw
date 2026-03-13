@@ -512,13 +512,15 @@ describe("update-cli", () => {
           call[0][1] === "i" &&
           call[0][2] === "-g",
       );
-    const mergedPath = updateCall?.[1]?.env?.Path ?? updateCall?.[1]?.env?.PATH ?? "";
+    const updateCallOptions =
+      updateCall && typeof updateCall[1] !== "number" ? updateCall[1] : undefined;
+    const mergedPath = updateCallOptions?.env?.Path ?? updateCallOptions?.env?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
       portableGitMingw,
       portableGitUsr,
     ]);
-    expect(updateCall?.[1]?.env?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
-    expect(updateCall?.[1]?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
+    expect(updateCallOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
+    expect(updateCallOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {

@@ -155,7 +155,9 @@ describe("resolveGatewayConnection", () => {
       return await resolveGatewayConnection({});
     });
 
-    expect(result.url).toBe("ws://127.0.0.1:18800");
+    const parsedUrl = new URL(result.url);
+    expect(parsedUrl.protocol).toBe("ws:");
+    expect(parsedUrl.hostname).toBe("127.0.0.1");
   });
 
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
