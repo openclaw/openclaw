@@ -194,8 +194,8 @@ async function hasApiKeyForProvider(
   // Map embedding provider names to model-auth provider names
   const authProvider = provider === "gemini" ? "google" : provider;
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
-    return true;
+    const result = await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    return result != null;
   } catch {
     return false;
   }

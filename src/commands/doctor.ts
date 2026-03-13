@@ -325,7 +325,11 @@ export async function doctorCommand(
       })
     : { checked: false, ready: false };
   await noteMemorySearchHealth(cfg, { gatewayMemoryProbe });
-  await noteMemorySearchDiagnostics(cfg);
+  // Only run detailed diagnostics if gateway memory probe is not ready
+  // (if it's ready, noteMemorySearchHealth already handled the case)
+  if (!gatewayMemoryProbe.ready) {
+    await noteMemorySearchDiagnostics(cfg);
+  }
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,
