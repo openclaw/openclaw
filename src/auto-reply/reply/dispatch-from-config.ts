@@ -174,7 +174,7 @@ export async function dispatchReplyFromConfig(params: {
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
-  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const hookRunner = getGlobalHookRunner();
 
   // Extract message context for hooks (plugin and internal)

@@ -7,6 +7,7 @@ import {
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
+  TtsConfigSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -759,6 +760,7 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    tts: TtsConfigSchema.optional(),
   })
   .strict();
 

@@ -22,7 +22,7 @@ import {
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
+import { maybeApplyTtsToPayload, resolveTtsConfigForAgent } from "../../tts/tts.js";
 import {
   isCommandEnabled,
   maybeResolveTextAlias,
@@ -314,7 +314,7 @@ export async function tryDispatchAcpReply(params: {
     });
 
     await projector.flush(true);
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
+    const ttsMode = resolveTtsConfigForAgent(params.cfg, resolvedAcpAgent).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
       try {
