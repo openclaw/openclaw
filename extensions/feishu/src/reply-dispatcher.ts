@@ -1,3 +1,4 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk";
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
@@ -251,6 +252,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
         if (!shouldDeliverText && !hasMedia) {
+          return;
+        }
+
+        // Suppress NO_REPLY silent token — already delivered via another channel/plugin.
+        if (shouldDeliverText && !hasMedia && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return;
         }
 

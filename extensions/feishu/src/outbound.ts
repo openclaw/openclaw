@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
@@ -82,6 +83,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId, mediaLocalRoots }) => {
+    // Suppress NO_REPLY silent token — already delivered via another channel/plugin.
+    if (!text?.trim() || isSilentReplyText(text.trim(), SILENT_REPLY_TOKEN)) {
+      return { channel: "feishu", messageId: "suppressed", channelId: to };
+    }
+
     const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
