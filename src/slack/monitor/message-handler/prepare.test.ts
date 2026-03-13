@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
@@ -174,6 +175,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     groupPolicy?: "open";
     defaultRequireMention?: boolean;
     asChannel?: boolean;
+    implicitThreadMention?: boolean;
   }): SlackMonitorContext {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -182,6 +184,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
             enabled: true,
             replyToMode: "all",
             ...(params?.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
+            ...(params?.implicitThreadMention === undefined
+              ? {}
+              : { implicitThreadMention: params.implicitThreadMention }),
           },
         },
       } as OpenClawConfig,
@@ -189,6 +194,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ...(params?.defaultRequireMention === undefined
         ? {}
         : { defaultRequireMention: params.defaultRequireMention }),
+      ...(params?.implicitThreadMention === undefined
+        ? {}
+        : { implicitThreadMention: params.implicitThreadMention }),
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
@@ -212,6 +220,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(prepared!.ctxPayload as any);
+  });
+
+  it("requires an explicit mention in threads when implicitThreadMention is false", async () => {
+    recordSlackThreadParticipation("default", "C123", "100.000");
+    const ctx = createReplyToAllSlackCtx({
+      asChannel: true,
+      defaultRequireMention: true,
+      implicitThreadMention: false,
+    });
+
+    const prepared = await prepareThreadMessage(ctx, {
+      parent_user_id: "B1",
+      text: "follow-up without mention",
+    });
+
+    expect(prepared).toBeNull();
   });
 
   it("includes forwarded shared attachment text in raw body", async () => {
