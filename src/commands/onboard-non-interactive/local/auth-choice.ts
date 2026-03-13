@@ -1,4 +1,5 @@
 import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
+import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -8,9 +9,6 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
-import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
-import { applyPrimaryModel } from "../../model-picker.js";
-import { configureOllamaNonInteractive } from "../../ollama-setup.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -23,46 +21,9 @@ import {
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
-  applyMinimaxConfig,
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  applyOpencodeGoConfig,
-  applyOpencodeZenConfig,
-  applyOpenrouterConfig,
-  applySyntheticConfig,
-  applyVeniceConfig,
-  applyTogetherConfig,
-  applyHuggingfaceConfig,
-  applyVercelAiGatewayConfig,
-  applyLitellmConfig,
-  applyMistralConfig,
-  applyXaiConfig,
-  applyXiaomiConfig,
   applyZaiConfig,
-  setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
-  setByteplusApiKey,
-  setQianfanApiKey,
-  setModelStudioApiKey,
-  setGeminiApiKey,
-  setKilocodeApiKey,
-  setKimiCodingApiKey,
-  setLitellmApiKey,
-  setMistralApiKey,
   setMinimaxApiKey,
-  setMoonshotApiKey,
-  setOpenaiApiKey,
-  setOpencodeGoApiKey,
-  setOpencodeZenApiKey,
-  setOpenrouterApiKey,
-  setSyntheticApiKey,
-  setVolcengineApiKey,
-  setXaiApiKey,
-  setVeniceApiKey,
-  setTogetherApiKey,
-  setHuggingfaceApiKey,
-  setVercelAiGatewayApiKey,
-  setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
@@ -72,9 +33,10 @@ import {
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
-import { applyOpenAIConfig } from "../../openai-model-default.js";
 import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
+import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
+import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
@@ -129,6 +91,46 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...input,
       secretInputMode: requestedSecretInputMode,
     });
+  const toApiKeyCredential = (params: {
+    provider: string;
+    resolved: ResolvedNonInteractiveApiKey;
+    email?: string;
+    metadata?: Record<string, string>;
+  }): ApiKeyCredential | null => {
+    const storeSecretRef = requestedSecretInputMode === "ref" && params.resolved.source === "env"; // pragma: allowlist secret
+    if (storeSecretRef) {
+      if (!params.resolved.envVarName) {
+        runtime.error(
+          [
+            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+            "Set the provider API key env var and retry, or use --secret-input-mode plaintext.",
+          ].join("\n"),
+        );
+        runtime.exit(1);
+        return null;
+      }
+      return {
+        type: "api_key",
+        provider: params.provider,
+        keyRef: {
+          source: "env",
+          provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
+            preferFirstProviderForSource: true,
+          }),
+          id: params.resolved.envVarName,
+        },
+        ...(params.email ? { email: params.email } : {}),
+        ...(params.metadata ? { metadata: params.metadata } : {}),
+      };
+    }
+    return {
+      type: "api_key",
+      provider: params.provider,
+      key: params.resolved.key,
+      ...(params.email ? { email: params.email } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    };
+  };
   const maybeSetResolvedApiKey = async (
     resolved: ResolvedNonInteractiveApiKey,
     setter: (value: SecretInput) => Promise<void> | void,
@@ -166,45 +168,22 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  if (authChoice === "vllm") {
-    runtime.error(
-      [
-        'Auth choice "vllm" requires interactive mode.',
-        "Use interactive onboard/configure to enter base URL, API key, and model ID.",
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "ollama") {
-    return configureOllamaNonInteractive({ nextConfig, opts, runtime });
-  }
-
-  if (authChoice === "apiKey") {
-    const resolved = await resolveApiKey({
-      provider: "anthropic",
-      cfg: baseConfig,
-      flagValue: opts.anthropicApiKey,
-      flagName: "--anthropic-api-key",
-      envVar: "ANTHROPIC_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setAnthropicApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    return applyAuthProfileConfig(nextConfig, {
-      profileId: "anthropic:default",
-      provider: "anthropic",
-      mode: "api_key",
-    });
+  const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+    nextConfig,
+    authChoice,
+    opts,
+    runtime,
+    baseConfig,
+    resolveApiKey: (input) =>
+      resolveApiKey({
+        ...input,
+        cfg: baseConfig,
+        runtime,
+      }),
+    toApiKeyCredential,
+  });
+  if (pluginProviderChoice !== undefined) {
+    return pluginProviderChoice;
   }
 
   if (authChoice === "token") {
@@ -262,31 +241,18 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
-  if (authChoice === "gemini-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "google",
-      cfg: baseConfig,
-      flagValue: opts.geminiApiKey,
-      flagName: "--gemini-api-key",
-      envVar: "GEMINI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setGeminiApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "google:default",
-      provider: "google",
-      mode: "api_key",
-    });
-    return applyGoogleGeminiModelDefault(nextConfig).next;
+  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
+    authChoice,
+    nextConfig,
+    baseConfig,
+    opts,
+    runtime,
+    apiKeyStorageOptions,
+    resolveApiKey,
+    maybeSetResolvedApiKey,
+  });
+  if (simpleApiKeyChoice !== undefined) {
+    return simpleApiKeyChoice;
   }
 
   if (
@@ -801,140 +767,37 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
   }
 
-  const applyMoonshotApiKeyChoice = async (
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig,
-  ): Promise<OpenClawConfig | null> => {
-    const resolved = await resolveApiKey({
-      provider: "moonshot",
-      cfg: baseConfig,
-      flagValue: opts.moonshotApiKey,
-      flagName: "--moonshot-api-key",
-      envVar: "MOONSHOT_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setMoonshotApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    return applyConfig(nextConfig);
+  // Legacy aliases: these choice values were removed; fail with an actionable message so
+  // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
+  const REMOVED_MINIMAX_CHOICES: Record<string, string> = {
+    minimax: "minimax-global-api",
+    "minimax-api": "minimax-global-api",
+    "minimax-cloud": "minimax-global-api",
+    "minimax-api-lightning": "minimax-global-api",
+    "minimax-api-key-cn": "minimax-cn-api",
   };
-
-  if (authChoice === "moonshot-api-key") {
-    return await applyMoonshotApiKeyChoice(applyMoonshotConfig);
+  if (Object.prototype.hasOwnProperty.call(REMOVED_MINIMAX_CHOICES, authChoice as string)) {
+    const replacement = REMOVED_MINIMAX_CHOICES[authChoice as string];
+    runtime.error(
+      `"${authChoice as string}" is no longer supported. Use --auth-choice ${replacement} instead.`,
+    );
+    runtime.exit(1);
+    return null;
   }
 
-  if (authChoice === "moonshot-api-key-cn") {
-    return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
-  }
-
-  if (authChoice === "kimi-code-api-key") {
+  if (authChoice === "minimax-global-api" || authChoice === "minimax-cn-api") {
+    const isCn = authChoice === "minimax-cn-api";
+    const profileId = isCn ? "minimax:cn" : "minimax:global";
     const resolved = await resolveApiKey({
-      provider: "kimi-coding",
-      cfg: baseConfig,
-      flagValue: opts.kimiCodeApiKey,
-      flagName: "--kimi-code-api-key",
-      envVar: "KIMI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setKimiCodingApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      mode: "api_key",
-    });
-    return applyKimiCodeConfig(nextConfig);
-  }
-
-  if (authChoice === "synthetic-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "synthetic",
-      cfg: baseConfig,
-      flagValue: opts.syntheticApiKey,
-      flagName: "--synthetic-api-key",
-      envVar: "SYNTHETIC_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setSyntheticApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "synthetic:default",
-      provider: "synthetic",
-      mode: "api_key",
-    });
-    return applySyntheticConfig(nextConfig);
-  }
-
-  if (authChoice === "venice-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "venice",
-      cfg: baseConfig,
-      flagValue: opts.veniceApiKey,
-      flagName: "--venice-api-key",
-      envVar: "VENICE_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setVeniceApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "venice:default",
-      provider: "venice",
-      mode: "api_key",
-    });
-    return applyVeniceConfig(nextConfig);
-  }
-
-  if (
-    authChoice === "minimax-cloud" ||
-    authChoice === "minimax-api" ||
-    authChoice === "minimax-api-key-cn" ||
-    authChoice === "minimax-api-lightning"
-  ) {
-    const isCn = authChoice === "minimax-api-key-cn";
-    const providerId = isCn ? "minimax-cn" : "minimax";
-    const profileId = `${providerId}:default`;
-    const resolved = await resolveApiKey({
-      provider: providerId,
+      provider: "minimax",
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
       flagName: "--minimax-api-key",
       envVar: "MINIMAX_API_KEY",
       runtime,
+      // Disable profile fallback: both regions share provider "minimax", so an existing
+      // Global profile key must not be silently reused when configuring CN (and vice versa).
+      allowProfile: false,
     });
     if (!resolved) {
       return null;
@@ -948,126 +811,10 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId,
-      provider: providerId,
+      provider: "minimax",
       mode: "api_key",
     });
-    const modelId =
-      authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-highspeed" : "MiniMax-M2.5";
-    return isCn
-      ? applyMinimaxApiConfigCn(nextConfig, modelId)
-      : applyMinimaxApiConfig(nextConfig, modelId);
-  }
-
-  if (authChoice === "minimax") {
-    return applyMinimaxConfig(nextConfig);
-  }
-
-  if (authChoice === "opencode-zen") {
-    const resolved = await resolveApiKey({
-      provider: "opencode",
-      cfg: baseConfig,
-      flagValue: opts.opencodeZenApiKey,
-      flagName: "--opencode-zen-api-key",
-      envVar: "OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY)",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setOpencodeZenApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode:default",
-      provider: "opencode",
-      mode: "api_key",
-    });
-    return applyOpencodeZenConfig(nextConfig);
-  }
-
-  if (authChoice === "opencode-go") {
-    const resolved = await resolveApiKey({
-      provider: "opencode-go",
-      cfg: baseConfig,
-      flagValue: opts.opencodeGoApiKey,
-      flagName: "--opencode-go-api-key",
-      envVar: "OPENCODE_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setOpencodeGoApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode-go:default",
-      provider: "opencode-go",
-      mode: "api_key",
-    });
-    return applyOpencodeGoConfig(nextConfig);
-  }
-
-  if (authChoice === "together-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "together",
-      cfg: baseConfig,
-      flagValue: opts.togetherApiKey,
-      flagName: "--together-api-key",
-      envVar: "TOGETHER_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setTogetherApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "together:default",
-      provider: "together",
-      mode: "api_key",
-    });
-    return applyTogetherConfig(nextConfig);
-  }
-
-  if (authChoice === "huggingface-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "huggingface",
-      cfg: baseConfig,
-      flagValue: opts.huggingfaceApiKey,
-      flagName: "--huggingface-api-key",
-      envVar: "HF_TOKEN",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setHuggingfaceApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "huggingface:default",
-      provider: "huggingface",
-      mode: "api_key",
-    });
-    return applyHuggingfaceConfig(nextConfig);
+    return isCn ? applyMinimaxApiConfigCn(nextConfig) : applyMinimaxApiConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {
@@ -1147,7 +894,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
-    authChoice === "minimax-portal"
+    authChoice === "minimax-global-oauth" ||
+    authChoice === "minimax-cn-oauth"
   ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);

@@ -3,6 +3,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
+  collectForbiddenPackPaths,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
@@ -148,5 +149,17 @@ describe("collectBundledExtensionManifestErrors", () => {
     ).toEqual([
       "bundled extension 'broken' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must contain only non-empty strings",
     ]);
+  });
+});
+
+describe("collectForbiddenPackPaths", () => {
+  it("flags nested node_modules leaking into npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "extensions/tlon/node_modules/.bin/tlon",
+        "node_modules/.bin/openclaw",
+      ]),
+    ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
   });
 });
