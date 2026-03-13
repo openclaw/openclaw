@@ -73,6 +73,31 @@ describe("config pruning defaults", () => {
     });
   });
 
+  it("loads Anthropic shorthand model refs without crashing", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/sonnet-4.6": { alias: "sonnet" },
+            },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.models?.["anthropic/sonnet-4.6"]?.params?.cacheRetention).toBe(
+        "short",
+      );
+    });
+  });
+
   it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
     await withTempHome(async (home) => {
       await writeConfigForTest(home, {

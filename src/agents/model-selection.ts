@@ -31,12 +31,7 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -145,13 +140,30 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
 }
 
+function resolveAnthropicModelAlias(modelLower: string): string | undefined {
+  // Keep alias resolution in a function declaration so parseModelRef stays safe
+  // during circular import evaluation before const bindings initialize.
+  switch (modelLower) {
+    case "opus-4.6":
+      return "claude-opus-4-6";
+    case "opus-4.5":
+      return "claude-opus-4-5";
+    case "sonnet-4.6":
+      return "claude-sonnet-4-6";
+    case "sonnet-4.5":
+      return "claude-sonnet-4-5";
+    default:
+      return undefined;
+  }
+}
+
 function normalizeAnthropicModelId(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  return resolveAnthropicModelAlias(lower) ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
