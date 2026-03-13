@@ -10,7 +10,6 @@ describe("CWE-78: Command Injection in link-understanding", () => {
     vi.mocked(exec.runExec).mockResolvedValue({
       stdout: "mock output",
       stderr: "",
-      exitCode: 0,
     });
   });
 
