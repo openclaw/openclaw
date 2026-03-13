@@ -80,11 +80,7 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "    raise RuntimeError('failed to allocate pinned backup file')",
   "",
   "def restore_backup(parent_fd, basename, backup_name):",
-  "    try:",
-  "        os.unlink(basename, dir_fd=parent_fd)",
-  "    except FileNotFoundError:",
-  "        pass",
-  "    os.rename(backup_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "    os.replace(backup_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
   "",
   "root_fd = open_dir(root_path)",
   "parent_fd = None",
@@ -106,7 +102,7 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "    try:",
   "        os.lstat(basename, dir_fd=parent_fd)",
   "        backup_name = create_backup_name(parent_fd, basename)",
-  "        os.rename(basename, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "        os.link(basename, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
   "    except FileNotFoundError:",
   "        backup_name = None",
   "    os.replace(temp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
@@ -318,7 +314,7 @@ async function runPinnedWriteFallback(params: {
     await fs.stat(targetPath);
     hadExistingTarget = true;
     await fs.rm(backupPath, { force: true }).catch(() => {});
-    await fs.rename(targetPath, backupPath);
+    await fs.link(targetPath, backupPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       await fs.rm(tempPath, { force: true }).catch(() => {});
@@ -329,9 +325,10 @@ async function runPinnedWriteFallback(params: {
     await fs.rename(tempPath, targetPath);
     const stat = await fs.stat(targetPath);
     if (stat.size !== params.expectedSize) {
-      await fs.rm(targetPath, { force: true }).catch(() => {});
       if (hadExistingTarget) {
         await fs.rename(backupPath, targetPath);
+      } else {
+        await fs.rm(targetPath, { force: true }).catch(() => {});
       }
       throw new Error(`write size mismatch: expected ${params.expectedSize}, got ${stat.size}`);
     }
@@ -341,10 +338,6 @@ async function runPinnedWriteFallback(params: {
     return { dev: stat.dev, ino: stat.ino, size: stat.size };
   } catch (error) {
     if (hadExistingTarget) {
-      try {
-        await fs.stat(targetPath);
-        await fs.rm(targetPath, { force: true }).catch(() => {});
-      } catch {}
       await fs.rename(backupPath, targetPath).catch(() => {});
     }
     throw error;
