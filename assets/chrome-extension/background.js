@@ -288,6 +288,9 @@ async function ensureRelayConnection() {
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}))
         relayIsLocked = !!data.lockTab
+        if (relayIsLocked && !lockedTabId) {
+          lockedTabId = Array.from(tabs.keys())[0] || null
+        }
         console.log('[OpenClaw] Fetched relay status. lockTab:', relayIsLocked)
       } else {
         console.warn('[OpenClaw] Relay status fetch failed:', resp.status)
@@ -687,6 +690,11 @@ async function attachTab(tabId, opts = {}) {
 
   tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
   tabBySession.set(sessionId, tabId)
+  
+  if (relayIsLocked && !lockedTabId) {
+    lockedTabId = tabId
+  }
+
   void chrome.action.setTitle({
     tabId,
     title: relayIsLocked

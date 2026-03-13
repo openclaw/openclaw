@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
@@ -66,7 +67,7 @@ async function resolveGatewayAuthToken(): Promise<string | null> {
   // Hard fallback: manually read from .openclaw/openclaw.json without loadConfig plugins
   try {
     const defaultPath =
-      process.env.OPENCLAW_CONFIG_PATH || path.join(process.cwd(), ".openclaw", "openclaw.json");
+      process.env.OPENCLAW_CONFIG_PATH || path.join(os.homedir(), ".openclaw", "openclaw.json");
     const raw = await fs.promises.readFile(defaultPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed?.gateway?.auth?.token) {
