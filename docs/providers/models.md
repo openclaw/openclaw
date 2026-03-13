@@ -36,6 +36,7 @@ model as `provider/model`.
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
+- [Dashscope (Aliyun)](/providers/dashscope)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)

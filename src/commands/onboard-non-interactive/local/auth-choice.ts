@@ -16,6 +16,15 @@ import {
   applyMinimaxApiConfigCn,
   applyZaiConfig,
   setCloudflareAiGatewayConfig,
+  setByteplusApiKey,
+  setDashscopeApiKey,
+  setQianfanApiKey,
+  setModelStudioApiKey,
+  setGeminiApiKey,
+  setKilocodeApiKey,
+  setKimiCodingApiKey,
+  setLitellmApiKey,
+  setMistralApiKey,
   setMinimaxApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -403,6 +412,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return isCn ? applyMinimaxApiConfigCn(nextConfig) : applyMinimaxApiConfig(nextConfig);
+  }
+
+  if (authChoice === "dashscope-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "dashscope",
+      cfg: baseConfig,
+      flagValue: opts.dashscopeApiKey,
+      flagName: "--dashscope-api-key",
+      envVar: "DASHSCOPE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setDashscopeApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "dashscope:default",
+      provider: "dashscope",
+      mode: "api_key",
+    });
+    return applyPrimaryModel(nextConfig, "dashscope/qwen3-max");
   }
 
   if (authChoice === "custom-api-key") {

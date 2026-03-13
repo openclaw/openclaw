@@ -22,6 +22,7 @@ import {
 import {
   buildBytePlusCodingProvider,
   buildBytePlusProvider,
+  buildDashscopeProvider,
   buildDoubaoCodingProvider,
   buildDoubaoProvider,
   buildKimiCodingProvider,
@@ -705,6 +706,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),
   withApiKey("modelstudio", async ({ apiKey }) => ({ ...buildModelStudioProvider(), apiKey })),
+  withApiKey("dashscope", async ({ apiKey }) => ({ ...buildDashscopeProvider(), apiKey })),
   withApiKey("openrouter", async ({ apiKey }) => ({ ...buildOpenrouterProvider(), apiKey })),
   withApiKey("nvidia", async ({ apiKey }) => ({ ...buildNvidiaProvider(), apiKey })),
   withApiKey("kilocode", async ({ apiKey }) => ({

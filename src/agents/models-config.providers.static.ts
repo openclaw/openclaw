@@ -13,6 +13,7 @@ import {
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
 } from "./byteplus-models.js";
+import { DASHSCOPE_BASE_URL, buildDashscopeModelDefinition } from "./dashscope-models.js";
 import {
   buildDoubaoModelDefinition,
   DOUBAO_BASE_URL,
@@ -547,5 +548,13 @@ export function buildKilocodeProvider(): ProviderConfig {
       contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
       maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
     })),
+  };
+}
+
+export function buildDashscopeProvider(): ProviderConfig {
+  return {
+    baseUrl: DASHSCOPE_BASE_URL,
+    api: "openai-completions",
+    models: [buildDashscopeModelDefinition()],
   };
 }

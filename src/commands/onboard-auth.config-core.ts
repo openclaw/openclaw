@@ -54,6 +54,13 @@ export {
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
 import {
+  buildDashscopeModelDefinitionById,
+  DASHSCOPE_DEFAULT_MODEL_ID,
+  DASHSCOPE_DEFAULT_MODEL_REF,
+  DASHSCOPE_REGION_BASE_URL,
+  type DashscopeRegion,
+} from "../agents/dashscope-models.js";
+import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModel,
@@ -665,4 +672,48 @@ export function applyModelStudioConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyModelStudioConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyModelStudioProviderConfigCn(cfg);
   return applyAgentDefaultModelPrimary(next, MODELSTUDIO_DEFAULT_MODEL_REF);
+}
+
+export function applyDashscopeProviderConfigWithModelId(
+  cfg: OpenClawConfig,
+  modelId: string,
+  params?: { region?: DashscopeRegion },
+): OpenClawConfig {
+  const resolvedModelId = modelId.trim() || DASHSCOPE_DEFAULT_MODEL_ID;
+  const modelRef = `dashscope/${resolvedModelId}`;
+  const baseUrl = DASHSCOPE_REGION_BASE_URL[params?.region ?? "cn"];
+
+  const models = { ...cfg.agents?.defaults?.models };
+  const defaultModelRef =
+    resolvedModelId === DASHSCOPE_DEFAULT_MODEL_ID ? DASHSCOPE_DEFAULT_MODEL_REF : modelRef;
+  models[defaultModelRef] = {
+    ...models[defaultModelRef],
+    alias: models[defaultModelRef]?.alias ?? "Dashscope",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.dashscope;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+
+  const defaultModel = buildDashscopeModelDefinitionById(resolvedModelId);
+  const mergedModels = existingModels.some((m) => m.id === resolvedModelId)
+    ? existingModels
+    : [...existingModels, defaultModel];
+
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+
+  providers.dashscope = {
+    ...existingProviderRest,
+    baseUrl,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels,
+  };
+
+  return applyOnboardAuthAgentModelsAndProviders(cfg, { agentModels: models, providers });
 }
