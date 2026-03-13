@@ -24,6 +24,54 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
+describe("writeFileWithinRoot atomic write regression", () => {
+  it("writes non-zero byte content reliably (regression test for #44372)", async () => {
+    // Regression test: v2026.3.11 introduced atomic writes but stat was called before sync,
+    // causing 0-byte files when kernel write buffer wasn't flushed yet
+    const rootDir = await tempDirs.make("fs-safe-write-test");
+    const relativePath = "test-file.txt";
+    const testContent = "#!/usr/bin/env python3\nprint('hello world')\n";
+
+    // Write the file
+    await writeFileWithinRoot({
+      rootDir,
+      relativePath,
+      data: testContent,
+    });
+
+    // Verify content is not empty
+    const fullPath = path.join(rootDir, relativePath);
+    const stat = await fs.stat(fullPath);
+    expect(stat.size).toBeGreaterThan(0);
+    expect(stat.size).toBe(testContent.length);
+
+    // Verify actual content matches
+    const content = await fs.readFile(fullPath, "utf8");
+    expect(content).toBe(testContent);
+  });
+
+  it("handles multiple rapid writes without 0-byte regression", async () => {
+    // Regression test: rapid successive writes should all succeed
+    const rootDir = await tempDirs.make("fs-safe-rapid-write-test");
+    const relativePath = "rapid-write-test.txt";
+
+    for (let i = 0; i < 5; i++) {
+      const testContent = `Iteration ${i}: ${"x".repeat(1000)}\n`;
+
+      await writeFileWithinRoot({
+        rootDir,
+        relativePath,
+        data: testContent,
+      });
+
+      const fullPath = path.join(rootDir, relativePath);
+      const stat = await fs.stat(fullPath);
+      expect(stat.size).toBeGreaterThan(0);
+      expect(stat.size).toBe(testContent.length);
+    }
+  });
+});
+
 async function expectWriteOpenRaceIsBlocked(params: {
   slotPath: string;
   outsideDir: string;
