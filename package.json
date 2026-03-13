@@ -464,6 +464,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "gaxios@7.1.3": "patches/gaxios@7.1.3.patch"
     }
   }
 }
