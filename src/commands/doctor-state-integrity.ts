@@ -11,8 +11,8 @@ import {
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
+  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -696,7 +696,6 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -713,8 +712,20 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
-      return !existsFile(transcriptPath);
+      let transcriptExists = false;
+      if (entry.sessionFile) {
+        try {
+          const transcriptPath = resolveSessionFilePath(sessionId, entry, { sessionsDir });
+          transcriptExists = existsFile(transcriptPath);
+        } catch {
+          // ignore invalid paths
+        }
+      }
+      if (!transcriptExists) {
+        const transcriptPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+        transcriptExists = existsFile(transcriptPath);
+      }
+      return !transcriptExists;
     });
     if (missing.length > 0) {
       warnings.push(
@@ -730,12 +741,22 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
-        mainEntry.sessionId,
-        mainEntry,
-        sessionPathOpts,
-      );
-      if (!existsFile(transcriptPath)) {
+      let transcriptPath = resolveSessionTranscriptPathInDir(mainEntry.sessionId, sessionsDir);
+      let transcriptExists = existsFile(transcriptPath);
+      if (mainEntry.sessionFile && !transcriptExists) {
+        try {
+          const customPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, {
+            sessionsDir,
+          });
+          if (existsFile(customPath)) {
+            transcriptPath = customPath;
+            transcriptExists = true;
+          }
+        } catch {
+          // ignore invalid paths
+        }
+      }
+      if (!transcriptExists) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
         );
@@ -757,9 +778,17 @@ export async function noteStateIntegrity(
         continue;
       }
       try {
-        referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
-        );
+        let transcriptPath: string;
+        if (entry.sessionFile) {
+          transcriptPath = path.resolve(
+            resolveSessionFilePath(entry.sessionId, entry, { sessionsDir }),
+          );
+        } else {
+          transcriptPath = path.resolve(
+            resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDir),
+          );
+        }
+        referencedTranscriptPaths.add(transcriptPath);
       } catch {
         // ignore invalid legacy paths
       }
