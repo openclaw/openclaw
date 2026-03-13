@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramFetch } from "../telegram/fetch.js";
+import { resolveTelegramTransport } from "../telegram/fetch.js";
 import { fetchRemoteMedia } from "./fetch.js";
 
 const undiciFetch = vi.hoisted(() => vi.fn());
@@ -57,7 +57,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       }),
     );
 
-    const telegramFetch = resolveTelegramFetch(undefined, {
+    const telegramTransport = resolveTelegramTransport(undefined, {
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "verbatim",
@@ -66,7 +66,8 @@ describe("fetchRemoteMedia telegram network policy", () => {
 
     await fetchRemoteMedia({
       url: "https://api.telegram.org/file/bottok/photos/1.jpg",
-      fetchImpl: telegramFetch,
+      fetchImpl: telegramTransport.sourceFetch,
+      dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
       lookupFn,
       maxBytes: 1024,
       ssrfPolicy: {
@@ -92,5 +93,50 @@ describe("fetchRemoteMedia telegram network policy", () => {
         lookup: expect.any(Function),
       }),
     );
+  });
+
+  it("keeps explicit proxy routing for file downloads", async () => {
+    const { makeProxyFetch } = await import("../telegram/proxy.js");
+    const lookupFn = vi.fn(async () => [
+      { address: "149.154.167.220", family: 4 },
+    ]) as unknown as LookupFn;
+    undiciFetch.mockResolvedValueOnce(
+      new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      }),
+    );
+
+    const telegramTransport = resolveTelegramTransport(makeProxyFetch("http://127.0.0.1:7890"), {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await fetchRemoteMedia({
+      url: "https://api.telegram.org/file/bottok/files/1.pdf",
+      fetchImpl: telegramTransport.sourceFetch,
+      dispatcherPolicy: telegramTransport.pinnedDispatcherPolicy,
+      lookupFn,
+      maxBytes: 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["api.telegram.org"],
+        allowRfc2544BenchmarkRange: true,
+      },
+    });
+
+    const init = undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & {
+          dispatcher?: {
+            options?: {
+              uri?: string;
+            };
+          };
+        })
+      | undefined;
+
+    expect(init?.dispatcher?.options?.uri).toBe("http://127.0.0.1:7890");
+    expect(ProxyAgentCtor).toHaveBeenCalled();
   });
 });
