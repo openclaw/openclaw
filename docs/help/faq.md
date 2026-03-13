@@ -348,7 +348,7 @@ The wizard opens your browser with a clean (non-tokenized) dashboard URL right a
 **Localhost (same machine):**
 
 - Open `http://127.0.0.1:18789/`.
-- If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+- If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Navigation > Overview > Gateway Access.
 - Retrieve it from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
 
 **Not on localhost:**
@@ -1454,7 +1454,7 @@ Notes:
 - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
 - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-- The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
+- The Control UI authenticates via `connect.params.auth.token` (stored in Navigation > Overview > Gateway Access). Avoid putting tokens in URLs.
 
 ### Why do I need a token on localhost now
 
@@ -2534,7 +2534,7 @@ Fix:
 - If you don't have a token yet: `openclaw doctor --generate-gateway-token`.
 - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
 - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
-- In the Control UI settings, paste the same token.
+- In the Navigation > Overview > Gateway Access, paste the same token.
 - If mismatch persists after the one retry, rotate/re-approve the paired device token:
   - `openclaw devices list`
   - `openclaw devices rotate --device <id> --role operator`

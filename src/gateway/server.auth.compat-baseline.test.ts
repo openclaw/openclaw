@@ -89,7 +89,7 @@ describe("gateway auth compatibility baseline", () => {
           client: { ...CONTROL_UI_CLIENT },
         });
         expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("Control UI settings");
+        expect(res.error?.message ?? "").toContain("Navigation > Overview > Gateway Access");
         expectAuthErrorDetails({
           details: res.error?.details,
           expectedCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,

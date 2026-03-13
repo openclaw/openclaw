@@ -176,7 +176,7 @@ ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 Then open the printed Dashboard URL in your local browser.
 
 If the UI asks for auth, paste the token from `gateway.auth.token`
-(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+(or `OPENCLAW_GATEWAY_TOKEN`) into Navigation > Overview > Gateway Access.
 
 For always-on remote access, see [Tailscale](/gateway/tailscale).
 
