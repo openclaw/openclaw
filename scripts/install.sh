@@ -995,6 +995,7 @@ SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
+VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
 HELP=0
@@ -1016,6 +1017,7 @@ Options:
   --no-git-update                      Skip git pull for existing checkout
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
+  --verify                              Run a post-install smoke verify
   --dry-run                             Print what would happen (no changes)
   --verbose                             Print debug output (set -x, npm verbose)
   --help, -h                            Show this help
@@ -1027,6 +1029,7 @@ Environment variables:
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
   OPENCLAW_NO_PROMPT=1
+  OPENCLAW_VERIFY_INSTALL=1
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
@@ -1036,6 +1039,7 @@ Environment variables:
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
+  curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard --verify
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 EOF
 }
@@ -1057,6 +1061,10 @@ parse_args() {
                 ;;
             --verbose)
                 VERBOSE=1
+                shift
+                ;;
+            --verify)
+                VERIFY_INSTALL=1
                 shift
                 ;;
             --no-prompt)
@@ -2196,7 +2204,38 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    run_quiet_step "Probing gateway service" "$claw" gateway status --probe --deep || true
+    run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
+}
+
+verify_installation() {
+    if [[ "${VERIFY_INSTALL}" != "1" ]]; then
+        return 0
+    fi
+
+    ui_stage "Verifying installation"
+    local claw="${OPENCLAW_BIN:-}"
+    if [[ -z "$claw" ]]; then
+        claw="$(resolve_openclaw_bin || true)"
+    fi
+    if [[ -z "$claw" ]]; then
+        ui_error "Install verify failed: openclaw not on PATH yet"
+        warn_openclaw_not_found
+        return 1
+    fi
+
+    run_quiet_step "Checking OpenClaw version" "$claw" --version || return 1
+
+    if is_gateway_daemon_loaded "$claw"; then
+        run_quiet_step "Checking gateway service" "$claw" gateway status --deep || {
+            ui_error "Install verify failed: gateway service unhealthy"
+            ui_info "Run: openclaw gateway status --deep"
+            return 1
+        }
+    else
+        ui_info "Gateway service not loaded; skipping gateway deep probe"
+    fi
+
+    ui_success "Install verify complete"
 }
 
 # Main installation flow
@@ -2483,6 +2522,10 @@ main() {
                 fi
             fi
         fi
+    fi
+
+    if ! verify_installation; then
+        exit 1
     fi
 
     if [[ "$should_open_dashboard" == "true" ]]; then
