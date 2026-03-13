@@ -149,10 +149,7 @@ export async function truncateSessionAfterCompaction(params: {
   }
 
   // Write truncated file atomically (temp + rename)
-  const lines: string[] = [
-    JSON.stringify(header),
-    ...keptEntries.map((e) => JSON.stringify(e)),
-  ];
+  const lines: string[] = [JSON.stringify(header), ...keptEntries.map((e) => JSON.stringify(e))];
   const content = lines.join("\n") + "\n";
 
   const tmpFile = `${sessionFile}.truncate-tmp`;
