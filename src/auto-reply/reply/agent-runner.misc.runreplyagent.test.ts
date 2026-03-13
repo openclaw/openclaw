@@ -12,6 +12,7 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const compactEmbeddedPiSessionMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
@@ -31,6 +32,7 @@ vi.mock("../../agents/pi-embedded.js", async () => {
   return {
     ...actual,
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
   };
 });
@@ -86,6 +88,12 @@ type RunWithModelFallbackParams = {
 
 beforeEach(() => {
   runEmbeddedPiAgentMock.mockClear();
+  compactEmbeddedPiSessionMock.mockClear();
+  compactEmbeddedPiSessionMock.mockResolvedValue({
+    ok: true,
+    compacted: false,
+    reason: "below threshold",
+  });
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
@@ -453,6 +461,80 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].totalTokens).toBe(10_000);
     // compactionCount should be incremented
     expect(stored[sessionKey].compactionCount).toBe(1);
+  });
+
+  it("proactively compacts near-threshold sessions before the next turn", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-precompact-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 253_816,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    compactEmbeddedPiSessionMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 8_000 },
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          lastCallUsage: { input: 8_000, output: 500, total: 8_500 },
+        },
+      },
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 272_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedPiSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "session",
+      currentTokenCount: 253_816,
+      trigger: "threshold",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].totalTokens).toBe(8_000);
   });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {

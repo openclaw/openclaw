@@ -3,10 +3,12 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { compactEmbeddedPiSession, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { resolveCompactionReserveTokensFloor } from "../../agents/pi-settings.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
@@ -55,10 +57,28 @@ import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queu
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { incrementCompactionCount } from "./session-updates.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function shouldPrecompactBeforeTurn(params: {
+  sessionEntry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">;
+  contextTokens: number;
+  reserveTokensFloor: number;
+}): { shouldCompact: boolean; totalTokens?: number; threshold: number } {
+  const totalTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
+  const threshold = Math.max(0, params.contextTokens - Math.max(0, params.reserveTokensFloor));
+  if (!totalTokens || threshold <= 0) {
+    return { shouldCompact: false, totalTokens, threshold };
+  }
+  return {
+    shouldCompact: totalTokens >= threshold,
+    totalTokens,
+    threshold,
+  };
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -239,6 +259,65 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  const preTurnContextTokens =
+    agentCfgContextTokens ??
+    lookupContextTokens(followupRun.run.model ?? defaultModel) ??
+    activeSessionEntry?.contextTokens ??
+    DEFAULT_CONTEXT_TOKENS;
+  const reserveTokensFloor = resolveCompactionReserveTokensFloor(cfg);
+  const precompact = shouldPrecompactBeforeTurn({
+    sessionEntry: activeSessionEntry,
+    contextTokens: preTurnContextTokens,
+    reserveTokensFloor,
+  });
+  const preTurnProvider = (followupRun.run.provider ?? "").trim();
+  const shouldAttemptPrecompaction =
+    !isHeartbeat &&
+    !isCliProvider(preTurnProvider, cfg) &&
+    !!activeSessionEntry?.sessionId &&
+    precompact.shouldCompact;
+
+  if (shouldAttemptPrecompaction) {
+    const result = await compactEmbeddedPiSession({
+      sessionId: activeSessionEntry!.sessionId,
+      sessionKey,
+      messageChannel: followupRun.run.messageChannel,
+      messageProvider: followupRun.run.messageProvider,
+      agentAccountId: followupRun.run.agentAccountId,
+      groupId: activeSessionEntry?.groupId,
+      groupChannel: activeSessionEntry?.groupChannel,
+      groupSpace: activeSessionEntry?.space,
+      spawnedBy: activeSessionEntry?.spawnedBy,
+      senderIsOwner: followupRun.run.senderIsOwner,
+      sessionFile: followupRun.run.sessionFile,
+      currentTokenCount: precompact.totalTokens,
+      workspaceDir: followupRun.run.workspaceDir,
+      agentDir: followupRun.run.agentDir,
+      config: cfg,
+      skillsSnapshot: followupRun.run.skillsSnapshot,
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+      thinkLevel: followupRun.run.thinkLevel,
+      reasoningLevel: followupRun.run.reasoningLevel,
+      bashElevated: followupRun.run.bashElevated,
+      trigger: "threshold",
+      ownerNumbers: followupRun.run.ownerNumbers,
+    });
+
+    if (result.ok && result.compacted) {
+      await incrementCompactionCount({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+        tokensAfter: result.result?.tokensAfter,
+      });
+      activeSessionEntry = sessionKey
+        ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry)
+        : activeSessionEntry;
+    }
+  }
 
   const runFollowupTurn = createFollowupRunner({
     opts,
