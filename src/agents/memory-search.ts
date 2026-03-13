@@ -21,6 +21,7 @@ export type ResolvedMemorySearchConfig = {
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
+    organizationId?: string;
     headers?: Record<string, string>;
     batch?: {
       enabled: boolean;
@@ -156,9 +157,11 @@ function mergeConfig(
   const hasRemoteConfig = Boolean(
     overrideRemote?.baseUrl ||
     overrideRemote?.apiKey ||
+    overrideRemote?.organizationId ||
     overrideRemote?.headers ||
     defaultRemote?.baseUrl ||
     defaultRemote?.apiKey ||
+    defaultRemote?.organizationId ||
     defaultRemote?.headers,
   );
   const includeRemote =
@@ -186,6 +189,7 @@ function mergeConfig(
     ? {
         baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
         apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
+        organizationId: overrideRemote?.organizationId ?? defaultRemote?.organizationId,
         headers: overrideRemote?.headers ?? defaultRemote?.headers,
         batch,
       }

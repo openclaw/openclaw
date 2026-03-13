@@ -49,13 +49,13 @@ const kilocodePlugin = {
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
           if (!apiKey) {
             return null;
           }
           return {
             provider: {
-              ...(await buildKilocodeProviderWithDiscovery()),
+              ...(await buildKilocodeProviderWithDiscovery(discoveryApiKey)),
               apiKey,
             },
           };
