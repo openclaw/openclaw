@@ -425,19 +425,71 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
     });
 }
 
-function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Set<string>): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) {
-    // Keep whitespace-only placeholders unchanged so they do not collapse to
-    // empty names (which can later surface as toolName="" loops).
+function resolveCaseInsensitiveAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const folded = rawName.toLowerCase();
+  let caseInsensitiveMatch: string | null = null;
+  for (const name of allowedToolNames) {
+    if (name.toLowerCase() !== folded) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
+      return null;
+    }
+    caseInsensitiveMatch = name;
+  }
+  return caseInsensitiveMatch;
+}
+
+function resolveExactAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  if (allowedToolNames.has(rawName)) {
     return rawName;
   }
-  if (!allowedToolNames || allowedToolNames.size === 0) {
-    return trimmed;
+  const normalized = normalizeToolName(rawName);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  return (
+    resolveCaseInsensitiveAllowedToolName(rawName, allowedToolNames) ??
+    resolveCaseInsensitiveAllowedToolName(normalized, allowedToolNames)
+  );
+}
+
+function buildStructuredToolNameCandidates(rawName: string): string[] {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return [];
   }
 
-  const candidateNames = new Set<string>([trimmed, normalizeToolName(trimmed)]);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (value: string) => {
+    const candidate = value.trim();
+    if (!candidate || seen.has(candidate)) {
+      return;
+    }
+    seen.add(candidate);
+    candidates.push(candidate);
+  };
+
+  addCandidate(trimmed);
+  addCandidate(normalizeToolName(trimmed));
+
   const normalizedDelimiter = trimmed.replace(/\//g, ".");
+  addCandidate(normalizedDelimiter);
+  addCandidate(normalizeToolName(normalizedDelimiter));
+
   const segments = normalizedDelimiter
     .split(".")
     .map((segment) => segment.trim())
@@ -445,11 +497,23 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   if (segments.length > 1) {
     for (let index = 1; index < segments.length; index += 1) {
       const suffix = segments.slice(index).join(".");
-      candidateNames.add(suffix);
-      candidateNames.add(normalizeToolName(suffix));
+      addCandidate(suffix);
+      addCandidate(normalizeToolName(suffix));
     }
   }
 
+  return candidates;
+}
+
+function resolveStructuredAllowedToolName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+
+  const candidateNames = buildStructuredToolNameCandidates(rawName);
   for (const candidate of candidateNames) {
     if (allowedToolNames.has(candidate)) {
       return candidate;
@@ -457,23 +521,116 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
   }
 
   for (const candidate of candidateNames) {
-    const folded = candidate.toLowerCase();
-    let caseInsensitiveMatch: string | null = null;
-    for (const name of allowedToolNames) {
-      if (name.toLowerCase() !== folded) {
-        continue;
-      }
-      if (caseInsensitiveMatch && caseInsensitiveMatch !== name) {
-        return candidate;
-      }
-      caseInsensitiveMatch = name;
-    }
+    const caseInsensitiveMatch = resolveCaseInsensitiveAllowedToolName(candidate, allowedToolNames);
     if (caseInsensitiveMatch) {
       return caseInsensitiveMatch;
     }
   }
 
-  return trimmed;
+  return null;
+}
+
+function inferToolNameFromToolCallId(
+  rawId: string | undefined,
+  allowedToolNames?: Set<string>,
+): string | null {
+  if (!rawId || !allowedToolNames || allowedToolNames.size === 0) {
+    return null;
+  }
+  const id = rawId.trim();
+  if (!id) {
+    return null;
+  }
+
+  const candidateTokens = new Set<string>();
+  const addToken = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    candidateTokens.add(trimmed);
+    candidateTokens.add(trimmed.replace(/[:._/-]\d+$/, ""));
+    candidateTokens.add(trimmed.replace(/\d+$/, ""));
+
+    const normalizedDelimiter = trimmed.replace(/\//g, ".");
+    candidateTokens.add(normalizedDelimiter);
+    candidateTokens.add(normalizedDelimiter.replace(/[:._-]\d+$/, ""));
+    candidateTokens.add(normalizedDelimiter.replace(/\d+$/, ""));
+
+    for (const prefixPattern of [/^functions?[._-]?/i, /^tools?[._-]?/i]) {
+      const stripped = normalizedDelimiter.replace(prefixPattern, "");
+      if (stripped !== normalizedDelimiter) {
+        candidateTokens.add(stripped);
+        candidateTokens.add(stripped.replace(/[:._-]\d+$/, ""));
+        candidateTokens.add(stripped.replace(/\d+$/, ""));
+      }
+    }
+  };
+
+  const preColon = id.split(":")[0] ?? id;
+  for (const seed of [id, preColon]) {
+    addToken(seed);
+  }
+
+  let singleMatch: string | null = null;
+  for (const candidate of candidateTokens) {
+    const matched = resolveStructuredAllowedToolName(candidate, allowedToolNames);
+    if (!matched) {
+      continue;
+    }
+    if (singleMatch && singleMatch !== matched) {
+      return null;
+    }
+    singleMatch = matched;
+  }
+
+  return singleMatch;
+}
+
+function looksLikeMalformedToolNameCounter(rawName: string): boolean {
+  const normalizedDelimiter = rawName.trim().replace(/\//g, ".");
+  return (
+    /^(?:functions?|tools?)[._-]?/i.test(normalizedDelimiter) &&
+    /(?:[:._-]\d+|\d+)$/.test(normalizedDelimiter)
+  );
+}
+
+function normalizeToolCallNameForDispatch(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+  rawToolCallId?: string,
+): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    // Keep whitespace-only placeholders unchanged unless we can safely infer
+    // a canonical name from toolCallId and allowlist.
+    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return trimmed;
+  }
+
+  const exact = resolveExactAllowedToolName(trimmed, allowedToolNames);
+  if (exact) {
+    return exact;
+  }
+  // Some providers put malformed toolCallId-like strings into `name`
+  // itself (for example `functionsread3`). Recover conservatively from the
+  // name token before consulting the separate id so explicit names like
+  // `someOtherTool` are preserved.
+  const inferredFromName = inferToolNameFromToolCallId(trimmed, allowedToolNames);
+  if (inferredFromName) {
+    return inferredFromName;
+  }
+
+  // If the explicit name looks like a provider-mangled tool-call id with a
+  // numeric suffix, fail closed when inference is ambiguous instead of routing
+  // to whichever structured candidate happens to match.
+  if (looksLikeMalformedToolNameCounter(trimmed)) {
+    return trimmed;
+  }
+
+  return resolveStructuredAllowedToolName(trimmed, allowedToolNames) ?? trimmed;
 }
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -549,13 +706,21 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isToolCallBlockType(typedBlock.type)) {
       continue;
     }
-    const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames);
-    if (normalized !== typedBlock.name) {
-      typedBlock.name = normalized;
+    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (typeof typedBlock.name === "string") {
+      const normalized = normalizeToolCallNameForDispatch(typedBlock.name, allowedToolNames, rawId);
+      if (normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+      continue;
+    }
+    const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
+    if (inferred) {
+      typedBlock.name = inferred;
     }
   }
   normalizeToolCallIdsInMessage(message);
@@ -1337,6 +1502,10 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+          spawnWorkspaceDir:
+            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
@@ -1572,6 +1741,7 @@ export async function runEmbeddedAttempt(
         try {
           await params.contextEngine.bootstrap({
             sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
         } catch (bootstrapErr) {
@@ -1760,7 +1930,10 @@ export async function runEmbeddedAttempt(
         params.config,
         params.provider,
         params.modelId,
-        params.streamParams,
+        {
+          ...params.streamParams,
+          fastMode: params.fastMode,
+        },
         params.thinkLevel,
         sessionAgentId,
       );
@@ -1774,9 +1947,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
+      // Anthropic Claude endpoints can reject replayed `thinking` blocks
+      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
+      // call, including tool continuations. Wrap the stream function so every
+      // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -1924,6 +2098,7 @@ export async function runEmbeddedAttempt(
           try {
             const assembled = await params.contextEngine.assemble({
               sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
             });
@@ -2371,14 +2546,19 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+        // Using a cumulative count (> 0) instead of a delta check avoids missing
+        // compactions that complete during activeSession.prompt() before the delta
+        // baseline is sampled.
         const compactionOccurredThisAttempt = getCompactionCount() > 0;
-
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
+        // Also skip when compaction ran this attempt — appending a custom entry
+        // after compaction would break the guard again. See: #28491
         if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
@@ -2439,6 +2619,7 @@ export async function runEmbeddedAttempt(
             try {
               await params.contextEngine.afterTurn({
                 sessionId: sessionIdUsed,
+                sessionKey: params.sessionKey,
                 sessionFile: params.sessionFile,
                 messages: messagesSnapshot,
                 prePromptMessageCount,
@@ -2456,6 +2637,7 @@ export async function runEmbeddedAttempt(
                 try {
                   await params.contextEngine.ingestBatch({
                     sessionId: sessionIdUsed,
+                    sessionKey: params.sessionKey,
                     messages: newMessages,
                   });
                 } catch (ingestErr) {
@@ -2466,6 +2648,7 @@ export async function runEmbeddedAttempt(
                   try {
                     await params.contextEngine.ingest({
                       sessionId: sessionIdUsed,
+                      sessionKey: params.sessionKey,
                       message: msg,
                     });
                   } catch (ingestErr) {

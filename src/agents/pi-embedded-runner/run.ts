@@ -892,6 +892,7 @@ export async function runEmbeddedPiAgent(
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -1053,6 +1054,7 @@ export async function runEmbeddedPiAgent(
               try {
                 compactResult = await contextEngine.compact({
                   sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
                   sessionFile: params.sessionFile,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
