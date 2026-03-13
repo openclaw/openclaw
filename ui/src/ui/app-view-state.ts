@@ -451,4 +451,11 @@ export type AppViewState = {
     handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
+    webPushSupported: boolean;
+    webPushPermission: NotificationPermission | "unsupported";
+    webPushSubscribed: boolean;
+    webPushLoading: boolean;
+    handleWebPushSubscribe: () => Promise<void>;
+    handleWebPushUnsubscribe: () => Promise<void>;
+    handleWebPushTest: () => Promise<void>;
   };

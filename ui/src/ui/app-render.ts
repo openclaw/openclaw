@@ -312,7 +312,14 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-const COMMUNICATION_SECTION_KEYS = ["channels", "messages", "broadcast", "talk", "audio"] as const;
+const COMMUNICATION_SECTION_KEYS = [
+  "channels",
+  "messages",
+  "broadcast",
+  "__notifications__",
+  "talk",
+  "audio",
+] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
   "commands",
@@ -1065,6 +1072,16 @@ export function renderApp(state: AppViewState) {
           onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
           navRootLabel: "Communication",
           includeSections: [...COMMUNICATION_SECTION_KEYS],
+          includeVirtualSections: true,
+          webPush: {
+            supported: state.webPushSupported,
+            permission: state.webPushPermission,
+            subscribed: state.webPushSubscribed,
+            loading: state.webPushLoading,
+          },
+          onWebPushSubscribe: () => state.handleWebPushSubscribe(),
+          onWebPushUnsubscribe: () => state.handleWebPushUnsubscribe(),
+          onWebPushTest: () => state.handleWebPushTest(),
         });
       case "appearance":
         return renderConfigTab({

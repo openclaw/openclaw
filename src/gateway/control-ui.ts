@@ -103,6 +103,8 @@ function contentTypeForExt(ext: string): string {
       return "image/x-icon";
     case ".txt":
       return "text/plain; charset=utf-8";
+    case ".webmanifest":
+      return "application/manifest+json; charset=utf-8";
     default:
       return "application/octet-stream";
   }
@@ -128,6 +130,7 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".webp",
   ".ico",
   ".txt",
+  ".webmanifest",
 ]);
 
 export type ControlUiAvatarResolution =
