@@ -337,7 +337,6 @@ extension OnboardingView {
         self.remoteProbePreflightMessage == nil && self.remoteProbeState != .checking
     }
 
-    @ViewBuilder
     private func remoteConnectionSection() -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
@@ -440,7 +439,7 @@ extension OnboardingView {
 
     private func remoteAuthPromptView(issue: RemoteGatewayAuthIssue) -> some View {
         let promptStyle = Self.remoteAuthPromptStyle(for: issue)
-        return HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: promptStyle.systemImage)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(promptStyle.tint)
@@ -503,17 +502,17 @@ extension OnboardingView {
     {
         switch issue {
         case .tokenRequired:
-            return ("key.fill", .orange)
+            ("key.fill", .orange)
         case .tokenMismatch:
-            return ("exclamationmark.triangle.fill", .orange)
+            ("exclamationmark.triangle.fill", .orange)
         case .gatewayTokenNotConfigured:
-            return ("wrench.and.screwdriver.fill", .orange)
+            ("wrench.and.screwdriver.fill", .orange)
         case .setupCodeExpired:
-            return ("qrcode.viewfinder", .orange)
+            ("qrcode.viewfinder", .orange)
         case .passwordRequired:
-            return ("lock.slash.fill", .orange)
+            ("lock.slash.fill", .orange)
         case .pairingRequired:
-            return ("link.badge.plus", .orange)
+            ("link.badge.plus", .orange)
         }
     }
 

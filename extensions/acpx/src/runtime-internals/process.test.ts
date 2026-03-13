@@ -154,6 +154,27 @@ describe("resolveSpawnCommand", () => {
     });
   });
 
+  it("does not package-resolve non-matching .cmd wrapper names", async () => {
+    const dir = await createTempDir();
+    const wrapperPath = path.join(dir, "acpx-wrapper.cmd");
+    await writeFile(wrapperPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+
+    const resolved = resolveSpawnCommand(
+      {
+        command: wrapperPath,
+        args: ["--arg", "value"],
+      },
+      undefined,
+      winRuntime({}),
+    );
+
+    expect(resolved).toEqual({
+      command: wrapperPath,
+      args: ["--arg", "value"],
+      shell: true,
+    });
+  });
+
   it("fails closed in strict mode when wrapper cannot be safely unwrapped", async () => {
     const dir = await createTempDir();
     const wrapperPath = path.join(dir, "strict-wrapper.cmd");

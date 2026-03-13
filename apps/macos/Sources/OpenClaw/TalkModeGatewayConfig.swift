@@ -26,12 +26,16 @@ enum TalkModeGatewayConfigParser {
         envApiKey: String?
     ) -> TalkModeGatewayConfigState {
         let talk = snapshot.config?["talk"]?.dictionaryValue
-        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: defaultProvider)
+        let selection = TalkConfigParsing.selectProviderConfig(
+            talk,
+            defaultProvider: defaultProvider,
+        )
         let activeProvider = selection?.provider ?? defaultProvider
         let activeConfig = selection?.config
         let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
             talk,
-            fallback: defaultSilenceTimeoutMs)
+            fallback: defaultSilenceTimeoutMs,
+        )
         let ui = snapshot.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let voice = activeConfig?["voiceId"]?.stringValue
@@ -73,7 +77,8 @@ enum TalkModeGatewayConfigParser {
             interruptOnSpeech: interrupt ?? true,
             silenceTimeoutMs: silenceTimeoutMs,
             apiKey: resolvedApiKey,
-            seamColorHex: rawSeam.isEmpty ? nil : rawSeam)
+            seamColorHex: rawSeam.isEmpty ? nil : rawSeam,
+        )
     }
 
     static func fallback(
@@ -99,6 +104,7 @@ enum TalkModeGatewayConfigParser {
             interruptOnSpeech: true,
             silenceTimeoutMs: defaultSilenceTimeoutMs,
             apiKey: resolvedApiKey,
-            seamColorHex: nil)
+            seamColorHex: nil,
+        )
     }
 }

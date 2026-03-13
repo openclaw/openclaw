@@ -173,7 +173,8 @@ enum RemoteGatewayProbe {
                 command: sshCommand,
                 cwd: nil,
                 env: nil,
-                timeout: 8)
+                timeout: 8,
+            )
             guard sshResult.ok else {
                 return .failed(self.formatSSHFailure(sshResult, target: settings.target))
             }

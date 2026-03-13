@@ -171,6 +171,11 @@ function resolveEntrypointFromPackageJson(
     return null;
   }
 
+  const wrapperBase = path.basename(wrapperPath, path.extname(wrapperPath)).toLowerCase();
+  if (wrapperBase !== packageName.toLowerCase()) {
+    return null;
+  }
+
   const tryResolveFromPackageJson = (packageJsonPath: string): string | null => {
     if (!isFilePath(packageJsonPath)) {
       return null;
