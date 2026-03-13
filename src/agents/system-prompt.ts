@@ -750,21 +750,11 @@ export function buildAgentSystemPrompt(params: {
     lines.push("");
   }
 
-  // Tool Manifest: the actual tool listing is injected here in the dynamic tail (after workspace
-  // files, skills, workspaceNotes) for KV-cache stability. When a new plugin is installed (new
-  // tool added), only this tail section is invalidated — all workspace files, skills, project
-  // notes, and deployment config remain in the KV-cached prefix.
-  // Placed last (before MEMORY.md) because tool installs are rarer than daily memory updates.
-  if (toolLines.length > 0) {
-    lines.push("## Tool Manifest", toolLines.join("\n"), "");
-  }
-
   // Deployment-level config: docs, authorized senders, sandbox settings.
-  // Injected AFTER workspaceNotes (and after model aliases, skills) so that when deployment
-  // config changes (rare: docs path update, new authorized device, sandbox toggle), the stable
-  // prefix includes workspace files, boilerplate, channel config, model aliases, skills, AND
-  // project notes. This is a pure win: workspaceNotes scenario stable_chars unaffected (first
-  // diff is at workspaceNotes position regardless), but deployment config scenario gains ~workspaceNotes_size.
+  // Injected BEFORE Tool Manifest. Deployment config changes are RARER than tool installs
+  // (yearly vs monthly). By placing deployment config before the tool manifest, when
+  // deployment config changes, the stable prefix is smaller — but this is the rare event.
+  // When tool names change (monthly), deployment config is in the stable prefix. ✓
   if (!isMinimal) {
     lines.push(...docsSection);
   }
@@ -818,6 +808,16 @@ export function buildAgentSystemPrompt(params: {
         .join("\n"),
     );
     lines.push("");
+  }
+
+  // Tool Manifest: injected AFTER deployment config (docs, owners, sandbox) and BEFORE MEMORY.md.
+  // Tool installs happen monthly — more often than yearly deployConfig changes but less often
+  // than daily MEMORY.md updates. Placing tool manifest here means:
+  //   • When tools change (monthly): deployConfig is in stable prefix ✓
+  //   • When deployConfig changes (yearly): tool manifest is NOT in stable prefix (smaller loss)
+  //   • When MEMORY.md changes (daily): everything above is in stable prefix ✓
+  if (toolLines.length > 0) {
+    lines.push("## Tool Manifest", toolLines.join("\n"), "");
   }
 
   // Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
