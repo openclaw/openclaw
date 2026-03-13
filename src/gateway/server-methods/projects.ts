@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { updateSessionStore } from "../../config/sessions.js";
+import {
+  createSqliteProjectStore,
+  ProjectStoreError,
+} from "../../projects/project-store-sqlite.js";
+import {
+  findProjectByTopicId,
+  getBindingsForProject,
+  bindTelegramTopic,
+  unbindTelegramTopic,
+} from "../../projects/telegram-topic-binding-sqlite.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import type { ProjectEntry, ProjectDetails, ProjectStore } from "./projects.types.js";
@@ -12,339 +21,13 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const sessionBindings = new Map<string, string>();
 
-// ── MarkdownProjectStore ────────────────────────────────────────────
-
-function resolveProjectsPath(): string {
-  const cfg = loadConfig();
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  return path.join(workspaceDir, "PROJECTS.md");
-}
-
-/**
- * Parse a PROJECTS.md file into ProjectEntry objects.
- *
- * Expected format:
- * ```
- * # Active Projects
- *
- * ## project-id
- * - **Path:** ~/dev/project
- * - **Type:** web app
- * - **Tech:** TypeScript, React
- * - **Status:** Active development
- * - **Default:** true
- * - **Keywords:** keyword1, keyword2
- *
- * # Archived Projects
- *
- * ## old-project
- * ...
- * ```
- */
-function parseProjectsMd(content: string): ProjectEntry[] {
-  const entries: ProjectEntry[] = [];
-  const lines = content.split("\n");
-
-  let currentId: string | null = null;
-  let current: Partial<ProjectEntry> = {};
-  let inTelegramBlock = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // H2 = project ID
-    const h2Match = trimmed.match(/^## (.+)$/);
-    if (h2Match) {
-      // Save previous entry if any
-      if (currentId && current.path) {
-        entries.push(finalizeEntry(currentId, current));
-      }
-      currentId = h2Match[1].trim();
-      current = {};
-      inTelegramBlock = false;
-      continue;
-    }
-
-    // H1 resets (e.g., "# Archived Projects")
-    if (trimmed.startsWith("# ")) {
-      if (currentId && current.path) {
-        entries.push(finalizeEntry(currentId, current));
-      }
-      currentId = null;
-      current = {};
-      inTelegramBlock = false;
-      continue;
-    }
-
-    if (!currentId) {
-      continue;
-    }
-
-    // Parse nested Telegram sub-fields (e.g., "  - Group: Operator1 Group", "  - Topic: 41")
-    if (inTelegramBlock) {
-      const subMatch = trimmed.match(/^- (.+?):\s*(.*)$/);
-      if (subMatch) {
-        const subKey = subMatch[1].toLowerCase();
-        const subValue = subMatch[2].trim();
-        if (!current.telegram) {
-          current.telegram = {};
-        }
-        if (subKey === "group") {
-          current.telegram.group = subValue;
-        } else if (subKey === "topic") {
-          const num = parseInt(subValue, 10);
-          if (!isNaN(num)) {
-            current.telegram.topicId = num;
-          }
-        }
-        continue;
-      }
-      // Non-sub-item line exits the telegram block
-      inTelegramBlock = false;
-    }
-
-    // Parse bullet fields
-    const fieldMatch = trimmed.match(/^- \*\*(.+?):\*\*\s*(.*)$/);
-    if (fieldMatch) {
-      const key = fieldMatch[1].toLowerCase();
-      const value = fieldMatch[2].trim();
-      switch (key) {
-        case "name":
-          current.name = value;
-          break;
-        case "path":
-          current.path = value;
-          break;
-        case "type":
-          current.type = value;
-          break;
-        case "tech":
-          current.tech = value;
-          break;
-        case "status":
-          current.status = value;
-          break;
-        case "default":
-          current.isDefault = value.toLowerCase() === "true";
-          break;
-        case "keywords":
-          current.keywords = value
-            .split(",")
-            .map((k) => k.trim())
-            .filter(Boolean);
-          break;
-        case "telegram":
-          inTelegramBlock = true;
-          break;
-      }
-    }
-  }
-
-  // Don't forget the last entry
-  if (currentId && current.path) {
-    entries.push(finalizeEntry(currentId, current));
-  }
-
-  return entries;
-}
-
-function finalizeEntry(id: string, partial: Partial<ProjectEntry>): ProjectEntry {
-  const entry: ProjectEntry = {
-    id,
-    name: partial.name ?? id,
-    path: partial.path ?? "",
-    type: partial.type ?? "",
-    tech: partial.tech ?? "",
-    status: partial.status ?? "active",
-    isDefault: partial.isDefault ?? false,
-    keywords: partial.keywords ?? [],
-  };
-  if (partial.telegram) {
-    entry.telegram = partial.telegram;
-  }
-  return entry;
-}
-
-function serializeProjectsMd(entries: ProjectEntry[]): string {
-  const active = entries.filter((e) => e.status !== "archived");
-  const archived = entries.filter((e) => e.status === "archived");
-
-  let md = "# Active Projects\n";
-
-  for (const e of active) {
-    md += `\n## ${e.id}\n`;
-    if (e.name && e.name !== e.id) {
-      md += `- **Name:** ${e.name}\n`;
-    }
-    md += `- **Path:** ${e.path}\n`;
-    md += `- **Type:** ${e.type}\n`;
-    md += `- **Tech:** ${e.tech}\n`;
-    md += `- **Status:** ${e.status}\n`;
-    if (e.isDefault) {
-      md += `- **Default:** true\n`;
-    }
-    if (e.keywords.length > 0) {
-      md += `- **Keywords:** ${e.keywords.join(", ")}\n`;
-    }
-    if (e.telegram) {
-      md += `- **Telegram:**\n`;
-      if (e.telegram.group) {
-        md += `  - Group: ${e.telegram.group}\n`;
-      }
-      if (e.telegram.topicId !== undefined) {
-        md += `  - Topic: ${e.telegram.topicId}\n`;
-      }
-    }
-  }
-
-  if (archived.length > 0) {
-    md += "\n# Archived Projects\n";
-    for (const e of archived) {
-      md += `\n## ${e.id}\n`;
-      if (e.name && e.name !== e.id) {
-        md += `- **Name:** ${e.name}\n`;
-      }
-      md += `- **Path:** ${e.path}\n`;
-      md += `- **Type:** ${e.type}\n`;
-      md += `- **Tech:** ${e.tech}\n`;
-      md += `- **Status:** ${e.status}\n`;
-      if (e.keywords.length > 0) {
-        md += `- **Keywords:** ${e.keywords.join(", ")}\n`;
-      }
-    }
-  }
-
-  return md;
-}
+// ── Helpers ─────────────────────────────────────────────────────────
 
 function expandHome(p: string): string {
   if (p.startsWith("~/")) {
     return path.join(process.env.HOME ?? "/", p.slice(2));
   }
   return p;
-}
-
-function readOptionalFile(filePath: string): string | null {
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-function createMarkdownProjectStore(): ProjectStore {
-  const filePath = resolveProjectsPath();
-
-  function readEntries(): ProjectEntry[] {
-    try {
-      const content = fs.readFileSync(filePath, "utf8");
-      return parseProjectsMd(content);
-    } catch {
-      return [];
-    }
-  }
-
-  function writeEntries(entries: ProjectEntry[]): void {
-    fs.writeFileSync(filePath, serializeProjectsMd(entries), "utf8");
-  }
-
-  return {
-    async list() {
-      return readEntries();
-    },
-
-    async get(id: string) {
-      const entries = readEntries();
-      const entry = entries.find((e) => e.id === id);
-      if (!entry) {
-        throw new ProjectStoreError("PROJECT_NOT_FOUND", `No project with id '${id}'`);
-      }
-
-      const projectPath = expandHome(entry.path);
-      const openclawDir = path.join(projectPath, ".openclaw");
-
-      if (!fs.existsSync(openclawDir)) {
-        throw new ProjectStoreError(
-          "NO_WORKSPACE",
-          `Project '${id}' has no .openclaw/ directory at ${entry.path}`,
-        );
-      }
-
-      const details: ProjectDetails = {
-        ...entry,
-        soul: readOptionalFile(path.join(openclawDir, "SOUL.md")),
-        agents: readOptionalFile(path.join(openclawDir, "AGENTS.md")),
-        tools: readOptionalFile(path.join(openclawDir, "TOOLS.md")),
-      };
-
-      return details;
-    },
-
-    async add(entry: ProjectEntry) {
-      const entries = readEntries();
-      if (entries.some((e) => e.id === entry.id)) {
-        throw new ProjectStoreError("DUPLICATE_ID", `Project '${entry.id}' already exists`);
-      }
-      const realPath = expandHome(entry.path);
-      if (!fs.existsSync(realPath)) {
-        throw new ProjectStoreError("PATH_NOT_FOUND", `Path '${entry.path}' does not exist`);
-      }
-      if (entry.isDefault) {
-        const existingDefault = entries.find((e) => e.isDefault);
-        if (existingDefault) {
-          throw new ProjectStoreError(
-            "MULTIPLE_DEFAULTS",
-            `Only one project can be default; '${existingDefault.id}' is already default`,
-          );
-        }
-      }
-      entries.push(entry);
-      writeEntries(entries);
-    },
-
-    async update(id: string, patch: Partial<ProjectEntry>) {
-      const entries = readEntries();
-      const idx = entries.findIndex((e) => e.id === id);
-      if (idx === -1) {
-        throw new ProjectStoreError("PROJECT_NOT_FOUND", `No project with id '${id}'`);
-      }
-
-      if (patch.isDefault === true) {
-        const existingDefault = entries.find((e) => e.isDefault && e.id !== id);
-        if (existingDefault) {
-          throw new ProjectStoreError(
-            "MULTIPLE_DEFAULTS",
-            `Only one project can be default; '${existingDefault.id}' is already default`,
-          );
-        }
-      }
-
-      entries[idx] = { ...entries[idx], ...patch, id };
-      writeEntries(entries);
-    },
-
-    async archive(id: string) {
-      const entries = readEntries();
-      const idx = entries.findIndex((e) => e.id === id);
-      if (idx === -1) {
-        throw new ProjectStoreError("PROJECT_NOT_FOUND", `No project with id '${id}'`);
-      }
-
-      entries[idx].status = "archived";
-      entries[idx].isDefault = false;
-      writeEntries(entries);
-    },
-  };
-}
-
-class ProjectStoreError extends Error {
-  code: string;
-  constructor(code: string, message: string) {
-    super(message);
-    this.code = code;
-    this.name = "ProjectStoreError";
-  }
 }
 
 // ── Session ProjectId Persistence ───────────────────────────────────
@@ -410,7 +93,6 @@ function scanInternalProjectTasks(registeredProjects: ProjectEntry[]): ProjectEn
         continue;
       }
       const id = dirent.name;
-      // Skip if already registered in PROJECTS.md
       if (registeredIds.has(id)) {
         continue;
       }
@@ -437,7 +119,7 @@ function scanInternalProjectTasks(registeredProjects: ProjectEntry[]): ProjectEn
 let _store: ProjectStore | undefined;
 function getStore(): ProjectStore {
   if (!_store) {
-    _store = createMarkdownProjectStore();
+    _store = createSqliteProjectStore();
   }
   return _store;
 }
@@ -561,7 +243,6 @@ export const projectsHandlers: GatewayRequestHandlers = {
     try {
       const project = await getStore().get(projectId);
       sessionBindings.set(sessionKey, projectId);
-      // Persist projectId on the session record so it survives gateway restarts
       persistProjectId(sessionKey, projectId);
       const injectedMessage = `[Session Init] Active project: ${projectId} | Path: ${project.path}`;
       respond(true, { projectId, path: project.path, injectedMessage }, undefined);
@@ -577,7 +258,6 @@ export const projectsHandlers: GatewayRequestHandlers = {
       return;
     }
     sessionBindings.delete(sessionKey);
-    // Clear persisted projectId from session record
     persistProjectId(sessionKey, null);
     respond(true, { ok: true }, undefined);
   },
@@ -597,7 +277,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
       }
     }
     if (!projectId) {
-      projectId = await autoBindByTopicFromSessionKey(sessionKey);
+      projectId = autoBindByTopicFromSessionKey(sessionKey);
     }
     if (!projectId) {
       respond(true, null, undefined);
@@ -610,6 +290,76 @@ export const projectsHandlers: GatewayRequestHandlers = {
     } catch (err) {
       respond(false, undefined, storeErrorToShape(err));
     }
+  },
+
+  // ── Telegram Topic Binding RPCs ─────────────────────────────────────
+
+  "projects.bindTelegramTopic": async ({ params, respond }) => {
+    const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
+    const chatId = typeof params.chatId === "string" ? params.chatId.trim() : "";
+    const topicId =
+      typeof params.topicId === "string"
+        ? params.topicId.trim()
+        : typeof params.topicId === "number"
+          ? `${params.topicId}`
+          : "";
+    if (!projectId || !chatId || !topicId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "projectId, chatId, and topicId are required"),
+      );
+      return;
+    }
+    try {
+      // Verify project exists
+      await getStore().get(projectId);
+      bindTelegramTopic({
+        chatId,
+        topicId,
+        projectId,
+        groupName: typeof params.groupName === "string" ? params.groupName : undefined,
+        topicName: typeof params.topicName === "string" ? params.topicName : undefined,
+        boundBy: typeof params.boundBy === "string" ? params.boundBy : "manual",
+      });
+      respond(true, { ok: true, chatId, topicId, projectId }, undefined);
+    } catch (err) {
+      respond(false, undefined, storeErrorToShape(err));
+    }
+  },
+
+  "projects.unbindTelegramTopic": async ({ params, respond }) => {
+    const chatId = typeof params.chatId === "string" ? params.chatId.trim() : "";
+    const topicId =
+      typeof params.topicId === "string"
+        ? params.topicId.trim()
+        : typeof params.topicId === "number"
+          ? `${params.topicId}`
+          : "";
+    if (!chatId || !topicId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "chatId and topicId are required"),
+      );
+      return;
+    }
+    const removed = unbindTelegramTopic(chatId, topicId);
+    if (!removed) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "binding not found"));
+      return;
+    }
+    respond(true, { ok: true, chatId, topicId }, undefined);
+  },
+
+  "projects.getTelegramBindings": async ({ params, respond }) => {
+    const projectId = typeof params.projectId === "string" ? params.projectId.trim() : "";
+    if (!projectId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "projectId is required"));
+      return;
+    }
+    const bindings = getBindingsForProject(projectId);
+    respond(true, { bindings }, undefined);
   },
 };
 
@@ -632,7 +382,7 @@ export async function getProjectContextForSession(
   }
   // Auto-bind by Telegram topic if no explicit binding exists
   if (!projectId) {
-    projectId = await autoBindByTopicFromSessionKey(sessionKey);
+    projectId = autoBindByTopicFromSessionKey(sessionKey);
   }
   if (!projectId) {
     return null;
@@ -646,34 +396,26 @@ export async function getProjectContextForSession(
 
 /**
  * Try to auto-bind a session to a project based on Telegram topic ID.
- * Session keys for Telegram topics look like:
- *   agent:{agentId}:telegram:direct:{peerId}:thread:{topicId}
- *   or contain `:thread:{chatId}:{topicId}`
- * If a project in PROJECTS.md has a matching telegram.topicId, auto-bind and persist.
+ * Uses SQLite topic bindings table instead of scanning PROJECTS.md.
  */
-async function autoBindByTopicFromSessionKey(sessionKey: string): Promise<string | undefined> {
+function autoBindByTopicFromSessionKey(sessionKey: string): string | undefined {
   // Extract topic ID from session key patterns
   const threadMatch = sessionKey.match(/:thread:(?:\d+:)?(\d+)$/);
   if (!threadMatch) {
     return undefined;
   }
-  const topicId = parseInt(threadMatch[1], 10);
-  if (isNaN(topicId)) {
+  const topicId = threadMatch[1];
+
+  // Query SQLite for a matching topic binding
+  const projectId = findProjectByTopicId(topicId);
+  if (!projectId) {
     return undefined;
   }
-  try {
-    const projects = await getStore().list();
-    const matched = projects.find((p) => p.telegram?.topicId === topicId);
-    if (!matched) {
-      return undefined;
-    }
-    // Auto-bind: set in-memory + persist
-    sessionBindings.set(sessionKey, matched.id);
-    persistProjectId(sessionKey, matched.id);
-    return matched.id;
-  } catch {
-    return undefined;
-  }
+
+  // Auto-bind: set in-memory + persist
+  sessionBindings.set(sessionKey, projectId);
+  persistProjectId(sessionKey, projectId);
+  return projectId;
 }
 
 function storeErrorToShape(err: unknown) {

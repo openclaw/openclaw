@@ -552,6 +552,117 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    description: "Phase 4E/5D: MCP registries, agent marketplace registries, agent locks → SQLite",
+    up(db) {
+      // -- MCP registries (replaces tools.mcp.registries in openclaw.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_mcp_registries (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          description TEXT,
+          auth_token_env TEXT,
+          visibility TEXT,
+          enabled INTEGER DEFAULT 1,
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        )
+      `);
+
+      // -- Agent marketplace registries (replaces ~/.openclaw/agent-registry-cache/registries.json)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_agent_registries (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          description TEXT,
+          auth_token_env TEXT,
+          visibility TEXT DEFAULT 'public',
+          enabled INTEGER DEFAULT 1,
+          last_synced TEXT,
+          agent_count INTEGER DEFAULT 0,
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        )
+      `);
+
+      // -- Agent locks (replaces agents-lock.yaml / agents.local-lock.yaml per scope)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_agent_locks (
+          agent_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          version TEXT NOT NULL,
+          resolved TEXT,
+          checksum TEXT,
+          installed_at TEXT,
+          requires TEXT,
+          created_at INTEGER DEFAULT (unixepoch()),
+          PRIMARY KEY (agent_id, scope)
+        )
+      `);
+
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_op1_agent_locks_scope
+          ON op1_agent_locks(scope)
+      `);
+    },
+  },
+  {
+    version: 8,
+    description: "Phase 8.5: projects registry + telegram topic bindings → SQLite",
+    up(db) {
+      // -- Projects registry (replaces PROJECTS.md)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          path TEXT NOT NULL,
+          type TEXT DEFAULT '',
+          tech TEXT DEFAULT '',
+          status TEXT DEFAULT 'active',
+          is_default INTEGER DEFAULT 0,
+          keywords_json TEXT DEFAULT '[]',
+          telegram_group TEXT,
+          telegram_topic_id INTEGER,
+          created_at INTEGER DEFAULT (unixepoch()),
+          updated_at INTEGER DEFAULT (unixepoch())
+        )
+      `);
+      db.exec("CREATE INDEX IF NOT EXISTS idx_op1_projects_status ON op1_projects(status)");
+
+      // -- Telegram topic → project bindings (extracted from PROJECTS.md telegram fields)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_telegram_topic_bindings (
+          chat_id TEXT NOT NULL,
+          topic_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          group_name TEXT,
+          topic_name TEXT,
+          bound_at INTEGER DEFAULT (unixepoch()),
+          bound_by TEXT DEFAULT 'manual',
+          PRIMARY KEY (chat_id, topic_id),
+          FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_telegram_topic_project ON op1_telegram_topic_bindings(project_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_telegram_topic_chat ON op1_telegram_topic_bindings(chat_id)",
+      );
+
+      // -- Link workspace_state to projects (optional FK)
+      // SQLite ALTER TABLE ADD COLUMN doesn't support FK constraints, so we add the column only.
+      // The FK is enforced at the application level.
+      try {
+        db.exec("ALTER TABLE workspace_state ADD COLUMN project_id TEXT");
+      } catch {
+        // Column already exists (idempotent)
+      }
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

@@ -8,8 +8,13 @@
  * via the helpers in `src/mcp/scope.ts`, not on `openclaw.json`.
  */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { getMcpClientManager } from "../../mcp/index.js";
+import {
+  loadMcpRegistriesFromDb,
+  saveMcpRegistryToDb,
+  deleteMcpRegistryFromDb,
+} from "../../mcp/registries-sqlite.js";
 import {
   syncMcpRegistry,
   syncAllMcpRegistries,
@@ -32,19 +37,6 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Read MCP config block from the gateway config (registries + inline settings). */
-function readMcpConfig(): {
-  servers?: Record<string, McpServerConfig>;
-  registries?: McpRegistryConfig[];
-} {
-  const cfg = loadConfig();
-  const mcp = (cfg as Record<string, unknown>).tools as Record<string, unknown> | undefined;
-  return (mcp?.mcp ?? {}) as {
-    servers?: Record<string, McpServerConfig>;
-    registries?: McpRegistryConfig[];
-  };
-}
 
 /** Get the inline MCP config from openclaw.json (for merging with scopes). */
 function getInlineMcpConfig(): { servers?: Record<string, McpServerConfig> } | undefined {
@@ -187,17 +179,15 @@ export const mcpHandlers: GatewayRequestHandlers = {
     });
   },
 
-  /** List configured registries. */
+  /** List configured registries (from SQLite). */
   "mcp.registry.list": async ({ respond }) => {
-    const mcpConfig = readMcpConfig();
-    const registries = mcpConfig.registries ?? [];
+    const registries = loadMcpRegistriesFromDb();
     respond(true, { registries });
   },
 
   /** List available servers from synced registries (cached, no sync). */
   "mcp.browse.list": async ({ respond }) => {
-    const mcpConfig = readMcpConfig();
-    const registries = (mcpConfig.registries ?? []).filter((r) => r.enabled !== false);
+    const registries = loadMcpRegistriesFromDb().filter((r) => r.enabled !== false);
 
     const results: Array<{
       registryId: string;
@@ -643,7 +633,7 @@ export const mcpHandlers: GatewayRequestHandlers = {
     }
   },
 
-  /** Add a registry. */
+  /** Add a registry (persisted to SQLite). */
   "mcp.registry.add": async ({ params, respond }) => {
     const id = params.id as string | undefined;
     const name = params.name as string | undefined;
@@ -659,12 +649,8 @@ export const mcpHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const cfg = loadConfig();
-      const tools = ((cfg as Record<string, unknown>).tools ?? {}) as Record<string, unknown>;
-      const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
-      const registries = ((mcp.registries ?? []) as McpRegistryConfig[]).slice();
-
-      if (registries.some((r) => r.id === id)) {
+      const existing = loadMcpRegistriesFromDb();
+      if (existing.some((r) => r.id === id)) {
         respond(
           false,
           undefined,
@@ -686,13 +672,7 @@ export const mcpHandlers: GatewayRequestHandlers = {
             : undefined,
         enabled: typeof params.enabled === "boolean" ? params.enabled : true,
       };
-      registries.push(newRegistry);
-
-      const updatedConfig = {
-        ...(cfg as Record<string, unknown>),
-        tools: { ...tools, mcp: { ...mcp, registries } },
-      };
-      await writeConfigFile(updatedConfig);
+      saveMcpRegistryToDb(newRegistry);
 
       respond(true, { registry: newRegistry });
     } catch (err) {
@@ -704,7 +684,7 @@ export const mcpHandlers: GatewayRequestHandlers = {
     }
   },
 
-  /** Remove a registry. */
+  /** Remove a registry (from SQLite). */
   "mcp.registry.remove": async ({ params, respond }) => {
     const id = params.id as string | undefined;
     if (!id) {
@@ -717,13 +697,8 @@ export const mcpHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const cfg = loadConfig();
-      const tools = ((cfg as Record<string, unknown>).tools ?? {}) as Record<string, unknown>;
-      const mcp = (tools.mcp ?? {}) as Record<string, unknown>;
-      const registries = (mcp.registries ?? []) as McpRegistryConfig[];
-
-      const filtered = registries.filter((r) => r.id !== id);
-      if (filtered.length === registries.length) {
+      const removed = deleteMcpRegistryFromDb(id);
+      if (!removed) {
         respond(
           false,
           undefined,
@@ -731,12 +706,6 @@ export const mcpHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-
-      const updatedConfig = {
-        ...(cfg as Record<string, unknown>),
-        tools: { ...tools, mcp: { ...mcp, registries: filtered } },
-      };
-      await writeConfigFile(updatedConfig);
 
       respond(true, { id, removed: true });
     } catch (err) {
@@ -754,8 +723,7 @@ export const mcpHandlers: GatewayRequestHandlers = {
   /** Sync registry manifests (one or all). */
   "mcp.registry.sync": async ({ params, respond }) => {
     const registryId = params.registry as string | undefined;
-    const mcpConfig = readMcpConfig();
-    const registries = (mcpConfig.registries ?? []).filter((r) => r.enabled !== false);
+    const registries = loadMcpRegistriesFromDb().filter((r) => r.enabled !== false);
 
     if (registries.length === 0) {
       respond(true, { results: [], message: "No MCP registries configured" });

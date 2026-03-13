@@ -8,6 +8,7 @@ pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+skill-bin
 __pycache__/
 *.pyc
 .pnpm-store

@@ -5,10 +5,15 @@
  * by reading agent manifests from the bundled `agents/` directory.
  */
 import { readdir, readFile, writeFile, mkdir, rm, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  loadAgentRegistriesFromDb,
+  saveAgentRegistryToDb,
+  deleteAgentRegistryFromDb,
+  updateAgentRegistrySyncState,
+} from "../../agents/registries-sqlite.js";
 import {
   deriveAllowAgents,
   detectDrift,
@@ -27,42 +32,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 // Bundled agents directory (relative to compiled output in dist/)
 // import.meta.dirname resolves to dist/ in bundled output, so one level up reaches repo root
 const BUNDLED_AGENTS_DIR = join(import.meta.dirname, "..", "agents");
-
-// ── User-configured registries persistence ───────────────────────────────────
-
-const USER_REGISTRIES_PATH = join(
-  homedir(),
-  ".openclaw",
-  "agent-registry-cache",
-  "registries.json",
-);
-
-interface StoredRegistry {
-  id: string;
-  name: string;
-  url: string;
-  description?: string;
-  visibility: "public" | "private";
-  authTokenEnv?: string;
-  enabled: boolean;
-  lastSynced?: string;
-  agentCount?: number;
-}
-
-async function loadUserRegistries(): Promise<StoredRegistry[]> {
-  try {
-    const content = await readFile(USER_REGISTRIES_PATH, "utf-8");
-    const parsed = JSON.parse(content);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveUserRegistries(registries: StoredRegistry[]): Promise<void> {
-  await mkdir(join(homedir(), ".openclaw", "agent-registry-cache"), { recursive: true });
-  await writeFile(USER_REGISTRIES_PATH, JSON.stringify(registries, null, 2));
-}
 
 interface LoadedAgent {
   manifest: AgentManifest;
@@ -1013,7 +982,7 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
       lastSynced: "bundled",
       bundled: true,
     };
-    const userRegistries = await loadUserRegistries();
+    const userRegistries = loadAgentRegistriesFromDb();
     const all = [bundledRegistry, ...userRegistries.map((r) => ({ ...r, bundled: false }))];
     respond(true, { registries: all }, undefined);
   },
@@ -1977,8 +1946,8 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const registries = await loadUserRegistries();
-    if (registries.some((r) => r.id === id)) {
+    const existing = loadAgentRegistriesFromDb();
+    if (existing.some((r) => r.id === id)) {
       respond(
         false,
         undefined,
@@ -1990,8 +1959,7 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
     const visibility = params.visibility === "private" ? ("private" as const) : ("public" as const);
     const authTokenEnv = typeof params.authTokenEnv === "string" ? params.authTokenEnv : undefined;
 
-    registries.push({ id, name, url, visibility, authTokenEnv, enabled: true });
-    await saveUserRegistries(registries);
+    saveAgentRegistryToDb({ id, name, url, visibility, authTokenEnv, enabled: true });
     respond(true, { ok: true, id }, undefined);
   },
 
@@ -2010,9 +1978,8 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const registries = await loadUserRegistries();
-    const idx = registries.findIndex((r) => r.id === id);
-    if (idx === -1) {
+    const removed = deleteAgentRegistryFromDb(id);
+    if (!removed) {
       respond(
         false,
         undefined,
@@ -2020,8 +1987,6 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    registries.splice(idx, 1);
-    await saveUserRegistries(registries);
     respond(true, { ok: true, id }, undefined);
   },
 
@@ -2040,7 +2005,7 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const registries = await loadUserRegistries();
+    const registries = loadAgentRegistriesFromDb();
     const reg = registries.find((r) => r.id === registryId);
     if (!reg) {
       respond(
@@ -2062,10 +2027,8 @@ export const marketplaceHandlers: GatewayRequestHandlers = {
 
     try {
       const result = await syncRegistry(entry);
-      // Update sync metadata in stored registries
-      reg.lastSynced = result.syncedAt;
-      reg.agentCount = result.agents.length;
-      await saveUserRegistries(registries);
+      // Update sync metadata in SQLite
+      updateAgentRegistrySyncState(reg.id, result.syncedAt, result.agents.length);
 
       respond(
         true,

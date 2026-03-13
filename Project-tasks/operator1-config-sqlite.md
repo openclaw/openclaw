@@ -2,7 +2,7 @@
 
 **Status:** Implementation Guide (Approved Direction)
 **Created:** 2026-03-05
-**Updated:** 2026-03-12
+**Updated:** 2026-03-13
 **Author:** Operator1 (from Rohit's request)
 
 ---
@@ -111,9 +111,12 @@ Operator1 currently has config and state spread across **3 formats in 60+ files*
 
 **Stays as JSON/YAML (not migrated):**
 
-| File Pattern       | What                                          | Why                                           |
-| ------------------ | --------------------------------------------- | --------------------------------------------- |
-| `mcp/servers.yaml` | MCP server definitions (may contain API keys) | Stays YAML — user-edited, MCP-specific format |
+| File Pattern          | What                            | Why                                                       |
+| --------------------- | ------------------------------- | --------------------------------------------------------- |
+| `mcp/servers.yaml`    | MCP server definitions          | Stays YAML — MCP ecosystem compatibility, user-edited     |
+| `agents/*/agent.yaml` | Agent manifest files (38 files) | Stays YAML — user-edited, agent marketplace compatibility |
+
+> **Note:** Server/agent definitions stay as files for ecosystem compatibility. Only the **registry config and lock state** migrate to SQLite.
 
 **Audit/debug logs (append-only JSONL):**
 
@@ -191,9 +194,10 @@ All tables use **domain prefixes** for organization as the table count grows. Up
 | Prefix         | Domain                   | Tables                                                                         |
 | -------------- | ------------------------ | ------------------------------------------------------------------------------ |
 | `op1_team_`    | Teams                    | `op1_team_registry`, `op1_team_members`, `op1_team_tasks`, `op1_team_messages` |
-| `op1_agent_`   | Agent marketplace        | `op1_agent_manifests`                                                          |
+| `op1_agent_`   | Agent marketplace        | `op1_agent_manifests`, `op1_agent_registries`, `op1_agent_locks`               |
 | `op1_clawhub_` | ClawHub skills           | `op1_clawhub_catalog`, `op1_clawhub_locks`                                     |
-| `op1_`         | Other operator1 features | `op1_settings` (heartbeat, matrix_agents, future features)                     |
+| `op1_mcp_`     | MCP registries           | `op1_mcp_registries` (server defs stay in `mcp/servers.yaml`)                  |
+| `op1_`         | Other operator1 features | `op1_settings` (heartbeat, future features)                                    |
 
 > **Convention:** All new operator1-specific features use the `op1_` prefix. This makes it
 > immediately clear at the schema level what's ours vs what originated from upstream.
@@ -237,6 +241,9 @@ All tables use **domain prefixes** for organization as the table count grows. Up
 | `op1_clawhub_locks`                                                            | `{workspace}/.openclaw/clawhub/clawhub.lock.json`                | P2                                                       |
 | `op1_settings` (scope=`heartbeat`)                                             | `{workspace}/memory/heartbeat-state.json`                        | P2                                                       |
 | `op1_settings` (scope=`matrix_agents`)                                         | `matrix-agents.json`                                             | P2 (temporary — migrates to `op1_agent_manifests` at P3) |
+| `op1_mcp_registries`                                                           | `openclaw.json tools.mcp.registries`                             | P2 (server defs stay in `mcp/servers.yaml`)              |
+| `op1_agent_registries`                                                         | `openclaw.json agents.registries`                                | P3 (manifests stay in `agents/*/agent.yaml`)             |
+| `op1_agent_locks`                                                              | `agents-lock.yaml` per scope (user/project/local)                | P3                                                       |
 | `op1_agent_manifests`                                                          | `agents/*/agent.yaml` (38 manifests)                             | P3 (replaces YAML layer)                                 |
 
 ### What stays as files (permanently)
@@ -246,7 +253,8 @@ All tables use **domain prefixes** for organization as the table count grows. Up
 | `agents/{id}/sessions/*.jsonl`     | Append-only transcript logs — already optimal as sequential files |
 | `logs/cache-trace.jsonl`           | Debug logs — optional, rotated, append-only                       |
 | `logs/anthropic-payload-log.jsonl` | Debug logs — same                                                 |
-| `mcp/servers.yaml`                 | MCP server definitions — user-edited YAML, MCP-specific format    |
+| `mcp/servers.yaml`                 | MCP server definitions — MCP ecosystem compatibility              |
+| `agents/*/agent.yaml`              | Agent manifests — marketplace ecosystem compatibility             |
 
 ---
 
@@ -567,6 +575,20 @@ CREATE TABLE op1_clawhub_locks (
   PRIMARY KEY (workspace_id, skill_slug),
   FOREIGN KEY (workspace_id) REFERENCES workspace_state(workspace_id) ON DELETE CASCADE
 );
+
+-- MCP registries (replaces openclaw.json tools.mcp.registries)
+-- Server definitions stay in mcp/servers.yaml for MCP ecosystem compatibility
+CREATE TABLE op1_mcp_registries (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  auth_token_env TEXT,            -- Env var name for private registry auth (not the token itself)
+  visibility TEXT,                -- 'public', 'private'
+  enabled INTEGER DEFAULT 1,
+  synced_at INTEGER,              -- Last registry sync timestamp
+  updated_at INTEGER
+);
 ```
 
 ### P3 Tables — Agents & Config (End Goal)
@@ -592,6 +614,35 @@ CREATE TABLE op1_agent_manifests (
 );
 
 CREATE INDEX idx_op1_agent_manifests_department ON op1_agent_manifests(department);
+
+-- Agent registries (replaces openclaw.json agents.registries)
+-- Agent definitions stay in agents/*/agent.yaml for marketplace ecosystem compatibility
+CREATE TABLE op1_agent_registries (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  auth_token_env TEXT,            -- Env var name for private registry auth (not the token itself)
+  visibility TEXT,                -- 'public', 'private'
+  enabled INTEGER DEFAULT 1,
+  synced_at INTEGER,              -- Last registry sync timestamp
+  updated_at INTEGER
+);
+
+-- Agent lock state (replaces agents-lock.yaml per scope)
+-- Tracks installed agents with exact versions for reproducibility
+CREATE TABLE op1_agent_locks (
+  scope TEXT NOT NULL,            -- 'user', 'project', 'local'
+  agent_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  registry_id TEXT,               -- Which registry this agent came from
+  checksum TEXT,                  -- sha256 for integrity verification
+  installed_at INTEGER,
+  requires TEXT,                  -- Parent agent ID if Tier 3 (for dependency validation)
+  PRIMARY KEY (scope, agent_id)
+);
+
+CREATE INDEX idx_op1_agent_locks_registry ON op1_agent_locks(registry_id);
+CREATE INDEX idx_op1_agent_locks_requires ON op1_agent_locks(requires) WHERE requires IS NOT NULL;
 
 -- Config (replaces openclaw.json — end goal)
 -- Uses named scope key (extensible to multi-env configs, snapshots, etc.)
@@ -905,6 +956,26 @@ Gateway RPC → UI / CLI / Agents
 - [x] Remove file-lock/atomic-write helpers if no remaining consumers (deferred from Phase 3) — **Result:** file-lock still used by plugin-sdk + OAuth; `createAsyncLock` removed as dead code
 - [x] Remove `json-file.ts` read/write functions if no remaining consumers — **Result:** still used by `cli-credentials.ts` (external CLI cred reads) and `auth-profiles` (legacy OAuth import); kept
 
+#### Phase 4E: MCP Registries → SQLite (~1 hour)
+
+> **Note:** MCP server definitions in `mcp/servers.yaml` stay as YAML for MCP ecosystem compatibility.
+> Only the **registry config** migrates to SQLite.
+
+- [x] Create `src/mcp/registries-sqlite.ts` — SQLite adapter for `op1_mcp_registries` table
+- [x] Schema migration v7: add `op1_mcp_registries` table
+- [x] Update `src/gateway/server-methods/mcp.ts`:
+  - `mcp.registry.list` → query `op1_mcp_registries` table
+  - `mcp.registry.add` → insert into `op1_mcp_registries` table
+  - `mcp.registry.remove` → delete from `op1_mcp_registries` table
+  - `mcp.registry.sync` → reads registries from SQLite
+  - `mcp.browse.list` → reads registries from SQLite
+- [x] One-shot migration: `openclaw.json tools.mcp.registries` → `op1_mcp_registries` rows (in `migrate-phase4e5d.ts`)
+- [x] Remove `tools.mcp.registries` from config reads (migration strips registries from config blob)
+
+**Phase 4E cleanup:**
+
+- [x] Removed `readMcpConfig()` helper + `writeConfigFile` import from `mcp.ts`
+
 ### Phase 5: Agent Manifests → SQLite (P3, 2-3 days)
 
 - [x] Phase 5A: device/node pairing + sandbox SQLite adapters + schema v5
@@ -915,6 +986,28 @@ Gateway RPC → UI / CLI / Agents
 **Phase 5 cleanup:**
 
 - [x] Remove dead exports from Phase 5B/5C sandbox+subagent migration
+
+#### Phase 5D: Agent Registries + Locks → SQLite (~1-2 hours)
+
+> **Note:** Agent manifests in `agents/*/agent.yaml` stay as YAML for marketplace ecosystem compatibility.
+> Only **registry config** and **lock state** migrate to SQLite.
+
+- [x] Create `src/agents/registries-sqlite.ts` — SQLite adapter for `op1_agent_registries` table
+- [x] Create `src/agents/agent-locks-sqlite.ts` — SQLite adapter for `op1_agent_locks` table
+- [x] Schema migration v7: add `op1_agent_registries` + `op1_agent_locks` tables
+- [x] Update `src/gateway/server-methods/marketplace.ts`:
+  - `agents.marketplace.registries` → query `op1_agent_registries` via `loadAgentRegistriesFromDb()`
+  - `agents.marketplace.registry.add` → insert via `saveAgentRegistryToDb()`
+  - `agents.marketplace.registry.remove` → delete via `deleteAgentRegistryFromDb()`
+  - `agents.marketplace.sync` → update sync state via `updateAgentRegistrySyncState()`
+- [x] One-shot migration: `~/.openclaw/agent-registry-cache/registries.json` → `op1_agent_registries` rows (in `migrate-phase4e5d.ts`)
+- [x] Update tests (schema version 6→7 in `state-db.test.ts`)
+- [ ] Agent lock file migration (`agent-scope.ts` lock I/O → `op1_agent_locks` table) — deferred, lock files are per-project scope and need careful handling
+
+**Phase 5D cleanup:**
+
+- [x] Removed `StoredRegistry` interface + `loadUserRegistries()`/`saveUserRegistries()` + `USER_REGISTRIES_PATH` from `marketplace.ts`
+- [ ] Delete `agents-lock.yaml` files after migration (per scope: user/project/local) — deferred with lock migration
 
 ### Phase 6: Config → SQLite (P3, 2-3 days)
 
@@ -950,6 +1043,9 @@ Gateway RPC → UI / CLI / Agents
 - [x] Update `openclaw doctor` to check DB health instead of JSON file presence — added `doctor-state-db.ts` with integrity check, schema version, table row counts; fixed stale "sessions.json" message
 
 **Total: ~18-24 days across all phases**
+
+> **Note:** Phase 4E (MCP Registries) and Phase 5D (Agent Registries + Locks) add ~2-3 hours total.
+> With coding agents handling implementation, these can be completed in a single session.
 
 ---
 
@@ -1104,4 +1200,349 @@ Recovery options if something goes wrong:
 
 ---
 
-_Last updated: 2026-03-11_
+## Phase 8: Session Memory Isolation (3-5 days)
+
+> **Problem:** When working with Operator1 across multiple sessions (web chat, Telegram topics, WhatsApp), all sessions share the same workspace (`~/.openclaw/workspace/`) and memory files (`MEMORY.md`, `memory/*.md`). This causes context confusion when parallel sessions work on different projects.
+>
+> **Example:**
+>
+> - Session A (Telegram topic 41) working on `crm-operations` → writes to shared MEMORY.md
+> - Session B (web chat) working on `ui-next` → writes to same MEMORY.md
+> - Session C (Telegram topic 16) reads mixed context from both projects → confused about "current task"
+
+### Solution: Four-Layer Isolation
+
+| Layer           | Approach                                          | Effort   | Scope            |
+| --------------- | ------------------------------------------------- | -------- | ---------------- |
+| **Foundation**  | Project/Workspace/Channel unification (Phase 8.5) | 2 days   | SQLite schema    |
+| **Short-term**  | Session tagging (Option C)                        | 0 days   | Immediate relief |
+| **Medium-term** | Project-scoped memory (Option B)                  | 1 day    | Memory isolation |
+| **Long-term**   | Per-project workspace (Option A)                  | 2-3 days | Full isolation   |
+
+---
+
+### Phase 8.5: Project → Workspace → Channel Unification (2 days)
+
+> **Prerequisite for all other phases.** Currently projects, workspaces, sessions, and Telegram topics exist in disconnected systems. This phase unifies them into SQLite with proper FK relationships.
+
+**Current disconnect:**
+
+| Concept                      | Where Stored                       | Links to Others?              |
+| ---------------------------- | ---------------------------------- | ----------------------------- |
+| **Projects**                 | `PROJECTS.md` (Markdown)           | ❌ No SQLite link             |
+| **Workspace state**          | `workspace_state` (SQLite)         | ❌ No `project_id`            |
+| **Sessions**                 | `session_entries` (SQLite)         | ❌ `projectId` in JSON only   |
+| **Thread bindings**          | `channel_thread_bindings` (SQLite) | ❌ Only maps thread → session |
+| **Telegram topic → project** | `PROJECTS.md` `telegram.topicId`   | ❌ In Markdown, not queryable |
+
+**Target unified chain:**
+
+```
+Telegram Group/Topic
+    ↓ (topic → project binding)
+op1_projects
+    ↓ (project_id)
+workspace_state
+    ↓ (workspace_id)
+session_entries (when session is in that topic)
+    ↓
+Memory, Tasks, etc.
+```
+
+#### SQLite Schema Changes
+
+```sql
+-- Projects table (NEW) — replaces PROJECTS.md
+CREATE TABLE op1_projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,           -- Project root path (~/dev/operator1/Projects/{id})
+  type TEXT,                    -- 'internal', 'external', 'reference'
+  tech TEXT,
+  status TEXT DEFAULT 'active', -- 'active', 'planning', 'on_hold', 'completed', 'archived'
+  is_default INTEGER DEFAULT 0,
+  keywords_json TEXT,           -- JSON array of keywords
+  links_json TEXT,              -- { github, docs, slack, notion }
+  created_at INTEGER,
+  updated_at INTEGER
+);
+
+CREATE INDEX idx_op1_projects_status ON op1_projects(status);
+CREATE INDEX idx_op1_projects_type ON op1_projects(type);
+
+-- Telegram topic → project binding (NEW)
+CREATE TABLE op1_telegram_topic_bindings (
+  chat_id TEXT NOT NULL,        -- Telegram group/supergroup ID
+  topic_id TEXT,                -- NULL for main group, topic ID for forum topics
+  project_id TEXT NOT NULL,
+  group_name TEXT,              -- Human-readable group name (cached)
+  topic_name TEXT,              -- Human-readable topic name (cached)
+  bound_at INTEGER DEFAULT (unixepoch()),
+  bound_by TEXT DEFAULT 'manual', -- 'auto', 'manual'
+  PRIMARY KEY (chat_id, topic_id),
+  FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_telegram_topic_project ON op1_telegram_topic_bindings(project_id);
+CREATE INDEX idx_telegram_topic_chat ON op1_telegram_topic_bindings(chat_id);
+
+-- Extend workspace_state with project link
+ALTER TABLE workspace_state ADD COLUMN project_id TEXT REFERENCES op1_projects(id);
+
+-- Extend session_entries with project link (move from JSON to column)
+ALTER TABLE session_entries ADD COLUMN project_id TEXT REFERENCES op1_projects(id);
+```
+
+#### Implementation Tasks
+
+- [x] Schema v8: add `op1_projects`, `op1_telegram_topic_bindings` tables + `workspace_state.project_id` column
+- [x] Create `src/projects/project-store-sqlite.ts` — SQLite adapter for projects CRUD (implements `ProjectStore` interface)
+- [x] Create `src/projects/telegram-topic-binding-sqlite.ts` — SQLite adapter for topic bindings
+- [x] Create `src/infra/state-db/migrate-phase8.ts` — one-shot migration: `PROJECTS.md` → `op1_projects` + `op1_telegram_topic_bindings` rows
+- [x] Add `project_id` column to `workspace_state` (schema migration v8, application-level FK)
+- [ ] Add `project_id` column to `session_entries` — deferred (currently stored in `extra_json` which works fine)
+- [x] Rewrite `src/gateway/server-methods/projects.ts`:
+  - `projects.list/get/add/update/archive` → use `SqliteProjectStore` instead of `MarkdownProjectStore`
+  - `autoBindByTopicFromSessionKey()` → queries `op1_telegram_topic_bindings` via `findProjectByTopicId()`
+  - Removed all Markdown parsing/serialization code (`parseProjectsMd`, `serializeProjectsMd`, `resolveProjectsPath`)
+- [x] Create new RPCs:
+  - `projects.bindTelegramTopic({ projectId, chatId, topicId })` → insert into `op1_telegram_topic_bindings`
+  - `projects.unbindTelegramTopic({ chatId, topicId })` → delete from `op1_telegram_topic_bindings`
+  - `projects.getTelegramBindings({ projectId })` → list all topic bindings for a project
+- [x] Register new RPCs in `server-methods-list.ts` and `method-scopes.ts`
+- [x] Wire migration into `server-startup.ts` (runs after Phase 4E/5D)
+- [x] Migration deletes `PROJECTS.md` after successful import
+
+#### Auto-Bind Flow (Updated)
+
+When a message arrives from Telegram:
+
+1. **Lookup topic binding in SQLite:**
+
+   ```sql
+   SELECT project_id FROM op1_telegram_topic_bindings
+   WHERE chat_id = ? AND topic_id = ?;
+   ```
+
+2. **If found → bind session to project:**
+   - Set `session_entries.project_id`
+   - Load project's workspace (`workspace_state` where `project_id` matches)
+   - Memory reads from `projects/{id}/MEMORY.md` (Phase 8B)
+
+3. **No binding → use default project or global workspace**
+
+#### Benefits
+
+| Before                          | After                                 |
+| ------------------------------- | ------------------------------------- |
+| Topic → project in Markdown     | Topic → project in SQLite (queryable) |
+| Workspace not linked to project | `workspace_state.project_id` FK       |
+| Session projectId in JSON       | `session_entries.project_id` column   |
+| Auto-bind scans PROJECTS.md     | Auto-bind queries SQLite              |
+| Manual topic binding edit       | RPCs for bind/unbind/list             |
+
+#### Effort
+
+**~2 days:**
+
+- Schema + migration: 0.5 day
+- Project store SQLite adapter: 0.5 day
+- Topic binding store + RPCs: 0.5 day
+- Integration + testing: 0.5 day
+
+---
+
+### Phase 8A: Session Tagging (Option C) — Immediate
+
+**Goal:** Disambiguate memory entries when reading mixed MEMORY.md.
+
+**Implementation:**
+
+- [ ] Update `AGENTS.md` with session tagging rule:
+
+  ```markdown
+  ### Memory Writes
+
+  When writing to MEMORY.md or memory/YYYY-MM-DD.md, always include a project tag:
+
+  ## 2026-03-13
+
+  ### [Project: crm-operations]
+
+  - Discussed invoice workflow with Trinity
+  - Decided on monthly billing cycle
+
+  ### [Project: ui-next]
+
+  - Reviewed dark mode implementation
+  - Blocked on shadcn/ui update
+  ```
+
+- [ ] Agent reads `projects.getContext` at session start to know current project
+- [ ] All memory writes include `[Project: {projectId}]` header
+- [ ] When reading memory, agent can filter/weight by project tag
+
+**Effort:** ~0 days (just documentation update)
+
+---
+
+### Phase 8B: Project-Scoped Memory (Option B) — Medium-Term
+
+**Goal:** Each project gets its own memory folder inside the shared workspace.
+
+**Implementation:**
+
+- [ ] Create per-project memory structure:
+  ```
+  ~/.openclaw/workspace/
+  ├── MEMORY.md                    # Generic memory (no project bound)
+  ├── memory/
+  │   └── 2026-03-13.md
+  └── projects/
+      └── crm-operations/
+          ├── MEMORY.md            # Project-specific long-term memory
+          └── memory/
+              └── 2026-03-13.md    # Project-specific daily notes
+  ```
+- [ ] Update `memory/manager.ts` to support project-scoped paths:
+  - `getMemoryPath(projectId?: string)` → returns project or global path
+  - `searchMemory(query, projectId?: string)` → searches appropriate scope
+- [ ] Update `AGENTS.md` session startup:
+
+  ```markdown
+  ### Session Startup
+
+  1. Check `projects.getContext` for bound project
+  2. If project bound:
+     - Read `projects/{projectId}/MEMORY.md` (if exists)
+     - Read `projects/{projectId}/memory/YYYY-MM-DD.md` (today + yesterday)
+  3. If no project bound:
+     - Read global `MEMORY.md`
+     - Read global `memory/YYYY-MM-DD.md`
+  ```
+
+- [ ] Update memory write logic:
+  - If project bound → write to `projects/{projectId}/memory/`
+  - If no project → write to global `memory/`
+- [ ] QMD integration: Add project memory folders as additional collections
+
+**Effort:** ~1 day
+
+**SQLite tables needed:**
+
+```sql
+-- Track which memory scope a session uses
+CREATE TABLE op1_session_memory_scope (
+  session_key TEXT PRIMARY KEY,
+  project_id TEXT,                    -- NULL = global scope
+  scope_path TEXT NOT NULL,           -- Path to memory folder
+  bound_at INTEGER DEFAULT (unixepoch()),
+  FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE SET NULL
+);
+```
+
+---
+
+### Phase 8C: Per-Project Workspace (Option A) — Long-Term
+
+**Goal:** Each project gets its own complete workspace (AGENTS.md, SOUL.md, MEMORY.md, etc.).
+
+**Implementation:**
+
+- [ ] Create per-project workspace structure:
+  ```
+  ~/dev/operator1/Projects/crm-operations/
+  └── .openclaw/
+      ├── AGENTS.md
+      ├── SOUL.md
+      ├── USER.md
+      ├── MEMORY.md
+      ├── TOOLS.md
+      ├── HEARTBEAT.md
+      └── memory/
+          └── 2026-03-13.md
+  ```
+- [ ] Update gateway session handling:
+  - When `projects.bindSession` called → switch `workspace` to project's `.openclaw/`
+  - New config option: `agents.defaults.perSessionWorkspace: true`
+- [ ] Update `resolveAgentWorkspaceDir()` to check session binding first:
+  ```typescript
+  function resolveAgentWorkspaceDir(
+    cfg: OpenClawConfig,
+    agentId: string,
+    sessionKey?: string,
+  ): string {
+    // Check if session is bound to a project
+    if (sessionKey) {
+      const projectContext = await getProjectContextForSession(sessionKey);
+      if (projectContext?.path) {
+        const projectWorkspace = path.join(projectContext.path, ".openclaw");
+        if (fs.existsSync(projectWorkspace)) {
+          return projectWorkspace;
+        }
+      }
+    }
+    // Fallback to default workspace
+    return cfg.agent?.workspace ?? path.join(os.homedir(), ".openclaw", "workspace");
+  }
+  ```
+- [ ] Update session spawn to inherit project workspace:
+  - `sessions_spawn` receives `projectId`
+  - Subagent's workspace is set to project's `.openclaw/` folder
+- [ ] Handle workspace bootstrap for new projects:
+  - `projects.scaffold` RPC creates `.openclaw/` folder with template files
+  - Or: auto-create on first session bind
+
+**Effort:** ~2-3 days
+
+**SQLite tables needed:**
+
+```sql
+-- Extend session_entries to track workspace override
+-- (add column to existing table via schema migration)
+ALTER TABLE session_entries ADD COLUMN workspace_override TEXT;
+
+-- Or create separate table for clean schema
+CREATE TABLE op1_session_workspace (
+  session_key TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  workspace_path TEXT NOT NULL,
+  bound_at INTEGER DEFAULT (unixepoch()),
+  FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE CASCADE
+);
+```
+
+---
+
+### Phase 8 Implementation Order
+
+| Phase | Description                                           | Effort   | When                         |
+| ----- | ----------------------------------------------------- | -------- | ---------------------------- |
+| 8.5   | Project/Workspace/Channel unification (SQLite schema) | 2 days   | Foundation                   |
+| 8A    | Session tagging (Option C)                            | 0 days   | Immediate (update AGENTS.md) |
+| 8B    | Project-scoped memory (Option B)                      | 1 day    | Short-term                   |
+| 8C    | Per-project workspace (Option A)                      | 2-3 days | Medium-term                  |
+
+**Total Phase 8 effort:** 5-6 days
+
+---
+
+### Phase 8 Success Criteria
+
+- [x] Projects stored in SQLite (`op1_projects` table), not PROJECTS.md
+- [x] Telegram topics bound to projects via SQLite (`op1_telegram_topic_bindings` table)
+- [x] Workspace linked to project via `workspace_state.project_id` column
+- [ ] Sessions linked to project via `session_entries.project_id` FK — deferred (using `extra_json` for now)
+- [x] Auto-bind queries SQLite instead of scanning PROJECTS.md
+- [ ] RPCs available: `projects.bindTelegramTopic`, `projects.unbindTelegramTopic`, `projects.getTelegramBindings`
+- [ ] Parallel sessions on different projects don't confuse memory context
+- [ ] Session can be bound to project via `projects.bindSession` RPC
+- [ ] Memory reads/writes are scoped to project when bound
+- [ ] Subagents inherit project context from parent session
+- [ ] `projects.scaffold` RPC creates project workspace structure
+- [ ] QMD indexes project-scoped memory alongside global memory
+- [ ] Backward compatible: unbound sessions use global workspace
+
+---
+
+_Last updated: 2026-03-13_

@@ -287,6 +287,40 @@ export async function startGatewaySidecars(params: {
     );
   }
 
+  // One-shot migration: Phase 4E/5D MCP registries + agent registries → SQLite.
+  try {
+    const { migratePhase4e5dToSqlite } = await import("../infra/state-db/migrate-phase4e5d.js");
+    const results = migratePhase4e5dToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.count > 0);
+    for (const r of migrated) {
+      params.log.info(`[state-db] Migrated ${r.store}: ${r.count} entries to SQLite`);
+    }
+    const failed = results.filter((r) => r.error);
+    for (const r of failed) {
+      params.log.warn(`[state-db] ${r.store} migration failed: ${r.error}`);
+    }
+  } catch (err) {
+    params.log.warn(
+      `[state-db] Phase 4E/5D registries JSON→SQLite migration failed: ${String(err)}`,
+    );
+  }
+
+  // One-shot migration: Phase 8.5 PROJECTS.md → SQLite.
+  try {
+    const { migratePhase8ToSqlite } = await import("../infra/state-db/migrate-phase8.js");
+    const results = migratePhase8ToSqlite();
+    const migrated = results.filter((r) => r.migrated && r.count > 0);
+    for (const r of migrated) {
+      params.log.info(`[state-db] Migrated ${r.store}: ${r.count} entries to SQLite`);
+    }
+    const failed = results.filter((r) => r.error);
+    for (const r of failed) {
+      params.log.warn(`[state-db] ${r.store} migration failed: ${r.error}`);
+    }
+  } catch (err) {
+    params.log.warn(`[state-db] Phase 8.5 PROJECTS.md→SQLite migration failed: ${String(err)}`);
+  }
+
   try {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);

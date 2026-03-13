@@ -26,6 +26,11 @@ const KEY_TABLES = [
   "op1_channel_thread_bindings",
   "core_settings",
   "op1_config",
+  "op1_mcp_registries",
+  "op1_agent_registries",
+  "op1_agent_locks",
+  "op1_projects",
+  "op1_telegram_topic_bindings",
 ];
 
 export function noteStateDbHealth(): void {
