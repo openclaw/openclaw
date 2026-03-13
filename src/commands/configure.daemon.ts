@@ -131,6 +131,7 @@ export async function maybeInstallDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            watchdog: true,
           });
           progress.setLabel("Gateway service installed.");
         } catch (err) {

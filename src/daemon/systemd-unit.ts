@@ -40,6 +40,7 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  watchdog,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -56,9 +57,12 @@ export function buildSystemdUnit({
     "Wants=network-online.target",
     "",
     "[Service]",
+    watchdog ? "Type=notify" : null,
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    watchdog ? "NotifyAccess=all" : null,
+    watchdog ? "WatchdogSec=90" : null,
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
