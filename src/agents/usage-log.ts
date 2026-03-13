@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import fs from "fs/promises";
 import path from "path";
 
@@ -19,7 +20,7 @@ export type TokenUsageRecord = {
 };
 
 function makeId() {
-  return `usage_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return `usage_${Date.now().toString(36)}_${randomBytes(4).toString("hex")}`;
 }
 
 async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
