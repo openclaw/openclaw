@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearFastTestEnv,
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
   restoreFastTestEnv,
+  runCliAgentMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -62,5 +64,21 @@ describe("runCronIsolatedAgentTurn execution session key", () => {
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionKey).toBe(
       "agent:default:cron:execution-session-key:run:run-123",
     );
+  });
+
+  it("uses the per-run session key when executing the CLI agent", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "cli result" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionKey).toBe(
+      "agent:default:cron:execution-session-key:run:run-123",
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 });

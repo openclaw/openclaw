@@ -76,6 +76,7 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  executionSessionKey: string;
   runSessionId: string;
   runStartedAt: number;
   runEndedAt: number;
@@ -315,7 +316,7 @@ export async function dispatchCronDelivery(
       return null;
     }
     const initialSynthesizedText = synthesizedText.trim();
-    let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+    let activeSubagentRuns = countActiveDescendantRuns(params.executionSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
@@ -325,22 +326,22 @@ export async function dispatchCronDelivery(
     const completedDescendantReply =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
         ? await readDescendantSubagentFallbackReply({
-            sessionKey: params.agentSessionKey,
+            sessionKey: params.executionSessionKey,
             runStartedAt: params.runStartedAt,
           })
         : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await waitForDescendantSubagentSummary({
-        sessionKey: params.agentSessionKey,
+        sessionKey: params.executionSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
-      activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+      activeSubagentRuns = countActiveDescendantRuns(params.executionSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await readDescendantSubagentFallbackReply({
-          sessionKey: params.agentSessionKey,
+          sessionKey: params.executionSessionKey,
           runStartedAt: params.runStartedAt,
         });
       }
