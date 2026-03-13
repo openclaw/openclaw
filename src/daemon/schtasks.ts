@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspectPortUsage } from "../infra/ports.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { assertSafeArgv } from "./arg-split.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
@@ -141,8 +142,10 @@ export async function readScheduledTaskCommand(
     if (!commandLine) {
       return null;
     }
+    const programArguments = parseCmdScriptCommandLine(commandLine);
+    assertSafeArgv(programArguments);
     return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
+      programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
       sourcePath: scriptPath,

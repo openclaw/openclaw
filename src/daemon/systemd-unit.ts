@@ -1,4 +1,4 @@
-import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { assertSafeArgv, splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
 const SYSTEMD_LINE_BREAKS = /[\r\n]/;
@@ -77,7 +77,9 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
+  const argv = splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
+  assertSafeArgv(argv);
+  return argv;
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {

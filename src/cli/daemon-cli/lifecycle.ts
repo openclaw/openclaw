@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { assertSafeArgv } from "../../daemon/arg-split.js";
 import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -90,7 +91,16 @@ function readGatewayProcessArgsSync(pid: number): string[] | null {
       return null;
     }
     const command = extractWindowsCommandLine(wmic.stdout);
-    return command ? parseCmdScriptCommandLine(command) : null;
+    if (!command) {
+      return null;
+    }
+    const argv = parseCmdScriptCommandLine(command);
+    try {
+      assertSafeArgv(argv);
+    } catch {
+      return null;
+    }
+    return argv;
   }
   return null;
 }
