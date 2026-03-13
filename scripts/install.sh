@@ -1990,6 +1990,10 @@ install_openclaw() {
         if semver_equal "$current_version" "$resolved_version"; then
             # Still ensure bin link is intact (may have been broken by interrupted install)
             ensure_openclaw_bin_link || true
+            # Warn if npm global bin dir is missing from PATH (skip doesn't mean PATH is fine)
+            local npm_bin=""
+            npm_bin="$(npm_global_bin_dir || true)"
+            warn_shell_path_missing_dir "$npm_bin" "npm global bin dir"
             ui_success "OpenClaw is already up to date (v${resolved_version}). Use --force to reinstall."
             INSTALL_SKIPPED=1
             return 0
