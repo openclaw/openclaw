@@ -16,14 +16,14 @@ describe("resolveMemoryFlushPromptForRun", () => {
     },
   } as OpenClawConfig;
 
-  it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
+  it("replaces YYYY-MM-DD using user timezone with HH-MM and appends current time", () => {
     const prompt = resolveMemoryFlushPromptForRun({
-      prompt: "Store durable notes in memory/YYYY-MM-DD.md",
+      prompt: "Store durable notes in memory/YYYY-MM-DD-HH-MM.md",
       cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
-    expect(prompt).toContain("memory/2026-02-16.md");
+    expect(prompt).toContain("memory/2026-02-16-10-00.md");
     expect(prompt).toContain(
       "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
     );
@@ -40,13 +40,13 @@ describe("resolveMemoryFlushPromptForRun", () => {
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 
-  it("resolves the canonical relative memory path using user timezone", () => {
+  it("resolves the timestamped relative memory path using user timezone", () => {
     const relativePath = resolveMemoryFlushRelativePathForRun({
       cfg,
       nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
     });
 
-    expect(relativePath).toBe("memory/2026-02-16.md");
+    expect(relativePath).toBe("memory/2026-02-16-10-00.md");
   });
 });
 
@@ -56,9 +56,8 @@ describe("DEFAULT_MEMORY_FLUSH_PROMPT", () => {
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("do not overwrite");
   });
 
-  it("includes anti-fragmentation instruction to prevent timestamped variant files (#34919)", () => {
-    // Agents must not create YYYY-MM-DD-HHMM.md variants alongside the canonical file
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
-    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
+  it("includes instruction to use timestamped memory files (#34919)", () => {
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped memory files");
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD-HH-MM.md");
   });
 });

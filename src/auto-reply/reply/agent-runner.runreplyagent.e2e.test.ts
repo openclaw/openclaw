@@ -1691,7 +1691,7 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("extra system");
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
-      expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(flushCall?.extraSystemPrompt).toContain("memory/YYYY-MM-DD-HH-MM.md");
       expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
     });
@@ -1819,7 +1819,7 @@ describe("runReplyAgent memory flush", () => {
       expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[0]?.prompt).toContain("MEMORY.md");
       expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
-      expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD.md");
+      expect(calls[0]?.extraSystemPrompt).toContain("memory/YYYY-MM-DD-HH-MM.md");
       expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
       expect(calls[1]?.prompt).toBe("hello");
 

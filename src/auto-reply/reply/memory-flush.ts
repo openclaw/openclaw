@@ -11,9 +11,9 @@ export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 const MEMORY_FLUSH_TARGET_HINT =
-  "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
+  "Store durable memories in memory/YYYY-MM-DD-HH-MM.md (create memory/ if needed).";
 const MEMORY_FLUSH_APPEND_ONLY_HINT =
-  "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
+  "If memory/YYYY-MM-DD-HH-MM.md already exists, APPEND new content only and do not overwrite existing entries.";
 const MEMORY_FLUSH_READ_ONLY_HINT =
   "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
 const MEMORY_FLUSH_REQUIRED_HINTS = [
@@ -27,7 +27,7 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
   MEMORY_FLUSH_APPEND_ONLY_HINT,
-  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the canonical YYYY-MM-DD.md filename.",
+  "Use timestamped memory files in the format YYYY-MM-DD-HH-MM.md for this flush.",
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
@@ -40,20 +40,25 @@ export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
 ].join(" ");
 
-function formatDateStampInTimezone(nowMs: number, timezone: string): string {
+function formatDateTimeStampInTimezone(nowMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   }).formatToParts(new Date(nowMs));
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
   const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
+  const hour = parts.find((part) => part.type === "hour")?.value;
+  const minute = parts.find((part) => part.type === "minute")?.value;
+  if (year && month && day && hour && minute) {
+    return `${year}-${month}-${day}-${hour}-${minute}`;
   }
-  return new Date(nowMs).toISOString().slice(0, 10);
+  return new Date(nowMs).toISOString().slice(0, 16).replace("T", "-").replace(":", "-");
 }
 
 export function resolveMemoryFlushRelativePathForRun(params: {
@@ -62,8 +67,8 @@ export function resolveMemoryFlushRelativePathForRun(params: {
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const { userTimezone } = resolveCronStyleNow(params.cfg ?? {}, nowMs);
-  const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
-  return `memory/${dateStamp}.md`;
+  const dateTimeStamp = formatDateTimeStampInTimezone(nowMs, userTimezone);
+  return `memory/${dateTimeStamp}.md`;
 }
 
 export function resolveMemoryFlushPromptForRun(params: {
@@ -79,7 +84,10 @@ export function resolveMemoryFlushPromptForRun(params: {
   })
     .replace(/^memory\//, "")
     .replace(/\.md$/, "");
-  const withDate = params.prompt.replaceAll("YYYY-MM-DD", dateStamp).trimEnd();
+  const withDate = params.prompt
+    .replaceAll("YYYY-MM-DD-HH-MM", dateStamp)
+    .replaceAll("YYYY-MM-DD", dateStamp)
+    .trimEnd();
   if (!withDate) {
     return timeLine;
   }
