@@ -184,7 +184,7 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
-    if (candidate.idHint && candidate.idHint !== manifest.id) {
+    if (candidate.idHint && candidate.idHint !== manifest.id && candidate.origin !== "bundled") {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
