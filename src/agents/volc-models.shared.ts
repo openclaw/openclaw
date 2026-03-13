@@ -15,7 +15,7 @@ export const VOLC_MODEL_KIMI_K2_5 = {
   reasoning: false,
   input: ["text", "image"] as const,
   contextWindow: 256000,
-  maxTokens: 4096,
+  maxTokens: 32000,
 } as const;
 
 export const VOLC_MODEL_GLM_4_7 = {
@@ -24,7 +24,7 @@ export const VOLC_MODEL_GLM_4_7 = {
   reasoning: false,
   input: ["text", "image"] as const,
   contextWindow: 200000,
-  maxTokens: 4096,
+  maxTokens: 128000,
 } as const;
 
 export const VOLC_SHARED_CODING_MODEL_CATALOG = [
@@ -32,17 +32,17 @@ export const VOLC_SHARED_CODING_MODEL_CATALOG = [
     id: "ark-code-latest",
     name: "Ark Coding Plan",
     reasoning: false,
-    input: ["text"] as const,
+    input: ["text", "image"] as const,
     contextWindow: 256000,
-    maxTokens: 4096,
+    maxTokens: 32000,
   },
   {
     id: "doubao-seed-code",
     name: "Doubao Seed Code",
     reasoning: false,
-    input: ["text"] as const,
+    input: ["text", "image"] as const,
     contextWindow: 256000,
-    maxTokens: 4096,
+    maxTokens: 32000,
   },
   {
     id: "glm-4.7",
@@ -50,7 +50,7 @@ export const VOLC_SHARED_CODING_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 200000,
-    maxTokens: 4096,
+    maxTokens: 128000,
   },
   {
     id: "kimi-k2-thinking",
@@ -58,7 +58,7 @@ export const VOLC_SHARED_CODING_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 256000,
-    maxTokens: 4096,
+    maxTokens: 32000,
   },
   {
     id: "kimi-k2.5",
@@ -66,7 +66,7 @@ export const VOLC_SHARED_CODING_MODEL_CATALOG = [
     reasoning: false,
     input: ["text"] as const,
     contextWindow: 256000,
-    maxTokens: 4096,
+    maxTokens: 32000,
   },
 ] as const;
 
