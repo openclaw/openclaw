@@ -137,6 +137,46 @@ describe("slackPlugin outbound", () => {
   });
 });
 
+describe("slackPlugin agentPrompt", () => {
+  it("tells agents interactive replies are disabled by default", () => {
+    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      },
+    });
+
+    expect(hints).toEqual([
+      "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
+    ]);
+  });
+
+  it("shows Slack interactive reply directives when enabled", () => {
+    const hints = slackPlugin.agentPrompt?.messageToolHints?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      },
+    });
+
+    expect(hints).toContain(
+      "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+    );
+    expect(hints).toContain(
+      "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+    );
+  });
+});
+
 describe("slackPlugin config", () => {
   it("treats HTTP mode accounts with bot token + signing secret as configured", async () => {
     const cfg: OpenClawConfig = {
