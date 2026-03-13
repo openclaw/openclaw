@@ -123,7 +123,8 @@ function buildMessagingSection(params: {
   messageChannelOptions: string;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
-  messageToolHints?: string[];
+  // Note: messageToolHints are NOT included here — they are per-channel/per-session
+  // and are injected in the dynamic tail (after workspace files) for KV-cache stability.
 }) {
   if (params.isMinimal) {
     return [];
@@ -148,7 +149,7 @@ function buildMessagingSection(params: {
             : params.runtimeChannel
               ? `- Inline buttons not enabled on this channel. To enable, ask to set capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
-          ...(params.messageToolHints ?? []),
+          // messageToolHints injected in dynamic tail (see buildAgentSystemPrompt)
         ]
           .filter(Boolean)
           .join("\n")
@@ -157,15 +158,12 @@ function buildMessagingSection(params: {
   ];
 }
 
-function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
-  if (params.isMinimal) {
-    return [];
-  }
-  const hint = params.ttsHint?.trim();
-  if (!hint) {
-    return [];
-  }
-  return ["## Voice (TTS)", hint, ""];
+function buildVoiceSection(params: { isMinimal: boolean }) {
+  // Note: ttsHint content is NOT included here — it is per-session/per-config and is
+  // injected in the dynamic tail (after workspace files) for KV-cache stability.
+  // This function is kept for future stable voice-section content.
+  void params;
+  return [];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
@@ -572,9 +570,8 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       inlineButtonsEnabled,
       runtimeChannel,
-      messageToolHints: params.messageToolHints,
     }),
-    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...buildVoiceSection({ isMinimal }),
   ];
 
   // Note: extraSystemPrompt, reactionGuidance, and reasoningHint are injected AFTER
@@ -689,11 +686,27 @@ export function buildAgentSystemPrompt(params: {
   }
 
   // ── Per-conversation dynamic context (injected LAST for KV-cache stability) ──
-  // extraSystemPrompt (Group Chat Context / Subagent Context), reactionGuidance, and
-  // reasoningHint change per conversation or session configuration. Placing them after
+  // These fields change per conversation or session configuration. Placing them after
   // workspace files and the runtime line ensures the large stable prefix (workspace
-  // files + boilerplate, ~28k chars) remains cached even when group chat membership,
-  // reaction mode, or reasoning settings change between conversations.
+  // files + boilerplate, ~28k chars) remains cached even when these change.
+
+  // Per-channel message tool hints (vary by channel: WhatsApp vs Telegram vs iMessage)
+  if (params.messageToolHints?.length) {
+    // Append as continuation of the message tool section in the dynamic tail
+    for (const hint of params.messageToolHints) {
+      if (hint.trim()) {
+        lines.push(hint.trim());
+      }
+    }
+    lines.push("");
+  }
+
+  // Voice/TTS configuration (per deployment config; changes when voice is enabled/reconfigured)
+  const ttsHint = params.ttsHint?.trim();
+  if (ttsHint && !isMinimal) {
+    lines.push("## Voice (TTS)", ttsHint, "");
+  }
+
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
