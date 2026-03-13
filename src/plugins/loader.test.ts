@@ -34,10 +34,29 @@ const {
   loadOpenClawPlugins,
   resetGlobalHookRunner,
 } = await importFreshPluginTestModules();
+const previousUmask = process.umask(0o022);
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-"));
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdtempSafe(prefix: string) {
+  const dir = fs.mkdtempSync(prefix);
+  chmodSafeDir(dir);
+  return dir;
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
+
+const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
@@ -69,7 +88,7 @@ const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirSafe(dir);
   return dir;
 }
 
@@ -81,7 +100,7 @@ function writePlugin(params: {
 }): TempPlugin {
   const dir = params.dir ?? makeTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirSafe(dir);
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
@@ -126,7 +145,7 @@ function loadBundledMemoryPluginRegistry(options?: {
   if (options?.packageMeta) {
     pluginDir = path.join(bundledDir, "memory-core");
     pluginFilename = options.pluginFilename ?? "index.js";
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSafe(pluginDir);
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
       JSON.stringify(
@@ -259,8 +278,8 @@ function createPluginSdkAliasFixture(params?: {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugin-sdk", params?.srcFile ?? "index.ts");
   const distFile = path.join(root, "dist", "plugin-sdk", params?.distFile ?? "index.js");
-  fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-  fs.mkdirSync(path.dirname(distFile), { recursive: true });
+  mkdirSafe(path.dirname(srcFile));
+  mkdirSafe(path.dirname(distFile));
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
@@ -281,6 +300,7 @@ afterAll(() => {
   } catch {
     // ignore cleanup failures
   } finally {
+    process.umask(previousUmask);
     cachedBundledTelegramDir = "";
     cachedBundledMemoryDir = "";
   }
@@ -571,7 +591,7 @@ describe("loadOpenClawPlugins", () => {
     const ignoredHome = makeTempDir();
     const stateDir = makeTempDir();
     const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSafe(pluginDir);
     const plugin = writePlugin({
       id: "tracked-install-cache",
       dir: pluginDir,
@@ -1271,8 +1291,8 @@ describe("loadOpenClawPlugins", () => {
     const bundledDir = makeTempDir();
     const memoryADir = path.join(bundledDir, "memory-a");
     const memoryBDir = path.join(bundledDir, "memory-b");
-    fs.mkdirSync(memoryADir, { recursive: true });
-    fs.mkdirSync(memoryBDir, { recursive: true });
+    mkdirSafe(memoryADir);
+    mkdirSafe(memoryBDir);
     writePlugin({
       id: "memory-a",
       dir: memoryADir,
@@ -1402,7 +1422,7 @@ describe("loadOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
       const globalDir = path.join(stateDir, "extensions", "feishu");
-      fs.mkdirSync(globalDir, { recursive: true });
+      mkdirSafe(globalDir);
       writePlugin({
         id: "feishu",
         body: `module.exports = { id: "feishu", register() {} };`,
@@ -1456,7 +1476,7 @@ describe("loadOpenClawPlugins", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
-    fs.mkdirSync(workspaceExtDir, { recursive: true });
+    mkdirSafe(workspaceExtDir);
     writePlugin({
       id: "workspace-helper",
       body: `module.exports = { id: "workspace-helper", register() {} };`,
@@ -1484,7 +1504,7 @@ describe("loadOpenClawPlugins", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
-    fs.mkdirSync(workspaceExtDir, { recursive: true });
+    mkdirSafe(workspaceExtDir);
     writePlugin({
       id: "workspace-helper",
       body: `module.exports = { id: "workspace-helper", register() {} };`,
@@ -1513,7 +1533,7 @@ describe("loadOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
       const globalDir = path.join(stateDir, "extensions", "rogue");
-      fs.mkdirSync(globalDir, { recursive: true });
+      mkdirSafe(globalDir);
       writePlugin({
         id: "rogue",
         body: `module.exports = { id: "rogue", register() {} };`,
@@ -1549,7 +1569,7 @@ describe("loadOpenClawPlugins", () => {
     const ignoredHome = makeTempDir();
     const stateDir = makeTempDir();
     const pluginDir = path.join(openclawHome, "plugins", "tracked-load-path");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSafe(pluginDir);
     const plugin = writePlugin({
       id: "tracked-load-path",
       dir: pluginDir,
@@ -1591,7 +1611,7 @@ describe("loadOpenClawPlugins", () => {
     const ignoredHome = makeTempDir();
     const stateDir = makeTempDir();
     const pluginDir = path.join(openclawHome, "plugins", "tracked-install-path");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSafe(pluginDir);
     const plugin = writePlugin({
       id: "tracked-install-path",
       dir: pluginDir,
@@ -1702,7 +1722,7 @@ describe("loadOpenClawPlugins", () => {
     }
     const bundledDir = makeTempDir();
     const pluginDir = path.join(bundledDir, "hardlinked-bundled");
-    fs.mkdirSync(pluginDir, { recursive: true });
+    mkdirSafe(pluginDir);
 
     const outsideDir = makeTempDir();
     const outsideEntry = path.join(outsideDir, "outside.cjs");
