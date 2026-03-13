@@ -108,6 +108,7 @@ Text + native (when enabled):
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
+- `/default_model [name]` (show/set default model; persists to config file; opens model picker when no args)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
@@ -138,7 +139,7 @@ Notes:
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
   - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
-- Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
+- Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`), `/default_model`.
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
 - **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
   - `/skill <name> [input]` runs a skill by name (useful when native command limits prevent per-skill commands).
