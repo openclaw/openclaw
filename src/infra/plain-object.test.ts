@@ -9,10 +9,21 @@ describe("isPlainObject", () => {
     },
   );
 
-  it.each([null, [], new Date(), /re/, "x", 42, () => null, new Map()])(
-    "rejects non-plain values: %j",
-    (value) => {
-      expect(isPlainObject(value)).toBe(false);
-    },
-  );
+  it.each([
+    null,
+    [],
+    new Date(),
+    /re/,
+    "x",
+    42,
+    () => null,
+    new Map(),
+    { [Symbol.toStringTag]: "Array" },
+  ])("rejects non-plain values: %j", (value) => {
+    expect(isPlainObject(value)).toBe(false);
+  });
+
+  it("accepts object-tag values with an explicit Object toStringTag", () => {
+    expect(isPlainObject({ [Symbol.toStringTag]: "Object" })).toBe(true);
+  });
 });
