@@ -575,11 +575,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
-        messages: {
-          ackReaction: "eyes",
-          ackReactionTiming: "run-start",
-          ackReactionScope: "direct",
-        },
+        messages: { ackReaction: "👀", ackReactionScope: "direct" },
       } as OpenClawConfig,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -589,12 +585,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     const prepared = await prepareMessageWith(
       slackCtx,
-      createSlackAccount({ ackReaction: "eyes" }),
+      createSlackAccount({ ackReactionTiming: "run-start" }),
       createSlackMessage({ ts: "700.000" }),
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ackReactionValue).toBe("eyes");
+    expect(prepared!.ackReactionValue).toBe("👀");
     expect(prepared!.ackReactionMessageTs).toBe("700.000");
     expect(prepared!.ackReactionAllowed).toBe(true);
     expect(prepared!.ackReactionPromise).toBeNull();
@@ -604,11 +600,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
-        messages: {
-          ackReaction: "eyes",
-          ackReactionTiming: "run-start",
-          ackReactionScope: "off",
-        },
+        messages: { ackReaction: "👀", ackReactionScope: "off" },
       } as OpenClawConfig,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -618,12 +610,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     const prepared = await prepareMessageWith(
       slackCtx,
-      createSlackAccount({ ackReaction: "eyes" }),
+      createSlackAccount({ ackReactionTiming: "run-start" }),
       createSlackMessage({ ts: "701.000" }),
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ackReactionValue).toBe("eyes");
+    expect(prepared!.ackReactionValue).toBe("👀");
     expect(prepared!.ackReactionMessageTs).toBe("701.000");
     expect(prepared!.ackReactionAllowed).toBe(false);
     expect(prepared!.ackReactionPromise).toBeNull();
