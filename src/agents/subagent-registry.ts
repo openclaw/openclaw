@@ -150,6 +150,10 @@ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "ex
  * so operators can correlate lost results via the audit log.
  */
 async function notifyAnnounceGiveUp(entry: SubagentRunRecord): Promise<void> {
+  // Do not notify for intentionally killed runs — the user already knows.
+  if (entry.suppressAnnounceReason === "killed") {
+    return;
+  }
   try {
     const origin = normalizeDeliveryContext(entry.requesterOrigin);
     const channel = typeof origin?.channel === "string" ? origin.channel.trim().toLowerCase() : "";
