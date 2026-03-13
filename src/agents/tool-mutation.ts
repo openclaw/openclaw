@@ -215,13 +215,17 @@ export function buildToolMutationState(
 }
 
 /**
- * Extract `tool=X` and `action=Y` segments from a fingerprint, ignoring target keys.
- * Returns a comparable prefix like `tool=write` or `tool=cron|action=add`.
+ * Extract identity segments from a fingerprint, ignoring target-specific keys
+ * (path, to, jobid, etc.) so that "same operation, different target" compares equal.
+ * Keeps `tool=`, `action=`, and `meta=` (used by actionless tools like exec/bash
+ * to distinguish different commands).
  */
 function extractToolActionPrefix(fingerprint: string): string {
   return fingerprint
     .split("|")
-    .filter((part) => part.startsWith("tool=") || part.startsWith("action="))
+    .filter(
+      (part) => part.startsWith("tool=") || part.startsWith("action=") || part.startsWith("meta="),
+    )
     .join("|");
 }
 

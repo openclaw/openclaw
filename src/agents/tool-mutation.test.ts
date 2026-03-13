@@ -111,6 +111,20 @@ describe("tool mutation helpers", () => {
         { toolName: "cron", actionFingerprint: "tool=cron|action=remove|jobid=1" },
       ),
     ).toBe(false);
+    // Actionless tools with different meta (commands) → different type
+    expect(
+      isSameToolActionType(
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi" },
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=rm -rf /tmp/x" },
+      ),
+    ).toBe(false);
+    // Actionless tools with same meta → same type
+    expect(
+      isSameToolActionType(
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi" },
+        { toolName: "exec", actionFingerprint: "tool=exec|meta=echo hi" },
+      ),
+    ).toBe(true);
     // Different tool → different type
     expect(
       isSameToolActionType(
