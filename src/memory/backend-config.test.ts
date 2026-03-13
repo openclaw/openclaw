@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
@@ -167,13 +167,29 @@ describe("checkQmdBinaryAvailable", () => {
   });
 
   it("respects custom timeout", async () => {
-    // Use a command that will hang (sleep on unix, timeout on windows)
-    const slowCommand = process.platform === "win32" ? "timeout" : "sleep";
+    // Mock execFile to simulate a hanging process that never resolves within the timeout
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+
+    // Create a spy that delays longer than the timeout
+    const spy = vi.spyOn(await import("node:child_process"), "execFile").mockImplementation(
+      (_cmd, _args, _opts, callback) => {
+        // Never call callback to simulate hanging
+        return undefined as unknown as ReturnType<typeof execFile>;
+      }
+    );
+
     const startTime = Date.now();
-    const result = await checkQmdBinaryAvailable(slowCommand, 100);
+    const result = await checkQmdBinaryAvailable("qmd", 100);
     const elapsed = Date.now() - startTime;
+
+    spy.mockRestore();
+
     // Should timeout quickly (within 500ms)
     expect(elapsed).toBeLessThan(500);
+    expect(result.available).toBe(false);
+    expect(result.error).toContain("timeout");
   });
 
   it("handles Windows .cmd extension", async () => {

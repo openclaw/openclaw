@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveWindowsExecutablePath } from "../plugin-sdk/windows-spawn.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -372,21 +373,27 @@ export async function checkQmdBinaryAvailable(
   cwd?: string,
 ): Promise<{ available: true; path: string } | { available: false; error: string }> {
   const isWindows = process.platform === "win32";
-  // Only append .cmd for known shim names (qmd, npm, npx) to avoid breaking
-  // custom executables that rely on PATHEXT resolution (e.g., my-qmd-wrapper -> my-qmd-wrapper.exe)
-  const knownShims = ["qmd", "npm", "npx"];
-  const resolvedCommand =
-    isWindows && !path.extname(command) && knownShims.includes(command)
-      ? `${command}.cmd`
-      : command;
+  const hasPath = /[\\/]/.test(command) || path.isAbsolute(command);
+
+  // Resolve command to absolute path for security (avoid CWD search on Windows)
+  let resolvedCommand: string;
+  if (isWindows && !hasPath) {
+    // For bare command names on Windows, use PATH-only resolution (exclude CWD)
+    resolvedCommand = resolveWindowsExecutablePath(command, process.env);
+  } else {
+    resolvedCommand = command;
+  }
+
+  // Only use cwd when command has explicit path (relative or absolute)
+  // Never use workspace cwd for bare command names to avoid executing malicious binaries
+  const effectiveCwd = hasPath ? cwd : undefined;
 
   try {
     // Try to run `qmd --version` to verify the binary works
-    // Use the provided cwd to ensure relative paths are resolved correctly
     await execFileAsync(resolvedCommand, ["--version"], {
       timeout: timeoutMs,
       encoding: "utf8",
-      cwd,
+      cwd: effectiveCwd,
     });
     return { available: true, path: resolvedCommand };
   } catch (err) {
