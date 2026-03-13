@@ -169,9 +169,9 @@
 
 /* When pre is inside a code-block-wrapper, the wrapper handles the border-radius
    and header provides top context, so remove duplicate radius/spacing */
-.code-block-wrapper .chat-text :where(pre),
 .code-block-wrapper pre {
   border-radius: 0;
+  border: none;
 }
 
 .chat-text :where(pre code) {
