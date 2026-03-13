@@ -23,6 +23,10 @@ import { collectTextContentBlocks } from "../content-blocks.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import {
+  composeSplitTurnInstructions,
+  resolveCompactionInstructions,
+} from "./compaction-instructions.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -697,7 +701,7 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const { preparation, customInstructions, signal } = event;
+    const { preparation, customInstructions: eventInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
@@ -715,6 +719,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const customInstructions = resolveCompactionInstructions(
+      eventInstructions,
+      runtime?.customInstructions,
+    );
     const summarizationInstructions = {
       identifierPolicy: runtime?.identifierPolicy,
       identifierInstructions: runtime?.identifierInstructions,
@@ -726,7 +734,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Use a WeakSet to track which session managers have already logged the warning.
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
-        console.warn(
+        log.warn(
           "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
             "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
             "was not called and model was not passed through runtime registry.",
@@ -737,7 +745,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      console.warn(
+      log.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
       );
       return { cancel: true };
@@ -892,7 +900,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               reserveTokens,
               maxChunkTokens,
               contextWindow: contextWindowTokens,
-              customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${currentInstructions}`,
+              customInstructions: composeSplitTurnInstructions(
+                TURN_PREFIX_INSTRUCTIONS,
+                currentInstructions,
+              ),
               summarizationInstructions,
               previousSummary: undefined,
             });
