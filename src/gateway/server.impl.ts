@@ -269,11 +269,6 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  // When HTTP_PROXY / HTTPS_PROXY / ALL_PROXY are set, make globalThis.fetch
-  // proxy-aware so that LLM inference requests (which use globalThis.fetch
-  // internally via @mariozechner/pi-ai) honour the proxy configuration.
-  applyGlobalProxyDispatcher();
-
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -289,6 +284,13 @@ export async function startGatewayServer(
   });
 
   let configSnapshot = await readConfigFileSnapshot();
+
+  // When HTTP_PROXY / HTTPS_PROXY / ALL_PROXY are set, make globalThis.fetch
+  // proxy-aware so that LLM inference requests (which use globalThis.fetch
+  // internally via @mariozechner/pi-ai) honour the proxy configuration.
+  // This runs AFTER readConfigFileSnapshot() so that dotenv-defined proxy
+  // vars (loaded inside config reading) are visible to the proxy bootstrap.
+  applyGlobalProxyDispatcher();
   if (configSnapshot.legacyIssues.length > 0) {
     if (isNixMode) {
       throw new Error(
