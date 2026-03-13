@@ -81,20 +81,29 @@ const teamIdToGroupIdCache = new Map<string, string>();
  * Resolve the Azure AD group ID from a Teams conversation-style team ID (19:xxx@thread.tacv2).
  * Graph API endpoints need the group GUID, not the conversation ID.
  */
-export async function resolveTeamGroupId(token: string, conversationTeamId: string): Promise<string | null> {
+export async function resolveTeamGroupId(
+  token: string,
+  conversationTeamId: string,
+): Promise<string | null> {
   const cached = teamIdToGroupIdCache.get(conversationTeamId);
   if (cached) return cached;
 
   // List all teams (paginated) and match by internalId
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team')`;
-  let nextPath: string | null = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
+  let nextPath: string | null =
+    `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
   while (nextPath) {
-    const page = await fetchGraphJson<GraphResponse<GraphGroup> & { "@odata.nextLink"?: string }>({ token, path: nextPath });
+    const page: GraphResponse<GraphGroup> & { "@odata.nextLink"?: string } = await fetchGraphJson<
+      GraphResponse<GraphGroup> & { "@odata.nextLink"?: string }
+    >({ token, path: nextPath });
     for (const group of page.value ?? []) {
       if (!group.id) continue;
       try {
         const teamPath = `/teams/${encodeURIComponent(group.id)}?$select=id,internalId`;
-        const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({ token, path: teamPath });
+        const teamInfo = await fetchGraphJson<{ id?: string; internalId?: string }>({
+          token,
+          path: teamPath,
+        });
         if (teamInfo.internalId) {
           teamIdToGroupIdCache.set(teamInfo.internalId, group.id);
           if (teamInfo.internalId === conversationTeamId) {
@@ -155,7 +164,10 @@ export async function fetchThreadReplies(params: {
   const limit = params.top ?? 50;
   const path = `/teams/${encodeURIComponent(params.teamId)}/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}/replies?$top=${limit}&$orderby=${encodeURIComponent("createdDateTime asc")}`;
   try {
-    const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token: params.token, path });
+    const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
+      token: params.token,
+      path,
+    });
     return res.value ?? [];
   } catch {
     return [];
