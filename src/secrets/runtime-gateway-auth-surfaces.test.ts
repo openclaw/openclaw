@@ -111,7 +111,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
       gateway: {
         mode: "local",
         remote: {
-          enabled: true,
           token: envRef("GW_REMOTE_TOKEN"),
         },
       },
@@ -131,7 +130,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
           mode: "password",
         },
         remote: {
-          enabled: true,
           token: envRef("GW_REMOTE_TOKEN"),
         },
       },
@@ -153,7 +151,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
           token: envRef("GW_AUTH_TOKEN"),
         },
         remote: {
-          enabled: true,
           token: envRef("GW_REMOTE_TOKEN"),
         },
       },
@@ -170,7 +167,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     const states = evaluate({
       gateway: {
         remote: {
-          enabled: true,
           url: "wss://gateway.example.com",
           password: envRef("GW_REMOTE_PASSWORD"),
         },
@@ -190,7 +186,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
           mode: "token",
         },
         remote: {
-          enabled: true,
           password: envRef("GW_REMOTE_PASSWORD"),
         },
       },
