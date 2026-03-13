@@ -22,6 +22,11 @@ Docs: https://docs.openclaw.ai
 - UI/docs: add image rendering support to Markdown component; add infographic images to Operator1 overview (hierarchy + gateway architecture diagrams)
 - UI/docs: rewrite `/images/` paths to `/openclaw-docs/images/` in operator1 docs processor so shared doc images render in-app; symlink `public/openclaw-docs/images` to `docs/images/`
 - Project: add slash commands implementation spec and project task template
+- SQLite/Phase 8A: promote `session_entries.project_id` to dedicated column (migrated from `extra_json`); add index for project-scoped queries
+- SQLite/Phase 8B: project-scoped memory — each project gets an isolated memory directory at `~/.openclaw/workspace/projects/{id}/memory/`; memory search auto-indexes all project memory dirs via `extraPaths`
+- SQLite/Phase 3: add `audit_state` table with 15 AFTER triggers on 5 security-sensitive tables for state change auditing
+- Agents/projects: subagents now inherit parent session's project context automatically; system prompt injects project-specific instructions and memory path when bound
+- Agents/projects: `projects.bindSession` and `projects.unbindSession` RPCs persist project binding to SQLite; `buildProjectContextBlock()` instructs agents on project-scoped memory writes
 
 ### Fixes
 

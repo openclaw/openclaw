@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../../config/config.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import {
+  updateSessionProjectId,
+  readSessionProjectId,
+} from "../../config/sessions/store-sqlite.js";
 import {
   createSqliteProjectStore,
   ProjectStoreError,
@@ -13,7 +15,6 @@ import {
   unbindTelegramTopic,
 } from "../../projects/telegram-topic-binding-sqlite.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import type { ProjectEntry, ProjectDetails, ProjectStore } from "./projects.types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -30,43 +31,20 @@ function expandHome(p: string): string {
   return p;
 }
 
-// ── Session ProjectId Persistence ───────────────────────────────────
+// ── Session ProjectId Persistence (SQLite) ──────────────────────────
 
-/** Persist projectId on the session record (fire-and-forget). */
+/** Persist projectId on the session_entries row (fire-and-forget). */
 function persistProjectId(sessionKey: string, projectId: string | null): void {
   try {
-    const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
-    void updateSessionStore(target.storePath, async (store) => {
-      const entry = store[sessionKey] ?? store[target.canonicalKey ?? sessionKey];
-      if (!entry) {
-        return { ok: true, entry: {} as import("../../config/sessions/types.js").SessionEntry };
-      }
-      if (projectId === null) {
-        delete entry.projectId;
-      } else {
-        entry.projectId = projectId;
-      }
-      return { ok: true, entry };
-    });
+    updateSessionProjectId(sessionKey, projectId);
   } catch {
-    // Best-effort — don't break bind/unbind if session store is unavailable
+    // Best-effort — don't break bind/unbind if DB is unavailable
   }
 }
 
-/** Read persisted projectId from session record (for rehydrating after restart). */
+/** Read persisted projectId from session_entries (for rehydrating after restart). */
 function readPersistedProjectId(sessionKey: string): string | undefined {
-  try {
-    const cfg = loadConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
-    const storePath = target.storePath;
-    const raw = fs.readFileSync(storePath, "utf8");
-    const store = JSON.parse(raw) as Record<string, { projectId?: string }>;
-    const entry = store[sessionKey] ?? store[target.canonicalKey ?? sessionKey];
-    return entry?.projectId;
-  } catch {
-    return undefined;
-  }
+  return readSessionProjectId(sessionKey);
 }
 
 // ── Internal Project Tasks Scanner ──────────────────────────────────

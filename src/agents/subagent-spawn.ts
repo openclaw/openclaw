@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
+import { readSessionProjectId, updateSessionProjectId } from "../config/sessions/store-sqlite.js";
 import { callGateway } from "../gateway/call.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -421,6 +422,16 @@ export async function spawnSubagentDirect(
       error: spawnDepthPatchError,
       childSessionKey,
     };
+  }
+
+  // Inherit project binding from parent session so subagents get project context
+  try {
+    const parentProjectId = readSessionProjectId(requesterInternalKey);
+    if (parentProjectId) {
+      updateSessionProjectId(childSessionKey, parentProjectId);
+    }
+  } catch {
+    // Non-fatal: subagent runs without project context if inheritance fails
   }
 
   if (resolvedModel) {

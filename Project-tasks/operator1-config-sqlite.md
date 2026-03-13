@@ -1226,12 +1226,14 @@ Recovery options if something goes wrong:
 
 ### Solution: Four-Layer Isolation
 
-| Layer           | Approach                                          | Effort   | Scope            |
-| --------------- | ------------------------------------------------- | -------- | ---------------- |
-| **Foundation**  | Project/Workspace/Channel unification (Phase 8.5) | 2 days   | SQLite schema    |
-| **Short-term**  | Session tagging (Option C)                        | 0 days   | Immediate relief |
-| **Medium-term** | Project-scoped memory (Option B)                  | 1 day    | Memory isolation |
-| **Long-term**   | Per-project workspace (Option A)                  | 2-3 days | Full isolation   |
+| Layer           | Approach                                          | Effort  | Scope              | Status      |
+| --------------- | ------------------------------------------------- | ------- | ------------------ | ----------- |
+| **Foundation**  | Project/Workspace/Channel unification (Phase 8.5) | 2 days  | SQLite schema      | ✅          |
+| **Short-term**  | Session tagging (Option C / Phase 8A)             | 0 days  | Immediate relief   | ✅          |
+| **Medium-term** | Project-scoped memory (Option B / Phase 8B)       | 0.5 day | Memory isolation   | ✅          |
+| ~~Long-term~~   | ~~Per-project workspace (Option A)~~              | —       | ~~Full isolation~~ | **Dropped** |
+
+> **Phase 8C dropped:** Per-project workspaces would duplicate what already exists. Projects already load their own SOUL.md/AGENTS.md/TOOLS.md from the project's `.openclaw/` directory via `buildProjectContextBlock()`. The workspace defines _who the agent is_ (identity, personality); the project defines _how the agent works on that project_ (instructions, tools, memory). Duplicating full workspaces per project blurs this clean separation without adding value.
 
 ---
 
@@ -1314,7 +1316,11 @@ ALTER TABLE session_entries ADD COLUMN project_id TEXT REFERENCES op1_projects(i
 - [x] Create `src/projects/telegram-topic-binding-sqlite.ts` — SQLite adapter for topic bindings
 - [x] Create `src/infra/state-db/migrate-phase8.ts` — one-shot migration: `PROJECTS.md` → `op1_projects` + `op1_telegram_topic_bindings` rows
 - [x] Add `project_id` column to `workspace_state` (schema migration v8, application-level FK)
-- [ ] Add `project_id` column to `session_entries` — deferred (currently stored in `extra_json` which works fine)
+- [x] Add `project_id` column to `session_entries` — schema v10 (2026-03-13):
+  - `ALTER TABLE session_entries ADD COLUMN project_id TEXT` + index
+  - Migration extracts `projectId` from `extra_json` → dedicated column
+  - `store-sqlite.ts`: promoted to `DEDICATED_FIELDS`, added `updateSessionProjectId()` + `readSessionProjectId()` helpers
+  - `projects.ts`: rewrote `persistProjectId`/`readPersistedProjectId` to use SQLite directly (removed JSON file I/O, `loadConfig`, `resolveGatewaySessionStoreTarget` imports)
 - [x] Rewrite `src/gateway/server-methods/projects.ts`:
   - `projects.list/get/add/update/archive` → use `SqliteProjectStore` instead of `MarkdownProjectStore`
   - `autoBindByTopicFromSessionKey()` → queries `op1_telegram_topic_bindings` via `findProjectByTopicId()`
@@ -1372,172 +1378,72 @@ When a message arrives from Telegram:
 
 **Implementation:**
 
-- [ ] Update `AGENTS.md` with session tagging rule:
-
-  ```markdown
-  ### Memory Writes
-
-  When writing to MEMORY.md or memory/YYYY-MM-DD.md, always include a project tag:
-
-  ## 2026-03-13
-
-  ### [Project: crm-operations]
-
-  - Discussed invoice workflow with Trinity
-  - Decided on monthly billing cycle
-
-  ### [Project: ui-next]
-
-  - Reviewed dark mode implementation
-  - Blocked on shadcn/ui update
-  ```
-
-- [ ] Agent reads `projects.getContext` at session start to know current project
-- [ ] All memory writes include `[Project: {projectId}]` header
-- [ ] When reading memory, agent can filter/weight by project tag
+- [x] Memory tagging instruction injected dynamically into system prompt via `buildProjectContextBlock()` in `attempt.ts` — agents get `[Project: {id}]` tagging guidance only when bound to a project (no static AGENTS.md rule needed)
+- [x] Agent reads `projects.getContext` at session start — already wired in `attempt.ts:920` via `getProjectContextForSession()`
+- [x] All memory writes include `[Project: {projectId}]` header — system prompt instructs agents to prefix entries
+- [x] When reading memory, agent can filter/weight by project tag — Phase 8B adds project memory dirs as `extraPaths` in memory search
 
 **Effort:** ~0 days (just documentation update)
 
 ---
 
-### Phase 8B: Project-Scoped Memory (Option B) — Medium-Term
+### Phase 8B: Project-Scoped Memory (Option B) — ✅ Complete
 
 **Goal:** Each project gets its own memory folder inside the shared workspace.
 
-**Implementation:**
+**Implementation (actual):**
 
-- [ ] Create per-project memory structure:
+- [x] Create per-project memory structure at `~/.openclaw/workspace/projects/{id}/memory/`:
+  - `ensureProjectMemoryDir(projectId)` in `src/projects/project-memory.ts`
+  - `resolveProjectDir()` and `resolveProjectMemoryDir()` helpers
+  - All projects (internal + external) use centralized path — never pollutes external repos
   ```
   ~/.openclaw/workspace/
   ├── MEMORY.md                    # Generic memory (no project bound)
   ├── memory/
   │   └── 2026-03-13.md
   └── projects/
-      └── crm-operations/
-          ├── MEMORY.md            # Project-specific long-term memory
-          └── memory/
-              └── 2026-03-13.md    # Project-specific daily notes
+      ├── appsfomo/memory/         # External project memory
+      ├── crm-operations/memory/   # Internal project memory
+      ├── operator1/memory/        # This repo's own project memory
+      └── ...
   ```
-- [ ] Update `memory/manager.ts` to support project-scoped paths:
-  - `getMemoryPath(projectId?: string)` → returns project or global path
-  - `searchMemory(query, projectId?: string)` → searches appropriate scope
-- [ ] Update `AGENTS.md` session startup:
+- [x] Memory search auto-indexes project memory dirs via `extraPaths`:
+  - `resolveMemorySearchConfig()` in `src/agents/memory-search.ts` calls `resolveProjectMemoryExtraPaths()`
+  - Scans `op1_projects` for active projects, includes existing memory dirs
+  - No static config changes needed — works automatically
+- [x] System prompt instructs agent on project memory path:
+  - `buildProjectContextBlock()` in `attempt.ts` calls `ensureProjectMemoryDir(project.id)`
+  - Tells agent the exact path to write project-specific .md files
+  - Memory search picks up files automatically on next sync cycle
+- [x] No new SQLite tables needed — uses existing `op1_projects` + filesystem
 
-  ```markdown
-  ### Session Startup
-
-  1. Check `projects.getContext` for bound project
-  2. If project bound:
-     - Read `projects/{projectId}/MEMORY.md` (if exists)
-     - Read `projects/{projectId}/memory/YYYY-MM-DD.md` (today + yesterday)
-  3. If no project bound:
-     - Read global `MEMORY.md`
-     - Read global `memory/YYYY-MM-DD.md`
-  ```
-
-- [ ] Update memory write logic:
-  - If project bound → write to `projects/{projectId}/memory/`
-  - If no project → write to global `memory/`
-- [ ] QMD integration: Add project memory folders as additional collections
-
-**Effort:** ~1 day
-
-**SQLite tables needed:**
-
-```sql
--- Track which memory scope a session uses
-CREATE TABLE op1_session_memory_scope (
-  session_key TEXT PRIMARY KEY,
-  project_id TEXT,                    -- NULL = global scope
-  scope_path TEXT NOT NULL,           -- Path to memory folder
-  bound_at INTEGER DEFAULT (unixepoch()),
-  FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE SET NULL
-);
-```
+**Effort:** ~0.5 day (simpler than originally planned — leveraged existing `extraPaths` mechanism)
 
 ---
 
-### Phase 8C: Per-Project Workspace (Option A) — Long-Term
+### ~~Phase 8C: Per-Project Workspace (Option A)~~ — DROPPED
 
-**Goal:** Each project gets its own complete workspace (AGENTS.md, SOUL.md, MEMORY.md, etc.).
+**Reason:** Unnecessary complexity. The workspace/project separation already handles this:
 
-**Implementation:**
+The existing three-layer architecture covers all use cases:
 
-- [ ] Create per-project workspace structure:
-  ```
-  ~/dev/operator1/Projects/crm-operations/
-  └── .openclaw/
-      ├── AGENTS.md
-      ├── SOUL.md
-      ├── USER.md
-      ├── MEMORY.md
-      ├── TOOLS.md
-      ├── HEARTBEAT.md
-      └── memory/
-          └── 2026-03-13.md
-  ```
-- [ ] Update gateway session handling:
-  - When `projects.bindSession` called → switch `workspace` to project's `.openclaw/`
-  - New config option: `agents.defaults.perSessionWorkspace: true`
-- [ ] Update `resolveAgentWorkspaceDir()` to check session binding first:
-  ```typescript
-  function resolveAgentWorkspaceDir(
-    cfg: OpenClawConfig,
-    agentId: string,
-    sessionKey?: string,
-  ): string {
-    // Check if session is bound to a project
-    if (sessionKey) {
-      const projectContext = await getProjectContextForSession(sessionKey);
-      if (projectContext?.path) {
-        const projectWorkspace = path.join(projectContext.path, ".openclaw");
-        if (fs.existsSync(projectWorkspace)) {
-          return projectWorkspace;
-        }
-      }
-    }
-    // Fallback to default workspace
-    return cfg.agent?.workspace ?? path.join(os.homedir(), ".openclaw", "workspace");
-  }
-  ```
-- [ ] Update session spawn to inherit project workspace:
-  - `sessions_spawn` receives `projectId`
-  - Subagent's workspace is set to project's `.openclaw/` folder
-- [ ] Handle workspace bootstrap for new projects:
-  - `projects.scaffold` RPC creates `.openclaw/` folder with template files
-  - Or: auto-create on first session bind
-
-**Effort:** ~2-3 days
-
-**SQLite tables needed:**
-
-```sql
--- Extend session_entries to track workspace override
--- (add column to existing table via schema migration)
-ALTER TABLE session_entries ADD COLUMN workspace_override TEXT;
-
--- Or create separate table for clean schema
-CREATE TABLE op1_session_workspace (
-  session_key TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  workspace_path TEXT NOT NULL,
-  bound_at INTEGER DEFAULT (unixepoch()),
-  FOREIGN KEY (project_id) REFERENCES op1_projects(id) ON DELETE CASCADE
-);
-```
+- **Workspace** (`~/.openclaw/workspace/`) = agent identity (SOUL.md, AGENTS.md, TOOLS.md, IDENTITY.md, USER.md). Shared across all projects.
+- **Project context** (from project's `.openclaw/` dir) = project-specific SOUL.md, AGENTS.md, TOOLS.md injected via `buildProjectContextBlock()`. Defines how the agent works on this specific project.
+- **Project memory** (`~/.openclaw/workspace/projects/{id}/memory/`) = isolated per-project recall, auto-indexed by memory search.
 
 ---
 
 ### Phase 8 Implementation Order
 
-| Phase | Description                                           | Effort   | When                         |
-| ----- | ----------------------------------------------------- | -------- | ---------------------------- |
-| 8.5   | Project/Workspace/Channel unification (SQLite schema) | 2 days   | Foundation                   |
-| 8A    | Session tagging (Option C)                            | 0 days   | Immediate (update AGENTS.md) |
-| 8B    | Project-scoped memory (Option B)                      | 1 day    | Short-term                   |
-| 8C    | Per-project workspace (Option A)                      | 2-3 days | Medium-term                  |
+| Phase  | Description                                           | Effort  | Status  |
+| ------ | ----------------------------------------------------- | ------- | ------- |
+| 8.5    | Project/Workspace/Channel unification (SQLite schema) | 2 days  | ✅      |
+| 8A     | Session tagging (Option C)                            | 0 days  | ✅      |
+| 8B     | Project-scoped memory (Option B)                      | 0.5 day | ✅      |
+| ~~8C~~ | ~~Per-project workspace (Option A)~~                  | —       | Dropped |
 
-**Total Phase 8 effort:** 5-6 days
+**Total Phase 8 effort:** ~2.5 days (completed)
 
 ---
 
@@ -1546,17 +1452,20 @@ CREATE TABLE op1_session_workspace (
 - [x] Projects stored in SQLite (`op1_projects` table), not PROJECTS.md
 - [x] Telegram topics bound to projects via SQLite (`op1_telegram_topic_bindings` table)
 - [x] Workspace linked to project via `workspace_state.project_id` column
-- [ ] Sessions linked to project via `session_entries.project_id` FK — deferred (using `extra_json` for now)
+- [x] Session tagging: `session_entries.project_id` dedicated column (migrated from `extra_json`)
 - [x] Auto-bind queries SQLite instead of scanning PROJECTS.md
-- [ ] RPCs available: `projects.bindTelegramTopic`, `projects.unbindTelegramTopic`, `projects.getTelegramBindings`
-- [ ] Parallel sessions on different projects don't confuse memory context
-- [ ] Session can be bound to project via `projects.bindSession` RPC
-- [ ] Memory reads/writes are scoped to project when bound
-- [ ] Subagents inherit project context from parent session
-- [ ] `projects.scaffold` RPC creates project workspace structure
-- [ ] QMD indexes project-scoped memory alongside global memory
-- [ ] Backward compatible: unbound sessions use global workspace
+- [x] Parallel sessions on different projects don't confuse memory context — each project has isolated memory dir
+- [x] Memory reads/writes are scoped to project when bound — system prompt instructs agent to write to `~/.openclaw/workspace/projects/{id}/memory/`
+- [x] QMD indexes project-scoped memory alongside global memory — project memory dirs added as `extraPaths` in `resolveMemorySearchConfig()`
+- [x] Backward compatible: unbound sessions use global workspace (default behavior)
+
+**Remaining (nice-to-have, not blocking):**
+
+- [x] `projects.bindSession` / `projects.unbindSession` RPCs — already implemented (`projects.ts:209-241`)
+- [x] RPCs: `projects.bindTelegramTopic`, `projects.unbindTelegramTopic`, `projects.getTelegramBindings` — already implemented (`projects.ts:275+`)
+- [x] `projects.scaffold` RPC — not needed; `ensureProjectMemoryDir()` auto-creates memory dirs, project `.openclaw/` dirs live in the project path
+- [x] Subagents inherit project context from parent session — `subagent-spawn.ts` reads parent's `project_id` and persists it to child session before agent call
 
 ---
 
-_Last updated: 2026-03-13_
+_Last updated: 2026-03-13 (Phase 8 complete, 8C dropped)_

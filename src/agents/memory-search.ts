@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { resolveProjectMemoryDir } from "../projects/project-memory.js";
+import { listProjectsFromDb } from "../projects/project-store-sqlite.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -201,6 +204,10 @@ function mergeConfig(
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
     .filter(Boolean);
+  // Include project memory dirs so project-scoped memory is indexed
+  for (const dir of resolveProjectMemoryExtraPaths()) {
+    rawPaths.push(dir);
+  }
   const extraPaths = Array.from(new Set(rawPaths));
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
@@ -363,4 +370,30 @@ export function resolveMemorySearchConfig(
     return null;
   }
   return resolved;
+}
+
+// ── Project memory extra paths ──────────────────────────────────────────────
+
+/**
+ * Collect existing project memory dirs to include in memory search.
+ * Only returns dirs that already exist on disk (no creation side-effects).
+ */
+function resolveProjectMemoryExtraPaths(): string[] {
+  try {
+    const projects = listProjectsFromDb();
+    const paths: string[] = [];
+    for (const project of projects) {
+      if (project.status === "archived") {
+        continue;
+      }
+      const memDir = resolveProjectMemoryDir(project.id);
+      if (fs.existsSync(memDir)) {
+        paths.push(memDir);
+      }
+    }
+    return paths;
+  } catch {
+    // DB not ready or no projects — return empty
+    return [];
+  }
 }

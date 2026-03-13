@@ -837,6 +837,47 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+
+  // ── v10: Promote project_id on session_entries ────────────────────────────
+  {
+    version: 10,
+    description: "Phase 8A: add project_id column to session_entries (was in extra_json)",
+    up(db) {
+      try {
+        db.exec("ALTER TABLE session_entries ADD COLUMN project_id TEXT");
+      } catch {
+        // Column already exists (idempotent)
+      }
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_session_entries_project ON session_entries(project_id)",
+      );
+
+      // Migrate existing projectId values from extra_json → dedicated column
+      const rows = db
+        .prepare(
+          "SELECT agent_id, session_key, extra_json FROM session_entries WHERE extra_json IS NOT NULL",
+        )
+        .all() as Array<{ agent_id: string; session_key: string; extra_json: string }>;
+
+      const update = db.prepare(
+        "UPDATE session_entries SET project_id = ?, extra_json = ? WHERE agent_id = ? AND session_key = ?",
+      );
+
+      for (const row of rows) {
+        try {
+          const extra = JSON.parse(row.extra_json) as Record<string, unknown>;
+          if (typeof extra.projectId === "string") {
+            const projectId = extra.projectId;
+            delete extra.projectId;
+            const newExtra = Object.keys(extra).length > 0 ? JSON.stringify(extra) : null;
+            update.run(projectId, newExtra, row.agent_id, row.session_key);
+          }
+        } catch {
+          // Corrupt JSON — skip
+        }
+      }
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

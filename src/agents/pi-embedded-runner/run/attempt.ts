@@ -21,6 +21,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import { ensureProjectMemoryDir } from "../../../projects/project-memory.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -473,7 +474,7 @@ function buildProjectContextBlock(project: ProjectDetails): string | undefined {
   const lines: string[] = [];
   lines.push("## Active Project Context");
   lines.push("");
-  lines.push(`**Project:** ${project.name}`);
+  lines.push(`**Project:** ${project.name} (id: \`${project.id}\`)`);
   lines.push(`**Path:** ${project.path}`);
   if (project.type) {
     lines.push(`**Type:** ${project.type}`);
@@ -497,6 +498,22 @@ function buildProjectContextBlock(project: ProjectDetails): string | undefined {
     lines.push("### Project Tools");
     lines.push(project.tools.trim());
   }
+
+  // Project-scoped memory — ensure dir exists and instruct agent
+  const projectMemoryDir = ensureProjectMemoryDir(project.id);
+  lines.push("");
+  lines.push("### Project Memory");
+  lines.push(
+    `This project has a dedicated memory directory at \`${projectMemoryDir}\`. ` +
+      "When saving project-specific notes, decisions, or context, write .md files to this directory. " +
+      "These files are automatically indexed by memory search.",
+  );
+  lines.push("");
+  lines.push("Example:");
+  lines.push("```markdown");
+  lines.push(`# ${project.name} — Implementation Notes`);
+  lines.push("- Key finding or decision here...");
+  lines.push("```");
 
   return lines.join("\n");
 }

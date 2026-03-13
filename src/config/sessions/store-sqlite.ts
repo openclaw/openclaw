@@ -83,6 +83,7 @@ const DEDICATED_FIELDS = new Set<string>([
   "displayName",
   "model",
   "updatedAt",
+  "projectId",
 ]);
 
 type SessionEntryRow = {
@@ -103,6 +104,7 @@ type SessionEntryRow = {
   department: string | null;
   created_at: number | null;
   updated_at: number | null;
+  project_id: string | null;
   extra_json: string | null;
 };
 
@@ -138,6 +140,7 @@ function sessionEntryToRow(
     department: null,
     created_at: null,
     updated_at: entry.updatedAt ?? null,
+    project_id: entry.projectId ?? null,
     extra_json: Object.keys(extra).length > 0 ? JSON.stringify(extra) : null,
   };
 }
@@ -191,6 +194,9 @@ function rowToSessionEntry(row: SessionEntryRow): SessionEntry {
   }
   if (row.model) {
     entry.model = row.model;
+  }
+  if (row.project_id) {
+    entry.projectId = row.project_id;
   }
 
   // Merge extra_json fields
@@ -256,8 +262,8 @@ export function saveSessionEntriesToDb(
           agent_id, session_key, session_id, session_file, channel,
           last_channel, last_to, last_account_id, last_thread_id,
           delivery_context_json, origin_json, display_name, group_name,
-          model, department, created_at, updated_at, extra_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          model, department, created_at, updated_at, project_id, extra_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const [sessionKey, entry] of Object.entries(store)) {
@@ -283,6 +289,7 @@ export function saveSessionEntriesToDb(
           row.department,
           row.created_at,
           row.updated_at,
+          row.project_id,
           row.extra_json,
         );
       }
@@ -320,8 +327,8 @@ export function upsertSessionEntryInDb(
         agent_id, session_key, session_id, session_file, channel,
         last_channel, last_to, last_account_id, last_thread_id,
         delivery_context_json, origin_json, display_name, group_name,
-        model, department, created_at, updated_at, extra_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        model, department, created_at, updated_at, project_id, extra_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       )
       .run(
@@ -342,6 +349,7 @@ export function upsertSessionEntryInDb(
         row.department,
         row.created_at,
         row.updated_at,
+        row.project_id,
         row.extra_json,
       );
   } catch (err) {
@@ -368,6 +376,36 @@ export function deleteSessionEntryFromDb(
       return;
     }
     throw err;
+  }
+}
+
+/** Update just the project_id on a session entry. */
+export function updateSessionProjectId(
+  sessionKey: string,
+  projectId: string | null,
+  db?: DatabaseSync,
+): boolean {
+  const conn = resolveDb(db);
+  try {
+    const result = conn
+      .prepare("UPDATE session_entries SET project_id = ? WHERE session_key = ?")
+      .run(projectId, sessionKey);
+    return (result.changes as number) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Read just the project_id from a session entry. */
+export function readSessionProjectId(sessionKey: string, db?: DatabaseSync): string | undefined {
+  const conn = resolveDb(db);
+  try {
+    const row = conn
+      .prepare("SELECT project_id FROM session_entries WHERE session_key = ?")
+      .get(sessionKey) as { project_id: string | null } | undefined;
+    return row?.project_id ?? undefined;
+  } catch {
+    return undefined;
   }
 }
 
