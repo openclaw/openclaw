@@ -76,39 +76,36 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
-  it("does not report already-canonical payload kinds as legacy kind migrations", () => {
+  it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
     const jobs = [
       {
-        id: "canonical-agent-turn",
-        schedule: { kind: "every", everyMs: 60_000 },
+        id: "normalized-agent-turn",
+        name: "normalized",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "agentTurn", message: "ping" },
+        sessionTarget: "isolated",
+        delivery: { mode: "announce" },
         state: {},
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-        },
       },
       {
-        id: "canonical-system-event",
-        schedule: { kind: "every", everyMs: 60_000 },
+        id: "normalized-system-event",
+        name: "normalized",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", text: "pong" },
+        sessionTarget: "main",
+        delivery: { mode: "announce" },
         state: {},
-        payload: {
-          kind: "systemEvent",
-          text: "ping",
-        },
       },
     ] as Array<Record<string, unknown>>;
 
     const result = normalizeStoredCronJobs(jobs);
 
+    expect(result.mutated).toBe(false);
     expect(result.issues.legacyPayloadKind).toBeUndefined();
-    expect(jobs[0]?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "ping",
-    });
-    expect(jobs[1]?.payload).toMatchObject({
-      kind: "systemEvent",
-      text: "ping",
-    });
   });
 
   it("migrates legacy lowercase payload kinds to canonical form", () => {
@@ -138,6 +135,40 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBe(2);
     expect((jobs[0]?.payload as Record<string, unknown> | undefined)?.kind).toBe("agentTurn");
     expect((jobs[1]?.payload as Record<string, unknown> | undefined)?.kind).toBe("systemEvent");
+  });
+
+  it("normalizes whitespace-padded and non-canonical payload kinds", () => {
+    const jobs = [
+      {
+        id: "spaced-agent-turn",
+        name: "normalized",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: " agentTurn ", message: "ping" },
+        sessionTarget: "isolated",
+        delivery: { mode: "announce" },
+        state: {},
+      },
+      {
+        id: "upper-system-event",
+        name: "normalized",
+        enabled: true,
+        wakeMode: "now",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "SYSTEMEVENT", text: "pong" },
+        sessionTarget: "main",
+        delivery: { mode: "announce" },
+        state: {},
+      },
+    ] as Array<Record<string, unknown>>;
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadKind).toBe(2);
+    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn", message: "ping" });
+    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent", text: "pong" });
   });
 
   it("trims unknown payload kinds without lowercasing them", () => {
