@@ -1,7 +1,10 @@
 export function formatBonjourError(err: unknown): string {
   if (err instanceof Error) {
     const msg = err.message || String(err);
-    return err.name && err.name !== "Error" ? `${err.name}: ${msg}` : msg;
+    if (err.name && err.name !== "Error") {
+      return msg === err.name ? err.name : `${err.name}: ${msg}`;
+    }
+    return msg;
   }
   return String(err);
 }
