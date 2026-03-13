@@ -3,15 +3,20 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { extractArchive as extractArchiveFn } from "../infra/archive.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { backupRestoreCommand, buildRestoreOperations } from "./backup-restore.js";
-import { normalizeArchiveRoot, parseBackupManifest } from "./backup-verify.js";
+import { backupVerifyCommand, normalizeArchiveRoot, parseBackupManifest } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 
 const { serviceIsLoaded, serviceStop } = vi.hoisted(() => ({
   serviceIsLoaded: vi.fn(async () => false),
   serviceStop: vi.fn(async (_args?: { stdout: NodeJS.WritableStream }) => undefined),
+}));
+const RESTORE_EXTRACT_LIMIT_MIN_BYTES = 1 * 1024 * 1024;
+const { extractArchiveSpy } = vi.hoisted(() => ({
+  extractArchiveSpy: vi.fn(),
 }));
 
 const afterVerifyHook = vi.hoisted(() => ({
@@ -24,6 +29,17 @@ vi.mock("../daemon/service.js", () => ({
     stop: serviceStop,
   }),
 }));
+
+vi.mock("../infra/archive.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/archive.js")>("../infra/archive.js");
+  return {
+    ...actual,
+    extractArchive: vi.fn(async (...args: Parameters<typeof actual.extractArchive>) => {
+      extractArchiveSpy(...args);
+      return await actual.extractArchive(...args);
+    }),
+  };
+});
 
 vi.mock("./backup-verify.js", async () => {
   const actual = await vi.importActual<typeof import("./backup-verify.js")>("./backup-verify.js");
@@ -47,6 +63,7 @@ describe("backup restore", () => {
     previousCwd = process.cwd();
     serviceIsLoaded.mockClear();
     serviceStop.mockClear();
+    extractArchiveSpy.mockClear();
     serviceIsLoaded.mockResolvedValue(false);
     serviceStop.mockResolvedValue(undefined);
     afterVerifyHook.current = undefined;
@@ -1287,6 +1304,130 @@ describe("backup restore", () => {
       } else {
         process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
       }
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores standalone config assets into the default state dir when the source config lived outside state", async () => {
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-restore-full-config-default-"),
+    );
+    const externalConfigPath = path.join(tempHome.home, "external-source", "openclaw.json");
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = externalConfigPath;
+      await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
+      await fs.writeFile(
+        externalConfigPath,
+        JSON.stringify({
+          backup: {
+            target: path.join(tempHome.home, "backups"),
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(externalConfigPath, { force: true });
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+      });
+
+      expect(await fs.readFile(path.join(stateDir, "state.txt"), "utf8")).toBe("state\n");
+      expect(JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"))).toEqual({
+        backup: { target: path.join(tempHome.home, "backups") },
+      });
+    } finally {
+      if (originalConfigPath == null) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores standalone oauth assets into the default state dir when the source oauth dir lived outside state", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const defaultOauthDir = path.join(stateDir, "credentials");
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-restore-full-oauth-default-"),
+    );
+    const externalOauthDir = path.join(tempHome.home, "external-source-oauth");
+    try {
+      process.env.OPENCLAW_OAUTH_DIR = externalOauthDir;
+      await fs.mkdir(externalOauthDir, { recursive: true });
+      await fs.writeFile(path.join(externalOauthDir, "token.json"), '{"token":"source"}\n', "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+
+      delete process.env.OPENCLAW_OAUTH_DIR;
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(externalOauthDir, { recursive: true, force: true });
+
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "full-host",
+      });
+
+      expect(await fs.readFile(path.join(stateDir, "state.txt"), "utf8")).toBe("state\n");
+      expect(await fs.readFile(path.join(defaultOauthDir, "token.json"), "utf8")).toContain(
+        '"token":"source"',
+      );
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes verified archive limits into extraction", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-limits-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+      const verified = await backupVerifyCommand(runtime, { archive: created.archivePath });
+
+      extractArchiveSpy.mockClear();
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "config-only",
+      });
+
+      const extractCall = extractArchiveSpy.mock.calls.at(-1)?.[0] as
+        | Parameters<typeof extractArchiveFn>[0]
+        | undefined;
+      expect(extractCall?.limits).toEqual({
+        maxArchiveBytes: verified.archiveBytes,
+        maxEntries: verified.entryCount,
+        maxExtractedBytes: Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.totalEntryBytes * 2),
+        maxEntryBytes: Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.maxEntryBytes * 2),
+      });
+    } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });

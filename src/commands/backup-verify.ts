@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { isBlockedTarEntryType } from "../infra/archive.js";
@@ -53,6 +55,14 @@ export type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+  archiveBytes: number;
+  totalEntryBytes: number;
+  maxEntryBytes: number;
+};
+
+export type ArchiveScanTotals = {
+  entryCount: number;
+  totalPathBytes: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -176,38 +186,59 @@ export function parseBackupManifest(raw: string): BackupManifest {
 
 async function listArchiveEntries(
   archivePath: string,
-): Promise<Array<{ path: string; type?: string }>> {
-  const entries: Array<{ path: string; type?: string }> = [];
-  let totalEntries = 0;
-  let totalPathBytes = 0;
+): Promise<Array<{ path: string; type?: string; size: number }>> {
+  const entries: Array<{ path: string; type?: string; size: number }> = [];
+  let totals: ArchiveScanTotals = { entryCount: 0, totalPathBytes: 0 };
   let limitError: Error | undefined;
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      if (limitError) {
+  let parser!: tar.Parser;
+  await new Promise<void>((resolve, reject) => {
+    let stream: ReturnType<typeof createReadStream> | undefined;
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) {
         return;
       }
-      totalEntries += 1;
-      if (totalEntries > MAX_ARCHIVE_ENTRY_COUNT) {
-        limitError = new Error(
-          `Backup archive exceeds maximum entry count of ${MAX_ARCHIVE_ENTRY_COUNT}.`,
-        );
+      settled = true;
+      if (error && stream && !stream.destroyed) {
+        stream.destroy(error);
+      }
+      if (error) {
+        reject(error);
         return;
       }
-      totalPathBytes += Buffer.byteLength(entry.path, "utf8");
-      if (totalPathBytes > MAX_ARCHIVE_ENTRY_PATH_BYTES) {
-        limitError = new Error(
-          `Backup archive entry metadata exceeds maximum size of ${MAX_ARCHIVE_ENTRY_PATH_BYTES} bytes.`,
-        );
-        return;
-      }
-      entries.push({ path: entry.path, type: entry.type });
-    },
+      resolve();
+    };
+
+    parser = new tar.Parser({
+      gzip: true,
+      onReadEntry(entry) {
+        if (limitError) {
+          return;
+        }
+        try {
+          totals = advanceArchiveScanTotals(totals, entry.path);
+          entries.push({
+            path: entry.path,
+            type: entry.type,
+            size: Math.max(0, Number.isFinite(entry.size) ? entry.size : 0),
+          });
+        } catch (error) {
+          limitError = error instanceof Error ? error : new Error(String(error));
+          parser.abort(limitError);
+        }
+      },
+    });
+
+    parser.on("error", (error) =>
+      settle(error instanceof Error ? error : new Error(String(error))),
+    );
+    parser.on("end", () => settle(limitError));
+    stream = createReadStream(archivePath);
+    stream.on("error", (error) =>
+      settle(error instanceof Error ? error : new Error(String(error))),
+    );
+    stream.pipe(parser);
   });
-  if (limitError) {
-    throw limitError;
-  }
   return entries;
 }
 
@@ -278,6 +309,25 @@ async function extractManifest(params: {
 function isRootManifestEntry(entryPath: string): boolean {
   const parts = entryPath.split("/");
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
+}
+
+export function advanceArchiveScanTotals(
+  totals: ArchiveScanTotals,
+  entryPath: string,
+): ArchiveScanTotals {
+  const entryCount = totals.entryCount + 1;
+  if (entryCount > MAX_ARCHIVE_ENTRY_COUNT) {
+    throw new Error(`Backup archive exceeds maximum entry count of ${MAX_ARCHIVE_ENTRY_COUNT}.`);
+  }
+
+  const totalPathBytes = totals.totalPathBytes + Buffer.byteLength(entryPath, "utf8");
+  if (totalPathBytes > MAX_ARCHIVE_ENTRY_PATH_BYTES) {
+    throw new Error(
+      `Backup archive entry metadata exceeds maximum size of ${MAX_ARCHIVE_ENTRY_PATH_BYTES} bytes.`,
+    );
+  }
+
+  return { entryCount, totalPathBytes };
 }
 
 function requiresExactArchiveEntry(asset: BackupManifestAsset): boolean {
@@ -351,6 +401,7 @@ export async function backupVerifyCommand(
   opts: BackupVerifyOptions,
 ): Promise<BackupVerifyResult> {
   const archivePath = resolveUserPath(opts.archive);
+  const archiveStat = await fs.stat(archivePath);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
     throw new Error("Backup archive is empty.");
@@ -393,6 +444,9 @@ export async function backupVerifyCommand(
     runtimeVersion: manifest.runtimeVersion,
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
+    archiveBytes: archiveStat.size,
+    totalEntryBytes: rawEntries.reduce((sum, entry) => sum + entry.size, 0),
+    maxEntryBytes: rawEntries.reduce((max, entry) => Math.max(max, entry.size), 0),
   };
 
   runtime.log(opts.json ? JSON.stringify(result, null, 2) : formatResult(result));

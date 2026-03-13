@@ -63,10 +63,27 @@ type PreparedRestoreArchive = {
 };
 
 const RESTORE_EXTRACT_TIMEOUT_MS = 60_000;
+const RESTORE_EXTRACT_LIMIT_MIN_BYTES = 1 * 1024 * 1024;
 
 function workspacePathKey(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isManifestPathCoveredByState(params: {
+  manifest: BackupManifest;
+  pathKey: "configPath" | "oauthDir";
+}): boolean {
+  const stateDir = params.manifest.paths?.stateDir;
+  const targetPath = params.manifest.paths?.[params.pathKey];
+  return Boolean(stateDir && targetPath && isPathWithin(targetPath, stateDir));
+}
+
+function resolveRestoreExtractLimit(bytes: number): number {
+  const bounded = Math.max(0, Math.floor(bytes));
+  // Tar extraction budgets header sizes up front and still counts streamed bytes,
+  // so restore needs a little headroom above the verified payload byte totals.
+  return Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, bounded * 2);
 }
 
 async function canonicalizePathForContainment(inputPath: string): Promise<string> {
@@ -688,8 +705,12 @@ export async function buildRestoreOperations(params: {
       });
     }
 
+    const sourceConfigCoveredByState = isManifestPathCoveredByState({
+      manifest: params.manifest,
+      pathKey: "configPath",
+    });
     const configSourcePath =
-      !stateAsset || !isPathWithin(configPath, stateDir)
+      !stateAsset || !sourceConfigCoveredByState || !isPathWithin(configPath, stateDir)
         ? ((configAsset && getAssetExtractPath(params.extractedRoot, configAsset)) ??
           tryResolveExtractedConfigPath({
             manifest: params.manifest,
@@ -710,8 +731,12 @@ export async function buildRestoreOperations(params: {
       });
     }
 
+    const sourceOauthCoveredByState = isManifestPathCoveredByState({
+      manifest: params.manifest,
+      pathKey: "oauthDir",
+    });
     const credentialsSourcePath =
-      !stateAsset || !isPathWithin(oauthDir, stateDir)
+      !stateAsset || !sourceOauthCoveredByState || !isPathWithin(oauthDir, stateDir)
         ? ((credentialsAsset && getAssetExtractPath(params.extractedRoot, credentialsAsset)) ??
           tryResolveExtractedCredentialsPath({
             manifest: params.manifest,
@@ -867,6 +892,12 @@ export async function backupRestoreCommand(
       kind: "tar",
       tarGzip: true,
       timeoutMs: RESTORE_EXTRACT_TIMEOUT_MS,
+      limits: {
+        maxArchiveBytes: Math.max(verified.archiveBytes, 1),
+        maxEntries: Math.max(verified.entryCount, 1),
+        maxExtractedBytes: resolveRestoreExtractLimit(verified.totalEntryBytes),
+        maxEntryBytes: resolveRestoreExtractLimit(verified.maxEntryBytes),
+      },
     });
 
     const archiveRoot = normalizeArchiveRoot(verified.archiveRoot);
