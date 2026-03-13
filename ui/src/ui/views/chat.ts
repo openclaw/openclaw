@@ -359,6 +359,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     return;
   }
   e.preventDefault();
+  e.stopPropagation();
   const files = allFiles.filter((file) => file.type.startsWith("image/"));
   if (files.length === 0) {
     return;
