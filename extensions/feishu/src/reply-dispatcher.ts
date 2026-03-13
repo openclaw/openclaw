@@ -143,10 +143,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let lastUpdateWasBlock = false;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
-  type StreamTextUpdateMode = "snapshot" | "delta";
+  type StreamTextUpdateMode = "snapshot" | "delta" | "block";
 
   const queueStreamingUpdate = (
     nextText: string,
@@ -165,8 +166,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     const mode = options?.mode ?? "snapshot";
-    streamText =
-      mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
+    if (mode === "delta") {
+      streamText = `${streamText}${nextText}`;
+    } else if (mode === "block") {
+      if (
+        nextText === streamText ||
+        (streamText.length > 0 && nextText.length > 0 && streamText.endsWith(nextText))
+      ) {
+        streamText = `${streamText}${nextText}`;
+      } else if (!lastUpdateWasBlock) {
+        // First block after partial: may continue partial (e.g. "hello" + "lo world" -> "hello world")
+        // or be independent (e.g. partial "ABCDEF", block "ABC" -> "ABCDEFABC"). When merge would
+        // drop next (merged === streamText), append to preserve.
+        const merged = mergeStreamingText(streamText, nextText);
+        streamText = merged === streamText ? `${streamText}${nextText}` : merged;
+      } else {
+        // Block after block: coalescer emits independent deltas. mergeStreamingText overlap-merge
+        // ("abcd"+"bcdx"->"abcdx") would drop valid repeated content; append preserves it.
+        streamText = `${streamText}${nextText}`;
+      }
+      lastUpdateWasBlock = true;
+    } else {
+      lastUpdateWasBlock = false;
+      streamText = mergeStreamingText(streamText, nextText);
+    }
     partialUpdateQueue = partialUpdateQueue.then(async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -278,12 +301,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (streaming?.isActive()) {
             if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta" });
+              // Block payloads can be cumulative (tool flush) or deltas (coalescer). Use mode
+              // "block" to only replace when next is a strict superset; otherwise append.
+              // Fixes #38938 (duplication) while preserving coalescer deltas/repeated chunks.
+              queueStreamingUpdate(text, { mode: "block" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
+              // Final is the authoritative complete response; use it to avoid duplication when
+              // block appends produced cumulative-like duplication (tool flush scenario).
+              streamText = text;
               await closeStreaming();
               deliveredFinalTexts.add(text);
             }
