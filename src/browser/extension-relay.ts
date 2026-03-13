@@ -650,15 +650,15 @@ export async function ensureChromeExtensionRelayServer(opts: {
                 const explicitMode = typeof data.tabMode === "string" ? data.tabMode : null;
                 let mode: string;
                 if (explicitMode === "lock_forbidden") {
-                  mode = "LOCK_FORBIDDEN";
+                  mode = "Terminated";       // Tab switch blocked — relay is locked to another tab
                 } else if (explicitMode === "tracking") {
-                  mode = "TRACKING";
+                  mode = "On (Tracking)";    // Relay follows active tab
                 } else if (currentLockTab) {
-                  mode = "LOCK";
+                  mode = "Lock";             // Relay locked to a specific tab
                 } else if (tabIdHint) {
-                  mode = "TRACKING";
+                  mode = "On (Tracking)";    // Inferred: unlocked with a preferred tab
                 } else {
-                  mode = "UNLOCK";
+                  mode = "Off";              // No preferred tab, not locked
                 }
                 console.log(
                   `[browser/extension-relay] Relay on ${info.port} mode: ${mode}${tabIdHint}`,
