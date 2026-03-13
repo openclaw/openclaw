@@ -48,21 +48,13 @@ interface ExtendedHttpRequestOptions<D> extends Lark.HttpRequestOptions<D> {
 }
 
 /**
- * Check if a status code indicates a redirect.
- */
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
-/**
  * Create an HTTP instance that delegates to the Lark SDK's default instance
  * but injects a default request timeout to prevent indefinite hangs
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
  *
- * Also handles Feishu CDN's self-redirect behavior where it returns 301
- * redirects to the same URL when using HTTP/1.1. When such a self-redirect
- * is detected, the response is returned as-is instead of throwing
- * ERR_FR_TOO_MANY_REDIRECTS.
+ * Also increases maxRedirects to handle Feishu CDN's redirect behavior.
+ * The default axios limit is 21, but Feishu CDN can sometimes create
+ * redirect chains that exhaust this limit before the CDN resolves.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
@@ -76,110 +68,21 @@ function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance 
     return {
       timeout: defaultTimeoutMs,
       // Set a higher maxRedirects limit to handle Feishu CDN's redirect behavior.
-      // The default axios limit is 21, but Feishu CDN can sometimes create
-      // self-redirect loops that exhaust this limit before the CDN resolves.
       // Setting this to a higher value gives more runway before failure.
       maxRedirects: 50,
       ...opts,
     } as ExtendedHttpRequestOptions<D>;
   }
 
-  /**
-   * Track visited URLs per request chain to detect redirect loops.
-   * We use a WeakMap keyed by the request config to avoid memory leaks.
-   */
-  const redirectTracker = new WeakMap<object, { visited: Set<string>; count: number }>();
-
-  /**
-   * Handle responses, checking for self-redirect patterns.
-   * When Feishu CDN returns a redirect to the same URL, we return the response
-   * instead of continuing to follow redirects.
-   */
-  async function handleWithRedirectProtection<T>(
-    makeRequest: () => Promise<T>,
-    url: string,
-    requestKey: object,
-  ): Promise<T> {
-    try {
-      return await makeRequest();
-    } catch (err) {
-      // Check if this is a "too many redirects" error from axios
-      const axiosErr = err as {
-        code?: string;
-        response?: { status?: number; headers?: Record<string, string> };
-      };
-      if (axiosErr.code === "ERR_FR_TOO_MANY_REDIRECTS") {
-        // Get tracker for this request
-        let tracker = redirectTracker.get(requestKey);
-        if (!tracker) {
-          tracker = { visited: new Set(), count: 0 };
-          redirectTracker.set(requestKey, tracker);
-        }
-
-        // Log warning about the redirect issue
-        console.warn(
-          `[feishu] Too many redirects detected for ${url}. ` +
-            `This may be due to Feishu CDN's self-redirect behavior. ` +
-            `Consider upgrading to HTTP/2 or using a different endpoint.`,
-        );
-
-        // Re-throw the error - we can't easily recover from this
-        // because the response body is not available after too many redirects
-        throw err;
-      }
-      throw err;
-    }
-  }
-
   return {
-    request: (opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(
-        () => base.request(injectDefaults(opts)),
-        opts?.url ?? "",
-        key,
-      );
-    },
-    get: (url, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(() => base.get(url, injectDefaults(opts)), url, key);
-    },
-    post: (url, data, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(
-        () => base.post(url, data, injectDefaults(opts)),
-        url,
-        key,
-      );
-    },
-    put: (url, data, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(
-        () => base.put(url, data, injectDefaults(opts)),
-        url,
-        key,
-      );
-    },
-    patch: (url, data, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(
-        () => base.patch(url, data, injectDefaults(opts)),
-        url,
-        key,
-      );
-    },
-    delete: (url, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(() => base.delete(url, injectDefaults(opts)), url, key);
-    },
-    head: (url, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(() => base.head(url, injectDefaults(opts)), url, key);
-    },
-    options: (url, opts) => {
-      const key = opts ?? {};
-      return handleWithRedirectProtection(() => base.options(url, injectDefaults(opts)), url, key);
-    },
+    request: (opts) => base.request(injectDefaults(opts)),
+    get: (url, opts) => base.get(url, injectDefaults(opts)),
+    post: (url, data, opts) => base.post(url, data, injectDefaults(opts)),
+    put: (url, data, opts) => base.put(url, data, injectDefaults(opts)),
+    patch: (url, data, opts) => base.patch(url, data, injectDefaults(opts)),
+    delete: (url, opts) => base.delete(url, injectDefaults(opts)),
+    head: (url, opts) => base.head(url, injectDefaults(opts)),
+    options: (url, opts) => base.options(url, injectDefaults(opts)),
   };
 }
 
