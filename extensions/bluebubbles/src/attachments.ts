@@ -198,85 +198,127 @@ export async function sendBlueBubblesAttachment(params: {
     password,
   });
 
-  // Build FormData with the attachment
-  const boundary = `----BlueBubblesFormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
-  const parts: Uint8Array[] = [];
-  const encoder = new TextEncoder();
-
-  // Helper to add a form field
-  const addField = (name: string, value: string) => {
-    parts.push(encoder.encode(`--${boundary}\r\n`));
-    parts.push(encoder.encode(`Content-Disposition: form-data; name="${name}"\r\n\r\n`));
-    parts.push(encoder.encode(`${value}\r\n`));
-  };
-
-  // Helper to add a file field
-  const addFile = (name: string, fileBuffer: Uint8Array, fileName: string, mimeType?: string) => {
-    parts.push(encoder.encode(`--${boundary}\r\n`));
-    parts.push(
-      encoder.encode(`Content-Disposition: form-data; name="${name}"; filename="${fileName}"\r\n`),
-    );
-    parts.push(encoder.encode(`Content-Type: ${mimeType ?? "application/octet-stream"}\r\n\r\n`));
-    parts.push(fileBuffer);
-    parts.push(encoder.encode("\r\n"));
-  };
-
-  // Add required fields
-  addFile("attachment", buffer, filename, contentType);
-  addField("chatGuid", chatGuid);
-  addField("name", filename);
-  addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  if (privateApiEnabled) {
-    addField("method", "private-api");
-  }
-
-  // Add isAudioMessage flag for voice memos
-  if (isAudioMessage) {
-    addField("isAudioMessage", "true");
-  }
-
   const trimmedReplyTo = replyToMessageGuid?.trim();
-  if (trimmedReplyTo && privateApiEnabled) {
-    addField("selectedMessageGuid", trimmedReplyTo);
-    addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
-  } else if (trimmedReplyTo && privateApiStatus === null) {
+  if (trimmedReplyTo && privateApiStatus === null) {
     warnBlueBubbles(
       "Private API status unknown; sending attachment without reply threading metadata. Run a status probe to restore private-api reply features.",
     );
   }
 
-  // Add optional caption
-  if (caption) {
-    addField("message", caption);
-    addField("text", caption);
-    addField("caption", caption);
+  const buildMultipartParts = (fileFieldName: string) => {
+    const boundary = `----BlueBubblesFormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
+    const parts: Uint8Array[] = [];
+    const encoder = new TextEncoder();
+
+    const addField = (name: string, value: string) => {
+      parts.push(encoder.encode(`--${boundary}\r\n`));
+      parts.push(encoder.encode(`Content-Disposition: form-data; name="${name}"\r\n\r\n`));
+      parts.push(encoder.encode(`${value}\r\n`));
+    };
+
+    const addFile = (name: string, fileBuffer: Uint8Array, fileName: string, mimeType?: string) => {
+      parts.push(encoder.encode(`--${boundary}\r\n`));
+      parts.push(
+        encoder.encode(`Content-Disposition: form-data; name="${name}"; filename="${fileName}"\r\n`),
+      );
+      parts.push(encoder.encode(`Content-Type: ${mimeType ?? "application/octet-stream"}\r\n\r\n`));
+      parts.push(fileBuffer);
+      parts.push(encoder.encode("\r\n"));
+    };
+
+    addFile(fileFieldName, buffer, filename, contentType);
+    addField("chatGuid", chatGuid);
+    addField("name", filename);
+    addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+    if (privateApiEnabled) {
+      addField("method", "private-api");
+    }
+    if (isAudioMessage) {
+      addField("isAudioMessage", "true");
+    }
+    if (trimmedReplyTo && privateApiEnabled) {
+      addField("selectedMessageGuid", trimmedReplyTo);
+      addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");
+    }
+    if (caption) {
+      addField("message", caption);
+      addField("text", caption);
+      addField("caption", caption);
+    }
+
+    parts.push(encoder.encode(`--${boundary}--\r\n`));
+    return { boundary, parts };
+  };
+
+  const candidateFileFields = ["attachment", "attachments", "file"];
+  let lastStatus = 0;
+  let lastErrorText = "";
+
+  for (let i = 0; i < candidateFileFields.length; i += 1) {
+    const fieldName = candidateFileFields[i];
+    const { boundary, parts } = buildMultipartParts(fieldName);
+    const res = await postMultipartFormData({
+      url,
+      boundary,
+      parts,
+      timeoutMs: opts.timeoutMs ?? 60_000,
+    });
+
+    const responseBody = await res.text();
+    if (res.ok) {
+      let messageId = "ok";
+      if (responseBody) {
+        try {
+          const parsed = JSON.parse(responseBody) as unknown;
+          messageId = extractBlueBubblesMessageId(parsed);
+        } catch {
+          messageId = "ok";
+        }
+      }
+
+      // Some BlueBubbles variants may return 200 even when the chosen multipart
+      // file field is ignored. For voice notes, verify persistence and continue
+      // fallback attempts unless the message is actually stored as audio.
+      if (isAudioMessage && messageId !== "ok") {
+        try {
+          const verifyUrl = buildBlueBubblesApiUrl({
+            baseUrl,
+            path: `/api/v1/message/${encodeURIComponent(messageId)}`,
+            password,
+          });
+          const verifyRes = await blueBubblesFetchWithTimeout(
+            verifyUrl,
+            { method: "GET" },
+            opts.timeoutMs,
+          );
+          if (verifyRes.ok) {
+            const verifyJson = (await verifyRes.json().catch(() => null)) as
+              | { data?: { isAudioMessage?: boolean } }
+              | null;
+            const explicitlyNotVoice = verifyJson?.data?.isAudioMessage === false;
+            if (explicitlyNotVoice) {
+              const isLastAttempt = i === candidateFileFields.length - 1;
+              if (!isLastAttempt) {
+                continue;
+              }
+            }
+          }
+        } catch {
+          // If verification fails, keep backward-compatible behavior.
+        }
+      }
+
+      return { messageId };
+    }
+
+    lastStatus = res.status;
+    lastErrorText = responseBody || "unknown";
+    const isLastAttempt = i === candidateFileFields.length - 1;
+    const shouldRetryWithAlternateField = !isLastAttempt && [400, 404, 415, 422].includes(res.status);
+    if (!shouldRetryWithAlternateField) {
+      break;
+    }
   }
 
-  // Close the multipart body
-  parts.push(encoder.encode(`--${boundary}--\r\n`));
-
-  const res = await postMultipartFormData({
-    url,
-    boundary,
-    parts,
-    timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(
-      `BlueBubbles attachment send failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
-
-  const responseBody = await res.text();
-  if (!responseBody) {
-    return { messageId: "ok" };
-  }
-  try {
-    const parsed = JSON.parse(responseBody) as unknown;
-    return { messageId: extractBlueBubblesMessageId(parsed) };
-  } catch {
-    return { messageId: "ok" };
-  }
+  throw new Error(`BlueBubbles attachment send failed (${lastStatus}): ${lastErrorText || "unknown"}`);
 }
