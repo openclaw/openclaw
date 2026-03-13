@@ -14,6 +14,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  normalizeProviderModelId,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -26,6 +27,31 @@ const EXPLICIT_ALLOWLIST_CONFIG = {
     },
   },
 } as OpenClawConfig;
+
+// Regression test for #44724 - circular dependency initialization crash
+describe("normalizeProviderModelId - circular dependency safety", () => {
+  it("normalizes Anthropic model aliases without initialization crash (#44724)", () => {
+    // This test verifies that normalizeProviderModelId works even when called
+    // during module initialization (which previously caused temporal dead zone error)
+    expect(normalizeProviderModelId("anthropic", "opus-4.6")).toBe("claude-opus-4-6");
+    expect(normalizeProviderModelId("anthropic", "sonnet-4.6")).toBe("claude-sonnet-4-6");
+    expect(normalizeProviderModelId("anthropic", "opus-4.5")).toBe("claude-opus-4-5");
+    expect(normalizeProviderModelId("anthropic", "sonnet-4.5")).toBe("claude-sonnet-4-5");
+    expect(normalizeProviderModelId("anthropic", "claude-3-5-sonnet")).toBe("claude-3-5-sonnet");
+  });
+
+  it("handles case-insensitive Anthropic aliases", () => {
+    expect(normalizeProviderModelId("anthropic", "OPUS-4.6")).toBe("claude-opus-4-6");
+    expect(normalizeProviderModelId("anthropic", "Sonnet-4.5")).toBe("claude-sonnet-4-5");
+  });
+
+  it("preserves non-alias Anthropic models", () => {
+    expect(normalizeProviderModelId("anthropic", "claude-3-opus-20240229")).toBe(
+      "claude-3-opus-20240229",
+    );
+    expect(normalizeProviderModelId("anthropic", "claude-2.1")).toBe("claude-2.1");
+  });
+});
 
 const BUNDLED_ALLOWLIST_CATALOG = [
   { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
