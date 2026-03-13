@@ -195,4 +195,37 @@ describe("existing-session browser routes", () => {
     });
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
+
+  it("supports glob URL waits for existing-session profiles", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockReset();
+    chromeMcpMocks.evaluateChromeMcpScript.mockImplementation(
+      async ({ fn }: { fn: string }) =>
+        (fn === "() => window.location.href" ? "https://example.com/" : true) as never,
+    );
+
+    const { app, postHandlers } = createApp();
+    registerBrowserAgentActRoutes(app, {
+      state: () => ({ resolved: { evaluateEnabled: true } }),
+    } as never);
+    const handler = postHandlers.get("/act");
+    expect(handler).toBeTypeOf("function");
+
+    const response = createResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "wait", url: "**/example.com/" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, targetId: "7" });
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith({
+      profileName: "chrome-live",
+      targetId: "7",
+      fn: "() => window.location.href",
+    });
+  });
 });
