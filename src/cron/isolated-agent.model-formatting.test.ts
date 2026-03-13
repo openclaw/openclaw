@@ -2,6 +2,7 @@ import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -12,27 +13,6 @@ import {
 import type { CronJob } from "./types.js";
 
 const withTempHome = withTempCronHome;
-
-function makeDeps() {
-  return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
-  };
-}
-
-function mockEmbeddedOk() {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-}
 
 /**
  * Extract the provider and model from the last runEmbeddedPiAgent call.
@@ -62,7 +42,7 @@ async function runTurnCore(home: string, options: TurnOptions = {}) {
     },
     ...options.storeEntries,
   });
-  mockEmbeddedOk();
+  mockAgentPayloads([{ text: "ok" }]);
 
   const jobPayload = options.jobPayload ?? {
     kind: "agentTurn" as const,
@@ -72,7 +52,7 @@ async function runTurnCore(home: string, options: TurnOptions = {}) {
 
   const res = await runCronIsolatedAgentTurn({
     cfg: makeCfg(home, storePath, options.cfgOverrides),
-    deps: makeDeps(),
+    deps: createCliDeps(),
     job: makeJob(jobPayload),
     message: DEFAULT_MESSAGE,
     sessionKey: options.sessionKey ?? "cron:job-1",
@@ -310,7 +290,7 @@ describe("cron model formatting and precedence edge cases", () => {
 
         // Step 2: No job model, session store says openai
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const step2 = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
           storeEntries: {
@@ -327,7 +307,7 @@ describe("cron model formatting and precedence edge cases", () => {
 
         // Step 3: Job payload says anthropic, session store still says openai
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const step3 = await runTurn(home, {
           jobPayload: {
             kind: "agentTurn",
@@ -365,7 +345,7 @@ describe("cron model formatting and precedence edge cases", () => {
 
         // Run 2: no override — must revert to default anthropic
         vi.mocked(runEmbeddedPiAgent).mockClear();
-        mockEmbeddedOk();
+        mockAgentPayloads([{ text: "ok" }]);
         const r2 = await runTurn(home, {
           jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, deliver: false },
         });
