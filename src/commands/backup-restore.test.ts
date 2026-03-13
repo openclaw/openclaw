@@ -14,12 +14,28 @@ const { serviceIsLoaded, serviceStop } = vi.hoisted(() => ({
   serviceStop: vi.fn(async (_args?: { stdout: NodeJS.WritableStream }) => undefined),
 }));
 
+const afterVerifyHook = vi.hoisted(() => ({
+  current: undefined as undefined | (() => Promise<void> | void),
+}));
+
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     isLoaded: serviceIsLoaded,
     stop: serviceStop,
   }),
 }));
+
+vi.mock("./backup-verify.js", async () => {
+  const actual = await vi.importActual<typeof import("./backup-verify.js")>("./backup-verify.js");
+  return {
+    ...actual,
+    backupVerifyCommand: vi.fn(async (...args: Parameters<typeof actual.backupVerifyCommand>) => {
+      const result = await actual.backupVerifyCommand(...args);
+      await afterVerifyHook.current?.();
+      return result;
+    }),
+  };
+});
 
 describe("backup restore", () => {
   let tempHome: TempHomeEnv;
@@ -33,6 +49,7 @@ describe("backup restore", () => {
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(false);
     serviceStop.mockResolvedValue(undefined);
+    afterVerifyHook.current = undefined;
     runtime = {
       log: vi.fn() as RuntimeEnv["log"],
       error: vi.fn() as RuntimeEnv["error"],
@@ -1521,6 +1538,58 @@ describe("backup restore", () => {
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
       await fs.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins archive restores to a private temp copy before extraction", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-pin-"));
+    const originalArchive = path.join(archiveDir, "original.tar.gz");
+    const swappedArchive = path.join(archiveDir, "swapped.tar.gz");
+    try {
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ backup: { target: "before" } }),
+        "utf8",
+      );
+      const before = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+      await fs.copyFile(before.archivePath, originalArchive);
+
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ backup: { target: "after" } }),
+        "utf8",
+      );
+      const after = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+      await fs.copyFile(after.archivePath, swappedArchive);
+
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ backup: { target: "live" } }),
+        "utf8",
+      );
+
+      afterVerifyHook.current = async () => {
+        await fs.copyFile(swappedArchive, originalArchive);
+      };
+
+      await backupRestoreCommand(runtime, {
+        archive: originalArchive,
+        mode: "config-only",
+      });
+
+      expect(JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"))).toEqual({
+        backup: { target: "before" },
+      });
+    } finally {
+      afterVerifyHook.current = undefined;
+      await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { collectWorkspaceDirs, isPathWithin } from "../../commands/cleanup-utils.js";
 import type { BackupConfig, OpenClawConfig } from "../../config/config.js";
-import { resolveStateDir } from "../../config/config.js";
+import { resolveOAuthDir, resolveStateDir } from "../../config/config.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { resolveSecretInputString } from "../../secrets/resolve-secret-input-string.js";
 import { resolveUserPath } from "../../utils.js";
@@ -75,8 +75,12 @@ async function resolveValidatedTargetDir(params: {
 
   const targetDir = await canonicalizePathForContainment(resolveUserPath(target));
   const stateDir = await canonicalizePathForContainment(resolveStateDir(params.env));
+  const oauthDir = await canonicalizePathForContainment(resolveOAuthDir(params.env, stateDir));
   if (targetDir === stateDir || isPathWithin(targetDir, stateDir)) {
     throw new Error("backup.target must not be inside the live state directory.");
+  }
+  if (targetDir === oauthDir || isPathWithin(targetDir, oauthDir)) {
+    throw new Error("backup.target must not be inside the live OAuth directory.");
   }
   for (const workspaceDir of collectWorkspaceDirs(params.config)) {
     const canonicalWorkspaceDir = await canonicalizePathForContainment(workspaceDir);

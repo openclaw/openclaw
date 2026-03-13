@@ -71,4 +71,28 @@ describe("resolveSnapshotStoreConfig", () => {
       }),
     ).rejects.toThrow("backup.target must not be inside a workspace being backed up.");
   });
+
+  it("rejects backup targets that live inside an external oauth directory", async () => {
+    const homeDir = await createTempDir("openclaw-backup-config-oauth-");
+    const oauthDir = path.join(homeDir, "external-oauth");
+    const targetDir = path.join(oauthDir, "snapshots");
+
+    await fs.mkdir(targetDir, { recursive: true });
+
+    await expect(
+      resolveSnapshotStoreConfig({
+        config: {
+          backup: {
+            target: targetDir,
+            encryption: { key: "secret" },
+          },
+        },
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          OPENCLAW_OAUTH_DIR: oauthDir,
+        },
+      }),
+    ).rejects.toThrow("backup.target must not be inside the live OAuth directory.");
+  });
 });

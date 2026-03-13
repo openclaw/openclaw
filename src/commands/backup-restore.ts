@@ -56,6 +56,12 @@ type RestoreOperation = {
   targetPath: string;
 };
 
+type PreparedRestoreArchive = {
+  archivePath: string;
+  displayArchivePath: string;
+  tempDir?: string;
+};
+
 const RESTORE_EXTRACT_TIMEOUT_MS = 60_000;
 
 function workspacePathKey(value: string): string {
@@ -156,9 +162,18 @@ async function ensureGatewayStopped(
 async function prepareRestoreArchive(
   opts: BackupRestoreOptions,
   deps: BackupSnapshotDeps | undefined,
-): Promise<{ archivePath: string; tempDir?: string }> {
+): Promise<PreparedRestoreArchive> {
   if (opts.archive?.trim()) {
-    return { archivePath: resolveUserPath(opts.archive) };
+    const displayArchivePath = resolveUserPath(opts.archive);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-archive-"));
+    const archivePath = path.join(tempDir, "archive.tar.gz");
+    try {
+      await fs.copyFile(displayArchivePath, archivePath, fsConstants.COPYFILE_EXCL);
+      return { archivePath, displayArchivePath, tempDir };
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   const snapshotId = opts.snapshotId?.trim();
@@ -198,7 +213,7 @@ async function prepareRestoreArchive(
       secret: snapshotStore.encryptionKey,
       envelope,
     });
-    return { archivePath, tempDir };
+    return { archivePath, displayArchivePath: archivePath, tempDir };
   } catch (error) {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -869,14 +884,14 @@ export async function backupRestoreCommand(
 
     const result: BackupRestoreResult = {
       mode,
-      archivePath: restoreSource.archivePath,
+      archivePath: restoreSource.displayArchivePath,
       restoredTargets: operations.map((operation) => operation.targetPath),
     };
     runtime.log(
       opts.json
         ? JSON.stringify(result, null, 2)
         : [
-            `Restored backup archive ${restoreSource.archivePath}`,
+            `Restored backup archive ${restoreSource.displayArchivePath}`,
             `Mode: ${mode}`,
             ...result.restoredTargets.map((target) => `- ${target}`),
           ].join("\n"),
