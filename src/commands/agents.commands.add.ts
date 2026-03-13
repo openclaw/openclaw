@@ -262,41 +262,28 @@ export async function agentsAddCommand(
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
+      const authChoice = await promptAuthChoiceGrouped({
+        prompter,
+        store: authStore,
+        includeSkip: true,
+        config: nextConfig,
+      });
 
-      // Loop to allow retrying auth choice if user cancels during configuration
-      while (true) {
-        const authChoice = await promptAuthChoiceGrouped({
-          prompter,
-          store: authStore,
-          includeSkip: true,
+      const authResult = await applyAuthChoice({
+        authChoice,
+        config: nextConfig,
+        prompter,
+        runtime,
+        agentDir,
+        setDefaultModel: false,
+        agentId,
+      });
+      nextConfig = authResult.config;
+      if (authResult.agentModelOverride) {
+        nextConfig = applyAgentConfig(nextConfig, {
+          agentId,
+          model: authResult.agentModelOverride,
         });
-
-        try {
-          const authResult = await applyAuthChoice({
-            authChoice,
-            config: nextConfig,
-            prompter,
-            runtime,
-            agentDir,
-            setDefaultModel: false,
-            agentId,
-          });
-          nextConfig = authResult.config;
-          if (authResult.agentModelOverride) {
-            nextConfig = applyAgentConfig(nextConfig, {
-              agentId,
-              model: authResult.agentModelOverride,
-            });
-          }
-          break; // Success - exit the loop
-        } catch (error) {
-          // If user cancelled to go back to auth selection, loop again
-          if (error instanceof WizardCancelledError) {
-            continue;
-          }
-          // Re-throw other errors
-          throw error;
-        }
       }
     }
 

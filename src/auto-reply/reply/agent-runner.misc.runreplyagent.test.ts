@@ -1628,3 +1628,72 @@ describe("runReplyAgent transient HTTP retry", () => {
     expect(payload?.text).toContain("Recovered response");
   });
 });
+
+describe("runReplyAgent billing error classification", () => {
+  // Regression guard for the runner-level catch block in runAgentTurnWithFallback.
+  // Billing errors from providers like OpenRouter can contain token/size wording that
+  // matches context overflow heuristics. This test verifies the final user-visible
+  // message is the billing-specific one, not the "Context overflow" fallback.
+  it("returns billing message for mixed-signal error (billing text + overflow patterns)", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("402 Payment Required: request token limit exceeded for this billing plan"),
+    );
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("billing error");
+    expect(payload?.text).not.toContain("Context overflow");
+  });
+});
