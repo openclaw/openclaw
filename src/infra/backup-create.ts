@@ -310,6 +310,18 @@ async function assertPathTreeHasNoSymlinks(rootPath: string): Promise<void> {
   }
 }
 
+async function assertBackupAssetSourceType(asset: BackupAsset): Promise<void> {
+  const stat = await fs.lstat(asset.sourcePath);
+  const expectsDirectory = asset.kind !== "config";
+  if (expectsDirectory ? stat.isDirectory() : stat.isFile()) {
+    return;
+  }
+
+  throw new Error(
+    `Refusing backup export: ${asset.kind} source must be a ${expectsDirectory ? "directory" : "regular file"} (${asset.sourcePath}).`,
+  );
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -347,6 +359,7 @@ export async function createBackupArchive(
     await assertOutputPathReady(outputPath);
     for (const asset of plan.included) {
       await assertPathTreeHasNoSymlinks(asset.sourcePath);
+      await assertBackupAssetSourceType(asset);
     }
   }
 

@@ -466,6 +466,125 @@ describe("backup commands", () => {
     }
   });
 
+  it("rejects file-valued state directories before writing an archive", async () => {
+    const statePath = path.join(tempHome.home, "state-file");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_STATE_DIR = statePath;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(statePath, "not-a-directory\n", "utf8");
+    await fs.writeFile(configPath, JSON.stringify({}), "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+        }),
+      ).rejects.toThrow(/state source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects directory-valued config sources before writing an archive", async () => {
+    const configPath = path.join(tempHome.home, "config-dir");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.mkdir(configPath, { recursive: true });
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          onlyConfig: true,
+        }),
+      ).rejects.toThrow(/config source must be a regular file/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file-valued credentials directories before writing an archive", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const oauthPath = path.join(tempHome.home, "oauth-file");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_OAUTH_DIR = oauthPath;
+    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.writeFile(oauthPath, "not-a-directory\n", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+        }),
+      ).rejects.toThrow(/credentials source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_OAUTH_DIR;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects file-valued workspace sources before writing an archive", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const workspacePath = path.join(tempHome.home, "workspace-file");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          defaults: {
+            workspace: workspacePath,
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+    await fs.writeFile(workspacePath, "not-a-directory\n", "utf8");
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    try {
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/workspace source must be a directory/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when config is invalid and workspace backup is enabled", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
