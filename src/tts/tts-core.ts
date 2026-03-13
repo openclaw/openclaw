@@ -12,6 +12,7 @@ import {
 import { createConfiguredOllamaStreamFn } from "../agents/ollama-stream.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { isBlockedHostname } from "../infra/net/ssrf.js";
 import type {
   ResolvedTtsConfig,
   ResolvedTtsModelOverrides,
@@ -27,12 +28,45 @@ export function isValidVoiceId(voiceId: string): boolean {
   return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
 }
 
+/**
+ * Validate that a TTS base URL does not target cloud metadata endpoints
+ * or other known-dangerous destinations (CWE-918).
+ *
+ * Users may run self-hosted TTS servers (e.g., Kokoro) on localhost or
+ * private networks, so loopback and private IPs are allowed. Only cloud
+ * metadata / link-local IPs and dangerous hostnames are blocked.
+ */
+function assertTtsBaseUrlAllowed(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid TTS base URL: ${url}`);
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  // Block link-local / cloud metadata IPs (169.254.x.x)
+  if (hostname.startsWith("169.254.")) {
+    throw new Error(`TTS base URL targets a link-local/metadata address: ${hostname}`);
+  }
+  if (hostname === "0.0.0.0") {
+    throw new Error(`TTS base URL targets a blocked address: ${hostname}`);
+  }
+
+  // Block dangerous hostnames, but allow localhost for self-hosted TTS
+  if (hostname !== "localhost" && isBlockedHostname(hostname)) {
+    throw new Error(`TTS base URL targets a blocked hostname: ${hostname}`);
+  }
+}
+
 function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return DEFAULT_ELEVENLABS_BASE_URL;
   }
-  return trimmed.replace(/\/+$/, "");
+  const normalized = trimmed.replace(/\/+$/, "");
+  assertTtsBaseUrlAllowed(normalized);
+  return normalized;
 }
 
 function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
@@ -40,7 +74,9 @@ function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   if (!trimmed) {
     return DEFAULT_OPENAI_BASE_URL;
   }
-  return trimmed.replace(/\/+$/, "");
+  const normalized = trimmed.replace(/\/+$/, "");
+  assertTtsBaseUrlAllowed(normalized);
+  return normalized;
 }
 
 function trimToUndefined(value?: string): string | undefined {
