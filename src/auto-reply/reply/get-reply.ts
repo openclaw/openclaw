@@ -118,15 +118,20 @@ export async function getReplyFromConfig(
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     onTtlExpired: opts?.onTypingTtlExpired
-      ? () => {
-          // Resolve the return value so async handlers' rejections are caught
-          // and logged rather than becoming unhandled rejections at runtime.
-          Promise.resolve(opts.onTypingTtlExpired()).catch((err: unknown) => {
-            defaultRuntime.log?.(
-              `typing TTL handler failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
-        }
+      ? (() => {
+          // Capture the handler in a const so TypeScript can narrow away
+          // 'undefined' inside the closure (TS2722).
+          const ttlHandler = opts.onTypingTtlExpired;
+          return () => {
+            // Resolve the return value so async handlers' rejections are caught
+            // and logged rather than becoming unhandled rejections at runtime.
+            Promise.resolve(ttlHandler()).catch((err: unknown) => {
+              defaultRuntime.log?.(
+                `typing TTL handler failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          };
+        })()
       : undefined,
     typingIntervalSeconds,
     silentToken: SILENT_REPLY_TOKEN,
