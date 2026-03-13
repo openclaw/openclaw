@@ -32,9 +32,10 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   bind: unknown;
   customBindHost?: string;
 }): string[] {
+  const scheme = params.bind === "netbird" ? "https" : "http";
   const origins = new Set<string>([
-    `http://localhost:${params.port}`,
-    `http://127.0.0.1:${params.port}`,
+    `${scheme}://localhost:${params.port}`,
+    `${scheme}://127.0.0.1:${params.port}`,
   ]);
   const customBindHost = params.customBindHost?.trim();
   if (params.bind === "custom" && customBindHost) {
