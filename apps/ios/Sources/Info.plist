@@ -66,6 +66,14 @@
 	<string>OpenClaw uses on-device speech recognition for voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawPushAPNsEnvironment</key>
+	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
+	<key>OpenClawPushDistribution</key>
+	<string>$(OPENCLAW_PUSH_DISTRIBUTION)</string>
+	<key>OpenClawPushRelayBaseURL</key>
+	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
+	<key>OpenClawPushTransport</key>
+	<string>$(OPENCLAW_PUSH_TRANSPORT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
