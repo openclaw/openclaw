@@ -412,13 +412,13 @@ export async function preflightDiscordMessage(
   );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 ||
-      (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+      ((message.mentionedUsers?.length ?? 0) > 0 ||
+        (message.mentionedRoles?.length ?? 0) > 0 ||
+        (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
   );
   const hasUserOrRoleMention = Boolean(
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
+      ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
   );
 
   if (
@@ -613,9 +613,9 @@ export async function preflightDiscordMessage(
     });
   const implicitMention = Boolean(
     !isDirectMessage &&
-    botId &&
-    message.referencedMessage?.author?.id &&
-    message.referencedMessage.author.id === botId,
+      botId &&
+      message.referencedMessage?.author?.id &&
+      message.referencedMessage.author.id === botId,
   );
   if (shouldLogVerbose()) {
     logVerbose(
