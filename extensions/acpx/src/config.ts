@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acpx";
@@ -8,11 +9,25 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.1.16";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 export const ACPX_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
+
+function readPinnedAcpxVersion(): string {
+  const manifestPath = path.join(ACPX_PLUGIN_ROOT, "package.json");
+  const raw = fs.readFileSync(manifestPath, "utf8");
+  const parsed = JSON.parse(raw) as {
+    dependencies?: Record<string, unknown>;
+  };
+  const version = parsed.dependencies?.acpx;
+  if (typeof version !== "string" || version.trim() === "") {
+    throw new Error("extensions/acpx/package.json is missing dependencies.acpx");
+  }
+  return version.trim();
+}
+
+export const ACPX_PINNED_VERSION = readPinnedAcpxVersion();
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
   return `npm install --omit=dev --no-save acpx@${version}`;
 }

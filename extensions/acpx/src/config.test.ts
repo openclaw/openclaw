@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +9,16 @@ import {
 } from "./config.js";
 
 describe("acpx plugin config parsing", () => {
+  it("keeps the pinned acpx version synced with the extension dependency", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve("extensions/acpx/package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, unknown>;
+    };
+
+    expect(ACPX_PINNED_VERSION).toBe(manifest.dependencies?.acpx);
+  });
+
   it("resolves bundled acpx with pinned version by default", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
