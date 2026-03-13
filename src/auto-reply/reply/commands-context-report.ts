@@ -1,3 +1,4 @@
+import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
@@ -141,37 +142,49 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
-  const bootstrapMaxLabel =
-    typeof report.bootstrapMaxChars === "number"
-      ? `${formatInt(report.bootstrapMaxChars)} chars`
-      : "? chars";
-  const bootstrapTotalLabel =
-    typeof report.bootstrapTotalMaxChars === "number"
-      ? `${formatInt(report.bootstrapTotalMaxChars)} chars`
-      : "? chars";
-  const bootstrapMaxChars = report.bootstrapMaxChars;
-  const bootstrapTotalMaxChars = report.bootstrapTotalMaxChars;
-  const nonMissingBootstrapFiles = report.injectedWorkspaceFiles.filter((f) => !f.missing);
-  const truncatedBootstrapFiles = nonMissingBootstrapFiles.filter((f) => f.truncated);
-  const rawBootstrapChars = nonMissingBootstrapFiles.reduce((sum, file) => sum + file.rawChars, 0);
-  const injectedBootstrapChars = nonMissingBootstrapFiles.reduce(
-    (sum, file) => sum + file.injectedChars,
-    0,
+  const bootstrapMaxChars =
+    typeof report.bootstrapMaxChars === "number" &&
+    Number.isFinite(report.bootstrapMaxChars) &&
+    report.bootstrapMaxChars > 0
+      ? report.bootstrapMaxChars
+      : resolveBootstrapMaxChars(params.cfg);
+  const bootstrapTotalMaxChars =
+    typeof report.bootstrapTotalMaxChars === "number" &&
+    Number.isFinite(report.bootstrapTotalMaxChars) &&
+    report.bootstrapTotalMaxChars > 0
+      ? report.bootstrapTotalMaxChars
+      : resolveBootstrapTotalMaxChars(params.cfg);
+  const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
+  const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
+  const bootstrapAnalysis = analyzeBootstrapBudget({
+    files: report.injectedWorkspaceFiles,
+    bootstrapMaxChars,
+    bootstrapTotalMaxChars,
+  });
+  const truncatedBootstrapFiles = bootstrapAnalysis.truncatedFiles;
+  const truncationCauseCounts = truncatedBootstrapFiles.reduce(
+    (acc, file) => {
+      for (const cause of file.causes) {
+        if (cause === "per-file-limit") {
+          acc.perFile += 1;
+        } else if (cause === "total-limit") {
+          acc.total += 1;
+        }
+      }
+      return acc;
+    },
+    { perFile: 0, total: 0 },
   );
-  const perFileOverLimitCount =
-    typeof bootstrapMaxChars === "number"
-      ? nonMissingBootstrapFiles.filter((f) => f.rawChars > bootstrapMaxChars).length
-      : 0;
-  const totalOverLimit =
-    typeof bootstrapTotalMaxChars === "number" && rawBootstrapChars > bootstrapTotalMaxChars;
   const truncationCauseParts = [
-    perFileOverLimitCount > 0 ? `${perFileOverLimitCount} file(s) exceeded max/file` : null,
-    totalOverLimit ? "raw total exceeded max/total" : null,
+    truncationCauseCounts.perFile > 0
+      ? `${truncationCauseCounts.perFile} file(s) exceeded max/file`
+      : null,
+    truncationCauseCounts.total > 0 ? `${truncationCauseCounts.total} file(s) hit max/total` : null,
   ].filter(Boolean);
   const bootstrapWarningLines =
     truncatedBootstrapFiles.length > 0
       ? [
-          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(rawBootstrapChars)} raw chars -> ${formatInt(injectedBootstrapChars)} injected chars).`,
+          `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
           "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
         ]

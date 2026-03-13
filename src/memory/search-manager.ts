@@ -10,6 +10,12 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
+
+function loadManagerRuntime() {
+  managerRuntimePromise ??= import("./manager-runtime.js");
+  return managerRuntimePromise;
+}
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -22,6 +28,24 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  // ── PostgreSQL backend ──────────────────────────────────────────────────
+  if (resolved.backend === "postgres") {
+    try {
+      const { PostgresMemoryManager } = await import("./postgres-manager.js");
+      const manager = await PostgresMemoryManager.create({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      });
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`postgres memory backend failed; falling back to builtin: ${message}`);
+      // Fall through to builtin below
+    }
+  }
+
+  // ── QMD backend ─────────────────────────────────────────────────────────
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     let cacheKey: string | undefined;
@@ -48,7 +72,7 @@ export async function getMemorySearchManager(params: {
           {
             primary,
             fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
+              const { MemoryIndexManager } = await loadManagerRuntime();
               return await MemoryIndexManager.get(params);
             },
           },
@@ -70,7 +94,7 @@ export async function getMemorySearchManager(params: {
   }
 
   try {
-    const { MemoryIndexManager } = await import("./manager.js");
+    const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
     return { manager };
   } catch (err) {
