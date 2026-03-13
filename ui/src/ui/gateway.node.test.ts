@@ -374,6 +374,46 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("sends explicit token and password in insecure contexts without crypto.subtle", async () => {
+    // Simulate insecure context (plain HTTP) where crypto.subtle is unavailable
+    const origSubtle = crypto.subtle;
+    Object.defineProperty(crypto, "subtle", { value: undefined, configurable: true });
+
+    try {
+      const client = new GatewayBrowserClient({
+        url: "ws://192.168.1.100:18789",
+        token: "explicit-token",
+        password: "explicit-password",
+      });
+
+      client.start();
+      const ws = getLatestWebSocket();
+      ws.emitOpen();
+      ws.emitMessage({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-1" },
+      });
+      await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+      const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+        method?: string;
+        params?: {
+          auth?: { token?: string; password?: string; deviceToken?: string };
+          device?: unknown;
+        };
+      };
+      expect(connectFrame.method).toBe("connect");
+      expect(connectFrame.params?.auth?.token).toBe("explicit-token");
+      expect(connectFrame.params?.auth?.password).toBe("explicit-password");
+      // No device identity in insecure context
+      expect(connectFrame.params?.device).toBeUndefined();
+      expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(crypto, "subtle", { value: origSubtle, configurable: true });
+    }
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
     vi.useFakeTimers();
     localStorage.clear();
