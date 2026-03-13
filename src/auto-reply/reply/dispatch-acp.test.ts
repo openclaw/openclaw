@@ -424,6 +424,14 @@ describe("tryDispatchAcpReply", () => {
           text: "Check network (in_progress)",
         });
         await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          title: "Check network",
+          text: "Check network (completed)",
+        });
+        await onEvent({
           type: "text_delta",
           text: "hello from acp",
           stream: "output",
@@ -482,6 +490,17 @@ describe("tryDispatchAcpReply", () => {
             name: "Check network",
             toolCallId: "tool-1",
             status: "in_progress",
+            source: "acp",
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-acp-bridge",
+          stream: "tool",
+          data: expect.objectContaining({
+            phase: "result",
+            name: "Check network",
+            toolCallId: "tool-1",
+            status: "completed",
             source: "acp",
           }),
         }),

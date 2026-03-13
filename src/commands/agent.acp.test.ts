@@ -535,7 +535,7 @@ describe("agentCommand ACP runtime routing", () => {
       ]);
       expect(toolEvents).toEqual([
         {
-          phase: "end",
+          phase: "result",
           name: "check-network",
           toolCallId: "tool-1",
           status: "completed",

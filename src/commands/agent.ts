@@ -798,7 +798,7 @@ async function agentCommandInternal(
               const normalizedStatus = event.status?.trim().toLowerCase();
               const phase =
                 normalizedStatus && ACP_TERMINAL_TOOL_STATUSES.has(normalizedStatus)
-                  ? "end"
+                  ? "result"
                   : event.tag === "tool_call_update"
                     ? "update"
                     : "start";
