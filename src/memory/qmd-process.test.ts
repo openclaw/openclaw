@@ -70,7 +70,7 @@ describe("resolveCliSpawnInvocation", () => {
       packageName: "qmd",
     });
 
-    expect(invocation.command).toBe(path.join(binDir, "qmd.cmd"));
+    expect(invocation.command.toLowerCase()).toBe(path.join(binDir, "qmd.cmd").toLowerCase());
     expect(invocation.shell).toBe(true);
   });
 

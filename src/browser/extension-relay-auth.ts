@@ -67,15 +67,13 @@ async function resolveGatewayAuthToken(): Promise<string | null> {
   try {
     const defaultPath =
       process.env.OPENCLAW_CONFIG_PATH || path.join(process.cwd(), ".openclaw", "openclaw.json");
-    if (fs.existsSync(defaultPath)) {
-      const raw = fs.readFileSync(defaultPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (parsed?.gateway?.auth?.token) {
-        return parsed.gateway.auth.token.trim();
-      }
+    const raw = await fs.promises.readFile(defaultPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed?.gateway?.auth?.token) {
+      return parsed.gateway.auth.token.trim();
     }
   } catch {
-    // ignore
+    // ignore missing file or parse errors
   }
   return null;
 }

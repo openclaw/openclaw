@@ -293,8 +293,9 @@ async function ensureRelayConnection() {
         console.warn('[OpenClaw] Relay status fetch failed:', resp.status)
       }
     } catch (err) {
-      console.warn('[OpenClaw] Relay status fetch exception:', err)
-      // Don't throw here; let WebSocket attempt to connect anyway
+      // If the status endpoint is completely unreachable the WS will also fail,
+      // but throw early so the user sees a clear "relay not running" error.
+      throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
     }
 
     const ws = new WebSocket(wsUrl)
@@ -350,6 +351,10 @@ async function ensureRelayConnection() {
  * @returns {Promise<{ok:boolean, lockTab:boolean}|null>}
  */
 async function setLockOnRelay(locked, tabId = null) {
+  if (locked && !tabId) {
+    console.warn('[OpenClaw] Refusing lock without an attached tab ID')
+    return null
+  }
   try {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
@@ -750,6 +755,13 @@ async function detachTab(tabId, reason) {
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
 
+  if (lockedTabId === tabId) {
+    lockedTabId = null
+    relayIsLocked = false
+    // Clear the relay state as well so status reflects reality
+    void setLockOnRelay(false).catch(() => {})
+  }
+
   try {
     await chrome.debugger.detach({ tabId })
   } catch {
@@ -1138,6 +1150,9 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
   tabs.set(addedTabId, tab)
   if (tab.sessionId) {
     tabBySession.set(tab.sessionId, addedTabId)
+  }
+  if (lockedTabId === removedTabId) {
+    lockedTabId = addedTabId
   }
   for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
     if (parentTabId === removedTabId) {
