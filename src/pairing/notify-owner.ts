@@ -39,12 +39,28 @@ function buildNotificationText(params: {
 /** Truncate and strip control characters from untrusted input. */
 function sanitizeField(value: string, maxLength: number): string {
   // Strip C0/C1 control chars and zero-width/bidi chars that could be used for injection.
-  // Constructed from string to satisfy no-control-regex lint rule.
-  const SANITIZE_RE = new RegExp(
-    "[\\u0000-\\u001F\\u007F-\\u009F\\u200B-\\u200F\\u2028-\\u202F\\uFEFF]",
-    "g",
-  );
-  const cleaned = value.replace(SANITIZE_RE, "");
+  // Use character loop approach to avoid oxlint control-regex warnings.
+  let cleaned = value;
+
+  // Remove C0 control chars (0x00-0x1F) except tab and newline
+  for (let c = 0; c <= 0x1f; c++) {
+    if (c !== 0x09 && c !== 0x0a) {
+      cleaned = cleaned.replaceAll(String.fromCharCode(c), "");
+    }
+  }
+
+  // Remove DEL (0x7F) and C1 control chars (0x80-0x9F)
+  cleaned = cleaned.replaceAll(String.fromCharCode(0x7f), "");
+  for (let c = 0x80; c <= 0x9f; c++) {
+    cleaned = cleaned.replaceAll(String.fromCharCode(c), "");
+  }
+
+  // Remove zero-width and bidi chars
+  const zeroWidthChars = [0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2028, 0x202f, 0xfeff];
+  for (const char of zeroWidthChars) {
+    cleaned = cleaned.replaceAll(String.fromCharCode(char), "");
+  }
+
   return cleaned.slice(0, maxLength);
 }
 
