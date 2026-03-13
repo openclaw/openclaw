@@ -65,8 +65,8 @@ Use `openclaw configure --section web` to set up your API key and choose a provi
 2. In the dashboard, choose the **Search** plan and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config, or set `BRAVE_API_KEY` in your environment.
 
-Each Brave plan includes **$5/month in free credit** (renewing). The Search
-plan costs $5 per 1,000 requests, so the credit covers 1,000 queries/month. Set
+Each Brave plan includes **\$5/month in free credit** (renewing). The Search
+plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set
 your usage limit in the Brave dashboard to avoid unexpected charges. See the
 [Brave API portal](https://brave.com/search/api/) for current plans and
 pricing.
