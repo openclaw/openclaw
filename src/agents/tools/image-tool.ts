@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
+import { buildUnknownModelError, resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -14,7 +15,6 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -217,7 +217,15 @@ async function runImagePrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = resolveModelWithRegistry({
+        modelRegistry,
+        provider,
+        modelId,
+        cfg: effectiveCfg,
+      });
+      if (!model) {
+        throw new Error(buildUnknownModelError(provider, modelId));
+      }
       if (!model.input?.includes("image")) {
         throw new Error(`Model does not support images: ${provider}/${modelId}`);
       }

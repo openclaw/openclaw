@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMediaRaw } from "../../web/media.js";
+import { buildUnknownModelError, resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -12,7 +13,6 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -199,7 +199,15 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = resolveModelWithRegistry({
+        modelRegistry,
+        provider,
+        modelId,
+        cfg: effectiveCfg,
+      });
+      if (!model) {
+        throw new Error(buildUnknownModelError(provider, modelId));
+      }
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
