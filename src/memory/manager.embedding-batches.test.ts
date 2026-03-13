@@ -129,6 +129,62 @@ describe("memory embedding batches", () => {
     expect(calls).toBe(2);
   }, 10000);
 
+  it("retries embeddings on transient network fetch failures", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "f".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-09.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new TypeError("fetch failed");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await managerSmall.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+
+    expect(calls).toBe(2);
+  }, 10000);
+
+  it("splits batches after repeated transient network fetch failures", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "g".repeat(120);
+    const content = Array.from({ length: 20 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-10.md"), content);
+
+    const batchSizes: number[] = [];
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      batchSizes.push(texts.length);
+      if (texts.length > 1) {
+        throw new TypeError("fetch failed");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    const restoreFastTimeouts = useFastShortTimeouts();
+    try {
+      await managerSmall.sync({ reason: "test" });
+    } finally {
+      restoreFastTimeouts();
+    }
+
+    const singleItemCalls = batchSizes.filter((size) => size === 1).length;
+    const expectedChunks = managerSmall.status().chunks;
+    expect(batchSizes[0]).toBeGreaterThan(1);
+    expect(singleItemCalls).toBe(expectedChunks);
+    expect(batchSizes.slice(-2)).toEqual([1, 1]);
+  }, 10000);
+
   it("skips empty chunks so embeddings input stays valid", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerSmall = fx.getManagerSmall();
