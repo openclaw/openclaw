@@ -82,15 +82,26 @@ describe("normalizeStoredCronJobs", () => {
     const jobs = [
       {
         id: "already-normalized-agentTurn",
+        name: "Morning greeting",
         schedule: { kind: "cron", expr: "0 9 * * *" },
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "isolated",
+        state: {},
         payload: {
           kind: "agentTurn", // Already in canonical form
           message: "morning greeting",
         },
+        delivery: { mode: "announce" },
       },
       {
         id: "already-normalized-systemEvent",
+        name: "Evening status",
         schedule: { kind: "cron", expr: "0 18 * * *" },
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "main",
+        state: {},
         payload: {
           kind: "systemEvent", // Already in canonical form
           text: "evening status",
@@ -115,15 +126,26 @@ describe("normalizeStoredCronJobs", () => {
     const jobs = [
       {
         id: "whitespace-agentTurn",
+        name: "Morning greeting",
         schedule: { kind: "cron", expr: "0 9 * * *" },
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "isolated",
+        state: {},
         payload: {
           kind: " agentTurn ", // Whitespace-padded canonical form
           message: "morning greeting",
         },
+        delivery: { mode: "announce" },
       },
       {
         id: "whitespace-systemEvent",
+        name: "Evening status",
         schedule: { kind: "cron", expr: "0 18 * * *" },
+        enabled: true,
+        wakeMode: "now",
+        sessionTarget: "main",
+        state: {},
         payload: {
           kind: "  systemEvent  ", // Whitespace-padded canonical form
           text: "evening status",
