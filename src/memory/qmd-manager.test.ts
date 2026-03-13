@@ -100,6 +100,7 @@ describe("QmdMemoryManager", () => {
   let workspaceDir: string;
   let stateDir: string;
   let cfg: OpenClawConfig;
+  let previousWindowsPath: string | undefined;
   const agentId = "main";
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
@@ -153,6 +154,32 @@ describe("QmdMemoryManager", () => {
         },
       },
     } as OpenClawConfig;
+
+    if (process.platform === "win32") {
+      previousWindowsPath = process.env.PATH;
+      const nodeModulesDir = path.join(tmpRoot, "node_modules");
+      const shimDir = path.join(nodeModulesDir, ".bin");
+      const qmdScriptPath = path.join(nodeModulesDir, "qmd", "dist", "cli.js");
+      const mcporterScriptPath = path.join(nodeModulesDir, "mcporter", "dist", "cli.js");
+      await fs.mkdir(path.dirname(qmdScriptPath), { recursive: true });
+      await fs.mkdir(path.dirname(mcporterScriptPath), { recursive: true });
+      await fs.mkdir(shimDir, { recursive: true });
+      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
+      await fs.writeFile(
+        path.join(nodeModulesDir, "qmd", "package.json"),
+        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(nodeModulesDir, "mcporter", "package.json"),
+        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
+        "utf8",
+      );
+      await fs.writeFile(qmdScriptPath, "module.exports = {};\n", "utf8");
+      await fs.writeFile(mcporterScriptPath, "module.exports = {};\n", "utf8");
+      process.env.PATH = `${shimDir};${previousWindowsPath ?? ""}`;
+    }
   });
 
   afterEach(() => {
@@ -160,6 +187,10 @@ describe("QmdMemoryManager", () => {
     delete process.env.OPENCLAW_STATE_DIR;
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
+    if (previousWindowsPath !== undefined) {
+      process.env.PATH = previousWindowsPath;
+      previousWindowsPath = undefined;
+    }
   });
 
   it("debounces back-to-back sync calls", async () => {
