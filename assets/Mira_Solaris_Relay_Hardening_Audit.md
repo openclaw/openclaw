@@ -137,3 +137,45 @@ A deep stress audit was conducted to simulate "Worst-Case Execution" scenarios (
 
 ### **Certification Status**
 All 13 points of failure have been addressed via the `atomic transaction` refactor of the background routing layer. The system is now certified for mission-critical autonomous browsing.
+
+### **Industrial Hardening Snippets**
+
+#### **1. Transient Reset (Hibernation Safety)**
+```javascript
+async function rehydrateState() {
+  const stored = await chrome.storage.session.get([...]);
+  
+  // Clear transient Sets to prevent Service Worker deadlocks
+  pendingSwaps.clear();
+  tabOperationLocks.clear();
+  
+  // Proceed with restoration...
+}
+```
+
+#### **2. Recursive Ancestry GC (Memory Leak Protection)**
+```javascript
+const purgeAncestry = (id) => {
+  for (const [cid, pid] of tabAncestry.entries()) {
+    if (pid === id) {
+      tabAncestry.delete(cid); // Prune child
+      purgeAncestry(cid);       // Recursive crawl
+    }
+  }
+};
+```
+
+#### **3. The Atomic Swap Transaction (`onReplaced`)**
+```javascript
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+  pendingSwaps.add(addedTabId); // Lock the sync window
+  try {
+    // 1. Notify Relay of child session death
+    // 2. Identity Refresh & Sync Window Buffering
+    // 3. Authoritative Epoch Sync
+    // 4. Post-Sync Buffer Flush
+  } finally {
+    pendingSwaps.delete(addedTabId); // Release the window
+  }
+});
+```
