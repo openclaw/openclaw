@@ -7,7 +7,18 @@ export function resolveSessionLane(key: string) {
 
 export function resolveGlobalLane(lane?: string) {
   const cleaned = lane?.trim();
-  return cleaned ? cleaned : CommandLane.Main;
+  if (!cleaned) {
+    return CommandLane.Main;
+  }
+  // Isolated cron runs already execute inside the outer cron service lane.
+  // Re-enqueuing embedded work onto the same global "cron" lane causes a
+  // self-deadlock: the outer cron task awaits an inner task that cannot start
+  // until the outer task releases the lane. Use the existing nested lane for
+  // the embedded portion instead.
+  if (cleaned === "cron") {
+    return CommandLane.Nested;
+  }
+  return cleaned;
 }
 
 export function resolveEmbeddedSessionLane(key: string) {
