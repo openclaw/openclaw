@@ -743,6 +743,23 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   `;
 }
 
+export function renderSidebarConnectionStatus(state: AppViewState) {
+  const label = state.connected ? t("common.online") : t("common.offline");
+  const toneClass = state.connected
+    ? "sidebar-connection-status--online"
+    : "sidebar-connection-status--offline";
+
+  return html`
+    <span
+      class="sidebar-version__status ${toneClass}"
+      role="img"
+      aria-live="polite"
+      aria-label="Gateway status: ${label}"
+      title="Gateway status: ${label}"
+    ></span>
+  `;
+}
+
 export function renderThemeToggle(state: AppViewState) {
   const setOpen = (orb: HTMLElement, nextOpen: boolean) => {
     orb.classList.toggle("theme-orb--open", nextOpen);

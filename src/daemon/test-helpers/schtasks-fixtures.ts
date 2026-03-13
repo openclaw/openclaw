@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import type { PortUsage } from "../../infra/ports-types.js";
+import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
+import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
-export const inspectPortUsage = vi.fn();
-export const killProcessTree = vi.fn();
+
+export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
+export const killProcessTree: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
 export async function withWindowsEnv(
   prefix: string,
