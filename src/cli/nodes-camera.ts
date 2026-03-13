@@ -94,8 +94,7 @@ export async function writeUrlToFile(
   }
 
   const policy = {
-    allowPrivateNetwork: true,
-    allowedHostnames: [expectedHost],
+    allowPrivateNetwork: false,
     hostnameAllowlist: [expectedHost],
   };
 
