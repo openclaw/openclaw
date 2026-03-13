@@ -91,4 +91,15 @@ describe("pw-session page-scoped CDP client", () => {
 
     expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(1);
   });
+
+  it("does not cache transient detection failures as non-relay", async () => {
+    cdpHelperMocks.fetchJson
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({ Browser: "OpenClaw/extension-relay" });
+
+    await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(false);
+    await expect(isExtensionRelayCdpEndpoint("http://127.0.0.1:29992")).resolves.toBe(true);
+
+    expect(cdpHelperMocks.fetchJson).toHaveBeenCalledTimes(2);
+  });
 });

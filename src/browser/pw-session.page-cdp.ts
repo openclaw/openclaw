@@ -34,7 +34,6 @@ export async function isExtensionRelayCdpEndpoint(cdpUrl: string): Promise<boole
     extensionRelayByCdpUrl.set(normalized, isRelay);
     return isRelay;
   } catch {
-    extensionRelayByCdpUrl.set(normalized, false);
     return false;
   }
 }
