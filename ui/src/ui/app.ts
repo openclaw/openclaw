@@ -415,6 +415,11 @@ export class OpenClawApp extends LitElement {
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
 
+  @state() webPushSupported = false;
+  @state() webPushPermission: NotificationPermission | "unsupported" = "unsupported";
+  @state() webPushSubscribed = false;
+  @state() webPushLoading = false;
+
   @state() logsLoading = false;
   @state() logsError: string | null = null;
   @state() logsFile: string | null = null;
@@ -480,6 +485,7 @@ export class OpenClawApp extends LitElement {
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    void this.initWebPushState();
   }
 
   protected firstUpdated() {
@@ -713,6 +719,89 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  private async initWebPushState() {
+    const supported =
+      "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    this.webPushSupported = supported;
+    this.webPushPermission = supported ? Notification.permission : "unsupported";
+    if (supported) {
+      try {
+        const { getExistingSubscription } = await import("./push-subscription.ts");
+        const existing = await getExistingSubscription();
+        if (existing && this.client) {
+          // Re-register with the gateway to reconcile local/server state.
+          // Handles the case where the gateway lost the subscription (e.g.
+          // state-dir reset) but the browser still has one locally.
+          const subJson = existing.toJSON();
+          if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+            try {
+              await this.client.request("push.web.subscribe", {
+                endpoint: subJson.endpoint,
+                keys: { p256dh: subJson.keys.p256dh, auth: subJson.keys.auth },
+              });
+            } catch {
+              // Best-effort — don't block init if gateway is unreachable.
+            }
+          }
+          this.webPushSubscribed = true;
+        } else {
+          this.webPushSubscribed = existing !== null;
+        }
+      } catch {
+        // ignore — just means we can't check
+      }
+    }
+  }
+
+  async handleWebPushSubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { subscribeToWebPush } = await import("./push-subscription.ts");
+      await subscribeToWebPush(this.client);
+      this.webPushSubscribed = true;
+      this.webPushPermission = Notification.permission;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+      // Always refresh permission state — catches denied prompts too.
+      if ("Notification" in window) {
+        this.webPushPermission = Notification.permission;
+      }
+    }
+  }
+
+  async handleWebPushUnsubscribe() {
+    if (!this.client || this.webPushLoading) {
+      return;
+    }
+    this.webPushLoading = true;
+    try {
+      const { unsubscribeFromWebPush } = await import("./push-subscription.ts");
+      await unsubscribeFromWebPush(this.client);
+      this.webPushSubscribed = false;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.webPushLoading = false;
+    }
+  }
+
+  async handleWebPushTest() {
+    if (!this.client) {
+      return;
+    }
+    try {
+      const { sendTestWebPush } = await import("./push-subscription.ts");
+      await sendTestWebPush(this.client);
+    } catch (err) {
+      this.lastError = String(err);
+    }
   }
 
   render() {
