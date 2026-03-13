@@ -380,6 +380,14 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+    // Always preserve model/provider overrides from the session entry when
+    // starting a new session.  sessions.patch writes modelOverride for
+    // subagents before initSessionState runs, and subagents never set
+    // resetTriggered — so these must be read unconditionally.  (#40159)
+    if (entry) {
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
+    }
     // When a reset trigger (/new, /reset) starts a new session, carry over
     // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
     // so the user doesn't have to re-enable them every time.
@@ -388,8 +396,6 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
     }
   }
