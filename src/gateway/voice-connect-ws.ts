@@ -112,7 +112,7 @@ async function handleVoiceConnectConnection(
   let queue = Promise.resolve();
 
   const gateway = new GatewayClient({
-    url: buildGatewayWsUrl(req),
+    url: process.env.OPENCLAW_VOICE_CONNECT_UPSTREAM_WS ?? buildGatewayWsUrl(req),
     clientName: "openclaw-control-ui",
     mode: "ui",
     role: "operator",
