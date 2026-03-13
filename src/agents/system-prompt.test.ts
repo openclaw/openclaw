@@ -293,7 +293,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
   });
 
-  it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
+  it("shows ACP block note in sandbox section and includes ACP guidance (stable for KV cache)", () => {
+    // ACP guidance is now unconditional w.r.t. sandboxedRuntime so the tool descriptions
+    // and guidance block don't change when sandbox mode is toggled — maximizing KV cache
+    // reuse. The ## Sandbox section tells the model that ACP harness spawns are blocked.
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
@@ -302,17 +305,18 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
-    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
-    expect(prompt).not.toContain(
+    // ACP guidance IS present in the tooling section (stable for KV cache).
+    expect(prompt).toContain('runtime="acp" requires `agentId`');
+    expect(prompt).toContain("ACP harness ids follow acp.allowedAgents");
+    expect(prompt).toContain(
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
-    expect(prompt).not.toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
-    );
+    // The ## Sandbox section explicitly blocks ACP harness spawns.
     expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
-    expect(prompt).toContain('`runtime: "acp"`');
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
+    // Sandbox section appears in the prompt.
+    expect(prompt).toContain("## Sandbox");
+    expect(prompt).toContain("You are running in a sandboxed runtime");
   });
 
   it("preserves tool casing in the prompt", () => {

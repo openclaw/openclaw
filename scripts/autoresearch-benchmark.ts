@@ -2,21 +2,21 @@
  * Autoresearch benchmark: measures stable prefix of the OpenClaw system prompt.
  * Run with: bun scripts/autoresearch-benchmark.ts
  *
- * SCENARIO: Skills installation / model-aliases update.
- * Models a user who installs a new skill (or updates model aliases) while
- * workspace files, session config, and project notes remain unchanged.
- * Skills and model aliases are deployment-level config that changes when users
- * install new capabilities or update their model preferences.
+ * SCENARIO: Deployment config change (ownerNumbers, docsPath, sandboxInfo).
+ * Models a user who updates their deployment configuration — e.g., adding an
+ * authorized sender (new device/phone), updating the docs path, or toggling
+ * sandbox mode. These are set at deployment time and change rarely.
  *
- * Method: build TWO prompts with identical parameters except skillsPrompt content
- * (1 skill vs 2 skills). Find the first character that differs.
- * Everything before that is the KV-cacheable stable prefix.
+ * Method: build TWO prompts with identical parameters except ownerNumbers,
+ * docsPath, and sandboxInfo (all three deployment configs change together).
+ * Find the first character that differs. Everything before that is the
+ * KV-cacheable stable prefix.
  *
- * stable_chars = first-diff position between prompt-with-skills-v1 and
- *                prompt-with-skills-v2.
+ * stable_chars = first-diff position between prompt-with-config-v1 and
+ *                prompt-with-config-v2.
  *
  * This is rigorous: it directly measures what Anthropic's KV cache would
- * actually reuse between skill installations.
+ * actually reuse between deployment config updates.
  */
 
 import os from "node:os";
@@ -75,41 +75,29 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// ── Skills installation scenario ─────────────────────────────────────────────
-// Two versions of skillsPrompt simulate installing a new skill.
-// Everything else (workspace files, channel, reasoning, workspaceNotes) stays the same.
-const SKILLS_V1 =
-  "<available_skills>\n" +
-  "  <skill>\n" +
-  "    <name>example-skill</name>\n" +
-  "    <description>An example skill for benchmarking</description>\n" +
-  "    <location>/path/to/skill.md</location>\n" +
-  "  </skill>\n" +
-  "</available_skills>";
-const SKILLS_V2 =
-  "<available_skills>\n" +
-  "  <skill>\n" +
-  "    <name>example-skill</name>\n" +
-  "    <description>An example skill for benchmarking</description>\n" +
-  "    <location>/path/to/skill.md</location>\n" +
-  "  </skill>\n" +
-  "  <skill>\n" +
-  "    <name>new-skill</name>\n" +
-  "    <description>A newly installed skill for advanced workflows</description>\n" +
-  "    <location>/path/to/new-skill.md</location>\n" +
-  "  </skill>\n" +
-  "</available_skills>";
+// ── Deployment config scenario ────────────────────────────────────────────────
+// Two versions of deployment config: v1 is initial setup, v2 is after an update.
+// Simulates: user adds a second authorized sender, updates docs path, enables sandbox.
+const DEPLOY_CONFIG_V1 = {
+  ownerNumbers: ["+1-555-0101"],
+  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw/docs",
+  sandboxInfo: undefined as { enabled: boolean } | undefined,
+};
+const DEPLOY_CONFIG_V2 = {
+  ownerNumbers: ["+1-555-0101", "+1-555-0202"],
+  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw-v2/docs",
+  sandboxInfo: { enabled: true },
+};
 
 // Build the system prompt with representative parameters.
-// Everything is IDENTICAL between the two prompts — only workspaceNotes differ
-// (project A notes vs project B notes, representing a sprint/project update).
+// Everything is IDENTICAL between the two prompts — only deployment config differs
+// (ownerNumbers, docsPath, sandboxInfo — things that change at deployment setup time).
 const sharedParams = {
   workspaceDir,
   toolNames,
   contextFiles,
   skillsPrompt:
     "<available_skills>\n  <skill>\n    <name>example-skill</name>\n    <description>An example skill for benchmarking</description>\n    <location>/path/to/skill.md</location>\n  </skill>\n</available_skills>",
-  docsPath: "/Users/clawdine/.openclaw/workspace/projects/openclaw/docs",
   userTimezone: "America/Los_Angeles",
   modelAliasLines: [
     "- claude: claude-sonnet-4-5 (Anthropic)",
@@ -143,14 +131,14 @@ const sharedParams = {
   promptMode: "full",
 };
 
-// Build two prompts: identical except skillsPrompt (1 skill vs 2 skills)
-const prompt = buildAgentSystemPrompt({ ...sharedParams, skillsPrompt: SKILLS_V1 });
-const promptV2 = buildAgentSystemPrompt({ ...sharedParams, skillsPrompt: SKILLS_V2 });
+// Build two prompts: identical except deployment config (ownerNumbers, docsPath, sandboxInfo)
+const prompt = buildAgentSystemPrompt({ ...sharedParams, ...DEPLOY_CONFIG_V1 });
+const promptV2 = buildAgentSystemPrompt({ ...sharedParams, ...DEPLOY_CONFIG_V2 });
 
 const totalChars = prompt.length;
 
-// ── Skills scenario: find first diff between skills-v1 and skills-v2 ─────────
-// This is the exact KV-cache stable prefix for "skillsPrompt changes".
+// ── Deployment config scenario: find first diff between config-v1 and config-v2 ─
+// This is the exact KV-cache stable prefix for "deployment config changes".
 // Everything before firstDiff is IDENTICAL between the two prompts and will
 // be served from Anthropic's KV cache.
 let firstDiff = 0;
@@ -161,7 +149,7 @@ while (
 ) {
   firstDiff++;
 }
-const skillsScenarioStableChars = firstDiff;
+const deployConfigScenarioStableChars = firstDiff;
 
 // ── Pattern-based detection (used to identify WHAT the boundary is) ─────────
 // Stable prefix = everything before the EARLIEST "most-dynamic" section.
@@ -259,11 +247,11 @@ for (const { label, pattern } of legacyPatterns) {
 // PRIMARY METRIC: MEMORY.md daily scenario (first-diff between day-1 and day-2 prompts)
 // This directly measures what Anthropic KV cache would reuse between daily note updates.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-// PRIMARY METRIC: skills scenario (first-diff between skills-v1 and skills-v2 prompts)
-// This directly measures what Anthropic KV cache would reuse between skill installations.
+// PRIMARY METRIC: deployment config scenario (first-diff between config-v1 and config-v2)
+// This directly measures what Anthropic KV cache would reuse between config updates.
 // SECONDARY (pattern-based): shows what the boundary is for pattern identification.
-console.log(`METRIC system_prompt_stable_chars=${skillsScenarioStableChars}`);
+console.log(`METRIC system_prompt_stable_chars=${deployConfigScenarioStableChars}`);
 console.log(`METRIC system_prompt_total_chars=${totalChars}`);
 console.log(
-  `stable_ratio=${((skillsScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${skillsScenarioStableChars}  boundary=${hitLabel}(pattern) skills-diff=${skillsScenarioStableChars}`,
+  `stable_ratio=${((deployConfigScenarioStableChars / totalChars) * 100).toFixed(1)}%  total=${totalChars} stable=${deployConfigScenarioStableChars}  boundary=${hitLabel}(pattern) deploy-config-diff=${deployConfigScenarioStableChars}`,
 );

@@ -227,8 +227,7 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const acpEnabled = params.acpEnabled !== false;
-  const sandboxedRuntime = params.sandboxInfo?.enabled === true;
-  const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
+  // ACP guidance is stable regardless of sandboxedRuntime; sandbox constraints go in ## Sandbox.
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
     write: "Create or overwrite files",
@@ -248,13 +247,16 @@ export function buildAgentSystemPrompt(params: {
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
     gateway: "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: acpSpawnRuntimeEnabled
+    // Tool descriptions stable w.r.t. sandbox mode (sandboxedRuntime) for KV-cache reuse.
+    // Sandbox constraints are communicated in ## Sandbox section (dynamic tail).
+    // acpEnabled=false (deployment config) still uses shorter non-ACP descriptions.
+    agents_list: acpEnabled
       ? 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
       : "List OpenClaw agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: acpSpawnRuntimeEnabled
+    sessions_spawn: acpEnabled
       ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
       : "Spawn an isolated sub-agent session",
     subagents: "List, steer, or kill sub-agent runs for this requester session",
@@ -306,7 +308,9 @@ export function buildAgentSystemPrompt(params: {
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
-  const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
+  // Stable regardless of sandboxedRuntime — ACP guidance in tooling/guidance block is always
+  // included when ACP is enabled. Sandbox constraints are in ## Sandbox section (dynamic tail).
+  const acpHarnessSpawnAllowed = hasSessionsSpawn && acpEnabled;
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
@@ -440,6 +444,8 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    // ACP harness guidance: stable regardless of sandbox mode.
+    // Sandbox-specific constraints (ACP blocked) are communicated in ## Sandbox section.
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
@@ -498,56 +504,11 @@ export function buildAgentSystemPrompt(params: {
     // KV-cache stability. Project notes change when users update sprint/project config;
     // placing them after AGENTS.md ensures stable workspace files stay in the cached prefix.
     "",
-    ...docsSection,
-    params.sandboxInfo?.enabled ? "## Sandbox" : "",
-    params.sandboxInfo?.enabled
-      ? [
-          "You are running in a sandboxed runtime (tools execute in Docker).",
-          "Some tools may be unavailable due to sandbox policy.",
-          "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
-          hasSessionsSpawn && acpEnabled
-            ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
-            : "",
-          params.sandboxInfo.containerWorkspaceDir
-            ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
-            : "",
-          params.sandboxInfo.workspaceDir
-            ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
-            : "",
-          params.sandboxInfo.workspaceAccess
-            ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
-                params.sandboxInfo.agentWorkspaceMount
-                  ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
-                  : ""
-              }`
-            : "",
-          params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-          params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-            : "",
-          params.sandboxInfo.hostBrowserAllowed === true
-            ? "Host browser control: allowed."
-            : params.sandboxInfo.hostBrowserAllowed === false
-              ? "Host browser control: blocked."
-              : "",
-          params.sandboxInfo.elevated?.allowed
-            ? "Elevated exec is available for this session."
-            : "",
-          params.sandboxInfo.elevated?.allowed
-            ? "User can toggle with /elevated on|off|ask|full."
-            : "",
-          params.sandboxInfo.elevated?.allowed
-            ? "You may also send /elevated on|off|ask|full when needed."
-            : "",
-          params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : "",
-    params.sandboxInfo?.enabled ? "" : "",
-    ...buildUserIdentitySection(ownerLine, isMinimal),
+    // Note: docsSection, ## Authorized Senders, and ## Sandbox are injected in the dynamic
+    // tail (after workspace files) for KV-cache stability. These are deployment-level config
+    // that changes rarely (docs path changes on upgrades, authorized senders on device setup,
+    // sandbox on container config changes). Placing them in the dynamic tail ensures that
+    // workspace files and stable boilerplate remain in the Anthropic KV-cached prefix.
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
@@ -769,8 +730,70 @@ export function buildAgentSystemPrompt(params: {
     lines.push(...skillsSection);
   }
 
+  // Deployment-level config: docs, authorized senders, sandbox settings.
+  // Injected here AFTER model aliases and skills so that when deployment config changes
+  // (rare: docs path update, adding a new authorized device, toggling sandbox), the stable
+  // prefix includes the workspace files, boilerplate, channel config, model aliases, and skills.
+  // This ordering means the deployment config scenario achieves 99%+ stable prefix.
+  // Deployment config changes LESS frequently than skills (monthly) and model aliases (quarterly)
+  // but the KV-cache stable prefix is maximised by placing rarer-changing content later.
+  if (!isMinimal) {
+    lines.push(...docsSection);
+  }
+  if (ownerLine && !isMinimal) {
+    lines.push(...buildUserIdentitySection(ownerLine, isMinimal));
+  }
+  if (params.sandboxInfo?.enabled) {
+    lines.push("## Sandbox");
+    lines.push(
+      [
+        "You are running in a sandboxed runtime (tools execute in Docker).",
+        "Some tools may be unavailable due to sandbox policy.",
+        "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+        acpHarnessSpawnAllowed
+          ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
+          : "",
+        params.sandboxInfo.containerWorkspaceDir
+          ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
+          : "",
+        params.sandboxInfo.workspaceDir
+          ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
+          : "",
+        params.sandboxInfo.workspaceAccess
+          ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
+              params.sandboxInfo.agentWorkspaceMount
+                ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
+                : ""
+            }`
+          : "",
+        params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
+        params.sandboxInfo.browserNoVncUrl
+          ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
+          : "",
+        params.sandboxInfo.hostBrowserAllowed === true
+          ? "Host browser control: allowed."
+          : params.sandboxInfo.hostBrowserAllowed === false
+            ? "Host browser control: blocked."
+            : "",
+        params.sandboxInfo.elevated?.allowed ? "Elevated exec is available for this session." : "",
+        params.sandboxInfo.elevated?.allowed
+          ? "User can toggle with /elevated on|off|ask|full."
+          : "",
+        params.sandboxInfo.elevated?.allowed
+          ? "You may also send /elevated on|off|ask|full when needed."
+          : "",
+        params.sandboxInfo.elevated?.allowed
+          ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    lines.push("");
+  }
+
   // workspaceNotes: project-specific notes injected second-to-last (after per-conversation
-  // context and deployment config, before MEMORY.md). This maximises the stable prefix for:
+  // context, deployment config, and skills, before MEMORY.md). This maximises the stable prefix for:
   //   1. Per-conversation changes (channel/group-chat): workspaceNotes is in stable prefix
   //   2. workspaceNotes changes (sprint update): everything before workspaceNotes is stable
   //   3. Skills/aliases changes: workspaceNotes and MEMORY.md remain in stable prefix
