@@ -383,7 +383,9 @@ async function verifyAssetChecksums(params: {
         fileHashes.push({ relativePath, sha256 });
       }
 
-      fileHashes.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+      fileHashes.sort((a, b) =>
+        a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
+      );
       const hash = createHash("sha256");
       for (const entry of fileHashes) {
         hash.update(`${entry.relativePath}\0${entry.sha256}\n`);

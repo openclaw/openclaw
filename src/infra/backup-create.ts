@@ -219,7 +219,9 @@ async function collectFileHashes(
   }
 
   await walk(dirPath);
-  results.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  results.sort((a, b) =>
+    a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0,
+  );
   return results;
 }
 
