@@ -336,6 +336,10 @@ export function handleMessageEnd(
     if (!onBlockReply) {
       return;
     }
+    if (ctx.state.suppressPreToolText) {
+      ctx.state.pendingBlockReplies.push(payload);
+      return;
+    }
     void Promise.resolve()
       .then(() => onBlockReply(payload))
       .catch((err) => {
@@ -426,6 +430,22 @@ export function handleMessageEnd(
 
   if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
+  }
+
+  if (ctx.state.pendingBlockReplies.length > 0) {
+    const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
+    if (stopReason === "toolUse") {
+      ctx.state.pendingBlockReplies.length = 0;
+    } else {
+      const pending = ctx.state.pendingBlockReplies.splice(0);
+      for (const payload of pending) {
+        void Promise.resolve()
+          .then(() => onBlockReply?.(payload))
+          .catch((err) => {
+            ctx.log.warn(`block reply callback failed: ${String(err)}`);
+          });
+      }
+    }
   }
 
   ctx.state.deltaBuffer = "";
