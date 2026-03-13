@@ -1276,6 +1276,46 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(failed?.runtimeMs).toBe(5_000);
   });
 
+  test("preserves original session timing across follow-up replacement runs", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:followup": {
+        sessionId: "sess-followup",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-followup-new",
+      childSessionKey: "agent:main:subagent:followup",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "follow-up task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 30_000,
+      sessionStartedAt: now - 150_000,
+      accumulatedRuntimeMs: 120_000,
+      model: "openai/gpt-5.4",
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const followup = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:followup",
+    );
+    expect(followup?.status).toBe("running");
+    expect(followup?.startedAt).toBe(now - 150_000);
+    expect(followup?.runtimeMs).toBeGreaterThanOrEqual(150_000);
+  });
+
   test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {
     resetSubagentRegistryForTests({ persist: false });
     const now = Date.now();
@@ -1302,6 +1342,36 @@ describe("listSessionsFromStore subagent metadata", () => {
     const child = result.sessions.find((session) => session.key === "agent:main:dashboard:child");
     expect(main?.childSessions).toEqual(["agent:main:dashboard:child"]);
     expect(child?.parentSessionKey).toBe("agent:main:main");
+  });
+
+  test("falls back to persisted subagent timing after run archival", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:subagent:archived": {
+        sessionId: "sess-archived",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+        startedAt: now - 20_000,
+        endedAt: now - 5_000,
+        runtimeMs: 15_000,
+        status: "done",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    const archived = result.sessions.find(
+      (session) => session.key === "agent:main:subagent:archived",
+    );
+    expect(archived?.status).toBe("done");
+    expect(archived?.startedAt).toBe(now - 20_000);
+    expect(archived?.endedAt).toBe(now - 5_000);
+    expect(archived?.runtimeMs).toBe(15_000);
   });
 
   test("maps timeout outcomes to timeout status and clamps negative runtime", () => {

@@ -11,7 +11,10 @@ import {
 } from "../agents/model-selection.js";
 import {
   getSubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
   listSubagentRunsForController,
+  resolveSubagentSessionStatus,
 } from "../agents/subagent-registry.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -187,39 +190,11 @@ export function deriveSessionTitle(
   return undefined;
 }
 
-function resolveSessionRunStatus(
-  run: {
-    endedAt?: number;
-    outcome?: { status?: string };
-  } | null,
-): "running" | "done" | "failed" | "killed" | "timeout" | undefined {
-  if (!run) {
-    return undefined;
-  }
-  if (!run.endedAt) {
-    return "running";
-  }
-  const status = run.outcome?.status;
-  if (status === "error") {
-    return "failed";
-  }
-  if (status === "killed") {
-    return "killed";
-  }
-  if (status === "timeout") {
-    return "timeout";
-  }
-  return "done";
-}
-
 function resolveSessionRuntimeMs(
-  run: { startedAt?: number; endedAt?: number } | null,
+  run: { startedAt?: number; endedAt?: number; accumulatedRuntimeMs?: number } | null,
   now: number,
 ) {
-  if (!run?.startedAt) {
-    return undefined;
-  }
-  return Math.max(0, (run.endedAt ?? now) - run.startedAt);
+  return getSubagentSessionRuntimeMs(run, now);
 }
 
 function resolvePositiveNumber(value: number | null | undefined): number | undefined {
@@ -1176,10 +1151,10 @@ export function buildGatewaySessionRow(params: {
     totalTokens,
     totalTokensFresh,
     estimatedCostUsd,
-    status: resolveSessionRunStatus(subagentRun),
-    startedAt: subagentRun?.startedAt,
-    endedAt: subagentRun?.endedAt,
-    runtimeMs: resolveSessionRuntimeMs(subagentRun, now),
+    status: resolveSubagentSessionStatus(subagentRun) ?? entry?.status,
+    startedAt: getSubagentSessionStartedAt(subagentRun) ?? entry?.startedAt,
+    endedAt: subagentRun?.endedAt ?? entry?.endedAt,
+    runtimeMs: resolveSessionRuntimeMs(subagentRun, now) ?? entry?.runtimeMs,
     parentSessionKey: entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,

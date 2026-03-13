@@ -425,6 +425,44 @@ describe("subagent registry steer restarts", () => {
     expect(run.cleanupHandled).toBe(false);
   });
 
+  it("preserves cumulative session timing across steer replacement runs", () => {
+    registerRun({
+      runId: "run-runtime-old",
+      childSessionKey: "agent:main:subagent:runtime",
+      task: "keep timing stable",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-runtime-old");
+    if (!previous) {
+      throw new Error("missing previous run");
+    }
+
+    previous.startedAt = 1_000;
+    previous.sessionStartedAt = 1_000;
+    previous.endedAt = 121_000;
+    previous.accumulatedRuntimeMs = 0;
+    previous.outcome = { status: "ok" };
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-runtime-old",
+      nextRunId: "run-runtime-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
+    expect(next).toBeDefined();
+    expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
+    expect(next?.accumulatedRuntimeMs).toBe(120_000);
+
+    if (!next?.startedAt) {
+      throw new Error("missing next startedAt");
+    }
+    next.endedAt = next.startedAt + 30_000;
+    expect(mod.getSubagentSessionRuntimeMs(next, next.endedAt)).toBe(150_000);
+  });
+
   it("preserves frozen completion as fallback when replacing for wake continuation", () => {
     registerRun({
       runId: "run-wake-old",

@@ -30,6 +30,8 @@ import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
   getSubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
   listSubagentRunsForController,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
@@ -298,7 +300,7 @@ export function buildSubagentList(params: {
       ...(childSessions.length > 0 ? { childSessions } : {}),
       model: resolveModelRef(sessionEntry) || entry.model,
       totalTokens,
-      startedAt: entry.startedAt,
+      startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
     };
     index += 1;
@@ -306,7 +308,7 @@ export function buildSubagentList(params: {
   };
   const active = params.runs
     .filter((entry) => isActiveSubagentRun(entry, pendingDescendantCount))
-    .map((entry) => buildListEntry(entry, now - (entry.startedAt ?? entry.createdAt)));
+    .map((entry) => buildListEntry(entry, getSubagentSessionRuntimeMs(entry, now) ?? 0));
   const recent = params.runs
     .filter(
       (entry) =>
@@ -315,7 +317,7 @@ export function buildSubagentList(params: {
         (entry.endedAt ?? 0) >= recentCutoff,
     )
     .map((entry) =>
-      buildListEntry(entry, (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt)),
+      buildListEntry(entry, getSubagentSessionRuntimeMs(entry, entry.endedAt ?? now) ?? 0),
     );
   return {
     total: params.runs.length,
