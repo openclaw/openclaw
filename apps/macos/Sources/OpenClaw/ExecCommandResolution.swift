@@ -37,8 +37,7 @@ struct ExecCommandResolution {
             var resolutions: [ExecCommandResolution] = []
             resolutions.reserveCapacity(segments.count)
             for segment in segments {
-                guard let token = self.parseFirstToken(segment),
-                      let resolution = self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
+                guard let resolution = self.resolveShellSegmentExecutable(segment, cwd: cwd, env: env)
                 else {
                     return []
                 }
@@ -88,6 +87,20 @@ struct ExecCommandResolution {
             cwd: cwd)
     }
 
+    private static func resolveShellSegmentExecutable(
+        _ segment: String,
+        cwd: String?,
+        env: [String: String]?) -> ExecCommandResolution?
+    {
+        let tokens = self.tokenizeShellWords(segment)
+        guard !tokens.isEmpty else { return nil }
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(tokens)
+        guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+    }
+
     private static func parseFirstToken(_ command: String) -> String? {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -100,6 +113,59 @@ struct ExecCommandResolution {
             return String(rest)
         }
         return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+    }
+
+    private static func tokenizeShellWords(_ command: String) -> [String] {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var tokens: [String] = []
+        var current = ""
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+
+        func appendCurrent() {
+            guard !current.isEmpty else { return }
+            tokens.append(current)
+            current.removeAll(keepingCapacity: true)
+        }
+
+        for ch in trimmed {
+            if escaped {
+                current.append(ch)
+                escaped = false
+                continue
+            }
+
+            if ch == "\\", !inSingle {
+                escaped = true
+                continue
+            }
+
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                continue
+            }
+
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                continue
+            }
+
+            if ch.isWhitespace, !inSingle, !inDouble {
+                appendCurrent()
+                continue
+            }
+
+            current.append(ch)
+        }
+
+        if escaped {
+            current.append("\\")
+        }
+        appendCurrent()
+        return tokens
     }
 
     private enum ShellTokenContext {
