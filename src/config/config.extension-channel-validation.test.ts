@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { NextcloudTalkConfigSchema } from "../../extensions/nextcloud-talk/src/config-schema.js";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { NextcloudTalkConfigSchema } from "../../extensions/nextcloud-talk/src/config-schema.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("extension channel validation", () => {

@@ -411,7 +411,10 @@ function validateConfigObjectWithPluginsBase(
     if (discoveredChannelPlugins) {
       return discoveredChannelPlugins;
     }
-    discoveredChannelPlugins = new Map<string, (typeof activeChannelPlugins extends Map<string, infer V> ? V : never)>();
+    discoveredChannelPlugins = new Map<
+      string,
+      typeof activeChannelPlugins extends Map<string, infer V> ? V : never
+    >();
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
     const registry = loadOpenClawPlugins({
       config,
