@@ -1498,6 +1498,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
     "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
+  "channels.discord.ackReactionTiming":
+    'When to send Discord ack reactions. "received" reacts as soon as the inbound message is accepted; "run-start" waits until the agent emits real run activity. Default: "received".',
   "channels.discord.draftChunk.minChars":
     'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
   "channels.discord.draftChunk.maxChars":

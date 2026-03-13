@@ -9,7 +9,7 @@ import type {
   ReplyToMode,
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { AckReactionTiming, DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -320,6 +320,8 @@ export type DiscordAccountConfig = {
    * Discord supports both unicode emoji and custom emoji names.
    */
   ackReaction?: string;
+  /** When to send ack reactions for this Discord account. Default: "received". */
+  ackReactionTiming?: AckReactionTiming;
   /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Bot activity status text (e.g. "Watching X"). */

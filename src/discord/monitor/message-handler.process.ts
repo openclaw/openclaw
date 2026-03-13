@@ -145,6 +145,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
+  const ackReactionTiming = discordConfig?.ackReactionTiming ?? "received";
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const shouldAckReaction = () =>
@@ -191,8 +192,28 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     },
   });
-  if (statusReactionsEnabled) {
-    void statusReactions.setQueued();
+  let statusReactionLifecycleStarted = false;
+  let statusReactionLifecycleStartPromise: Promise<void> | null = null;
+  const ensureStatusReactionLifecycleStarted = (): Promise<void> => {
+    if (!statusReactionsEnabled) {
+      return Promise.resolve();
+    }
+    if (statusReactionLifecycleStartPromise) {
+      return statusReactionLifecycleStartPromise;
+    }
+    statusReactionLifecycleStarted = true;
+    statusReactionLifecycleStartPromise = Promise.resolve(statusReactions.setQueued());
+    return statusReactionLifecycleStartPromise;
+  };
+  const runStatusReactionTransition = async (transition: () => Promise<void> | void) => {
+    if (!statusReactionLifecycleStarted) {
+      return;
+    }
+    await ensureStatusReactionLifecycleStarted();
+    await transition();
+  };
+  if (ackReactionTiming === "received") {
+    void ensureStatusReactionLifecycleStarted();
   }
 
   const fromLabel = isDirectMessage
@@ -711,7 +732,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           return;
         }
         await typingCallbacks.onReplyStart();
-        await statusReactions.setThinking();
+        await runStatusReactionTransition(() => statusReactions.setThinking());
       },
     });
 
@@ -759,28 +780,33 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               draftChunker?.reset();
             }
           : undefined,
+        onAgentRunStart: () => {
+          void ensureStatusReactionLifecycleStarted();
+        },
         onModelSelected,
         onReasoningStream: async () => {
-          await statusReactions.setThinking();
+          await runStatusReactionTransition(() => statusReactions.setThinking());
         },
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          await statusReactions.setTool(payload.name);
+          await runStatusReactionTransition(() => statusReactions.setTool(payload.name));
         },
         onCompactionStart: async () => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          await statusReactions.setCompacting();
+          await runStatusReactionTransition(() => statusReactions.setCompacting());
         },
         onCompactionEnd: async () => {
           if (isProcessAborted(abortSignal)) {
             return;
           }
-          statusReactions.cancelPending();
-          await statusReactions.setThinking();
+          await runStatusReactionTransition(async () => {
+            statusReactions.cancelPending();
+            await statusReactions.setThinking();
+          });
         },
       },
     });
@@ -809,7 +835,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       markRunComplete();
       markDispatchIdle();
     }
-    if (statusReactionsEnabled) {
+    if (statusReactionLifecycleStarted) {
+      await ensureStatusReactionLifecycleStarted();
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();
