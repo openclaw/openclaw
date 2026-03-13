@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -156,6 +157,7 @@ export async function getMessageFeishu(params: {
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
   const { cfg, messageId, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -165,7 +167,7 @@ export async function getMessageFeishu(params: {
 
   try {
     const response = (await client.im.message.get({
-      path: { message_id: messageId },
+      path: { message_id: normalizedMessageId },
     })) as {
       code?: number;
       msg?: string;
@@ -217,7 +219,7 @@ export async function getMessageFeishu(params: {
     const content = parseQuotedMessageContent(rawContent, msgType);
 
     return {
-      messageId: item.message_id ?? messageId,
+      messageId: item.message_id ?? normalizedMessageId,
       chatId: item.chat_id ?? "",
       chatType:
         item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
@@ -274,6 +276,9 @@ export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  const normalizedReplyToMessageId = replyToMessageId
+    ? stripFeishuReactionSuffix(replyToMessageId)
+    : undefined;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
@@ -291,11 +296,11 @@ export async function sendMessageFeishu(
 
   const directParams = { receiveId, receiveIdType, content, msgType };
 
-  if (replyToMessageId) {
+  if (normalizedReplyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
       response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
+        path: { message_id: normalizedReplyToMessageId },
         data: {
           content,
           msg_type: msgType,
@@ -330,16 +335,19 @@ export type SendFeishuCardParams = {
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
+  const normalizedReplyToMessageId = replyToMessageId
+    ? stripFeishuReactionSuffix(replyToMessageId)
+    : undefined;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
 
-  if (replyToMessageId) {
+  if (normalizedReplyToMessageId) {
     let response: { code?: number; msg?: string; data?: { message_id?: string } };
     try {
       response = await client.im.message.reply({
-        path: { message_id: replyToMessageId },
+        path: { message_id: normalizedReplyToMessageId },
         data: {
           content,
           msg_type: "interactive",
@@ -369,6 +377,7 @@ export async function updateCardFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, card, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -378,7 +387,7 @@ export async function updateCardFeishu(params: {
   const content = JSON.stringify(card);
 
   const response = await client.im.message.patch({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     data: { content },
   });
 
@@ -444,6 +453,7 @@ export async function editMessageFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, text, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -459,7 +469,7 @@ export async function editMessageFeishu(params: {
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
   const response = await client.im.message.update({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     data: {
       msg_type: msgType,
       content,
