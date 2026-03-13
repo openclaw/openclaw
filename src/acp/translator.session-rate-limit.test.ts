@@ -90,12 +90,28 @@ function createToolEvent(params: {
   } as unknown as EventFrame;
 }
 
-function createChatFinalEvent(sessionKey: string): EventFrame {
+function createChatFinalEvent(
+  sessionKey: string,
+  params: {
+    text?: string;
+    stopReason?: string;
+  } = {},
+): EventFrame {
   return {
     event: "chat",
     payload: {
       sessionKey,
       state: "final",
+      ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      ...(params.text
+        ? {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: params.text }],
+              timestamp: Date.now(),
+            },
+          }
+        : {}),
     },
   } as unknown as EventFrame;
 }
@@ -878,6 +894,39 @@ describe("acp tool streaming bridge behavior", () => {
 });
 
 describe("acp session metadata and usage updates", () => {
+  it("flushes final assistant text from chat.final message payload before resolving prompt", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return new Promise(() => {});
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("usage-session"));
+    sessionUpdate.mockClear();
+
+    const promptPromise = agent.prompt(createPromptRequest("usage-session", "hello"));
+
+    await agent.handleGatewayEvent(createChatFinalEvent("usage-session", { text: "final answer" }));
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "usage-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "final answer" },
+      },
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("emits a fresh usage snapshot after prompt completion when gateway totals are available", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
