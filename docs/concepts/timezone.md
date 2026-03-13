@@ -35,7 +35,7 @@ You can override this with:
 ```
 
 - `envelopeTimezone: "utc"` uses UTC.
-- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
+- `envelopeTimezone: "user"` uses the active agent's `agents.list[].userTimezone` when set, otherwise `agents.defaults.userTimezone`, then falls back to the host timezone.
 - Use an explicit IANA timezone (e.g., `"Europe/Vienna"`) for a fixed offset.
 - `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
 - `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
@@ -72,12 +72,16 @@ Raw provider fields are preserved.
 
 ## User timezone for the system prompt
 
-Set `agents.defaults.userTimezone` to tell the model the user's local time zone. If it is
-unset, OpenClaw resolves the **host timezone at runtime** (no config write).
+Set `agents.defaults.userTimezone` to tell the model the default user-local time zone. You can
+override it per agent with `agents.list[].userTimezone`. If neither is set, OpenClaw resolves the
+**host timezone at runtime** (no config write).
 
 ```json5
 {
-  agents: { defaults: { userTimezone: "America/Chicago" } },
+  agents: {
+    defaults: { userTimezone: "America/Chicago" },
+    list: [{ id: "work", userTimezone: "Europe/London" }],
+  },
 }
 ```
 

@@ -632,7 +632,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+  if (!isWithinActiveHours(cfg, heartbeat, startedAt, agentId)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
 

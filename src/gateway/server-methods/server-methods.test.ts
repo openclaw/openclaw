@@ -234,6 +234,28 @@ describe("timestampOptsFromConfig", () => {
     expect(opts.timezone).toBe("America/Chicago");
   });
 
+  it("uses the per-agent userTimezone override when configured", () => {
+    const opts = timestampOptsFromConfig(
+      {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+          },
+          list: [
+            {
+              id: "work",
+              userTimezone: "America/Los_Angeles",
+            },
+          ],
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any,
+      "work",
+    );
+
+    expect(opts.timezone).toBe("America/Los_Angeles");
+  });
+
   it("falls back gracefully with empty config", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const opts = timestampOptsFromConfig({} as any);

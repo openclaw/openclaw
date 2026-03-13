@@ -1,9 +1,6 @@
-import {
-  type TimeFormatPreference,
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-} from "./date-time.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentUserTimezone } from "./agent-scope.js";
+import { formatUserTime, resolveUserTimeFormat } from "./date-time.js";
 
 export type CronStyleNow = {
   userTimezone: string;
@@ -11,17 +8,12 @@ export type CronStyleNow = {
   timeLine: string;
 };
 
-type TimeConfigLike = {
-  agents?: {
-    defaults?: {
-      userTimezone?: string;
-      timeFormat?: TimeFormatPreference;
-    };
-  };
-};
-
-export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
-  const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+export function resolveCronStyleNow(
+  cfg: OpenClawConfig,
+  nowMs: number,
+  agentId?: string,
+): CronStyleNow {
+  const userTimezone = resolveAgentUserTimezone(cfg, agentId);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
   const formattedTime =
     formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
@@ -30,11 +22,16 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
-export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
+export function appendCronStyleCurrentTimeLine(
+  text: string,
+  cfg: OpenClawConfig,
+  nowMs: number,
+  agentId?: string,
+) {
   const base = text.trimEnd();
   if (!base || base.includes("Current time:")) {
     return base;
   }
-  const { timeLine } = resolveCronStyleNow(cfg, nowMs);
+  const { timeLine } = resolveCronStyleNow(cfg, nowMs, agentId);
   return `${base}\n${timeLine}`;
 }

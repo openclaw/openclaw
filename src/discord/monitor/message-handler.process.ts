@@ -231,7 +231,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
   });
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg, { agentId: route.agentId });
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
     sessionKey: route.sessionKey,

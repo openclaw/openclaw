@@ -31,13 +31,17 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  resolveAgentUserTimezone,
+  resolveSessionAgentId,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { ensureCustomApiRegistered } from "../custom-api-registry.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import { formatUserTime, resolveUserTimeFormat } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
@@ -629,13 +633,13 @@ export async function compactEmbeddedPiSessionDirect(
     };
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(provider);
-    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const userTimezone = resolveAgentUserTimezone(params.config ?? {}, sessionAgentId);
+    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)

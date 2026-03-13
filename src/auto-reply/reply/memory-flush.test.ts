@@ -48,6 +48,56 @@ describe("resolveMemoryFlushPromptForRun", () => {
 
     expect(relativePath).toBe("memory/2026-02-16.md");
   });
+
+  it("uses the per-agent userTimezone override for the canonical memory path", () => {
+    const relativePath = resolveMemoryFlushRelativePathForRun({
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+            timeFormat: "12",
+          },
+          list: [
+            {
+              id: "work",
+              userTimezone: "America/Los_Angeles",
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+      agentId: "work",
+    });
+
+    expect(relativePath).toBe("memory/2026-02-16.md");
+  });
+
+  it("uses the per-agent userTimezone override when configured", () => {
+    const prompt = resolveMemoryFlushPromptForRun({
+      prompt: "Store durable notes in memory/YYYY-MM-DD.md",
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+            timeFormat: "12",
+          },
+          list: [
+            {
+              id: "work",
+              userTimezone: "America/Los_Angeles",
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+      agentId: "work",
+    });
+
+    expect(prompt).toContain("memory/2026-02-16.md");
+    expect(prompt).toContain(
+      "Current time: Monday, February 16th, 2026 — 7:00 AM (America/Los_Angeles) / 2026-02-16 15:00 UTC",
+    );
+  });
 });
 
 describe("DEFAULT_MEMORY_FLUSH_PROMPT", () => {
