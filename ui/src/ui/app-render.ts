@@ -1375,7 +1375,16 @@ export function renderApp(state: AppViewState) {
                 onDraftChange: (next) => (state.chatMessage = next),
                 onRequestUpdate: requestHostUpdate,
                 attachments: state.chatAttachments,
+                attachmentReadsPending: state.chatAttachmentReadsPending,
+                bufferedAttachments: state.chatBufferedAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
+                onAttachmentReadDelta: (delta) => {
+                  state.chatAttachmentReadsPending = Math.max(
+                    0,
+                    state.chatAttachmentReadsPending + delta,
+                  );
+                },
+                onBufferedAttachmentsChange: (next) => (state.chatBufferedAttachments = next),
                 onSend: () => state.handleSendChat(),
                 canAbort: Boolean(state.chatRunId),
                 onAbort: () => void state.handleAbortChat(),

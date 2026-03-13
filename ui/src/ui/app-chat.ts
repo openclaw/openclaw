@@ -19,6 +19,8 @@ export type ChatHost = {
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatAttachmentReadsPending: number;
+  chatBufferedAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
@@ -33,6 +35,8 @@ export type ChatHost = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+const CHAT_ATTACHMENT_READ_POLL_MS = 20;
+const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 1_500;
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
@@ -110,7 +114,9 @@ async function sendChatMessageNow(
     restoreDraft?: boolean;
     attachments?: ChatAttachment[];
     previousAttachments?: ChatAttachment[];
+    previousBufferedAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
+    restoreBufferedAttachments?: boolean;
     refreshSessions?: boolean;
   },
 ) {
@@ -123,6 +129,9 @@ async function sendChatMessageNow(
   if (!ok && opts?.previousAttachments) {
     host.chatAttachments = opts.previousAttachments;
   }
+  if (!ok && opts?.previousBufferedAttachments) {
+    host.chatBufferedAttachments = opts.previousBufferedAttachments;
+  }
   if (ok) {
     setLastActiveSessionKey(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
@@ -134,6 +143,9 @@ async function sendChatMessageNow(
   }
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
+  }
+  if (ok && opts?.restoreBufferedAttachments && opts.previousBufferedAttachments?.length) {
+    host.chatBufferedAttachments = opts.previousBufferedAttachments;
   }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
@@ -180,6 +192,20 @@ export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
 }
 
+function cloneChatAttachments(attachments?: ChatAttachment[]): ChatAttachment[] {
+  return (attachments ?? []).map((att) => ({ ...att }));
+}
+
+async function waitForPendingAttachmentReads(host: ChatHost) {
+  if (host.chatAttachmentReadsPending <= 0) {
+    return;
+  }
+  const deadline = Date.now() + CHAT_ATTACHMENT_READ_TIMEOUT_MS;
+  while (host.chatAttachmentReadsPending > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, CHAT_ATTACHMENT_READ_POLL_MS));
+  }
+}
+
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
@@ -188,10 +214,20 @@ export async function handleSendChat(
   if (!host.connected) {
     return;
   }
+  const requestedDraft = messageOverride ?? host.chatMessage;
+  if (messageOverride == null && host.chatAttachmentReadsPending > 0) {
+    await waitForPendingAttachmentReads(host);
+  }
   const previousDraft = host.chatMessage;
-  const message = (messageOverride ?? host.chatMessage).trim();
-  const attachments = host.chatAttachments ?? [];
-  const attachmentsToSend = messageOverride == null ? attachments : [];
+  const currentAttachments = cloneChatAttachments(host.chatAttachments);
+  const bufferedAttachments = cloneChatAttachments(host.chatBufferedAttachments);
+  const attachmentsToSend =
+    messageOverride == null
+      ? currentAttachments.length > 0
+        ? currentAttachments
+        : bufferedAttachments
+      : [];
+  const message = requestedDraft.trim();
   const hasAttachments = attachmentsToSend.length > 0;
 
   if (!message && !hasAttachments) {
@@ -221,6 +257,7 @@ export async function handleSendChat(
     if (messageOverride == null) {
       host.chatMessage = "";
       host.chatAttachments = [];
+      host.chatBufferedAttachments = [];
     }
     await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
       previousDraft: prevDraft,
@@ -233,6 +270,7 @@ export async function handleSendChat(
   if (messageOverride == null) {
     host.chatMessage = "";
     host.chatAttachments = [];
+    host.chatBufferedAttachments = [];
   }
 
   if (isChatBusy(host)) {
@@ -244,8 +282,10 @@ export async function handleSendChat(
     previousDraft: messageOverride == null ? previousDraft : undefined,
     restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
     attachments: hasAttachments ? attachmentsToSend : undefined,
-    previousAttachments: messageOverride == null ? attachments : undefined,
+    previousAttachments: messageOverride == null ? currentAttachments : undefined,
+    previousBufferedAttachments: messageOverride == null ? bufferedAttachments : undefined,
     restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+    restoreBufferedAttachments: Boolean(messageOverride && opts?.restoreDraft),
     refreshSessions,
   });
 }

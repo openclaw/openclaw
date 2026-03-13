@@ -62,6 +62,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { stageWebchatImageAttachments } from "./webchat-media-stage.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1222,6 +1223,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+      const stagedMediaPayload =
+        parsedImages.length > 0
+          ? await stageWebchatImageAttachments({
+              images: parsedImages,
+              runId: clientRunId,
+              log: context.logGateway,
+            })
+          : undefined;
 
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
@@ -1273,6 +1282,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        ...stagedMediaPayload,
       };
 
       const agentId = resolveSessionAgentId({

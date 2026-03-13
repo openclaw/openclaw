@@ -160,6 +160,8 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatAttachmentReadsPending = 0;
+  @state() chatBufferedAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
 
   onSlashAction?: (action: string) => void;
