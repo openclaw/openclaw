@@ -18,6 +18,11 @@ describe("jsonUtf8Bytes", () => {
       value: undefined,
       expected: Buffer.byteLength("undefined", "utf8"),
     },
+    {
+      name: "unicode strings",
+      value: "🙂",
+      expected: Buffer.byteLength(JSON.stringify("🙂"), "utf8"),
+    },
   ])("returns utf8 byte length for $name", ({ value, expected }) => {
     expect(jsonUtf8Bytes(value)).toBe(expected);
   });
@@ -30,5 +35,9 @@ describe("jsonUtf8Bytes", () => {
 
   it("uses string conversion for BigInt serialization failures", () => {
     expect(jsonUtf8Bytes(12n)).toBe(Buffer.byteLength("12", "utf8"));
+  });
+
+  it("uses string conversion for symbol serialization failures", () => {
+    expect(jsonUtf8Bytes(Symbol("token"))).toBe(Buffer.byteLength("Symbol(token)", "utf8"));
   });
 });

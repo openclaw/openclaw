@@ -6,8 +6,11 @@ describe("isValueToken", () => {
     { value: "work", expected: true },
     { value: "-1", expected: true },
     { value: "-1.5", expected: true },
+    { value: "-0.5", expected: true },
     { value: "--", expected: false },
     { value: "--dev", expected: false },
+    { value: "-", expected: false },
+    { value: "", expected: false },
     { value: undefined, expected: false },
   ])("classifies %j", ({ value, expected }) => {
     expect(isValueToken(value)).toBe(expected);
@@ -24,6 +27,8 @@ describe("consumeRootOptionToken", () => {
     { args: ["--log-level", "-1.5"], index: 0, expected: 2 },
     { args: ["--profile", "--no-color"], index: 0, expected: 1 },
     { args: ["--profile", "--"], index: 0, expected: 1 },
+    { args: ["x", "--profile", "work"], index: 1, expected: 2 },
+    { args: ["--log-level", ""], index: 0, expected: 1 },
     { args: ["--unknown"], index: 0, expected: 0 },
     { args: [], index: 0, expected: 0 },
   ])("consumes %j at %d", ({ args, index, expected }) => {
