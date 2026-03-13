@@ -1,9 +1,11 @@
 import {
   buildVllmProvider,
+  configureOpenAICompatibleSelfHostedProviderNonInteractive,
   emptyPluginConfigSchema,
   promptAndConfigureOpenAICompatibleSelfHostedProvider,
   type OpenClawPluginApi,
   type ProviderAuthContext,
+  type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
@@ -49,6 +51,15 @@ const vllmPlugin = {
               defaultModel: result.modelRef,
             };
           },
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
+            configureOpenAICompatibleSelfHostedProviderNonInteractive({
+              ctx,
+              providerId: PROVIDER_ID,
+              providerLabel: "vLLM",
+              defaultBaseUrl: DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: "VLLM_API_KEY",
+              modelPlaceholder: "meta-llama/Meta-Llama-3-8B-Instruct",
+            }),
         },
       ],
       discovery: {

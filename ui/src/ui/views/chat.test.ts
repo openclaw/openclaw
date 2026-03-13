@@ -1,3 +1,5 @@
+/* @vitest-environment jsdom */
+
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
@@ -54,6 +56,95 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "/avatar/main",
+        }),
+      ),
+      container,
+    );
+
+    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    expect(welcomeImage).not.toBeNull();
+    expect(welcomeImage?.getAttribute("src")).toBe("/avatar/main");
+  });
+
+  it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+        }),
+      ),
+      container,
+    );
+
+    const welcomeImage = container.querySelector<HTMLImageElement>(".agent-chat__welcome > img");
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(welcomeImage).toBeNull();
+    expect(logoImage).not.toBeNull();
+    expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
+  });
+
+  it("keeps the welcome logo fallback under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+        }),
+      ),
+      container,
+    );
+
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(logoImage).not.toBeNull();
+    expect(logoImage?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
+  it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+          messages: [
+            {
+              role: "assistant",
+              content: "hello",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const groupedLogo = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant .chat-avatar--logo",
+    );
+    expect(groupedLogo).not.toBeNull();
+    expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(
@@ -192,15 +283,14 @@ describe("chat view", () => {
       renderChat(
         createProps({
           canAbort: true,
+          sending: true,
           onAbort,
         }),
       ),
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
@@ -220,8 +310,8 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
+    const newSessionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="New session"]',
     );
     expect(newSessionButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));

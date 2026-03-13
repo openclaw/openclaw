@@ -16,6 +16,9 @@ const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
+const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
@@ -132,6 +135,19 @@ function resolveOpenAICodexForwardCompatModel(
     patch = {
       contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+    };
+  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
+    templateIds = [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS];
+    eligibleProviders = CODEX_GPT54_ELIGIBLE_PROVIDERS;
+    patch = {
+      api: "openai-codex-responses",
+      provider: normalizedProvider,
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS,
     };
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
