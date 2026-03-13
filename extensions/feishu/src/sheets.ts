@@ -20,7 +20,7 @@ async function getMeta(client: Lark.Client, params: FeishuSheetsParams) {
 
   return {
     title: res.data?.spreadsheet?.title,
-    spreadsheet_token: res.data?.spreadsheet?.spreadsheet_token,
+    spreadsheet_token: res.data?.spreadsheet?.token,
     url: res.data?.spreadsheet?.url,
   };
 }
