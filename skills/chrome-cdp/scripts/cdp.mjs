@@ -7,11 +7,11 @@
 // the CDP session open. Chrome's "Allow debugging" modal fires once per
 // daemon (= once per tab). Daemons auto-exit after 20min idle.
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from 'fs';
-import { homedir } from 'os';
-import { resolve } from 'path';
-import { spawn } from 'child_process';
-import net from 'net';
+import { spawn } from "child_process";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, readdirSync } from "fs";
+import net from "net";
+import { homedir } from "os";
+import { resolve } from "path";
 
 const TIMEOUT = 15000;
 const NAVIGATION_TIMEOUT = 30000;
@@ -19,46 +19,53 @@ const IDLE_TIMEOUT = 20 * 60 * 1000;
 const DAEMON_CONNECT_RETRIES = 20;
 const DAEMON_CONNECT_DELAY = 300;
 const MIN_TARGET_PREFIX_LEN = 8;
-const SOCK_PREFIX = '/tmp/cdp-';
-const PAGES_CACHE = '/tmp/cdp-pages.json';
+const SOCK_PREFIX = "/tmp/cdp-";
+const PAGES_CACHE = "/tmp/cdp-pages.json";
 
-function sockPath(targetId) { return `${SOCK_PREFIX}${targetId}.sock`; }
+function sockPath(targetId) {
+  return `${SOCK_PREFIX}${targetId}.sock`;
+}
 
 function getWsUrl() {
-  const portFile = resolve(homedir(), 'Library/Application Support/Google/Chrome/DevToolsActivePort');
-  const lines = readFileSync(portFile, 'utf8').trim().split('\n');
+  const portFile = resolve(
+    homedir(),
+    "Library/Application Support/Google/Chrome/DevToolsActivePort",
+  );
+  const lines = readFileSync(portFile, "utf8").trim().split("\n");
   return `ws://127.0.0.1:${lines[0]}${lines[1]}`;
 }
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function listDaemonSockets() {
-  return readdirSync('/tmp')
-    .filter(f => f.startsWith('cdp-') && f.endsWith('.sock'))
-    .map(f => ({
+  return readdirSync("/tmp")
+    .filter((f) => f.startsWith("cdp-") && f.endsWith(".sock"))
+    .map((f) => ({
       targetId: f.slice(4, -5),
       socketPath: `/tmp/${f}`,
     }));
 }
 
-function resolvePrefix(prefix, candidates, noun = 'target', missingHint = '') {
+function resolvePrefix(prefix, candidates, noun = "target", missingHint = "") {
   const upper = prefix.toUpperCase();
-  const matches = candidates.filter(candidate => candidate.toUpperCase().startsWith(upper));
+  const matches = candidates.filter((candidate) => candidate.toUpperCase().startsWith(upper));
   if (matches.length === 0) {
-    const hint = missingHint ? ` ${missingHint}` : '';
+    const hint = missingHint ? ` ${missingHint}` : "";
     throw new Error(`No ${noun} matching prefix "${prefix}".${hint}`);
   }
   if (matches.length > 1) {
-    throw new Error(`Ambiguous prefix "${prefix}" — matches ${matches.length} ${noun}s. Use more characters.`);
+    throw new Error(
+      `Ambiguous prefix "${prefix}" — matches ${matches.length} ${noun}s. Use more characters.`,
+    );
   }
   return matches[0];
 }
 
 function getDisplayPrefixLength(targetIds) {
   if (targetIds.length === 0) return MIN_TARGET_PREFIX_LEN;
-  const maxLen = Math.max(...targetIds.map(id => id.length));
+  const maxLen = Math.max(...targetIds.map((id) => id.length));
   for (let len = MIN_TARGET_PREFIX_LEN; len <= maxLen; len++) {
-    const prefixes = new Set(targetIds.map(id => id.slice(0, len).toUpperCase()));
+    const prefixes = new Set(targetIds.map((id) => id.slice(0, len).toUpperCase()));
     if (prefixes.size === targetIds.length) return len;
   }
   return maxLen;
@@ -69,14 +76,18 @@ function getDisplayPrefixLength(targetIds) {
 // ---------------------------------------------------------------------------
 
 class CDP {
-  #ws; #id = 0; #pending = new Map(); #eventHandlers = new Map(); #closeHandlers = [];
+  #ws;
+  #id = 0;
+  #pending = new Map();
+  #eventHandlers = new Map();
+  #closeHandlers = [];
 
   async connect(wsUrl) {
     return new Promise((res, rej) => {
       this.#ws = new WebSocket(wsUrl);
       this.#ws.onopen = () => res();
-      this.#ws.onerror = (e) => rej(new Error('WebSocket error: ' + (e.message || e.type)));
-      this.#ws.onclose = () => this.#closeHandlers.forEach(h => h());
+      this.#ws.onerror = (e) => rej(new Error("WebSocket error: " + (e.message || e.type)));
+      this.#ws.onclose = () => this.#closeHandlers.forEach((h) => h());
       this.#ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data);
         if (msg.id && this.#pending.has(msg.id)) {
@@ -96,16 +107,22 @@ class CDP {
   send(method, params = {}, sessionId) {
     const id = ++this.#id;
     return new Promise((resolve, reject) => {
-      let timer; 
-      
-      const wrappedResolve = (val) => { clearTimeout(timer); resolve(val); };
-      const wrappedReject = (err) => { clearTimeout(timer); reject(err); };
-      
+      let timer;
+
+      const wrappedResolve = (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      };
+      const wrappedReject = (err) => {
+        clearTimeout(timer);
+        reject(err);
+      };
+
       this.#pending.set(id, { resolve: wrappedResolve, reject: wrappedReject });
       const msg = { id, method, params };
       if (sessionId) msg.sessionId = sessionId;
       this.#ws.send(JSON.stringify(msg));
-      
+
       timer = setTimeout(() => {
         if (this.#pending.has(id)) {
           this.#pending.delete(id);
@@ -155,8 +172,12 @@ class CDP {
     };
   }
 
-  onClose(handler) { this.#closeHandlers.push(handler); }
-  close() { this.#ws.close(); }
+  onClose(handler) {
+    this.#closeHandlers.push(handler);
+  }
+  close() {
+    this.#ws.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,35 +185,37 @@ class CDP {
 // ---------------------------------------------------------------------------
 
 async function getPages(cdp) {
-  const { targetInfos } = await cdp.send('Target.getTargets');
-  return targetInfos.filter(t => t.type === 'page' && !t.url.startsWith('chrome://'));
+  const { targetInfos } = await cdp.send("Target.getTargets");
+  return targetInfos.filter((t) => t.type === "page" && !t.url.startsWith("chrome://"));
 }
 
 function formatPageList(pages) {
-  const prefixLen = getDisplayPrefixLength(pages.map(p => p.targetId));
-  return pages.map(p => {
-    const id = p.targetId.slice(0, prefixLen).padEnd(prefixLen);
-    const title = p.title.substring(0, 54).padEnd(54);
-    return `${id}  ${title}  ${p.url}`;
-  }).join('\n');
+  const prefixLen = getDisplayPrefixLength(pages.map((p) => p.targetId));
+  return pages
+    .map((p) => {
+      const id = p.targetId.slice(0, prefixLen).padEnd(prefixLen);
+      const title = p.title.substring(0, 54).padEnd(54);
+      return `${id}  ${title}  ${p.url}`;
+    })
+    .join("\n");
 }
 
 function shouldShowAxNode(node, compact = false) {
-  const role = node.role?.value || '';
-  const name = node.name?.value ?? '';
+  const role = node.role?.value || "";
+  const name = node.name?.value ?? "";
   const value = node.value?.value;
-  if (compact && role === 'InlineTextBox') return false;
-  return role !== 'none' && role !== 'generic' && !(name === '' && (value === '' || value == null));
+  if (compact && role === "InlineTextBox") return false;
+  return role !== "none" && role !== "generic" && !(name === "" && (value === "" || value == null));
 }
 
 function formatAxNode(node, depth) {
-  const role = node.role?.value || '';
-  const name = node.name?.value ?? '';
+  const role = node.role?.value || "";
+  const name = node.name?.value ?? "";
   const value = node.value?.value;
-  const indent = '  '.repeat(Math.min(depth, 10));
+  const indent = "  ".repeat(Math.min(depth, 10));
   let line = `${indent}[${role}]`;
-  if (name !== '') line += ` ${name}`;
-  if (!(value === '' || value == null)) line += ` = ${JSON.stringify(value)}`;
+  if (name !== "") line += ` ${name}`;
+  if (!(value === "" || value == null)) line += ` = ${JSON.stringify(value)}`;
   return line;
 }
 
@@ -219,17 +242,17 @@ async function snapshotStr(cdp, sid, compact = false, selector = null) {
   let nodes;
   if (selector) {
     // Scoped: resolve selector → DOM node → accessibility subtree
-    await cdp.send('DOM.enable', {}, sid);
-    const { root } = await cdp.send('DOM.getDocument', { depth: 0 }, sid);
-    const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector }, sid);
+    await cdp.send("DOM.enable", {}, sid);
+    const { root } = await cdp.send("DOM.getDocument", { depth: 0 }, sid);
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector }, sid);
     if (!nodeId) throw new Error(`Element not found: ${selector}`);
-    const { object } = await cdp.send('DOM.resolveNode', { nodeId }, sid);
-    const result = await cdp.send('Accessibility.queryAXTree', { objectId: object.objectId }, sid);
+    const { object } = await cdp.send("DOM.resolveNode", { nodeId }, sid);
+    const result = await cdp.send("Accessibility.queryAXTree", { objectId: object.objectId }, sid);
     nodes = result.nodes;
   } else {
-    ({ nodes } = await cdp.send('Accessibility.getFullAXTree', {}, sid));
+    ({ nodes } = await cdp.send("Accessibility.getFullAXTree", {}, sid));
   }
-  const nodesById = new Map(nodes.map(node => [node.nodeId, node]));
+  const nodesById = new Map(nodes.map((node) => [node.nodeId, node]));
   const childrenByParent = new Map();
   for (const node of nodes) {
     if (!node.parentId) continue;
@@ -248,46 +271,56 @@ async function snapshotStr(cdp, sid, compact = false, selector = null) {
     }
   }
 
-  const roots = nodes.filter(node => !node.parentId || !nodesById.has(node.parentId));
+  const roots = nodes.filter((node) => !node.parentId || !nodesById.has(node.parentId));
   for (const root of roots) visit(root, 0);
   for (const node of nodes) visit(node, 0);
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 async function evalStr(cdp, sid, expression) {
-  await cdp.send('Runtime.enable', {}, sid);
-  const result = await cdp.send('Runtime.evaluate', {
-    expression, returnByValue: true, awaitPromise: true,
-  }, sid);
+  await cdp.send("Runtime.enable", {}, sid);
+  const result = await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    },
+    sid,
+  );
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.text || result.exceptionDetails.exception?.description);
   }
   const val = result.result.value;
-  return typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');
+  return typeof val === "object" ? JSON.stringify(val, null, 2) : String(val ?? "");
 }
 
 async function shotStr(cdp, sid, filePath) {
   let dpr = 1;
   try {
-    const raw = await evalStr(cdp, sid, 'window.devicePixelRatio');
+    const raw = await evalStr(cdp, sid, "window.devicePixelRatio");
     const parsed = parseFloat(raw);
     if (parsed > 0) dpr = parsed;
   } catch {}
 
-  const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' }, sid);
-  const out = filePath || '/tmp/screenshot.png';
-  writeFileSync(out, Buffer.from(data, 'base64'));
+  const { data } = await cdp.send("Page.captureScreenshot", { format: "png" }, sid);
+  const out = filePath || "/tmp/screenshot.png";
+  writeFileSync(out, Buffer.from(data, "base64"));
 
   const lines = [out];
   lines.push(`Screenshot saved. Device pixel ratio (DPR): ${dpr}`);
   lines.push(`Coordinate mapping:`);
   lines.push(`  Screenshot pixels → CSS pixels (for CDP Input events): divide by ${dpr}`);
-  lines.push(`  e.g. screenshot point (${Math.round(100 * dpr)}, ${Math.round(200 * dpr)}) → CSS (100, 200) → use clickxy <target> 100 200`);
+  lines.push(
+    `  e.g. screenshot point (${Math.round(100 * dpr)}, ${Math.round(200 * dpr)}) → CSS (100, 200) → use clickxy <target> 100 200`,
+  );
   if (dpr !== 1) {
-    lines.push(`  On this ${dpr}x display: CSS px = screenshot px / ${dpr} ≈ screenshot px × ${Math.round(100/dpr)/100}`);
+    lines.push(
+      `  On this ${dpr}x display: CSS px = screenshot px / ${dpr} ≈ screenshot px × ${Math.round(100 / dpr) / 100}`,
+    );
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 async function htmlStr(cdp, sid, selector) {
@@ -299,13 +332,13 @@ async function htmlStr(cdp, sid, selector) {
 
 async function waitForDocumentReady(cdp, sid, timeoutMs = NAVIGATION_TIMEOUT) {
   const deadline = Date.now() + timeoutMs;
-  let lastState = '';
+  let lastState = "";
   let lastError;
   while (Date.now() < deadline) {
     try {
-      const state = await evalStr(cdp, sid, 'document.readyState');
+      const state = await evalStr(cdp, sid, "document.readyState");
       lastState = state;
-      if (state === 'complete') return;
+      if (state === "complete") return;
     } catch (e) {
       lastError = e;
     }
@@ -318,13 +351,13 @@ async function waitForDocumentReady(cdp, sid, timeoutMs = NAVIGATION_TIMEOUT) {
   if (lastError) {
     throw new Error(`Timed out waiting for navigation to finish (${lastError.message})`);
   }
-  throw new Error('Timed out waiting for navigation to finish');
+  throw new Error("Timed out waiting for navigation to finish");
 }
 
 async function navStr(cdp, sid, url) {
-  await cdp.send('Page.enable', {}, sid);
-  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
-  const result = await cdp.send('Page.navigate', { url }, sid);
+  await cdp.send("Page.enable", {}, sid);
+  const loadEvent = cdp.waitForEvent("Page.loadEventFired", NAVIGATION_TIMEOUT);
+  const result = await cdp.send("Page.navigate", { url }, sid);
   if (result.errorText) {
     loadEvent.cancel();
     throw new Error(result.errorText);
@@ -339,18 +372,25 @@ async function navStr(cdp, sid, url) {
 }
 
 async function netStr(cdp, sid) {
-  const raw = await evalStr(cdp, sid, `JSON.stringify(performance.getEntriesByType('resource').map(e => ({
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `JSON.stringify(performance.getEntriesByType('resource').map(e => ({
     name: e.name.substring(0, 120), type: e.initiatorType,
     duration: Math.round(e.duration), size: e.transferSize
-  })))`);
-  return JSON.parse(raw).map(e =>
-    `${String(e.duration).padStart(5)}ms  ${String(e.size || '?').padStart(8)}B  ${e.type.padEnd(8)}  ${e.name}`
-  ).join('\n');
+  })))`,
+  );
+  return JSON.parse(raw)
+    .map(
+      (e) =>
+        `${String(e.duration).padStart(5)}ms  ${String(e.size || "?").padStart(8)}B  ${e.type.padEnd(8)}  ${e.name}`,
+    )
+    .join("\n");
 }
 
 // Click element by CSS selector
 async function clickStr(cdp, sid, selector) {
-  if (!selector) throw new Error('CSS selector required');
+  if (!selector) throw new Error("CSS selector required");
   const expr = `
     (function() {
       const el = document.querySelector(${JSON.stringify(selector)});
@@ -370,75 +410,83 @@ async function clickStr(cdp, sid, selector) {
 async function clickXyStr(cdp, sid, x, y) {
   const cx = parseFloat(x);
   const cy = parseFloat(y);
-  if (isNaN(cx) || isNaN(cy)) throw new Error('x and y must be numbers (CSS pixels)');
-  const base = { x: cx, y: cy, button: 'left', clickCount: 1, modifiers: 0 };
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' }, sid);
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, sid);
+  if (isNaN(cx) || isNaN(cy)) throw new Error("x and y must be numbers (CSS pixels)");
+  const base = { x: cx, y: cy, button: "left", clickCount: 1, modifiers: 0 };
+  await cdp.send("Input.dispatchMouseEvent", { ...base, type: "mouseMoved" }, sid);
+  await cdp.send("Input.dispatchMouseEvent", { ...base, type: "mousePressed" }, sid);
   await sleep(50);
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, sid);
+  await cdp.send("Input.dispatchMouseEvent", { ...base, type: "mouseReleased" }, sid);
   return `Clicked at CSS (${cx}, ${cy})`;
 }
 
 // Type text using Input.insertText (works in cross-origin iframes, unlike eval)
 async function typeStr(cdp, sid, text) {
-  if (text == null || text === '') throw new Error('text required');
-  await cdp.send('Input.insertText', { text }, sid);
+  if (text == null || text === "") throw new Error("text required");
+  await cdp.send("Input.insertText", { text }, sid);
   return `Typed ${text.length} characters`;
 }
 
 // Send a key press (Enter, Tab, Escape, etc.) using Input.dispatchKeyEvent
 const KEY_MAP = {
-  enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
-  tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
-  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
-  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
-  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
-  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-  arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-  arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-  space: { key: ' ', code: 'Space', keyCode: 32 },
-  home: { key: 'Home', code: 'Home', keyCode: 36 },
-  end: { key: 'End', code: 'End', keyCode: 35 },
-  pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
-  pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+  enter: { key: "Enter", code: "Enter", keyCode: 13 },
+  tab: { key: "Tab", code: "Tab", keyCode: 9 },
+  escape: { key: "Escape", code: "Escape", keyCode: 27 },
+  backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+  delete: { key: "Delete", code: "Delete", keyCode: 46 },
+  arrowdown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+  arrowup: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+  arrowleft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+  arrowright: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+  space: { key: " ", code: "Space", keyCode: 32 },
+  home: { key: "Home", code: "Home", keyCode: 36 },
+  end: { key: "End", code: "End", keyCode: 35 },
+  pageup: { key: "PageUp", code: "PageUp", keyCode: 33 },
+  pagedown: { key: "PageDown", code: "PageDown", keyCode: 34 },
 };
 
 async function keyStr(cdp, sid, keyName) {
-  if (!keyName) throw new Error(`Key name required. Supported: ${Object.keys(KEY_MAP).join(', ')}`);
+  if (!keyName) throw new Error(`Key name required. Supported: ${Object.keys(KEY_MAP).join(", ")}`);
   const mapped = KEY_MAP[keyName.toLowerCase()];
-  if (!mapped) throw new Error(`Unknown key: ${keyName}. Supported: ${Object.keys(KEY_MAP).join(', ')}`);
-  const base = { key: mapped.key, code: mapped.code, windowsVirtualKeyCode: mapped.keyCode, nativeVirtualKeyCode: mapped.keyCode };
-  await cdp.send('Input.dispatchKeyEvent', { ...base, type: 'keyDown' }, sid);
-  await cdp.send('Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, sid);
+  if (!mapped)
+    throw new Error(`Unknown key: ${keyName}. Supported: ${Object.keys(KEY_MAP).join(", ")}`);
+  const base = {
+    key: mapped.key,
+    code: mapped.code,
+    windowsVirtualKeyCode: mapped.keyCode,
+    nativeVirtualKeyCode: mapped.keyCode,
+  };
+  await cdp.send("Input.dispatchKeyEvent", { ...base, type: "keyDown" }, sid);
+  await cdp.send("Input.dispatchKeyEvent", { ...base, type: "keyUp" }, sid);
   return `Pressed ${mapped.key}`;
 }
 
 // Scroll the viewport
-async function scrollStr(cdp, sid, direction = 'down') {
+async function scrollStr(cdp, sid, direction = "down") {
   const scrollMap = {
-    down: 'window.scrollBy(0, window.innerHeight * 0.8)',
-    up: 'window.scrollBy(0, -window.innerHeight * 0.8)',
-    top: 'window.scrollTo(0, 0)',
-    bottom: 'window.scrollTo(0, document.body.scrollHeight)',
+    down: "window.scrollBy(0, window.innerHeight * 0.8)",
+    up: "window.scrollBy(0, -window.innerHeight * 0.8)",
+    top: "window.scrollTo(0, 0)",
+    bottom: "window.scrollTo(0, document.body.scrollHeight)",
   };
   const expr = scrollMap[direction.toLowerCase()];
   if (!expr) throw new Error(`Unknown direction: ${direction}. Use: down, up, top, bottom`);
   await evalStr(cdp, sid, expr);
-  const pos = await evalStr(cdp, sid, 'JSON.stringify({ y: Math.round(window.scrollY), max: Math.round(document.body.scrollHeight - window.innerHeight) })');
+  const pos = await evalStr(
+    cdp,
+    sid,
+    "JSON.stringify({ y: Math.round(window.scrollY), max: Math.round(document.body.scrollHeight - window.innerHeight) })",
+  );
   const { y, max } = JSON.parse(pos);
   return `Scrolled ${direction} — position: ${y}/${max}px`;
 }
 
 // Wait for a CSS selector to appear in the DOM
 async function waitStr(cdp, sid, selector, timeoutMs = 10000) {
-  if (!selector) throw new Error('CSS selector required');
+  if (!selector) throw new Error("CSS selector required");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const found = await evalStr(cdp, sid,
-      `!!document.querySelector(${JSON.stringify(selector)})`
-    );
-    if (found === 'true') return `Element found: ${selector}`;
+    const found = await evalStr(cdp, sid, `!!document.querySelector(${JSON.stringify(selector)})`);
+    if (found === "true") return `Element found: ${selector}`;
     await sleep(300);
   }
   throw new Error(`Timed out after ${timeoutMs}ms waiting for: ${selector}`);
@@ -446,14 +494,12 @@ async function waitStr(cdp, sid, selector, timeoutMs = 10000) {
 
 // Load-more: repeatedly click a button/selector until it disappears
 async function loadAllStr(cdp, sid, selector, intervalMs = 1500) {
-  if (!selector) throw new Error('CSS selector required');
+  if (!selector) throw new Error("CSS selector required");
   let clicks = 0;
   const deadline = Date.now() + 5 * 60 * 1000; // 5-minute hard cap
   while (Date.now() < deadline) {
-    const exists = await evalStr(cdp, sid,
-      `!!document.querySelector(${JSON.stringify(selector)})`
-    );
-    if (exists !== 'true') break;
+    const exists = await evalStr(cdp, sid, `!!document.querySelector(${JSON.stringify(selector)})`);
+    if (exists !== "true") break;
     const clickExpr = `
       (function() {
         const el = document.querySelector(${JSON.stringify(selector)});
@@ -464,7 +510,7 @@ async function loadAllStr(cdp, sid, selector, intervalMs = 1500) {
       })()
     `;
     const clicked = await evalStr(cdp, sid, clickExpr);
-    if (clicked !== 'true') break;
+    if (clicked !== "true") break;
     clicks++;
     await sleep(intervalMs);
   }
@@ -476,8 +522,11 @@ async function evalRawStr(cdp, sid, method, paramsJson) {
   if (!method) throw new Error('CDP method required (e.g. "DOM.getDocument")');
   let params = {};
   if (paramsJson) {
-    try { params = JSON.parse(paramsJson); }
-    catch { throw new Error(`Invalid JSON params: ${paramsJson}`); }
+    try {
+      params = JSON.parse(paramsJson);
+    } catch {
+      throw new Error(`Invalid JSON params: ${paramsJson}`);
+    }
   }
   const result = await cdp.send(method, params, sid);
   return JSON.stringify(result, null, 2);
@@ -485,7 +534,10 @@ async function evalRawStr(cdp, sid, method, paramsJson) {
 
 // Page info summary for agent orientation
 async function infoStr(cdp, sid) {
-  const raw = await evalStr(cdp, sid, `JSON.stringify({
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `JSON.stringify({
     url: location.href,
     title: document.title,
     viewport: { w: window.innerWidth, h: window.innerHeight },
@@ -501,7 +553,8 @@ async function infoStr(cdp, sid) {
     })(),
     forms: document.forms.length,
     iframes: document.querySelectorAll('iframe').length,
-  })`);
+  })`,
+  );
   const info = JSON.parse(raw);
   const lines = [
     `URL:      ${info.url}`,
@@ -509,31 +562,41 @@ async function infoStr(cdp, sid) {
     `Viewport: ${info.viewport.w}x${info.viewport.h}`,
     `Scroll:   ${info.scroll.y}/${info.scroll.max}px`,
   ];
-  if (info.focus) lines.push(`Focus:    <${info.focus.tag}> ${info.focus.selector}${info.focus.value ? ' = "' + info.focus.value + '"' : ''}`);
+  if (info.focus)
+    lines.push(
+      `Focus:    <${info.focus.tag}> ${info.focus.selector}${info.focus.value ? ' = "' + info.focus.value + '"' : ""}`,
+    );
   else lines.push(`Focus:    (none)`);
   if (info.forms) lines.push(`Forms:    ${info.forms}`);
   if (info.iframes) lines.push(`Iframes:  ${info.iframes}`);
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 // Focus an element without clicking (no toggle side effects)
 async function focusStr(cdp, sid, selector) {
-  if (!selector) throw new Error('CSS selector required');
-  const raw = await evalStr(cdp, sid, `(function() {
+  if (!selector) throw new Error("CSS selector required");
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `(function() {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
     el.focus();
     return { ok: true, tag: el.tagName, type: el.type || null };
-  })()`);
+  })()`,
+  );
   const r = JSON.parse(raw);
   if (!r.ok) throw new Error(r.error);
-  return `Focused <${r.tag}>${r.type ? ' type=' + r.type : ''}`;
+  return `Focused <${r.tag}>${r.type ? " type=" + r.type : ""}`;
 }
 
 // Clear an input/textarea/contenteditable using native setter for React compat
 async function clearStr(cdp, sid, selector) {
-  if (!selector) throw new Error('CSS selector required');
-  const raw = await evalStr(cdp, sid, `(function() {
+  if (!selector) throw new Error("CSS selector required");
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `(function() {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
     const tag = el.tagName.toLowerCase();
@@ -553,7 +616,8 @@ async function clearStr(cdp, sid, selector) {
       return { ok: true, tag: el.tagName };
     }
     return { ok: false, error: 'Element is not an input, textarea, or contenteditable' };
-  })()`);
+  })()`,
+  );
   const r = JSON.parse(raw);
   if (!r.ok) throw new Error(r.error);
   return `Cleared <${r.tag}>`;
@@ -561,9 +625,12 @@ async function clearStr(cdp, sid, selector) {
 
 // Pick a <select> option by value or visible text
 async function selectStr(cdp, sid, selector, value) {
-  if (!selector) throw new Error('CSS selector required');
-  if (value == null) throw new Error('value required');
-  const raw = await evalStr(cdp, sid, `(function() {
+  if (!selector) throw new Error("CSS selector required");
+  if (value == null) throw new Error("value required");
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `(function() {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
     if (el.tagName !== 'SELECT') return { ok: false, error: 'Element is not a <select> (found <' + el.tagName + '>)' };
@@ -576,7 +643,8 @@ async function selectStr(cdp, sid, selector, value) {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
     return { ok: true, value: opt.value, text: opt.textContent.trim() };
-  })()`);
+  })()`,
+  );
   const r = JSON.parse(raw);
   if (!r.ok) throw new Error(r.error);
   return `Selected "${r.text}" (value: ${r.value})`;
@@ -592,62 +660,72 @@ async function textStr(cdp, sid, selector) {
 
 // Hover an element via CDP mouse events (triggers :hover and JS handlers)
 async function hoverStr(cdp, sid, selector) {
-  if (!selector) throw new Error('CSS selector required');
-  const raw = await evalStr(cdp, sid, `(function() {
+  if (!selector) throw new Error("CSS selector required");
+  const raw = await evalStr(
+    cdp,
+    sid,
+    `(function() {
     const el = document.querySelector(${JSON.stringify(selector)});
     if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
     el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { ok: true, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), tag: el.tagName };
-  })()`);
+  })()`,
+  );
   const r = JSON.parse(raw);
   if (!r.ok) throw new Error(r.error);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x, y: r.y }, sid);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y }, sid);
   return `Hovered <${r.tag}> at CSS (${r.x}, ${r.y})`;
 }
 
 // Navigate back in history
 async function backStr(cdp, sid) {
-  await cdp.send('Page.enable', {}, sid);
-  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
-  await evalStr(cdp, sid, 'history.back()');
-  try { await loadEvent.promise; } catch { loadEvent.cancel(); }
+  await cdp.send("Page.enable", {}, sid);
+  const loadEvent = cdp.waitForEvent("Page.loadEventFired", NAVIGATION_TIMEOUT);
+  await evalStr(cdp, sid, "history.back()");
+  try {
+    await loadEvent.promise;
+  } catch {
+    loadEvent.cancel();
+  }
   await waitForDocumentReady(cdp, sid, 5000);
-  const url = await evalStr(cdp, sid, 'location.href');
+  const url = await evalStr(cdp, sid, "location.href");
   return `Back: ${url}`;
 }
 
 // Navigate forward in history
 async function forwardStr(cdp, sid) {
-  await cdp.send('Page.enable', {}, sid);
-  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
-  await evalStr(cdp, sid, 'history.forward()');
-  try { await loadEvent.promise; } catch { loadEvent.cancel(); }
+  await cdp.send("Page.enable", {}, sid);
+  const loadEvent = cdp.waitForEvent("Page.loadEventFired", NAVIGATION_TIMEOUT);
+  await evalStr(cdp, sid, "history.forward()");
+  try {
+    await loadEvent.promise;
+  } catch {
+    loadEvent.cancel();
+  }
   await waitForDocumentReady(cdp, sid, 5000);
-  const url = await evalStr(cdp, sid, 'location.href');
+  const url = await evalStr(cdp, sid, "location.href");
   return `Forward: ${url}`;
 }
 
 // Reload current page
 async function reloadStr(cdp, sid) {
-  await cdp.send('Page.enable', {}, sid);
-  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
-  await cdp.send('Page.reload', {}, sid);
+  await cdp.send("Page.enable", {}, sid);
+  const loadEvent = cdp.waitForEvent("Page.loadEventFired", NAVIGATION_TIMEOUT);
+  await cdp.send("Page.reload", {}, sid);
   await loadEvent.promise;
   await waitForDocumentReady(cdp, sid, 5000);
-  const url = await evalStr(cdp, sid, 'location.href');
+  const url = await evalStr(cdp, sid, "location.href");
   return `Reloaded: ${url}`;
 }
 
 // Wait for a CSS selector to disappear from the DOM
 async function waitGoneStr(cdp, sid, selector, timeoutMs = 10000) {
-  if (!selector) throw new Error('CSS selector required');
+  if (!selector) throw new Error("CSS selector required");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const found = await evalStr(cdp, sid,
-      `!!document.querySelector(${JSON.stringify(selector)})`
-    );
-    if (found !== 'true') return `Element gone: ${selector}`;
+    const found = await evalStr(cdp, sid, `!!document.querySelector(${JSON.stringify(selector)})`);
+    if (found !== "true") return `Element gone: ${selector}`;
     await sleep(300);
   }
   throw new Error(`Timed out after ${timeoutMs}ms waiting for element to disappear: ${selector}`);
@@ -656,11 +734,13 @@ async function waitGoneStr(cdp, sid, selector, timeoutMs = 10000) {
 // Return recent console messages from daemon ring buffer
 function consoleStr(consoleBuf, count = 20) {
   const entries = consoleBuf.slice(-count);
-  if (entries.length === 0) return '(no console messages)';
-  return entries.map(e => {
-    const age = Math.round((Date.now() - e.ts) / 1000);
-    return `[${e.type}] ${age}s ago: ${e.text}`;
-  }).join('\n');
+  if (entries.length === 0) return "(no console messages)";
+  return entries
+    .map((e) => {
+      const age = Math.round((Date.now() - e.ts) / 1000);
+      return `[${e.type}] ${age}s ago: ${e.text}`;
+    })
+    .join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -680,7 +760,7 @@ async function runDaemon(targetId) {
 
   let sessionId;
   try {
-    const res = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+    const res = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     sessionId = res.sessionId;
   } catch (e) {
     process.stderr.write(`Daemon: attach failed: ${e.message}\n`);
@@ -692,10 +772,10 @@ async function runDaemon(targetId) {
   const consoleBuf = [];
   const CONSOLE_BUF_MAX = 100;
   try {
-    await cdp.send('Runtime.enable', {}, sessionId);
-    cdp.onEvent('Runtime.consoleAPICalled', (params) => {
-      if (params.type === 'debug') return;
-      const text = (params.args || []).map(a => a.value ?? a.description ?? '').join(' ');
+    await cdp.send("Runtime.enable", {}, sessionId);
+    cdp.onEvent("Runtime.consoleAPICalled", (params) => {
+      if (params.type === "debug") return;
+      const text = (params.args || []).map((a) => a.value ?? a.description ?? "").join(" ");
       consoleBuf.push({ type: params.type, text: text.substring(0, 500), ts: Date.now() });
       if (consoleBuf.length > CONSOLE_BUF_MAX) consoleBuf.shift();
     });
@@ -707,21 +787,23 @@ async function runDaemon(targetId) {
     if (!alive) return;
     alive = false;
     server.close();
-    try { unlinkSync(sp); } catch {}
+    try {
+      unlinkSync(sp);
+    } catch {}
     cdp.close();
     process.exit(0);
   }
 
   // Exit if target goes away or Chrome disconnects
-  cdp.onEvent('Target.targetDestroyed', (params) => {
+  cdp.onEvent("Target.targetDestroyed", (params) => {
     if (params.targetId === targetId) shutdown();
   });
-  cdp.onEvent('Target.detachedFromTarget', (params) => {
+  cdp.onEvent("Target.detachedFromTarget", (params) => {
     if (params.sessionId === sessionId) shutdown();
   });
   cdp.onClose(() => shutdown());
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 
   // Idle timer
   let idleTimer = setTimeout(shutdown, IDLE_TIMEOUT);
@@ -736,45 +818,101 @@ async function runDaemon(targetId) {
     try {
       let result;
       switch (cmd) {
-        case 'list': {
+        case "list": {
           const pages = await getPages(cdp);
           result = formatPageList(pages);
           break;
         }
-        case 'list_raw': {
+        case "list_raw": {
           const pages = await getPages(cdp);
           result = JSON.stringify(pages);
           break;
         }
-        case 'snap': case 'snapshot': result = await snapshotStr(cdp, sessionId, true, args[0] || null); break;
-        case 'eval': result = await evalStr(cdp, sessionId, args[0]); break;
-        case 'shot': case 'screenshot': result = await shotStr(cdp, sessionId, args[0]); break;
-        case 'html': result = await htmlStr(cdp, sessionId, args[0]); break;
-        case 'info': result = await infoStr(cdp, sessionId); break;
-        case 'text': result = await textStr(cdp, sessionId, args[0]); break;
-        case 'nav': case 'navigate': result = await navStr(cdp, sessionId, args[0]); break;
-        case 'back': result = await backStr(cdp, sessionId); break;
-        case 'forward': result = await forwardStr(cdp, sessionId); break;
-        case 'reload': result = await reloadStr(cdp, sessionId); break;
-        case 'net': case 'network': result = await netStr(cdp, sessionId); break;
-        case 'click': result = await clickStr(cdp, sessionId, args[0]); break;
-        case 'clickxy': result = await clickXyStr(cdp, sessionId, args[0], args[1]); break;
-        case 'hover': result = await hoverStr(cdp, sessionId, args[0]); break;
-        case 'focus': result = await focusStr(cdp, sessionId, args[0]); break;
-        case 'clear': result = await clearStr(cdp, sessionId, args[0]); break;
-        case 'select': result = await selectStr(cdp, sessionId, args[0], args[1]); break;
-        case 'type': result = await typeStr(cdp, sessionId, args[0]); break;
-        case 'key': result = await keyStr(cdp, sessionId, args[0]); break;
-        case 'scroll': result = await scrollStr(cdp, sessionId, args[0] || 'down'); break;
-        case 'wait': result = await waitStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 10000); break;
-        case 'waitgone': result = await waitGoneStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 10000); break;
-        case 'console': result = consoleStr(consoleBuf, args[0] ? parseInt(args[0]) : 20); break;
-        case 'loadall': result = await loadAllStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 1500); break;
-        case 'evalraw': result = await evalRawStr(cdp, sessionId, args[0], args[1]); break;
-        case 'stop': return { ok: true, result: '', stopAfter: true };
-        default: return { ok: false, error: `Unknown command: ${cmd}` };
+        case "snap":
+        case "snapshot":
+          result = await snapshotStr(cdp, sessionId, true, args[0] || null);
+          break;
+        case "eval":
+          result = await evalStr(cdp, sessionId, args[0]);
+          break;
+        case "shot":
+        case "screenshot":
+          result = await shotStr(cdp, sessionId, args[0]);
+          break;
+        case "html":
+          result = await htmlStr(cdp, sessionId, args[0]);
+          break;
+        case "info":
+          result = await infoStr(cdp, sessionId);
+          break;
+        case "text":
+          result = await textStr(cdp, sessionId, args[0]);
+          break;
+        case "nav":
+        case "navigate":
+          result = await navStr(cdp, sessionId, args[0]);
+          break;
+        case "back":
+          result = await backStr(cdp, sessionId);
+          break;
+        case "forward":
+          result = await forwardStr(cdp, sessionId);
+          break;
+        case "reload":
+          result = await reloadStr(cdp, sessionId);
+          break;
+        case "net":
+        case "network":
+          result = await netStr(cdp, sessionId);
+          break;
+        case "click":
+          result = await clickStr(cdp, sessionId, args[0]);
+          break;
+        case "clickxy":
+          result = await clickXyStr(cdp, sessionId, args[0], args[1]);
+          break;
+        case "hover":
+          result = await hoverStr(cdp, sessionId, args[0]);
+          break;
+        case "focus":
+          result = await focusStr(cdp, sessionId, args[0]);
+          break;
+        case "clear":
+          result = await clearStr(cdp, sessionId, args[0]);
+          break;
+        case "select":
+          result = await selectStr(cdp, sessionId, args[0], args[1]);
+          break;
+        case "type":
+          result = await typeStr(cdp, sessionId, args[0]);
+          break;
+        case "key":
+          result = await keyStr(cdp, sessionId, args[0]);
+          break;
+        case "scroll":
+          result = await scrollStr(cdp, sessionId, args[0] || "down");
+          break;
+        case "wait":
+          result = await waitStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 10000);
+          break;
+        case "waitgone":
+          result = await waitGoneStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 10000);
+          break;
+        case "console":
+          result = consoleStr(consoleBuf, args[0] ? parseInt(args[0]) : 20);
+          break;
+        case "loadall":
+          result = await loadAllStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : 1500);
+          break;
+        case "evalraw":
+          result = await evalRawStr(cdp, sessionId, args[0], args[1]);
+          break;
+        case "stop":
+          return { ok: true, result: "", stopAfter: true };
+        default:
+          return { ok: false, error: `Unknown command: ${cmd}` };
       }
-      return { ok: true, result: result ?? '' };
+      return { ok: true, result: result ?? "" };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -786,11 +924,11 @@ async function runDaemon(targetId) {
   // Response: { "id": <number>, "ok": <boolean>, "result": "<string>" }
   //           or { "id": <number>, "ok": false, "error": "<message>" }
   const server = net.createServer((conn) => {
-    let buf = '';
+    let buf = "";
     let queue = Promise.resolve();
-    conn.on('data', (chunk) => {
+    conn.on("data", (chunk) => {
       buf += chunk.toString();
-      const lines = buf.split('\n');
+      const lines = buf.split("\n");
       buf = lines.pop(); // keep incomplete last line
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -798,21 +936,23 @@ async function runDaemon(targetId) {
         try {
           req = JSON.parse(line);
         } catch {
-          conn.write(JSON.stringify({ ok: false, error: 'Invalid JSON request', id: null }) + '\n');
+          conn.write(JSON.stringify({ ok: false, error: "Invalid JSON request", id: null }) + "\n");
           continue;
         }
         queue = queue.then(() =>
           handleCommand(req).then((res) => {
-            const payload = JSON.stringify({ ...res, id: req.id }) + '\n';
+            const payload = JSON.stringify({ ...res, id: req.id }) + "\n";
             if (res.stopAfter) conn.end(payload, shutdown);
             else conn.write(payload);
-          })
+          }),
         );
       }
     });
   });
 
-  try { unlinkSync(sp); } catch {}
+  try {
+    unlinkSync(sp);
+  } catch {}
   server.listen(sp);
 }
 
@@ -823,49 +963,55 @@ async function runDaemon(targetId) {
 function connectToSocket(sp) {
   return new Promise((resolve, reject) => {
     const conn = net.connect(sp);
-    conn.on('connect', () => resolve(conn));
-    conn.on('error', reject);
+    conn.on("connect", () => resolve(conn));
+    conn.on("error", reject);
   });
 }
 
 async function getOrStartTabDaemon(targetId) {
   const sp = sockPath(targetId);
   // Try existing daemon
-  try { return await connectToSocket(sp); } catch {}
+  try {
+    return await connectToSocket(sp);
+  } catch {}
 
   // Clean stale socket
-  try { unlinkSync(sp); } catch {}
+  try {
+    unlinkSync(sp);
+  } catch {}
 
   // Spawn daemon
-  const child = spawn(process.execPath, [process.argv[1], '_daemon', targetId], {
+  const child = spawn(process.execPath, [process.argv[1], "_daemon", targetId], {
     detached: true,
-    stdio: 'ignore',
+    stdio: "ignore",
   });
   child.unref();
 
   // Wait for socket (includes time for user to click Allow)
   for (let i = 0; i < DAEMON_CONNECT_RETRIES; i++) {
     await sleep(DAEMON_CONNECT_DELAY);
-    try { return await connectToSocket(sp); } catch {}
+    try {
+      return await connectToSocket(sp);
+    } catch {}
   }
-  throw new Error('Daemon failed to start — did you click Allow in Chrome?');
+  throw new Error("Daemon failed to start — did you click Allow in Chrome?");
 }
 
 function sendCommand(conn, req) {
   return new Promise((resolve, reject) => {
-    let buf = '';
+    let buf = "";
     let settled = false;
 
     const cleanup = () => {
-      conn.off('data', onData);
-      conn.off('error', onError);
-      conn.off('end', onEnd);
-      conn.off('close', onClose);
+      conn.off("data", onData);
+      conn.off("error", onError);
+      conn.off("end", onEnd);
+      conn.off("close", onClose);
     };
 
     const onData = (chunk) => {
       buf += chunk.toString();
-      const idx = buf.indexOf('\n');
+      const idx = buf.indexOf("\n");
       if (idx === -1) return;
       settled = true;
       cleanup();
@@ -884,22 +1030,22 @@ function sendCommand(conn, req) {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error('Connection closed before response'));
+      reject(new Error("Connection closed before response"));
     };
 
     const onClose = () => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error('Connection closed before response'));
+      reject(new Error("Connection closed before response"));
     };
 
-    conn.on('data', onData);
-    conn.on('error', onError);
-    conn.on('end', onEnd);
-    conn.on('close', onClose);
+    conn.on("data", onData);
+    conn.on("error", onError);
+    conn.on("end", onEnd);
+    conn.on("close", onClose);
     req.id = 1;
-    conn.write(JSON.stringify(req) + '\n');
+    conn.write(JSON.stringify(req) + "\n");
   });
 }
 
@@ -916,13 +1062,19 @@ async function stopDaemons(targetPrefix) {
   const daemons = listDaemonSockets();
 
   if (targetPrefix) {
-    const targetId = resolvePrefix(targetPrefix, daemons.map(d => d.targetId), 'daemon');
-    const daemon = daemons.find(d => d.targetId === targetId);
+    const targetId = resolvePrefix(
+      targetPrefix,
+      daemons.map((d) => d.targetId),
+      "daemon",
+    );
+    const daemon = daemons.find((d) => d.targetId === targetId);
     try {
       const conn = await connectToSocket(daemon.socketPath);
-      await sendCommand(conn, { cmd: 'stop' });
+      await sendCommand(conn, { cmd: "stop" });
     } catch {
-      try { unlinkSync(daemon.socketPath); } catch {}
+      try {
+        unlinkSync(daemon.socketPath);
+      } catch {}
     }
     return;
   }
@@ -930,9 +1082,11 @@ async function stopDaemons(targetPrefix) {
   for (const daemon of daemons) {
     try {
       const conn = await connectToSocket(daemon.socketPath);
-      await sendCommand(conn, { cmd: 'stop' });
+      await sendCommand(conn, { cmd: "stop" });
     } catch {
-      try { unlinkSync(daemon.socketPath); } catch {}
+      try {
+        unlinkSync(daemon.socketPath);
+      } catch {}
     }
   }
 }
@@ -1021,30 +1175,59 @@ DAEMON IPC (for advanced use / scripting)
 `;
 
 const NEEDS_TARGET = new Set([
-  'snap','snapshot','eval','shot','screenshot','html','nav','navigate',
-  'back','forward','reload','info','text','console',
-  'net','network','click','clickxy','hover','focus','clear','select',
-  'type','key','scroll','wait','waitgone','loadall','evalraw',
+  "snap",
+  "snapshot",
+  "eval",
+  "shot",
+  "screenshot",
+  "html",
+  "nav",
+  "navigate",
+  "back",
+  "forward",
+  "reload",
+  "info",
+  "text",
+  "console",
+  "net",
+  "network",
+  "click",
+  "clickxy",
+  "hover",
+  "focus",
+  "clear",
+  "select",
+  "type",
+  "key",
+  "scroll",
+  "wait",
+  "waitgone",
+  "loadall",
+  "evalraw",
 ]);
 
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
 
   // Daemon mode (internal)
-  if (cmd === '_daemon') { await runDaemon(args[0]); return; }
+  if (cmd === "_daemon") {
+    await runDaemon(args[0]);
+    return;
+  }
 
-  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
-    console.log(USAGE); process.exit(0);
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    console.log(USAGE);
+    process.exit(0);
   }
 
   // List — use existing daemon if available, otherwise direct
-  if (cmd === 'list' || cmd === 'ls') {
+  if (cmd === "list" || cmd === "ls") {
     let pages;
     const existingSock = findAnyDaemonSocket();
     if (existingSock) {
       try {
         const conn = await connectToSocket(existingSock);
-        const resp = await sendCommand(conn, { cmd: 'list_raw' });
+        const resp = await sendCommand(conn, { cmd: "list_raw" });
         if (resp.ok) pages = JSON.parse(resp.result);
       } catch {}
     }
@@ -1061,7 +1244,7 @@ async function main() {
   }
 
   // Stop
-  if (cmd === 'stop') {
+  if (cmd === "stop") {
     await stopDaemons(args[0]);
     return;
   }
@@ -1081,48 +1264,76 @@ async function main() {
 
   // Resolve prefix → full targetId from cache or running daemon
   let targetId;
-  const daemonTargetIds = listDaemonSockets().map(d => d.targetId);
-  const daemonMatches = daemonTargetIds.filter(id => id.toUpperCase().startsWith(targetPrefix.toUpperCase()));
+  const daemonTargetIds = listDaemonSockets().map((d) => d.targetId);
+  const daemonMatches = daemonTargetIds.filter((id) =>
+    id.toUpperCase().startsWith(targetPrefix.toUpperCase()),
+  );
 
   if (daemonMatches.length > 0) {
-    targetId = resolvePrefix(targetPrefix, daemonTargetIds, 'daemon');
+    targetId = resolvePrefix(targetPrefix, daemonTargetIds, "daemon");
   } else {
     if (!existsSync(PAGES_CACHE)) {
       console.error('No page list cached. Run "cdp list" first.');
       process.exit(1);
     }
-    const pages = JSON.parse(readFileSync(PAGES_CACHE, 'utf8'));
-    targetId = resolvePrefix(targetPrefix, pages.map(p => p.targetId), 'target', 'Run "cdp list".');
+    const pages = JSON.parse(readFileSync(PAGES_CACHE, "utf8"));
+    targetId = resolvePrefix(
+      targetPrefix,
+      pages.map((p) => p.targetId),
+      "target",
+      'Run "cdp list".',
+    );
   }
 
   const conn = await getOrStartTabDaemon(targetId);
 
   const cmdArgs = args.slice(1);
 
-  if (cmd === 'eval') {
-    const expr = cmdArgs.join(' ');
-    if (!expr) { console.error('Error: expression required'); process.exit(1); }
+  if (cmd === "eval") {
+    const expr = cmdArgs.join(" ");
+    if (!expr) {
+      console.error("Error: expression required");
+      process.exit(1);
+    }
     cmdArgs[0] = expr;
-    cmdArgs.length = 1; 
-  } else if (cmd === 'type') {
+    cmdArgs.length = 1;
+  } else if (cmd === "type") {
     // Join all remaining args as text (allows spaces)
-    const text = cmdArgs.join(' ');
-    if (!text) { console.error('Error: text required'); process.exit(1); }
+    const text = cmdArgs.join(" ");
+    if (!text) {
+      console.error("Error: text required");
+      process.exit(1);
+    }
     cmdArgs[0] = text;
-    cmdArgs.length = 1; 
-  } else if (cmd === 'select') {
+    cmdArgs.length = 1;
+  } else if (cmd === "select") {
     // args: [selector, ...valueParts] — join value parts to allow spaces
-    if (!cmdArgs[0]) { console.error('Error: CSS selector required'); process.exit(1); }
-    if (!cmdArgs[1]) { console.error('Error: value required'); process.exit(1); }
-    if (cmdArgs.length > 2) { cmdArgs[1] = cmdArgs.slice(1).join(' '); cmdArgs.length = 2; }
-  } else if (cmd === 'evalraw') {
+    if (!cmdArgs[0]) {
+      console.error("Error: CSS selector required");
+      process.exit(1);
+    }
+    if (!cmdArgs[1]) {
+      console.error("Error: value required");
+      process.exit(1);
+    }
+    if (cmdArgs.length > 2) {
+      cmdArgs[1] = cmdArgs.slice(1).join(" ");
+      cmdArgs.length = 2;
+    }
+  } else if (cmd === "evalraw") {
     // args: [method, ...jsonParts] — join json parts in case of spaces
-    if (!cmdArgs[0]) { console.error('Error: CDP method required'); process.exit(1); }
-    if (cmdArgs.length > 2) { cmdArgs[1] = cmdArgs.slice(1).join(' '); cmdArgs.length = 2; }
+    if (!cmdArgs[0]) {
+      console.error("Error: CDP method required");
+      process.exit(1);
+    }
+    if (cmdArgs.length > 2) {
+      cmdArgs[1] = cmdArgs.slice(1).join(" ");
+      cmdArgs.length = 2;
+    }
   }
 
-  if ((cmd === 'nav' || cmd === 'navigate') && !cmdArgs[0]) {
-    console.error('Error: URL required');
+  if ((cmd === "nav" || cmd === "navigate") && !cmdArgs[0]) {
+    console.error("Error: URL required");
     process.exit(1);
   }
 
@@ -1131,9 +1342,12 @@ async function main() {
   if (response.ok) {
     if (response.result) console.log(response.result);
   } else {
-    console.error('Error:', response.error);
+    console.error("Error:", response.error);
     process.exitCode = 1;
   }
 }
 
-main().catch(e => { console.error(e.message); process.exit(1); });
+main().catch((e) => {
+  console.error(e.message);
+  process.exit(1);
+});
