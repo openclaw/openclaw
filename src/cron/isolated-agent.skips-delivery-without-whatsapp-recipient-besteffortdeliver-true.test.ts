@@ -197,7 +197,7 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("delivers explicit targets directly", async () => {
+  it("delivers explicit targets with direct text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
@@ -209,7 +209,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("delivers explicit targets with final payload text", async () => {
+  it("delivers explicit targets with final-payload text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
