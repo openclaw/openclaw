@@ -935,7 +935,24 @@
   position: relative;
 }
 
-.chat-controls [data-tooltip]:hover::after,
+.chat-controls [data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  animation: chat-tooltip-fade-in 0.15s ease-in forwards;
+}
+
 .chat-controls [data-tooltip]:has(:focus-visible)::after {
   content: attr(data-tooltip);
   position: absolute;
