@@ -421,8 +421,11 @@ export function buildAgentSystemPrompt(params: {
     "## Tooling",
     "Tool availability (filtered by policy):",
     "Tool names are case-sensitive. Call tools exactly as listed.",
+    // Tool listing is injected in the dynamic tail (after workspace files) for KV-cache
+    // stability. When a new plugin is installed (new tool added), only the tail is invalidated.
+    // See "## Tool Manifest" section injected after workspace files.
     toolLines.length > 0
-      ? toolLines.join("\n")
+      ? "(Available tools listed in Tool Manifest section below.)"
       : [
           "Pi lists the standard tools above. This runtime enables:",
           "- grep: search file contents for patterns",
@@ -740,6 +743,15 @@ export function buildAgentSystemPrompt(params: {
       lines.push(note);
     }
     lines.push("");
+  }
+
+  // Tool Manifest: the actual tool listing is injected here in the dynamic tail (after workspace
+  // files, skills, workspaceNotes) for KV-cache stability. When a new plugin is installed (new
+  // tool added), only this tail section is invalidated — all workspace files, skills, project
+  // notes, and deployment config remain in the KV-cached prefix.
+  // Placed last (before MEMORY.md) because tool installs are rarer than daily memory updates.
+  if (toolLines.length > 0) {
+    lines.push("## Tool Manifest", toolLines.join("\n"), "");
   }
 
   // Deployment-level config: docs, authorized senders, sandbox settings.
