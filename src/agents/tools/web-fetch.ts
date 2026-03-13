@@ -103,6 +103,13 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchAllowPrivateNetwork(fetch?: WebFetchConfig): boolean {
+  if (typeof fetch?.allowPrivateNetwork === "boolean") {
+    return fetch.allowPrivateNetwork;
+  }
+  return false;
+}
+
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
     fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
@@ -452,12 +459,13 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  allowPrivateNetwork: boolean;
 };
 
 function toFirecrawlContentParams(
   params: FirecrawlRuntimeParams & { url: string; extractMode: ExtractMode },
 ): Parameters<typeof fetchFirecrawlContent>[0] | null {
-  if (!params.firecrawlEnabled || !params.firecrawlApiKey) {
+  if (!params.firecrawlEnabled || !params.firecrawlApiKey || params.allowPrivateNetwork) {
     return null;
   }
   return {
@@ -533,6 +541,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -725,6 +734,7 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const allowPrivateNetwork = resolveFetchAllowPrivateNetwork(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
   const shouldResolveFirecrawlApiKey =
@@ -771,6 +781,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        allowPrivateNetwork,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,
