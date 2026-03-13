@@ -31,13 +31,6 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
-
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -146,6 +139,12 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
 }
 
 function normalizeAnthropicModelId(model: string): string {
+  const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5",
+  };
   const trimmed = model.trim();
   if (!trimmed) {
     return trimmed;
