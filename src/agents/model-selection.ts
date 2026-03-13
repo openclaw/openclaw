@@ -31,13 +31,6 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
-};
-
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -150,8 +143,16 @@ function normalizeAnthropicModelId(model: string): string {
   if (!trimmed) {
     return trimmed;
   }
+  // Inline alias map to avoid TDZ when this module is accessed via circular
+  // imports before module-level const initialisation completes (#45157).
+  const aliases: Record<string, string> = {
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "sonnet-4.6": "claude-sonnet-4-6",
+    "sonnet-4.5": "claude-sonnet-4-5",
+  };
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  return aliases[lower] ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
