@@ -97,6 +97,11 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
+// Detect model safety-filter rejections (stop_reason: sensitive).
+// This is NOT a timeout — it is a content policy block that requires a user-facing message.
+const SENSITIVE_STOP_REASON_RE =
+  /\bunhandled\s+stop reason:\s*sensitive\b|\bstop reason:\s*sensitive\b|\breason:\s*sensitive\b/i;
+
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
@@ -1220,6 +1225,37 @@ export async function runEmbeddedPiAgent(
             if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
               continue;
+            }
+            // Handle sensitive stop_reason (content safety filter) with a user-friendly message
+            if (SENSITIVE_STOP_REASON_RE.test(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text:
+                      "I can't respond to that - the content was flagged by the model's safety filter. " +
+                      "Please rephrase or try a different topic.",
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "sensitive", message: errorText },
+                },
+                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+                messagingToolSentTexts: attempt.messagingToolSentTexts,
+                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+                messagingToolSentTargets: attempt.messagingToolSentTargets,
+                successfulCronAdds: attempt.successfulCronAdds,
+              };
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
