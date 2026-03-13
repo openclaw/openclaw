@@ -12,6 +12,7 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "releaseChecks": {}
   }
 }

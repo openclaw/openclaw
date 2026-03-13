@@ -136,7 +136,7 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   const errors: string[] = [];
 
   for (const extension of normalizeBundledExtensionMetadata(params.extensions)) {
-    if (!extension.npmSpec) {
+    if (!extension.npmSpec && !extension.rootDependencyMirrorCheckEnabled) {
       continue;
     }
 

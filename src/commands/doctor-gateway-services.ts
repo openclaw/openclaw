@@ -43,26 +43,6 @@ function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDa
   return DEFAULT_GATEWAY_DAEMON_RUNTIME;
 }
 
-function findGatewayEntrypoint(programArguments?: string[]): string | null {
-  if (!programArguments || programArguments.length === 0) {
-    return null;
-  }
-  const gatewayIndex = programArguments.indexOf("gateway");
-  if (gatewayIndex <= 0) {
-    return null;
-  }
-  return programArguments[gatewayIndex - 1] ?? null;
-}
-
-async function normalizeExecutablePath(value: string): Promise<string> {
-  const resolvedPath = path.resolve(value);
-  try {
-    return await fs.realpath(resolvedPath);
-  } catch {
-    return resolvedPath;
-  }
-}
-
 function extractDetailPath(detail: string, prefix: string): string | null {
   if (!detail.startsWith(prefix)) {
     return null;
@@ -262,36 +242,7 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
-  const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
-  const { programArguments } = await buildGatewayInstallPlan({
-    env: process.env,
-    port,
-    runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-    nodePath: systemNodePath ?? undefined,
-    warn: (message, title) => note(message, title),
-    config: cfg,
-  });
-  const expectedEntrypoint = findGatewayEntrypoint(programArguments);
-  const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
-  const normalizedExpectedEntrypoint = expectedEntrypoint
-    ? await normalizeExecutablePath(expectedEntrypoint)
-    : null;
-  const normalizedCurrentEntrypoint = currentEntrypoint
-    ? await normalizeExecutablePath(currentEntrypoint)
-    : null;
-  if (
-    normalizedExpectedEntrypoint &&
-    normalizedCurrentEntrypoint &&
-    normalizedExpectedEntrypoint !== normalizedCurrentEntrypoint
-  ) {
-    audit.issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
-      message: "Gateway service entrypoint does not match the current install.",
-      detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
-      level: "recommended",
-    });
-  }
 
   if (audit.issues.length === 0) {
     return;

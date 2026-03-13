@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+import { callGatewayTool } from "../../../agents/tools/gateway.js";
+import type { ChannelLoginWithQrStartResult, ChannelLoginWithQrWaitResult } from "../types.js";
 import type { ChannelAgentTool } from "../types.js";
 
 export function createWhatsAppLoginTool(): ChannelAgentTool {
@@ -18,31 +20,36 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       force: Type.Optional(Type.Boolean()),
     }),
     execute: async (_toolCallId, args) => {
-      const { startWebLoginWithQr, waitForWebLogin } = await import("../../../web/login-qr.js");
       const action = (args as { action?: string })?.action ?? "start";
+      const timeoutMs =
+        typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
+          ? (args as { timeoutMs?: number }).timeoutMs
+          : undefined;
       if (action === "wait") {
-        const result = await waitForWebLogin({
-          timeoutMs:
-            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-              ? (args as { timeoutMs?: number }).timeoutMs
-              : undefined,
-        });
+        const result = await callGatewayTool<ChannelLoginWithQrWaitResult>(
+          "web.login.wait",
+          { timeoutMs },
+          {
+            timeoutMs,
+          },
+        );
         return {
           content: [{ type: "text", text: result.message }],
           details: { connected: result.connected },
         };
       }
 
-      const result = await startWebLoginWithQr({
-        timeoutMs:
-          typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (args as { timeoutMs?: number }).timeoutMs
-            : undefined,
-        force:
-          typeof (args as { force?: unknown }).force === "boolean"
-            ? (args as { force?: boolean }).force
-            : false,
-      });
+      const result = await callGatewayTool<ChannelLoginWithQrStartResult>(
+        "web.login.start",
+        { timeoutMs },
+        {
+          timeoutMs,
+          force:
+            typeof (args as { force?: unknown }).force === "boolean"
+              ? (args as { force?: boolean }).force
+              : false,
+        },
+      );
 
       if (!result.qrDataUrl) {
         return {

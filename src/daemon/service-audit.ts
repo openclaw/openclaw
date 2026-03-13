@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { resolveCliEntrypointPathForService } from "./program-args.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
@@ -59,6 +60,26 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
 
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
   return Boolean(programArguments?.some((arg) => arg === "gateway"));
+}
+
+function findGatewayEntrypoint(programArguments?: string[]): string | null {
+  if (!programArguments || programArguments.length === 0) {
+    return null;
+  }
+  const gatewayIndex = programArguments.indexOf("gateway");
+  if (gatewayIndex <= 0) {
+    return null;
+  }
+  return programArguments[gatewayIndex - 1] ?? null;
+}
+
+async function normalizeExecutablePath(value: string): Promise<string> {
+  const resolvedPath = path.resolve(value);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
 }
 
 function parseSystemdUnit(content: string): {
@@ -370,6 +391,44 @@ async function auditGatewayRuntime(
   }
 }
 
+async function auditGatewayEntrypoint(params: {
+  command: GatewayServiceCommand;
+  issues: ServiceConfigIssue[];
+  currentGatewayEntrypoint?: string;
+}) {
+  const currentEntrypoint = findGatewayEntrypoint(params.command?.programArguments);
+  if (!currentEntrypoint) {
+    return;
+  }
+
+  let expectedEntrypoint =
+    typeof params.currentGatewayEntrypoint === "string"
+      ? params.currentGatewayEntrypoint.trim() || undefined
+      : undefined;
+  if (!expectedEntrypoint) {
+    try {
+      expectedEntrypoint = await resolveCliEntrypointPathForService();
+    } catch {
+      return;
+    }
+  }
+
+  const [normalizedCurrentEntrypoint, normalizedExpectedEntrypoint] = await Promise.all([
+    normalizeExecutablePath(currentEntrypoint),
+    normalizeExecutablePath(expectedEntrypoint),
+  ]);
+  if (normalizedCurrentEntrypoint === normalizedExpectedEntrypoint) {
+    return;
+  }
+
+  params.issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+    message: "Gateway service entrypoint does not match the current install.",
+    detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
+    level: "recommended",
+  });
+}
+
 /**
  * Check if the service's embedded token differs from the config file token.
  * Returns an issue if drift is detected (service will use old token after restart).
@@ -404,6 +463,7 @@ export async function auditGatewayServiceConfig(params: {
   command: GatewayServiceCommand;
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
+  currentGatewayEntrypoint?: string;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
@@ -412,6 +472,11 @@ export async function auditGatewayServiceConfig(params: {
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
+  await auditGatewayEntrypoint({
+    command: params.command,
+    issues,
+    currentGatewayEntrypoint: params.currentGatewayEntrypoint,
+  });
 
   if (platform === "linux") {
     await auditSystemdUnit(params.env, issues);

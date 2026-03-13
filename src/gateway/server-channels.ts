@@ -415,15 +415,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
-        const configured = described?.configured;
+        const describedConfigured = described?.configured;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         next.enabled = enabled;
-        next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
+        // `isConfigured()` can be more authoritative than sync account descriptors.
+        // Preserve a known-false runtime state so optimistic descriptors do not
+        // re-arm health-monitor restarts for unconfigured accounts.
+        next.configured =
+          next.configured === false
+            ? false
+            : typeof describedConfigured === "boolean"
+              ? describedConfigured
+              : (next.configured ?? true);
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
-          } else if (configured === false) {
+          } else if (next.configured === false) {
             next.lastError ??= plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
           }
         }

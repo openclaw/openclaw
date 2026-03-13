@@ -111,6 +111,30 @@ describe("collectBundledExtensionRootDependencyGapErrors", () => {
       "bundled extension 'googlechat' root dependency mirror drift | missing in root package: (none) | remove stale allowlist entries: google-auth-library",
     ]);
   });
+
+  it("checks bundled-only extensions when they opt into root mirror validation", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        extensions: [
+          {
+            id: "memory-lancedb",
+            packageJson: {
+              dependencies: {
+                "@lancedb/lancedb": "^0.26.2",
+                openai: "^6.27.0",
+              },
+              openclaw: {
+                releaseChecks: {},
+              },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'memory-lancedb' root dependency mirror drift | missing in root package: @lancedb/lancedb, openai | new gaps: @lancedb/lancedb, openai",
+    ]);
+  });
 });
 
 describe("collectBundledExtensionManifestErrors", () => {

@@ -9,7 +9,7 @@ type GatewayProgramArgs = {
 
 type GatewayRuntimePreference = "auto" | "node" | "bun";
 
-async function resolveCliEntrypointPathForService(): Promise<string> {
+export async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
   if (!argv1) {
     throw new Error("Unable to resolve CLI entrypoint path");

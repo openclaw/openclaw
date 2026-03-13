@@ -44,6 +44,7 @@ function createTestPlugin(params?: {
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
+  isConfigured?: NonNullable<ChannelPlugin<TestAccount>["config"]>["isConfigured"];
 }): ChannelPlugin<TestAccount> {
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
@@ -52,6 +53,9 @@ function createTestPlugin(params?: {
     resolveAccount: () => account,
     isEnabled: (resolved) => resolved.enabled !== false,
   };
+  if (params?.isConfigured) {
+    config.isConfigured = params.isConfigured;
+  }
   if (includeDescribeAccount) {
     config.describeAccount = (resolved) => ({
       accountId: DEFAULT_ACCOUNT_ID,
@@ -132,7 +136,7 @@ describe("server-channels auto restart", () => {
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
-    expect(account?.reconnectAttempts).toBe(10);
+    expect(account?.reconnectAttempts).toBe(11);
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
@@ -166,6 +170,26 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.enabled).toBe(true);
     expect(account?.configured).toBe(true);
+  });
+
+  it("preserves known unconfigured runtime state when descriptors are optimistic", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({
+        account: { enabled: true, configured: true },
+        startAccount,
+        isConfigured: async () => false,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).not.toHaveBeenCalled();
+    expect(account?.configured).toBe(false);
+    expect(account?.lastError).toBe("not configured");
   });
 
   it("passes channelRuntime through channel gateway context when provided", async () => {

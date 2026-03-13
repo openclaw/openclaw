@@ -17,6 +17,7 @@ export type BundledExtension = { id: string; packageJson: ExtensionPackageJson }
 export type BundledExtensionMetadata = BundledExtension & {
   npmSpec?: string;
   rootDependencyMirrorAllowlist: string[];
+  rootDependencyMirrorCheckEnabled: boolean;
 };
 
 export function normalizeBundledExtensionMetadata(
@@ -28,6 +29,7 @@ export function normalizeBundledExtensionMetadata(
       typeof extension.packageJson.openclaw?.install?.npmSpec === "string"
         ? extension.packageJson.openclaw.install.npmSpec.trim()
         : undefined,
+    rootDependencyMirrorCheckEnabled: extension.packageJson.openclaw?.releaseChecks !== undefined,
     rootDependencyMirrorAllowlist:
       extension.packageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist?.filter(
         (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,

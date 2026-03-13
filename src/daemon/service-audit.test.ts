@@ -86,6 +86,34 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(true);
   });
 
+  it("flags gateway entrypoint mismatch when the service still points at an older install", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/home/testuser" },
+      platform: "linux",
+      currentGatewayEntrypoint: "/usr/lib/node_modules/openclaw/dist/index.js",
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "/home/testuser/.npm-global/lib/node_modules/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: {
+          PATH: "/home/testuser/.npm-global/bin:/usr/local/bin:/usr/bin:/bin",
+        },
+      },
+    });
+
+    expect(audit.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+          detail:
+            "/home/testuser/.npm-global/lib/node_modules/openclaw/dist/index.js -> /usr/lib/node_modules/openclaw/dist/index.js",
+        }),
+      ]),
+    );
+  });
+
   it("flags embedded service token even when it matches config token", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

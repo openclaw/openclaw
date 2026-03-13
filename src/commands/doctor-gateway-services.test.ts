@@ -2,22 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
-const fsMocks = vi.hoisted(() => ({
-  realpath: vi.fn(),
-}));
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      realpath: fsMocks.realpath,
-    },
-    realpath: fsMocks.realpath,
-  };
-});
-
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
   install: vi.fn(),
@@ -153,7 +137,6 @@ function setupGatewayTokenRepairScenario() {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -235,7 +218,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
   });
 
-  it("does not flag entrypoint mismatch when symlink and realpath match", async () => {
+  it("does not attempt entrypoint repair when the shared audit is clean", async () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: [
         "/usr/bin/node",
@@ -250,25 +233,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ok: true,
       issues: [],
     });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: [
-        "/usr/bin/node",
-        "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
-        "gateway",
-        "--port",
-        "18789",
-      ],
-      environment: {},
-    });
-    fsMocks.realpath.mockImplementation(async (value: string) => {
-      if (value.includes("/global/5/node_modules/openclaw/")) {
-        return value.replace(
-          "/global/5/node_modules/openclaw/",
-          "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
-        );
-      }
-      return value;
-    });
 
     await runRepair({ gateway: {} });
 
@@ -276,46 +240,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("does not flag entrypoint mismatch when realpath fails but normalized absolute paths match", async () => {
-    mocks.readCommand.mockResolvedValue({
-      programArguments: [
-        "/usr/bin/node",
-        "/opt/openclaw/../openclaw/dist/index.js",
-        "gateway",
-        "--port",
-        "18789",
-      ],
-      environment: {},
-    });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: true,
-      issues: [],
-    });
-    mocks.buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: [
-        "/usr/bin/node",
-        "/opt/openclaw/dist/index.js",
-        "gateway",
-        "--port",
-        "18789",
-      ],
-      environment: {},
-    });
-    fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
-
-    await runRepair({ gateway: {} });
-
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
-      "Gateway service config",
-    );
-    expect(mocks.install).not.toHaveBeenCalled();
-  });
-
-  it("still flags entrypoint mismatch when canonicalized paths differ", async () => {
+  it("still flags entrypoint mismatch when the shared audit reports it", async () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: [
         "/usr/bin/node",
@@ -327,8 +256,16 @@ describe("maybeRepairGatewayServiceConfig", () => {
       environment: {},
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: true,
-      issues: [],
+      ok: false,
+      issues: [
+        {
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint does not match the current install.",
+          detail:
+            "/Users/test/.nvm/versions/node/v22.0.0/lib/node_modules/openclaw/dist/index.js -> /Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+          level: "recommended",
+        },
+      ],
     });
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: [
@@ -338,8 +275,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
         "--port",
         "18789",
       ],
+      workingDirectory: "/tmp",
       environment: {},
     });
+    mocks.install.mockResolvedValue(undefined);
 
     await runRepair({ gateway: {} });
 
@@ -459,7 +398,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
           ok: false,
-          issues: [],
+          issues: [
+            {
+              code: "gateway-token-embedded",
+              message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
+              level: "recommended",
+            },
+          ],
         });
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
