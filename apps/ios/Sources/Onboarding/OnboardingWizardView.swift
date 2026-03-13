@@ -642,11 +642,17 @@ struct OnboardingWizardView: View {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualTLS = link.tls
-        if let token = link.token {
+        let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
+        if let token = link.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
             self.gatewayToken = token
+        } else if trimmedBootstrapToken?.isEmpty == false {
+            self.gatewayToken = ""
         }
-        if let password = link.password {
+        if let password = link.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
             self.gatewayPassword = password
+        } else if trimmedBootstrapToken?.isEmpty == false {
+            self.gatewayPassword = ""
         }
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
@@ -792,6 +798,13 @@ struct OnboardingWizardView: View {
         GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
+    }
+
+    private func saveGatewayBootstrapToken(_ token: String?) {
+        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstanceId.isEmpty else { return }
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        GatewaySettingsStore.saveGatewayBootstrapToken(trimmedToken, instanceId: trimmedInstanceId)
     }
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {

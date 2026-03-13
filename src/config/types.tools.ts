@@ -319,6 +319,15 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
+  /** Optional multimodal file indexing for selected extra paths. */
+  multimodal?: {
+    /** Enable image/audio embeddings from extraPaths. */
+    enabled?: boolean;
+    /** Which non-text file types to index. */
+    modalities?: Array<"image" | "audio" | "all">;
+    /** Max bytes allowed per multimodal file before it is skipped. */
+    maxFileBytes?: number;
+  };
   /** Experimental memory search settings. */
   experimental?: {
     /** Enable session transcript indexing (experimental, default: false). */
@@ -347,6 +356,11 @@ export type MemorySearchConfig = {
   fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /**
+   * Gemini embedding-2 models only: output vector dimensions.
+   * Supported values today are 768, 1536, and 3072.
+   */
+  outputDimensionality?: number;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
@@ -388,6 +402,8 @@ export type MemorySearchConfig = {
       deltaBytes?: number;
       /** Minimum appended JSONL lines before session transcripts are reindexed. */
       deltaMessages?: number;
+      /** Force session reindex after compaction-triggered transcript updates (default: true). */
+      postCompactionForce?: boolean;
     };
   };
   /** Query behavior. */
