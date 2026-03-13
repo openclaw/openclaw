@@ -149,4 +149,28 @@ describe("deliverReplies", () => {
       messageId: "imsg-1",
     });
   });
+
+  it("strips inline reply directive tags before sending outbound text", async () => {
+    await deliverReplies({
+      replies: [{ text: "[[reply_to:1578]] Hey Matt.", replyToId: "1578" }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:40",
+      "Hey Matt.",
+      expect.objectContaining({
+        client,
+        maxBytes: 2048,
+        accountId: "acct-4",
+        replyToId: "1578",
+      }),
+    );
+  });
 });
