@@ -79,8 +79,8 @@ function cdpUrlForPort(cdpPort: number) {
 }
 
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
+  const ws = await openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
   return new Promise<boolean>((resolve) => {
-    const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
     ws.once("open", () => {
       try {
         ws.close();
@@ -152,10 +152,10 @@ async function canRunCdpHealthCommand(
   wsUrl: string,
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
 ): Promise<boolean> {
+  const ws = await openCdpWebSocket(wsUrl, {
+    handshakeTimeoutMs: timeoutMs,
+  });
   return await new Promise<boolean>((resolve) => {
-    const ws = openCdpWebSocket(wsUrl, {
-      handshakeTimeoutMs: timeoutMs,
-    });
     let settled = false;
     const onMessage = (raw: Parameters<typeof rawDataToString>[0]) => {
       if (settled) {

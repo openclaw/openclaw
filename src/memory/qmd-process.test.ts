@@ -63,14 +63,15 @@ describe("resolveCliSpawnInvocation", () => {
     process.env.PATH = `${binDir};${originalPath ?? ""}`;
     process.env.PATHEXT = ".CMD;.EXE";
 
-    expect(() =>
-      resolveCliSpawnInvocation({
-        command: "qmd",
-        args: ["query", "hello"],
-        env: process.env,
-        packageName: "qmd",
-      }),
-    ).toThrow(/without shell execution/);
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "qmd",
+    });
+
+    expect(invocation.command.toLowerCase()).toBe(path.join(binDir, "qmd.cmd").toLowerCase());
+    expect(invocation.shell).toBe(true);
   });
 
   it("keeps bare commands bare when no Windows wrapper exists on PATH", () => {

@@ -47,7 +47,9 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  /** If true: prevent all browser launches (via local Chrome or Playwright) and only allow attaching. Default: false */
   attachOnly: boolean;
+  lockTab: boolean;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -357,6 +359,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    lockTab: profile.lockTab === true,
   };
 }
 

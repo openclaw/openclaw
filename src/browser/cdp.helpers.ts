@@ -39,8 +39,8 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
-export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
-  const relayHeaders = getChromeExtensionRelayAuthHeaders(url);
+export async function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
+  const relayHeaders = await getChromeExtensionRelayAuthHeaders(url);
   const mergedHeaders = { ...relayHeaders, ...headers };
   try {
     const parsed = new URL(url);
@@ -168,7 +168,7 @@ export async function fetchCdpChecked(
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const headers = await getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await withNoProxyForCdpUrl(url, () =>
       fetch(url, { ...init, headers, signal: ctrl.signal }),
     );
@@ -193,11 +193,11 @@ export async function fetchOk(
   await fetchCdpChecked(url, timeoutMs, init);
 }
 
-export function openCdpWebSocket(
+export async function openCdpWebSocket(
   wsUrl: string,
   opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
-): WebSocket {
-  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+): Promise<WebSocket> {
+  const headers = await getHeadersWithAuth(wsUrl, opts?.headers ?? {});
   const handshakeTimeoutMs =
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
@@ -215,7 +215,7 @@ export async function withCdpSocket<T>(
   fn: (send: CdpSendFn) => Promise<T>,
   opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
 ): Promise<T> {
-  const ws = openCdpWebSocket(wsUrl, opts);
+  const ws = await openCdpWebSocket(wsUrl, opts);
   const { send, closeWithError } = createCdpSender(ws);
 
   const openPromise = new Promise<void>((resolve, reject) => {

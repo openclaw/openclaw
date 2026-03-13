@@ -1,5 +1,6 @@
 import {
   buildRelayWsUrl,
+  deriveRelayToken,
   isLastRemainingTab,
   isMissingTabError,
   isRetryableReconnectError,
@@ -12,7 +13,8 @@ const BADGE = {
   on: { text: 'ON', color: '#FF5A36' },
   off: { text: '', color: '#000000' },
   connecting: { text: '…', color: '#F59E0B' },
-  error: { text: '!', color: '#B91C1C' },
+  error: { text: 'X', color: '#7F1D1D' },
+  locked: { text: 'LCK', color: '#10B981' },
 }
 
 /** @type {WebSocket|null} */
@@ -20,8 +22,10 @@ let relayWs = null
 /** @type {Promise<void>|null} */
 let relayConnectPromise = null
 let relayGatewayToken = ''
-/** @type {string|null} */
 let relayConnectRequestId = null
+let relayIsLocked = false
+let lockedTabId = null
+let extensionIsDisabled = false
 
 let nextSession = 1
 
@@ -49,6 +53,7 @@ let reconnectTimer = null
 
 const TAB_VALIDATION_ATTEMPTS = 2
 const TAB_VALIDATION_RETRY_DELAY_MS = 1000
+
 
 function nowStack() {
   try {
@@ -105,9 +110,12 @@ async function getGatewayToken() {
 
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
-  void chrome.action.setBadgeText({ tabId, text: cfg.text })
-  void chrome.action.setBadgeBackgroundColor({ tabId, color: cfg.color })
-  void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
+  const opts = tabId ? { tabId, text: cfg.text } : { text: cfg.text }
+  const bgOpts = tabId ? { tabId, color: cfg.color } : { color: cfg.color }
+  const fgOpts = tabId ? { tabId, color: '#FFFFFF' } : { color: '#FFFFFF' }
+  void chrome.action.setBadgeText(opts)
+  void chrome.action.setBadgeBackgroundColor(bgOpts)
+  void chrome.action.setBadgeTextColor(fgOpts).catch(() => {})
 }
 
 // Persist attached tab state to survive MV3 service worker restarts.
@@ -115,13 +123,15 @@ async function persistState() {
   try {
     const tabEntries = []
     for (const [tabId, tab] of tabs.entries()) {
-      if (tab.state === 'connected' && tab.sessionId && tab.targetId) {
-        tabEntries.push({ tabId, sessionId: tab.sessionId, targetId: tab.targetId, attachOrder: tab.attachOrder })
+      if ((tab.state === 'connected' || tab.state === 'disabled') && tab.sessionId && tab.targetId) {
+        tabEntries.push({ tabId, sessionId: tab.sessionId, targetId: tab.targetId, attachOrder: tab.attachOrder, state: tab.state })
       }
     }
     await chrome.storage.session.set({
       persistedTabs: tabEntries,
       nextSession,
+      lockedTabId,
+      extensionIsDisabled,
     })
   } catch {
     // chrome.storage.session may not be available in all contexts.
@@ -130,24 +140,123 @@ async function persistState() {
 
 // Rehydrate tab state on service worker startup. Fast path — just restores
 // maps and badges. Relay reconnect happens separately in background.
+/**
+ * Computes and sets the badges exactly how the states require:
+ * - Locked: Green only on locked tab, others blank.
+ * - Orange: Orange on ALL tabs globally.
+ * - X: X on ALL tabs globally.
+ */
+function updateAllBadges() {
+  const isUp = !!(relayWs && relayWs.readyState === WebSocket.OPEN)
+  
+  if (!extensionIsDisabled && tabs.size === 0) {
+    // No auto-disable side-effect here to prevent accidental shutdown on tab close
+  }
+  
+  let globalKind = 'error';
+  if (extensionIsDisabled) {
+    globalKind = 'error';
+  } else if (relayIsLocked) {
+    globalKind = 'off';
+  } else if (isUp && tabs.size > 0) {
+    const tabList = Array.from(tabs.values());
+    if (tabList.some(t => t.state === 'connected')) {
+      globalKind = 'on';
+    } else if (tabList.some(t => t.state === 'connecting')) {
+      globalKind = 'connecting';
+    } else {
+      globalKind = 'error';
+    }
+  } else {
+    // Only set disabled if we are truly disconnected and no tabs are being handled.
+    if (!isUp && tabs.size === 0) {
+      extensionIsDisabled = true;
+    }
+    globalKind = 'error';
+  }
+
+  // Set the global default badge
+  setBadge(null, globalKind);
+  
+  // Explicitly force every single tab's local override to match the new state,
+  // resolving any ghosting issues from detached tabs
+  chrome.tabs.query({}).then((allTabs) => {
+    for (const tab of allTabs) {
+      if (!tab.id) continue;
+      
+      if (relayIsLocked && lockedTabId === tab.id) {
+        setBadge(tab.id, 'locked');
+      } else {
+        setBadge(tab.id, globalKind);
+      }
+    }
+  }).catch(() => {});
+  
+  void syncAllOverlays()
+}
+
+/**
+ * Permanently removes the floating status bar on a single tab using executeScript / debugger.
+ * Called automatically to clean up any old labels that might still exist.
+ */
+async function setOverlayOnTab(tabId) {
+  const removeFunc = () => {
+    ['__openclawOverlay', '__openclawLockedIcon'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+  }
+  
+  await Promise.allSettled([
+    chrome.scripting.executeScript({ target: { tabId }, func: removeFunc }).catch(() => {}),
+    chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression: `(${removeFunc.toString()})()`,
+    }).catch(() => {})
+  ]);
+}
+
+/**
+ * Removes labels from ALL tabs. Labels are no longer supported.
+ */
+async function syncAllOverlays() {
+  const allTabs = await chrome.tabs.query({});
+  for (const tab of allTabs) {
+    if (tab.id) setOverlayOnTab(tab.id).catch(() => {});
+  }
+}
+
 async function rehydrateState() {
   try {
-    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession'])
+    const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession', 'lockedTabId', 'extensionIsDisabled'])
     if (stored.nextSession) {
       nextSession = Math.max(nextSession, stored.nextSession)
     }
+    if (stored.lockedTabId) {
+      lockedTabId = stored.lockedTabId
+    }
+    if (stored.extensionIsDisabled !== undefined) {
+      extensionIsDisabled = stored.extensionIsDisabled
+    }
+    
+    if (extensionIsDisabled) {
+      setBadge(null, 'error')
+    } else {
+      setBadge(null, 'off')
+    }
+    
     const entries = stored.persistedTabs || []
     // Phase 1: optimistically restore state and badges.
     for (const entry of entries) {
       tabs.set(entry.tabId, {
-        state: 'connected',
+        state: entry.state || 'connected',
         sessionId: entry.sessionId,
         targetId: entry.targetId,
         attachOrder: entry.attachOrder,
       })
       tabBySession.set(entry.sessionId, entry.tabId)
-      setBadge(entry.tabId, 'on')
     }
+    updateAllBadges()
+    // Phase 2: validate asynchronously, remove dead tabs.
     // Retry once so transient busy/navigation states do not permanently drop
     // a still-attached tab after a service worker restart.
     for (const entry of entries) {
@@ -175,8 +284,17 @@ async function ensureRelayConnection() {
 
     // Fast preflight: is the relay server up?
     try {
-      await fetch(`${httpBase}/`, { method: 'HEAD', signal: AbortSignal.timeout(2000) })
+      const resp = await fetch(`${httpBase}/extension/status`, { signal: AbortSignal.timeout(2000) })
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}))
+        relayIsLocked = !!data.lockTab
+        console.log('[OpenClaw] Fetched relay status. lockTab:', relayIsLocked)
+      } else {
+        console.warn('[OpenClaw] Relay status fetch failed:', resp.status)
+      }
     } catch (err) {
+      // If the status endpoint is completely unreachable the WS will also fail,
+      // but throw early so the user sees a clear "relay not running" error.
       throw new Error(`Relay server not reachable at ${httpBase} (${String(err)})`)
     }
 
@@ -221,8 +339,52 @@ async function ensureRelayConnection() {
   try {
     await relayConnectPromise
     reconnectAttempt = 0
+    updateAllBadges()
   } finally {
     relayConnectPromise = null
+  }
+}
+
+/**
+ * Toggle the lockTab setting on the relay server.
+ * @param {boolean} locked
+ * @returns {Promise<{ok:boolean, lockTab:boolean}|null>}
+ */
+async function setLockOnRelay(locked, tabId = null) {
+  if (locked && !tabId) {
+    console.warn('[OpenClaw] Refusing lock without an attached tab ID')
+    return null
+  }
+  try {
+    const port = await getRelayPort()
+    const gatewayToken = await getGatewayToken()
+    const relayToken = await deriveRelayToken(gatewayToken, port)
+    const resp = await fetch(`http://127.0.0.1:${port}/extension/status`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-openclaw-relay-token': relayToken,
+      },
+      body: JSON.stringify({ lockTab: locked }),
+      signal: AbortSignal.timeout(3000),
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      relayIsLocked = !!data.lockTab
+      
+      if (relayIsLocked) {
+        lockedTabId = tabId
+      } else if (lockedTabId === tabId || tabId === null) {
+        lockedTabId = null
+      }
+      
+      void persistState()
+      return data
+    }
+    return null
+  } catch (err) {
+    console.warn('[OpenClaw] setLockOnRelay failed:', err)
+    return null
   }
 }
 
@@ -340,10 +502,10 @@ async function reannounceAttachedTabs() {
         },
       })
 
-      setBadge(tabId, 'on')
+      setBadge(tabId, relayIsLocked ? 'locked' : 'on')
       void chrome.action.setTitle({
         tabId,
-        title: 'OpenClaw Browser Relay: attached (click to detach)',
+        title: relayIsLocked ? 'OpenClaw Browser Relay: LOCKED to this tab (click to detach)' : 'OpenClaw Browser Relay: attached (click to detach)',
       })
     } catch {
       // Relay send failed (e.g. WS closed in the gap between ensureRelayConnection
@@ -527,8 +689,12 @@ async function attachTab(tabId, opts = {}) {
   tabBySession.set(sessionId, tabId)
   void chrome.action.setTitle({
     tabId,
-    title: 'OpenClaw Browser Relay: attached (click to detach)',
+    title: relayIsLocked
+      ? 'OpenClaw Browser Relay: LOCKED (click to lock/detach)'
+      : 'OpenClaw Browser Relay: attached (click to lock/detach)',
   })
+
+  // Overlay is synced after attach via syncAllOverlays()
 
   if (!opts.skipAttachedEvent) {
     sendToRelay({
@@ -544,7 +710,7 @@ async function attachTab(tabId, opts = {}) {
     })
   }
 
-  setBadge(tabId, 'on')
+  setBadge(tabId, relayIsLocked ? 'locked' : 'on')
   await persistState()
 
   return { sessionId, targetId }
@@ -589,16 +755,26 @@ async function detachTab(tabId, reason) {
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
   tabs.delete(tabId)
 
+  if (lockedTabId === tabId) {
+    lockedTabId = null
+    relayIsLocked = false
+    // Clear the relay state as well so status reflects reality
+    void setLockOnRelay(false).catch(() => {})
+  }
+
   try {
     await chrome.debugger.detach({ tabId })
   } catch {
     // May already be detached.
   }
 
-  setBadge(tabId, 'off')
+  // Sync overlays globally to remove label from the detached tab
+  await syncAllOverlays()
+
+  updateAllBadges() // Sync ALL badges (forcing the detached tab to correctly inherit the globally applied state)
   void chrome.action.setTitle({
     tabId,
-    title: 'OpenClaw Browser Relay (click to attach/detach)',
+    title: extensionIsDisabled ? 'OpenClaw Browser Relay: STOPPED globally (click to run)' : 'OpenClaw Browser Relay (click to attach)',
   })
 
   await persistState()
@@ -619,18 +795,73 @@ async function connectOrToggleForActiveTab() {
       setBadge(tabId, 'off')
       void chrome.action.setTitle({
         tabId,
-        title: 'OpenClaw Browser Relay (click to attach/detach)',
+        title: 'OpenClaw Browser Relay (click to attach)',
       })
       return
     }
 
     const existing = tabs.get(tabId)
-    if (existing?.state === 'connected') {
-      await detachTab(tabId, 'toggle')
+
+    if (extensionIsDisabled) {
+      // X → ON: remove global disabled state, attach current tab
+      extensionIsDisabled = false
+      
+      if (!existing || existing.state !== 'connected') {
+        tabs.set(tabId, { state: 'connecting' })
+        setBadge(tabId, 'connecting')
+        void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: connecting to local relay…' })
+        
+        try {
+          await ensureRelayConnection()
+          await attachTab(tabId)
+          updateAllBadges()
+          void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: attached (click to lock)' })
+        } catch (err) {
+          tabs.delete(tabId)
+          setBadge(tabId, 'error')
+          void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: relay not running (open options for setup)' })
+          void maybeOpenHelpOnce()
+          const message = err instanceof Error ? err.message : String(err)
+          console.warn('attach failed', message, nowStack())
+        }
+      } else {
+        updateAllBadges()
+        void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: attached (click to lock)' })
+      }
       return
     }
 
-    // User is manually connecting — cancel any pending reconnect.
+    // 3-state cycle (now we are in ON or LCK state)
+    if (existing?.state === 'connected') {
+      if (!relayIsLocked) {
+        // ON → LCK: enable lock on relay
+        setBadge(tabId, 'connecting')
+        void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: locking…' })
+        const result = await setLockOnRelay(true, tabId)
+        if (result) {
+          updateAllBadges()
+          void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: LOCKED (click to stop / X)' })
+        } else {
+          setBadge(tabId, 'on')
+          void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: attached (click to lock)' })
+        }
+      } else {
+        // LCK → X: unlock relay, set state to disabled globally
+        await setLockOnRelay(false, tabId)
+        extensionIsDisabled = true
+        
+        // Detach all tabs to fully stop taking commands and remove chrome infobar
+        for (const t of Array.from(tabs.keys())) {
+          await detachTab(t, 'toggle').catch(() => {})
+        }
+        
+        updateAllBadges() // Everyone gets X
+        void chrome.action.setTitle({ tabId, title: 'OpenClaw Browser Relay: STOPPED globally (click to run)' })
+      }
+      return
+    }
+
+    // Fallback: idle tab while ON/LCK → ON (attach new tab)
     cancelReconnect()
 
     tabs.set(tabId, { state: 'connecting' })
@@ -643,6 +874,11 @@ async function connectOrToggleForActiveTab() {
     try {
       await ensureRelayConnection()
       await attachTab(tabId)
+      updateAllBadges()
+      void chrome.action.setTitle({
+        tabId,
+        title: 'OpenClaw Browser Relay: attached (click to lock)',
+      })
     } catch (err) {
       tabs.delete(tabId)
       setBadge(tabId, 'error')
@@ -675,6 +911,14 @@ async function handleForwardCdpCommand(msg) {
       }
       return null
     })()
+
+  if (extensionIsDisabled) {
+    throw new Error('Extension is globally disabled. Commands from relay refused.')
+  }
+
+  if (relayIsLocked && lockedTabId && tabId !== lockedTabId) {
+    throw new Error('Extension relay is locked to another tab. Command refused.')
+  }
 
   if (!tabId) throw new Error(`No attached tab for method ${method}`)
 
@@ -730,8 +974,7 @@ async function handleForwardCdpCommand(msg) {
     return {}
   }
 
-  const tabState = tabs.get(tabId)
-  const mainSessionId = tabState?.sessionId
+  const mainSessionId = tabs.get(tabId)?.sessionId
   const debuggerSession =
     sessionId && mainSessionId && sessionId !== mainSessionId
       ? { ...debuggee, sessionId }
@@ -908,12 +1151,19 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
   if (tab.sessionId) {
     tabBySession.set(tab.sessionId, addedTabId)
   }
+  if (lockedTabId === removedTabId) {
+    lockedTabId = addedTabId
+  }
   for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
     if (parentTabId === removedTabId) {
       childSessionToTab.set(childSessionId, addedTabId)
     }
   }
-  setBadge(addedTabId, 'on')
+  updateAllBadges()
+  void chrome.action.setTitle({
+    tabId: addedTabId,
+    title: relayIsLocked ? 'OpenClaw Browser Relay: LOCKED to this tab (click to detach)' : 'OpenClaw Browser Relay: attached (click to detach)',
+  })
   void persistState()
 }))
 
@@ -924,25 +1174,24 @@ chrome.debugger.onDetach.addListener((...args) => void whenReady(() => onDebugge
 
 chrome.action.onClicked.addListener(() => void whenReady(() => connectOrToggleForActiveTab()))
 
-// Refresh badge after navigation completes — service worker may have restarted
-// during navigation, losing ephemeral badge state.
-chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(() => {
+// Refresh badge + overlay after navigation completes.
+chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenReady(async () => {
   if (frameId !== 0) return
-  const tab = tabs.get(tabId)
-  if (tab?.state === 'connected') {
-    setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
-  }
+  updateAllBadges()
+  // Re-sync overlays after page load (DOM was reset by navigation)
+  await syncAllOverlays()
 }))
 
-// Refresh badge when user switches to an attached tab.
-chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(() => {
-  const tab = tabs.get(tabId)
-  if (tab?.state === 'connected') {
-    setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
-  }
+// When user switches tabs:
+// Sync all overlays globally. The broadcast logic handles showing/hiding on correct tabs.
+chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
+  updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
+  await syncAllOverlays()
 }))
 
 chrome.runtime.onInstalled.addListener(() => {
+  // Clear any stale overlays from a previous session on install/update
+  void syncAllOverlays()
   void chrome.runtime.openOptionsPage()
 })
 
@@ -957,11 +1206,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (tabs.size === 0) return
 
   // Refresh badges (ephemeral in MV3).
-  for (const [tabId, tab] of tabs.entries()) {
-    if (tab.state === 'connected') {
-      setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
-    }
-  }
+  updateAllBadges()
 
   // If relay is down and no reconnect is in progress, trigger one.
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
@@ -1004,22 +1249,60 @@ async function whenReady(fn) {
 // host_permissions and bypasses CORS preflight, so the options page
 // delegates token-validation requests here.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== 'relayCheck') return false
-  const { url, token } = msg
-  const headers = token ? { 'x-openclaw-relay-token': token } : {}
-  fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
-    .then(async (res) => {
-      const contentType = String(res.headers.get('content-type') || '')
-      let json = null
-      if (contentType.includes('application/json')) {
-        try {
-          json = await res.json()
-        } catch {
-          json = null
+  if (msg?.type === 'relayCheck') {
+    const { url, token } = msg
+    const headers = token ? { 'x-openclaw-relay-token': token } : {}
+    fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
+      .then(async (res) => {
+        const contentType = String(res.headers.get('content-type') || '')
+        let json = null
+        if (contentType.includes('application/json')) {
+          try {
+            json = await res.json()
+          } catch {
+            json = null
+          }
         }
+        sendResponse({ status: res.status, ok: res.ok, contentType, json })
+      })
+      .catch((err) => sendResponse({ status: 0, ok: false, error: String(err) }))
+    return true
+  }
+
+  if (msg?.type === 'setLock') {
+    const { locked } = msg
+    void whenReady(async () => {
+      let activeTabId = null;
+      try {
+        const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+        
+        // If the active tab is already one of our attached tabs, use it.
+        if (active?.id && tabs.has(active.id)) {
+          activeTabId = active.id;
+        } else {
+          // Otherwise, pick the most recently attached tab as a fallback
+          const attachedIds = Array.from(tabs.keys()).sort((a, b) => {
+            const ta = tabs.get(a)?.attachOrder || 0
+            const tb = tabs.get(b)?.attachOrder || 0
+            return tb - ta
+          })
+          activeTabId = attachedIds[0] || null
+        }
+      } catch {}
+
+      const result = await setLockOnRelay(!!locked, activeTabId)
+      if (result) {
+        updateAllBadges()
       }
-      sendResponse({ status: res.status, ok: res.ok, contentType, json })
+      sendResponse({ ok: !!result, lockTab: relayIsLocked })
     })
-    .catch((err) => sendResponse({ status: 0, ok: false, error: String(err) }))
-  return true
+    return true
+  }
+
+  if (msg?.type === 'getLockStatus') {
+    sendResponse({ lockTab: relayIsLocked, connected: !!(relayWs && relayWs.readyState === WebSocket.OPEN) })
+    return false
+  }
+
+  return false
 })

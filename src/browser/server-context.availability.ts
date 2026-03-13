@@ -156,6 +156,7 @@ export function createProfileAvailability({
         await ensureChromeExtensionRelayServer({
           cdpUrl: profile.cdpUrl,
           bindHost: current.resolved.relayBindHost,
+          lockTab: profile.lockTab,
         });
         if (!(await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
           throw new BrowserProfileUnavailableError(

@@ -214,7 +214,7 @@ export function resolveWindowsSpawnProgramCandidate(
     };
   }
 
-  if (ext === ".cmd" || ext === ".bat") {
+  if ((ext === ".cmd" || ext === ".bat") && isFilePath(resolvedCommand)) {
     const entrypoint =
       resolveEntrypointFromCmdShim(resolvedCommand) ??
       resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);

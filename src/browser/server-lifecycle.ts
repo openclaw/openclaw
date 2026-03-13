@@ -23,6 +23,7 @@ export async function ensureExtensionRelayForProfiles(params: {
     await ensureChromeExtensionRelayServer({
       cdpUrl: profile.cdpUrl,
       bindHost: params.resolved.relayBindHost,
+      lockTab: profile.lockTab,
     }).catch((err) => {
       params.onWarn(`Chrome extension relay init failed for profile "${name}": ${String(err)}`);
     });
