@@ -1,4 +1,4 @@
-import { posix as path } from "node:path";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findExtraGatewayServices } from "./inspect.js";
 
@@ -17,11 +17,11 @@ const fsState = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", () => {
   const readdir = vi.fn(async (dir: string) => {
-    const prefix = dir.endsWith("/") ? dir : dir + "/";
+    const prefix = dir.endsWith(path.sep) ? dir : dir + path.sep;
     const names: string[] = [];
     for (const key of fsState.files.keys()) {
       const rest = key.slice(prefix.length);
-      if (key.startsWith(prefix) && !rest.includes("/")) {
+      if (key.startsWith(prefix) && !rest.includes(path.sep)) {
         names.push(rest);
       }
     }
