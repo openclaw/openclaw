@@ -1,4 +1,19 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as openAICodexOAuth from "./openai-codex-oauth.js";
+
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+  return {
+    ...actual,
+    getOAuthApiKey: vi.fn(),
+    getOAuthProviders: () => [
+      { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    ],
+  };
+});
+
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import {
   createAuthTestLifecycle,
@@ -14,6 +29,7 @@ describe("applyAuthChoiceOpenAI", () => {
     "OPENCLAW_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "OPENAI_API_KEY",
+    "CODEX_HOME",
   ]);
 
   async function setupTempState() {
@@ -22,7 +38,28 @@ describe("applyAuthChoiceOpenAI", () => {
     return env.agentDir;
   }
 
+  async function writeCodexCliAuth(
+    stateDir: string,
+    tokens?: { access?: string; refresh?: string; accountId?: string },
+  ) {
+    const codexHome = path.join(stateDir, "codex-home");
+    process.env.CODEX_HOME = codexHome;
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        tokens: {
+          access_token: tokens?.access ?? "file-access",
+          refresh_token: tokens?.refresh ?? "file-refresh",
+          ...(tokens?.accountId ? { account_id: tokens.accountId } : {}),
+        },
+      }),
+      "utf8",
+    );
+  }
+
   afterEach(async () => {
+    vi.restoreAllMocks();
     await lifecycle.cleanup();
   });
 
@@ -112,5 +149,196 @@ describe("applyAuthChoiceOpenAI", () => {
     }>(agentDir);
     expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-token");
     expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("skips follow-up model selection when OpenAI Codex OAuth throws", async () => {
+    const loginSpy = vi
+      .spyOn(openAICodexOAuth, "loginOpenAICodexOAuth")
+      .mockRejectedValueOnce(new Error("oauth failed"));
+
+    const prompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).toMatchObject({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    expect(loginSpy).toHaveBeenCalled();
+  });
+
+  it("skips follow-up model selection when OpenAI Codex OAuth returns no credentials", async () => {
+    const loginSpy = vi
+      .spyOn(openAICodexOAuth, "loginOpenAICodexOAuth")
+      .mockResolvedValueOnce(null);
+
+    const prompter = createWizardPrompter({}, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).toMatchObject({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    expect(loginSpy).toHaveBeenCalled();
+  });
+
+  it("offers to sync validated newer Codex auth.json when auth-profiles is missing", async () => {
+    const env = await setupAuthTestEnv("openclaw-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    await writeCodexCliAuth(env.stateDir, { accountId: "acct-123" });
+    const callbackExpires = Date.now() + 60_000;
+
+    vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
+      provider: "openai-codex",
+      access: "callback-access",
+      refresh: "callback-refresh",
+      expires: callbackExpires,
+      accountId: "acct-123",
+      email: "callback@example.com",
+    });
+
+    const confirm = vi.fn(async () => true);
+    const prompter = createWizardPrompter({ confirm }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: env.agentDir,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: false,
+        message: expect.stringContaining("Sync auth.json credentials into this agent now?"),
+      }),
+    );
+    expect(result?.config.auth?.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<
+        string,
+        { access?: string; refresh?: string; expires?: number; accountId?: string }
+      >;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      access: "file-access",
+      refresh: "file-refresh",
+      expires: callbackExpires,
+      accountId: "acct-123",
+    });
+  });
+
+  it("uses callback credentials when auth.json sync is declined", async () => {
+    const env = await setupAuthTestEnv("openclaw-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    await writeCodexCliAuth(env.stateDir, {
+      access: "file-access",
+      refresh: "file-refresh",
+      accountId: "acct-123",
+    });
+
+    vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
+      provider: "openai-codex",
+      access: "callback-access",
+      refresh: "callback-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "acct-123",
+      email: "callback@example.com",
+    });
+
+    const confirm = vi.fn(async () => false);
+    const prompter = createWizardPrompter({ confirm }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: env.agentDir,
+    });
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result?.config.auth?.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { access?: string; refresh?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      access: "callback-access",
+      refresh: "callback-refresh",
+    });
+  });
+
+  it("keeps callback credentials when auth.json cannot be validated against the callback", async () => {
+    const env = await setupAuthTestEnv("openclaw-openai-");
+    lifecycle.setStateDir(env.stateDir);
+    await writeCodexCliAuth(env.stateDir, {
+      access: "file-access",
+      refresh: "file-refresh",
+      accountId: "acct-other",
+    });
+
+    vi.spyOn(openAICodexOAuth, "loginOpenAICodexOAuth").mockResolvedValueOnce({
+      provider: "openai-codex",
+      access: "callback-access",
+      refresh: "callback-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "acct-current",
+      email: "callback@example.com",
+    });
+
+    const confirm = vi.fn(async () => true);
+    const prompter = createWizardPrompter({ confirm }, { defaultSelect: "" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      agentDir: env.agentDir,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result?.config.auth?.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { access?: string; refresh?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai-codex:callback@example.com"]).toMatchObject({
+      access: "callback-access",
+      refresh: "callback-refresh",
+    });
   });
 });

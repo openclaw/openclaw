@@ -124,7 +124,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexCliAuthPath() {
+export function resolveCodexCliAuthPath() {
   return path.join(resolveCodexHomePath(), CODEX_CLI_AUTH_FILENAME);
 }
 
@@ -452,13 +452,16 @@ export function writeClaudeCliCredentials(
 export function readCodexCliCredentials(options?: {
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  skipKeychain?: boolean;
 }): CodexCliCredential | null {
-  const keychain = readCodexKeychainCredentials({
-    platform: options?.platform,
-    execSync: options?.execSync,
-  });
-  if (keychain) {
-    return keychain;
+  if (!options?.skipKeychain) {
+    const keychain = readCodexKeychainCredentials({
+      platform: options?.platform,
+      execSync: options?.execSync,
+    });
+    if (keychain) {
+      return keychain;
+    }
   }
 
   const authPath = resolveCodexCliAuthPath();
@@ -505,10 +508,11 @@ export function readCodexCliCredentialsCached(options?: {
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  skipKeychain?: boolean;
 }): CodexCliCredential | null {
   const ttlMs = options?.ttlMs ?? 0;
   const now = Date.now();
-  const cacheKey = `${options?.platform ?? process.platform}|${resolveCodexCliAuthPath()}`;
+  const cacheKey = `${options?.platform ?? process.platform}|${options?.skipKeychain === true ? "file" : "auto"}|${resolveCodexCliAuthPath()}`;
   if (
     ttlMs > 0 &&
     codexCliCache &&
@@ -520,6 +524,7 @@ export function readCodexCliCredentialsCached(options?: {
   const value = readCodexCliCredentials({
     platform: options?.platform,
     execSync: options?.execSync,
+    skipKeychain: options?.skipKeychain,
   });
   if (ttlMs > 0) {
     codexCliCache = { value, readAt: now, cacheKey };

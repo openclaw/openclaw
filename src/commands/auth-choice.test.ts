@@ -151,7 +151,10 @@ describe("applyAuthChoice", () => {
         runtime,
         setDefaultModel: false,
       }),
-    ).resolves.toEqual({ config: {} });
+    ).resolves.toMatchObject({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
   });
 
   it("stores openai-codex OAuth with email profile id", async () => {

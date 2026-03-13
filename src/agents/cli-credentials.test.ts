@@ -282,4 +282,45 @@ describe("cli credentials", () => {
       provider: "openai-codex",
     });
   });
+
+  it("can read Codex auth.json without consulting keychain", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
+    process.env.CODEX_HOME = tempHome;
+
+    execSyncMock.mockImplementation(() =>
+      JSON.stringify({
+        tokens: {
+          access_token: "keychain-access",
+          refresh_token: "keychain-refresh",
+        },
+        last_refresh: "2026-01-01T00:00:00Z",
+      }),
+    );
+
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: "file-access",
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const creds = readCodexCliCredentials({
+      platform: "darwin",
+      execSync: execSyncMock,
+      skipKeychain: true,
+    });
+
+    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(creds).toMatchObject({
+      access: "file-access",
+      refresh: "file-refresh",
+      provider: "openai-codex",
+    });
+  });
 });

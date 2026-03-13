@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { readCodexCliCredentials, resolveCodexCliAuthPath } from "../agents/cli-credentials.js";
+import { shortenHomePath } from "../utils.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
@@ -19,6 +24,65 @@ import {
   applyOpenAIProviderConfig,
   OPENAI_DEFAULT_MODEL,
 } from "./openai-model-default.js";
+
+async function resolveOpenAICodexWriteCredentials(
+  params: ApplyAuthChoiceParams,
+  callbackCreds: OAuthCredentials,
+): Promise<OAuthCredentials> {
+  const authStorePath = resolveAuthStorePath(params.agentDir);
+  if (fs.existsSync(authStorePath)) {
+    return callbackCreds;
+  }
+
+  const codexCliCreds = readCodexCliCredentials({ skipKeychain: true });
+  if (!codexCliCreds) {
+    return callbackCreds;
+  }
+
+  const callbackAccountId =
+    typeof callbackCreds.accountId === "string" && callbackCreds.accountId.trim().length > 0
+      ? callbackCreds.accountId.trim()
+      : undefined;
+  const cliAccountId =
+    typeof codexCliCreds.accountId === "string" && codexCliCreds.accountId.trim().length > 0
+      ? codexCliCreds.accountId.trim()
+      : undefined;
+  const sameTokens =
+    codexCliCreds.access === callbackCreds.access &&
+    codexCliCreds.refresh === callbackCreds.refresh;
+  const sameAccount = Boolean(
+    callbackAccountId && cliAccountId && callbackAccountId === cliAccountId,
+  );
+  const cliLooksNewer = codexCliCreds.expires > callbackCreds.expires;
+
+  if (!sameTokens && !(sameAccount && cliLooksNewer)) {
+    return callbackCreds;
+  }
+
+  const shouldSyncCliAuth = await params.prompter.confirm({
+    message: [
+      `OpenClaw auth store not found: ${shortenHomePath(authStorePath)}`,
+      `OpenAI Codex OAuth was found in ${shortenHomePath(resolveCodexCliAuthPath())}`,
+      "Sync auth.json credentials into this agent now?",
+    ].join("\n"),
+    initialValue: false,
+  });
+  if (!shouldSyncCliAuth) {
+    return callbackCreds;
+  }
+
+  await params.prompter.note(
+    `Syncing OpenAI Codex OAuth from ${shortenHomePath(resolveCodexCliAuthPath())}`,
+    "Auth sync",
+  );
+  return {
+    ...callbackCreds,
+    access: codexCliCreds.access,
+    refresh: codexCliCreds.refresh,
+    // auth.json only gives us a file-mtime-based expiry heuristic; keep the callback metadata.
+    ...(cliAccountId ? { accountId: cliAccountId } : {}),
+  };
+}
 
 export async function applyAuthChoiceOpenAI(
   params: ApplyAuthChoiceParams,
@@ -90,31 +154,33 @@ export async function applyAuthChoiceOpenAI(
       });
     } catch {
       // The helper already surfaces the error to the user.
-      // Keep onboarding flow alive and return unchanged config.
-      return { config: nextConfig, agentModelOverride };
+      // Keep onboarding flow alive, but do not continue as if Codex auth succeeded.
+      return { config: nextConfig, agentModelOverride, skipDefaultModelPrompt: true };
     }
-    if (creds) {
-      const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
-        syncSiblingAgents: true,
-      });
-      nextConfig = applyAuthProfileConfig(nextConfig, {
-        profileId,
-        provider: "openai-codex",
-        mode: "oauth",
-      });
-      if (params.setDefaultModel) {
-        const applied = applyOpenAICodexModelDefault(nextConfig);
-        nextConfig = applied.next;
-        if (applied.changed) {
-          await params.prompter.note(
-            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-            "Model configured",
-          );
-        }
-      } else {
-        agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
-        await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
+    if (!creds) {
+      return { config: nextConfig, agentModelOverride, skipDefaultModelPrompt: true };
+    }
+    const persistedCreds = await resolveOpenAICodexWriteCredentials(params, creds);
+    const profileId = await writeOAuthCredentials("openai-codex", persistedCreds, params.agentDir, {
+      syncSiblingAgents: true,
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyOpenAICodexModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+          "Model configured",
+        );
       }
+    } else {
+      agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
+      await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
     }
     return { config: nextConfig, agentModelOverride };
   }

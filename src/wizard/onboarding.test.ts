@@ -4,13 +4,16 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { ApplyAuthChoiceResult } from "../commands/auth-choice.apply.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runOnboardingWizard } from "./onboarding.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
-const applyAuthChoice = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
+const applyAuthChoice = vi.hoisted(() =>
+  vi.fn(async (args): Promise<ApplyAuthChoiceResult> => ({ config: args.config })),
+);
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(() => "openai"));
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
@@ -494,6 +497,41 @@ describe("runOnboardingWizard", () => {
       expect.objectContaining({
         secretInputMode: "ref", // pragma: allowlist secret
       }),
+    );
+  });
+
+  it("skips default model selection when auth flow marks the provider as incomplete", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {},
+      skipDefaultModelPrompt: true,
+    });
+    promptDefaultModel.mockClear();
+
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    await runOnboardingWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptDefaultModel).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "OpenAI Codex sign-in did not complete. Skipping default model selection.",
+      "OpenAI Codex OAuth",
     );
   });
 });

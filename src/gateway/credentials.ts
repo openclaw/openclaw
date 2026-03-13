@@ -112,12 +112,16 @@ function resolveLocalGatewayCredentials(params: {
   localTokenPrecedence: GatewayCredentialPrecedence;
   localPasswordPrecedence: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
+  const remoteTokenFallback = params.plan.remoteEnabled ? params.plan.remoteToken.value : undefined;
+  const remotePasswordFallback = params.plan.remoteEnabled
+    ? params.plan.remotePassword.value
+    : undefined;
   const fallbackToken = params.plan.localToken.configured
     ? params.plan.localToken.value
-    : params.plan.remoteToken.value;
+    : remoteTokenFallback;
   const fallbackPassword = params.plan.localPassword.configured
     ? params.plan.localPassword.value
-    : params.plan.remotePassword.value;
+    : remotePasswordFallback;
   const localResolved = resolveGatewayCredentialsFromValues({
     configToken: fallbackToken,
     configPassword: fallbackPassword,
@@ -183,31 +187,33 @@ function resolveRemoteGatewayCredentials(params: {
   remoteTokenFallback: GatewayRemoteCredentialFallback;
   remotePasswordFallback: GatewayRemoteCredentialFallback;
 }): ResolvedGatewayCredentials {
+  const remoteTokenValue = params.plan.remoteEnabled ? params.plan.remoteToken.value : undefined;
+  const remotePasswordValue = params.plan.remoteEnabled
+    ? params.plan.remotePassword.value
+    : undefined;
+  const remoteTokenRefPath = params.plan.remoteEnabled
+    ? params.plan.remoteToken.refPath
+    : undefined;
+  const remotePasswordRefPath = params.plan.remoteEnabled
+    ? params.plan.remotePassword.refPath
+    : undefined;
   const token =
     params.remoteTokenFallback === "remote-only"
-      ? params.plan.remoteToken.value
+      ? remoteTokenValue
       : params.remoteTokenPrecedence === "env-first"
-        ? firstDefined([
-            params.plan.envToken,
-            params.plan.remoteToken.value,
-            params.plan.localToken.value,
-          ])
-        : firstDefined([
-            params.plan.remoteToken.value,
-            params.plan.envToken,
-            params.plan.localToken.value,
-          ]);
+        ? firstDefined([params.plan.envToken, remoteTokenValue, params.plan.localToken.value])
+        : firstDefined([remoteTokenValue, params.plan.envToken, params.plan.localToken.value]);
   const password =
     params.remotePasswordFallback === "remote-only" // pragma: allowlist secret
-      ? params.plan.remotePassword.value
+      ? remotePasswordValue
       : params.remotePasswordPrecedence === "env-first" // pragma: allowlist secret
         ? firstDefined([
             params.plan.envPassword,
-            params.plan.remotePassword.value,
+            remotePasswordValue,
             params.plan.localPassword.value,
           ])
         : firstDefined([
-            params.plan.remotePassword.value,
+            remotePasswordValue,
             params.plan.envPassword,
             params.plan.localPassword.value,
           ]);
@@ -217,23 +223,17 @@ function resolveRemoteGatewayCredentials(params: {
   const localPasswordFallback =
     params.remotePasswordFallback === "remote-only" ? undefined : params.plan.localPassword.value; // pragma: allowlist secret
 
-  if (
-    params.plan.remoteToken.refPath &&
-    !token &&
-    !params.plan.envToken &&
-    !localTokenFallback &&
-    !password
-  ) {
-    throwUnresolvedGatewaySecretInput(params.plan.remoteToken.refPath);
+  if (remoteTokenRefPath && !token && !params.plan.envToken && !localTokenFallback && !password) {
+    throwUnresolvedGatewaySecretInput(remoteTokenRefPath);
   }
   if (
-    params.plan.remotePassword.refPath &&
+    remotePasswordRefPath &&
     !password &&
     !params.plan.envPassword &&
     !localPasswordFallback &&
     !token
   ) {
-    throwUnresolvedGatewaySecretInput(params.plan.remotePassword.refPath);
+    throwUnresolvedGatewaySecretInput(remotePasswordRefPath);
   }
   if (
     params.plan.localToken.refPath &&
@@ -241,7 +241,7 @@ function resolveRemoteGatewayCredentials(params: {
     !token &&
     !password &&
     !params.plan.envToken &&
-    !params.plan.remoteToken.value &&
+    !remoteTokenValue &&
     params.plan.localTokenCanWin
   ) {
     throwUnresolvedGatewaySecretInput(params.plan.localToken.refPath);

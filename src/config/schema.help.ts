@@ -110,6 +110,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
   "gateway.remote":
     "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
+  "gateway.remote.enabled":
+    "Enables remote gateway credential surfaces and fallback auth planning when remote settings are present. Disable this only when remote token/password fields must stay inert even if other remote settings exist.",
   "gateway.remote.transport":
     'Remote connection transport: "direct" uses configured URL connectivity, while "ssh" tunnels through SSH. Use SSH when you need encrypted tunnel semantics without exposing remote ports.',
   "gateway.reload":
