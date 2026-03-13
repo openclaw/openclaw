@@ -96,6 +96,55 @@ describe("chat view", () => {
     expect(logoImage?.getAttribute("src")).toBe("favicon.svg");
   });
 
+  it("keeps the welcome logo fallback under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+        }),
+      ),
+      container,
+    );
+
+    const logoImage = container.querySelector<HTMLImageElement>(
+      ".agent-chat__welcome .agent-chat__avatar--logo img",
+    );
+    expect(logoImage).not.toBeNull();
+    expect(logoImage?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
+  it("keeps grouped assistant avatar fallbacks under the mounted base path", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Assistant",
+          assistantAvatar: "A",
+          assistantAvatarUrl: null,
+          basePath: "/openclaw/",
+          messages: [
+            {
+              role: "assistant",
+              content: "hello",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const groupedLogo = container.querySelector<HTMLImageElement>(
+      ".chat-group.assistant .chat-avatar--logo",
+    );
+    expect(groupedLogo).not.toBeNull();
+    expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(
