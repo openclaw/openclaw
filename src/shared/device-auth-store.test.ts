@@ -50,6 +50,36 @@ describe("device-auth-store", () => {
     ).toBeNull();
   });
 
+  it("returns null for missing stores and malformed token entries", () => {
+    expect(
+      loadDeviceAuthTokenFromStore({
+        adapter: createAdapter().adapter,
+        deviceId: "device-1",
+        role: "operator",
+      }),
+    ).toBeNull();
+
+    const { adapter } = createAdapter({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: 123 as unknown as string,
+          role: "operator",
+          scopes: [],
+          updatedAtMs: 1,
+        },
+      },
+    });
+    expect(
+      loadDeviceAuthTokenFromStore({
+        adapter,
+        deviceId: "device-1",
+        role: "operator",
+      }),
+    ).toBeNull();
+  });
+
   it("stores normalized roles and deduped sorted scopes while preserving same-device tokens", () => {
     vi.spyOn(Date, "now").mockReturnValue(1234);
     const { adapter, writes, readStore } = createAdapter({
@@ -126,6 +156,44 @@ describe("device-auth-store", () => {
           scopes: [],
           updatedAtMs: expect.any(Number),
         },
+      },
+    });
+  });
+
+  it("overwrites existing entries for the same normalized role", () => {
+    vi.spyOn(Date, "now").mockReturnValue(2222);
+    const { adapter, readStore } = createAdapter({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: {
+          token: "old-token",
+          role: "operator",
+          scopes: ["operator.read"],
+          updatedAtMs: 10,
+        },
+      },
+    });
+
+    const entry = storeDeviceAuthTokenInStore({
+      adapter,
+      deviceId: "device-1",
+      role: " operator ",
+      token: "new-token",
+      scopes: ["operator.write"],
+    });
+
+    expect(entry).toEqual({
+      token: "new-token",
+      role: "operator",
+      scopes: ["operator.write"],
+      updatedAtMs: 2222,
+    });
+    expect(readStore()).toEqual({
+      version: 1,
+      deviceId: "device-1",
+      tokens: {
+        operator: entry,
       },
     });
   });
