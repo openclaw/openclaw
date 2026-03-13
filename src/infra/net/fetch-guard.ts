@@ -196,7 +196,12 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
-        dispatcher = new EnvHttpProxyAgent();
+        // CWE-918: Pass pinned lookup even when using env proxy to prevent
+        // DNS rebinding attacks. A bare EnvHttpProxyAgent() would perform
+        // its own DNS resolution, discarding the validated IP addresses.
+        dispatcher = new EnvHttpProxyAgent({
+          connect: { lookup: pinned.lookup },
+        });
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy);
       }
