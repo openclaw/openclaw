@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
+import { migrateLegacyConfig } from "./legacy-migrate.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -164,6 +165,109 @@ describe("config io paths", () => {
         expect.stringContaining(`Invalid config at ${configPath}:\\n`),
       );
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("- gateway.port:"));
+    });
+  });
+
+  it("auto-migrates legacy tlon install specs during load and snapshot reads", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              installs: {
+                tlon: {
+                  source: "npm",
+                  spec: "@openclaw/tlon@2026.2.21",
+                  resolvedName: "@openclaw/tlon",
+                  resolvedVersion: "2026.2.21",
+                  resolvedSpec: "@openclaw/tlon@2026.2.21",
+                  integrity: "sha512-old",
+                  shasum: "old",
+                  resolvedAt: "2026-03-01T00:00:00.000Z",
+                  installPath: "/tmp/tlon",
+                  version: "2026.2.21",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const io = createIoForHome(home);
+      expect(io.loadConfig().plugins?.installs?.tlon?.spec).toBe("@tloncorp/openclaw@2026.2.21");
+      expect(io.loadConfig().plugins?.installs?.tlon?.resolvedSpec).toBeUndefined();
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      expect(
+        snapshot.legacyIssues.some((issue) => issue.path === "plugins.installs.tlon.spec"),
+      ).toBe(true);
+      expect(snapshot.config.plugins?.installs?.tlon?.spec).toBe("@tloncorp/openclaw@2026.2.21");
+      expect(snapshot.config.plugins?.installs?.tlon?.resolvedSpec).toBeUndefined();
+    });
+  });
+
+  it("persists migrated tlon install specs back to disk", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            plugins: {
+              installs: {
+                tlon: {
+                  source: "npm",
+                  spec: "@openclaw/tlon@2026.2.21",
+                  resolvedName: "@openclaw/tlon",
+                  resolvedVersion: "2026.2.21",
+                  resolvedSpec: "@openclaw/tlon@2026.2.21",
+                  integrity: "sha512-old",
+                  shasum: "old",
+                  resolvedAt: "2026-03-01T00:00:00.000Z",
+                  installPath: "/tmp/tlon",
+                  version: "2026.2.21",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const io = createIoForHome(home);
+      const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
+      const migrated = migrateLegacyConfig(parsed);
+
+      expect(migrated.config).toBeTruthy();
+      await io.writeConfigFile(migrated.config!);
+
+      const written = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        plugins?: {
+          installs?: {
+            tlon?: {
+              spec?: string;
+              resolvedSpec?: string;
+              resolvedName?: string;
+            };
+          };
+        };
+      };
+
+      expect(written.plugins?.installs?.tlon?.spec).toBe("@tloncorp/openclaw@2026.2.21");
+      expect(written.plugins?.installs?.tlon?.resolvedSpec).toBeUndefined();
+      expect(written.plugins?.installs?.tlon?.resolvedName).toBeUndefined();
     });
   });
 });

@@ -35,6 +35,16 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 
+function migrateLegacyTlonInstallSpec(spec: string): string | null {
+  if (spec === "@openclaw/tlon") {
+    return "@tloncorp/openclaw";
+  }
+  if (spec.startsWith("@openclaw/tlon@")) {
+    return `@tloncorp/openclaw${spec.slice("@openclaw/tlon".length)}`;
+  }
+  return null;
+}
+
 function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
   agentHeartbeat: Record<string, unknown> | null;
   channelHeartbeat: Record<string, unknown> | null;
@@ -97,6 +107,35 @@ function mergeLegacyIntoDefaults(params: {
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
+  {
+    id: "plugins.installs.tlon.spec->tloncorp",
+    describe: "Move Tlon plugin install records to @tloncorp/openclaw",
+    apply: (raw, changes) => {
+      const plugins = getRecord(raw.plugins);
+      const installs = getRecord(plugins?.installs);
+      const tlon = getRecord(installs?.tlon);
+      const spec = typeof tlon?.spec === "string" ? tlon.spec : null;
+      if (!tlon || !spec) {
+        return;
+      }
+
+      const nextSpec = migrateLegacyTlonInstallSpec(spec);
+      if (!nextSpec) {
+        return;
+      }
+
+      tlon.spec = nextSpec;
+      delete tlon.resolvedName;
+      delete tlon.resolvedVersion;
+      delete tlon.resolvedSpec;
+      delete tlon.integrity;
+      delete tlon.shasum;
+      delete tlon.resolvedAt;
+      changes.push(
+        `Moved plugins.installs.tlon.spec → ${nextSpec} and cleared stale npm resolution metadata.`,
+      );
+    },
+  },
   {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated

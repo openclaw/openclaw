@@ -21,7 +21,7 @@ Tlon ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-openclaw plugins install @openclaw/tlon
+openclaw plugins install @tloncorp/openclaw
 ```
 
 Local checkout (when running from a git repo):
@@ -31,6 +31,9 @@ openclaw plugins install ./extensions/tlon
 ```
 
 Details: [Plugins](/tools/plugin)
+
+Existing installs from `@openclaw/tlon` are migrated to the new package name on config load so
+future `openclaw plugins update` runs resolve from `@tloncorp/openclaw`.
 
 ## Setup
 

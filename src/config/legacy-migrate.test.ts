@@ -1,6 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
+import { findLegacyConfigIssues } from "./legacy.js";
+
+describe("legacy migrate tlon plugin install spec", () => {
+  it("flags legacy @openclaw/tlon install specs for auto-migration", () => {
+    const issues = findLegacyConfigIssues({
+      plugins: {
+        installs: {
+          tlon: {
+            source: "npm",
+            spec: "@openclaw/tlon",
+          },
+        },
+      },
+    });
+
+    expect(issues).toContainEqual({
+      path: "plugins.installs.tlon.spec",
+      message:
+        "plugins.installs.tlon.spec moved from @openclaw/tlon to @tloncorp/openclaw (auto-migrated on load).",
+    });
+  });
+
+  it("rewrites old tlon install specs and clears stale npm metadata", () => {
+    const res = migrateLegacyConfig({
+      plugins: {
+        installs: {
+          tlon: {
+            source: "npm",
+            spec: "@openclaw/tlon@2026.2.21",
+            resolvedName: "@openclaw/tlon",
+            resolvedVersion: "2026.2.21",
+            resolvedSpec: "@openclaw/tlon@2026.2.21",
+            integrity: "sha512-old",
+            shasum: "old",
+            resolvedAt: "2026-03-01T00:00:00.000Z",
+            installPath: "/tmp/tlon",
+            version: "2026.2.21",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved plugins.installs.tlon.spec → @tloncorp/openclaw@2026.2.21 and cleared stale npm resolution metadata.",
+    );
+    expect(res.config?.plugins?.installs?.tlon?.spec).toBe("@tloncorp/openclaw@2026.2.21");
+    expect(res.config?.plugins?.installs?.tlon?.version).toBe("2026.2.21");
+    expect(res.config?.plugins?.installs?.tlon?.installPath).toBe("/tmp/tlon");
+    expect(res.config?.plugins?.installs?.tlon?.resolvedName).toBeUndefined();
+    expect(res.config?.plugins?.installs?.tlon?.resolvedVersion).toBeUndefined();
+    expect(res.config?.plugins?.installs?.tlon?.resolvedSpec).toBeUndefined();
+    expect(res.config?.plugins?.installs?.tlon?.integrity).toBeUndefined();
+    expect(res.config?.plugins?.installs?.tlon?.shasum).toBeUndefined();
+    expect(res.config?.plugins?.installs?.tlon?.resolvedAt).toBeUndefined();
+  });
+});
 
 describe("legacy migrate audio transcription", () => {
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {

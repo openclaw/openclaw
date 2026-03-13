@@ -68,8 +68,11 @@ function expectRoutingAllowFromLegacySnapshot(
   ctx: { snapshot: ConfigSnapshot; parsed: unknown },
   expectedAllowFrom: string[],
 ) {
-  expect(ctx.snapshot.valid).toBe(false);
+  const snapshotConfig = ctx.snapshot.config as { routing?: unknown };
+  expect(ctx.snapshot.valid).toBe(true);
   expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
+  expect(snapshotConfig.routing).toBeUndefined();
+  expect(ctx.snapshot.config.channels?.whatsapp?.allowFrom).toBeUndefined();
   const parsed = ctx.parsed as {
     routing?: { allowFrom?: string[] };
     channels?: unknown;
@@ -269,8 +272,12 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+        expect(ctx.snapshot.config.agents?.defaults?.memorySearch).toEqual({
+          provider: "local",
+          fallback: "none",
+        });
       },
     );
   });
@@ -285,8 +292,9 @@ describe("legacy config detection", () => {
   });
   it("flags legacy provider sections in snapshot", async () => {
     await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
-      expect(ctx.snapshot.valid).toBe(false);
+      expect(ctx.snapshot.valid).toBe(true);
       expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
+      expect(ctx.snapshot.config.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
 
       const parsed = ctx.parsed as {
         channels?: unknown;

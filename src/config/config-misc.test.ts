@@ -360,7 +360,7 @@ describe("config strict validation", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("keeps auto-migrated legacy config entries valid in snapshots", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         agents: { list: [{ id: "pi" }] },
@@ -368,9 +368,12 @@ describe("config strict validation", () => {
       });
 
       const snap = await readConfigFileSnapshot();
+      const snapshotConfig = snap.config as { routing?: unknown };
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues).not.toHaveLength(0);
+      expect(snapshotConfig.routing).toBeUndefined();
+      expect(snap.config.channels?.whatsapp?.allowFrom).toBeUndefined();
     });
   });
 
@@ -404,8 +407,9 @@ describe("config strict validation", () => {
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(snap.config.gateway?.bind).toBe("lan");
     });
   });
 });

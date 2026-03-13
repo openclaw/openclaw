@@ -24,7 +24,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/tlon",
+      "npmSpec": "@tloncorp/openclaw",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
     },

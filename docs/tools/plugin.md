@@ -1293,7 +1293,7 @@ it’s present in your workspace/managed skills locations.
 Recommended packaging:
 
 - Main package: `openclaw` (this repo)
-- Plugins: separate npm packages under `@openclaw/*` (example: `@openclaw/voice-call`)
+- Plugins: separate npm packages, usually under `@openclaw/*` (examples: `@openclaw/voice-call`, `@tloncorp/openclaw`)
 
 Publishing contract:
 

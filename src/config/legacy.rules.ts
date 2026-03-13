@@ -46,6 +46,13 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   );
 }
 
+function isLegacyTlonInstallSpec(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return value === "@openclaw/tlon" || value.startsWith("@openclaw/tlon@");
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -208,5 +215,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["heartbeat"],
     message:
       "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
+  },
+  {
+    path: ["plugins", "installs", "tlon", "spec"],
+    message:
+      "plugins.installs.tlon.spec moved from @openclaw/tlon to @tloncorp/openclaw (auto-migrated on load).",
+    match: (value) => isLegacyTlonInstallSpec(value),
   },
 ];

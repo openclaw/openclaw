@@ -41,7 +41,7 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
-import { findLegacyConfigIssues } from "./legacy.js";
+import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -221,6 +221,13 @@ function isWritePlainObject(value: unknown): value is Record<string, unknown> {
 
 function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function shouldAutoMigrateLegacyIssues(legacyIssues: LegacyConfigIssue[]): boolean {
+  return (
+    legacyIssues.length > 0 &&
+    legacyIssues.every((issue) => issue.message.includes("(auto-migrated on load)."))
+  );
 }
 
 const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
@@ -731,6 +738,58 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
+  function validateResolvedConfigWithAutoMigration(
+    resolvedConfigRaw: unknown,
+    sourceRaw?: unknown,
+  ) {
+    const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
+    if (shouldAutoMigrateLegacyIssues(legacyIssues)) {
+      const migrated = applyLegacyMigrations(resolvedConfigRaw);
+      if (migrated.next) {
+        const validatedMigrated = validateConfigObjectWithPlugins(migrated.next);
+        if (validatedMigrated.ok) {
+          return {
+            legacyIssues,
+            validated: validatedMigrated,
+            effectiveResolvedConfigRaw: migrated.next,
+          };
+        }
+      }
+    }
+
+    return {
+      legacyIssues,
+      validated: validateConfigObjectWithPlugins(resolvedConfigRaw),
+      effectiveResolvedConfigRaw: resolvedConfigRaw,
+    };
+  }
+
+  function validateResolvedRawConfigWithAutoMigration(
+    resolvedConfigRaw: unknown,
+    sourceRaw?: unknown,
+  ) {
+    const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
+    if (shouldAutoMigrateLegacyIssues(legacyIssues)) {
+      const migrated = applyLegacyMigrations(resolvedConfigRaw);
+      if (migrated.next) {
+        const validatedMigrated = validateConfigObjectRawWithPlugins(migrated.next);
+        if (validatedMigrated.ok) {
+          return {
+            legacyIssues,
+            validated: validatedMigrated,
+            effectiveResolvedConfigRaw: migrated.next,
+          };
+        }
+      }
+    }
+
+    return {
+      legacyIssues,
+      validated: validateConfigObjectRawWithPlugins(resolvedConfigRaw),
+      effectiveResolvedConfigRaw: resolvedConfigRaw,
+    };
+  }
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -769,7 +828,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      const { validated } = validateResolvedConfigWithAutoMigration(resolvedConfig, parsed);
       if (!validated.ok) {
         const details = validated.issues
           .map(
@@ -975,11 +1034,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      // Detect legacy keys on resolved config, but only mark source-literal legacy
-      // entries (for auto-migration) when they are present in the parsed source.
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
-
-      const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
+      const { legacyIssues, validated, effectiveResolvedConfigRaw } =
+        validateResolvedConfigWithAutoMigration(resolvedConfigRaw, parsedRes.parsed);
       if (!validated.ok) {
         return {
           snapshot: {
@@ -987,7 +1043,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             exists: true,
             raw,
             parsed: parsedRes.parsed,
-            resolved: coerceConfig(resolvedConfigRaw),
+            resolved: coerceConfig(effectiveResolvedConfigRaw),
             valid: false,
             config: coerceConfig(resolvedConfigRaw),
             hash,
@@ -1019,7 +1075,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: parsedRes.parsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
-          resolved: coerceConfig(resolvedConfigRaw),
+          resolved: coerceConfig(effectiveResolvedConfigRaw),
           valid: true,
           config: snapshotConfig,
           hash,
@@ -1116,7 +1172,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate);
+    const { validated } = validateResolvedRawConfigWithAutoMigration(persistCandidate);
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
