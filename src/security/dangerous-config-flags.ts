@@ -28,11 +28,10 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.gateway?.auth?.mode === "none") {
     enabledFlags.push("gateway.auth.mode=none (authentication fully disabled)");
   }
-  // [HARDENED] trusted-proxy with an empty allowUsers list accepts ALL proxy users.
+  // [HARDENED] trusted-proxy with an empty or absent allowUsers list accepts ALL proxy users.
   if (
     cfg.gateway?.auth?.mode === "trusted-proxy" &&
-    Array.isArray(cfg.gateway?.auth?.trustedProxy?.allowUsers) &&
-    cfg.gateway.auth.trustedProxy.allowUsers.length === 0
+    (cfg.gateway?.auth?.trustedProxy?.allowUsers ?? []).length === 0
   ) {
     enabledFlags.push(
       "gateway.auth.trustedProxy.allowUsers=[] (all proxy-authenticated users accepted)",
