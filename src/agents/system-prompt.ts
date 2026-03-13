@@ -625,7 +625,7 @@ export function buildAgentSystemPrompt(params: {
     }),
     "## Runtime",
     buildRuntimeLine(runtimeInfo),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    "Reasoning: configurable (off|on|stream, default off). Toggle /reasoning; /status shows current level.",
   );
 
   // Project Context (workspace bootstrap files) is placed LAST in the stable-prefix-ordered
@@ -679,7 +679,11 @@ export function buildAgentSystemPrompt(params: {
   }
 
   // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
-  const dynamicLine = buildRuntimeDynamicLine(runtimeInfo, params.defaultThinkLevel);
+  const dynamicLine = buildRuntimeDynamicLine(
+    runtimeInfo,
+    params.defaultThinkLevel,
+    reasoningLevel,
+  );
   if (dynamicLine) {
     lines.push(dynamicLine);
   }
@@ -778,6 +782,7 @@ export function buildRuntimeDynamicLine(
     capabilities?: string[];
   },
   defaultThinkLevel?: ThinkLevel,
+  reasoningLevel?: ReasoningLevel,
 ): string {
   const parts = [
     // Per-conversation: channel and capabilities change across messaging platforms
@@ -785,6 +790,8 @@ export function buildRuntimeDynamicLine(
     runtimeInfo?.channel
       ? `capabilities=${runtimeInfo?.capabilities?.length ? runtimeInfo.capabilities.join(",") : "none"}`
       : "",
+    // Per-session: reasoning level (only emit when non-default to save tokens)
+    reasoningLevel && reasoningLevel !== "off" ? `reasoning=${reasoningLevel}` : "",
     // Per-session: thinking level, model, agentId, defaultModel
     defaultThinkLevel && defaultThinkLevel !== "off" ? `thinking=${defaultThinkLevel}` : "",
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",

@@ -625,15 +625,41 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("agent=work");
   });
 
-  it("includes reasoning visibility hint", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("includes static reasoning visibility hint (stable across reasoning levels)", () => {
+    // The Reasoning line must be stable text regardless of the current reasoning level.
+    // The actual level is emitted in buildRuntimeDynamicLine to preserve the KV-cache prefix.
+    for (const level of ["off", "on", "stream"] as const) {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        reasoningLevel: level,
+      });
+
+      // Stable text (does NOT contain the dynamic level value inline)
+      expect(prompt).toContain("Reasoning: configurable");
+      expect(prompt).toContain("/reasoning");
+      expect(prompt).toContain("/status shows current level");
+      expect(prompt).not.toContain(`Reasoning: ${level} `);
+    }
+
+    // "on" and "stream" levels appear in the dynamic line, not the stable Reasoning line
+    const promptOn = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "on",
+    });
+    expect(promptOn).toContain("reasoning=on");
+
+    const promptStream = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningLevel: "stream",
+    });
+    expect(promptStream).toContain("reasoning=stream");
+
+    // "off" is the default — not emitted in the dynamic line (saves tokens)
+    const promptOff = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       reasoningLevel: "off",
     });
-
-    expect(prompt).toContain("Reasoning: off");
-    expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(promptOff).not.toContain("reasoning=off");
   });
 
   it("builds runtime line with only stable host/os/node fields", () => {
