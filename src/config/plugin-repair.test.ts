@@ -54,4 +54,50 @@ describe("repairPluginConfigNoise", () => {
       priority: "after-bundled",
     });
   });
+
+  it("preserves unknown plugins.load fields when stale load paths are fully pruned", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-repair-"));
+    try {
+      const removedDir = path.join(fixtureRoot, "removed-plugin");
+      await fs.mkdir(removedDir, { recursive: true });
+      await fs.writeFile(
+        path.join(removedDir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: "google-antigravity-auth",
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const cfg = {
+        plugins: {
+          load: {
+            paths: [removedDir],
+            priority: "after-bundled",
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const repaired = repairPluginConfigNoise(cfg);
+      const repairedLoad = repaired.config.plugins?.load as
+        | {
+            paths?: string[];
+            priority?: string;
+          }
+        | undefined;
+
+      expect(repaired.changes).toContain(
+        '- Removed plugins.load.paths entry for removed plugin "google-antigravity-auth"',
+      );
+      expect(repairedLoad).toEqual({
+        priority: "after-bundled",
+      });
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
 });

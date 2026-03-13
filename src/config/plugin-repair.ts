@@ -12,11 +12,25 @@ type PluginRepairResult = {
   changes: string[];
 };
 
+type PluginLoadLike = Record<string, unknown> | undefined;
+
 function pathsEqual(left?: string, right?: string): boolean {
   if (!left || !right) {
     return false;
   }
   return path.resolve(left) === path.resolve(right);
+}
+
+function cleanupPluginLoadShape(load: PluginLoadLike) {
+  if (!load || typeof load !== "object" || Array.isArray(load)) {
+    return undefined;
+  }
+  const nextLoad = { ...load };
+  const paths = Array.isArray(nextLoad.paths) ? nextLoad.paths : undefined;
+  if (!paths || paths.length === 0) {
+    delete nextLoad.paths;
+  }
+  return Object.keys(nextLoad).length > 0 ? nextLoad : undefined;
 }
 
 function cleanupPluginsShape(config: OpenClawConfig): OpenClawConfig {
@@ -39,8 +53,11 @@ function cleanupPluginsShape(config: OpenClawConfig): OpenClawConfig {
   if (!nextPlugins.installs || Object.keys(nextPlugins.installs).length === 0) {
     delete nextPlugins.installs;
   }
-  if (!nextPlugins.load || !nextPlugins.load.paths || nextPlugins.load.paths.length === 0) {
+  const cleanedLoad = cleanupPluginLoadShape(nextPlugins.load);
+  if (!cleanedLoad) {
     delete nextPlugins.load;
+  } else {
+    nextPlugins.load = cleanedLoad as typeof nextPlugins.load;
   }
   if (!nextPlugins.slots || Object.keys(nextPlugins.slots).length === 0) {
     delete nextPlugins.slots;
@@ -189,13 +206,21 @@ export function repairPluginConfigNoise(cfg: OpenClawConfig): PluginRepairResult
     return { config: cfg, changes: [] };
   }
 
+  const repairedLoadInput = {
+    ...(plugins.load ? (plugins.load as Record<string, unknown>) : {}),
+  };
+  if (filteredLoadPaths.length > 0) {
+    repairedLoadInput.paths = filteredLoadPaths;
+  } else {
+    delete repairedLoadInput.paths;
+  }
+  const repairedLoad = cleanupPluginLoadShape(repairedLoadInput);
+
   next.plugins = {
     ...(typeof plugins.enabled === "boolean" ? { enabled: plugins.enabled } : {}),
     ...(filteredAllow.length > 0 ? { allow: filteredAllow } : {}),
     ...(filteredDeny.length > 0 ? { deny: filteredDeny } : {}),
-    ...(filteredLoadPaths.length > 0
-      ? { load: { ...plugins.load, paths: filteredLoadPaths } }
-      : {}),
+    ...(repairedLoad ? { load: repairedLoad as typeof plugins.load } : {}),
     ...(slots ? { slots } : {}),
     ...(Object.keys(entries).length > 0 ? { entries } : {}),
     ...(Object.keys(installs).length > 0 ? { installs } : {}),
