@@ -1503,10 +1503,11 @@ describe("compaction-safeguard extension model fallback", () => {
 });
 
 describe("compaction-safeguard double-compaction guard", () => {
-  it("cancels compaction when there are no real messages to summarize", async () => {
+  it("cancels compaction when both collections are empty", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
+    mockSummarizeInStages.mockReset();
 
     const mockEvent = {
       preparation: {
@@ -1526,6 +1527,92 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels compaction when both collections contain no real conversation messages", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+    mockSummarizeInStages.mockReset();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          castAgentMessage({
+            role: "system",
+            content: "session metadata",
+            timestamp: 1,
+          }),
+        ],
+        turnPrefixMessages: [
+          castAgentMessage({
+            role: "system",
+            content: "split-turn metadata",
+            timestamp: 2,
+          }),
+        ],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+  });
+
+  it("continues split-turn compaction when turnPrefixMessages contain real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("split-turn prefix summary");
+
+    const turnPrefixMessages: AgentMessage[] = [
+      { role: "user", content: "Please finish the safeguard fix.", timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Working on the patch." }],
+        timestamp: 2,
+      }),
+    ];
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        previousSummary: undefined,
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "sk-test", // pragma: allowlist secret
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(getApiKeyMock).toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(mockSummarizeInStages.mock.calls[0]?.[0]?.messages).toEqual(turnPrefixMessages);
+    if (!("compaction" in result)) {
+      throw new Error("Expected compaction result for split-turn safeguard test.");
+    }
+    const compaction = result.compaction as { summary?: string } | undefined;
+    expect(compaction?.summary).toContain("**Turn Context (split turn):**");
+    expect(compaction?.summary).toContain("split-turn prefix summary");
   });
 
   it("continues when messages include real conversation content", async () => {
