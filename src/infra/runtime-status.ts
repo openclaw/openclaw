@@ -11,12 +11,12 @@ export function formatRuntimeStatusWithDetails({
   state,
   details = [],
 }: RuntimeStatusFormatInput): string {
-  const runtimeStatus = status ?? "unknown";
+  const runtimeStatus = status?.trim() || "unknown";
   const fullDetails: string[] = [];
   if (pid) {
     fullDetails.push(`pid ${pid}`);
   }
-  if (state && state.toLowerCase() !== runtimeStatus) {
+  if (state && state.toLowerCase() !== runtimeStatus.toLowerCase()) {
     fullDetails.push(`state ${state}`);
   }
   for (const detail of details) {
