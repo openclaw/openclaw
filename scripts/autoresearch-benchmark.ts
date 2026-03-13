@@ -72,7 +72,11 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// Build the system prompt with representative parameters (group chat scenario)
+// Build the system prompt with representative parameters (group chat + extended thinking scenario)
+// reasoningLevel: "on" models the case where the user/agent has extended thinking enabled —
+// a common config for coding agents and power users. When the reasoning level changes
+// (user toggles /reasoning or a new session starts with a different default), the
+// Reasoning line changes and breaks the KV cache prefix.
 const prompt = buildAgentSystemPrompt({
   workspaceDir,
   toolNames,
@@ -89,6 +93,7 @@ const prompt = buildAgentSystemPrompt({
   contextFiles,
   extraSystemPrompt: GROUP_CHAT_EXTRA_PROMPT,
   reactionGuidance: { level: "minimal", channel: "WhatsApp" },
+  reasoningLevel: "on",
   runtimeInfo: {
     host: "benchmark-host",
     os: "darwin",
@@ -130,9 +135,10 @@ function escapeRegExp(s: string): string {
 const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   { label: "group-chat-context", pattern: /^## Group Chat Context$/m },
   { label: "subagent-context", pattern: /^## Subagent Context$/m },
+  // Reasoning line: `Reasoning: on/stream` breaks cache when reasoning is enabled.
+  // The "off" default is stable; "on" and "stream" are per-session settings.
+  { label: "reasoning-level", pattern: /\bReasoning: (on|stream)\b/m },
   // channel= and capabilities= change per conversation in multi-channel deployments
-  // (same OpenClaw instance serving WhatsApp + Telegram + iMessage).
-  // Anything before these in the prompt can't be KV-cached across channels.
   { label: "channel-runtime", pattern: /\bchannel=\w/m },
   { label: "capabilities-runtime", pattern: /\bcapabilities=\w/m },
   {
