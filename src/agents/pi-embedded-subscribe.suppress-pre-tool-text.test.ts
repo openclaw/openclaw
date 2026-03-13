@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 /**
  * Tests for suppressPreToolText behavior: intermediate text blocks written
  * between tool calls must NOT be delivered via onBlockReply.
@@ -6,7 +7,6 @@
  * https://github.com/openclaw/openclaw/pull/19932
  */
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
 const waitForAsyncCallbacks = async () => {
@@ -30,10 +30,7 @@ function makeAssistantMessage(
   };
 }
 
-function emitTurn(
-  emit: (evt: unknown) => void,
-  message: AssistantMessage,
-) {
+function emitTurn(emit: (evt: unknown) => void, message: AssistantMessage) {
   emit({ type: "message_start", message });
   emit({ type: "message_end", message });
 }
@@ -42,10 +39,7 @@ function emitTurn(
  * Simulate a streaming turn: message_start → text_delta → text_end → message_end.
  * This matches the production path for text_end mode where onBlockReply fires on text_end.
  */
-function emitStreamingTurn(
-  emit: (evt: unknown) => void,
-  message: AssistantMessage,
-) {
+function emitStreamingTurn(emit: (evt: unknown) => void, message: AssistantMessage) {
   const textContent = message.content
     .filter((b): b is { type: "text"; text: string } => b.type === "text")
     .map((b) => b.text)
@@ -125,10 +119,7 @@ describe("suppressPreToolText", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
 
     // Turn 2: final answer
-    const finalMsg = makeAssistantMessage(
-      [{ type: "text", text: "Here are the files." }],
-      "stop",
-    );
+    const finalMsg = makeAssistantMessage([{ type: "text", text: "Here are the files." }], "stop");
     emitTurn(emit, finalMsg);
     await waitForAsyncCallbacks();
 
@@ -167,5 +158,33 @@ describe("suppressPreToolText", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((onBlockReply.mock.calls[0][0] as { text: string }).text).toBe("FINAL_REPLY");
+  });
+
+  it("does not include intermediate texts in assistantTexts (final reply payload)", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-4",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    const toolMsg = (text: string, id: string) =>
+      makeAssistantMessage(
+        [
+          { type: "text", text },
+          { type: "toolCall", id, name: "exec", arguments: { command: "x" } },
+        ],
+        "toolUse",
+      );
+
+    emitStreamingTurn(emit, toolMsg("INTERMEDIATE_should_not_be_in_final", "c1"));
+    await waitForAsyncCallbacks();
+
+    emitStreamingTurn(emit, makeAssistantMessage([{ type: "text", text: "FINAL_ONLY" }], "stop"));
+    await waitForAsyncCallbacks();
+
+    // assistantTexts is the source for the final reply payload
+    expect(subscription.assistantTexts).not.toContain("INTERMEDIATE_should_not_be_in_final");
+    expect(subscription.assistantTexts).toContain("FINAL_ONLY");
   });
 });

@@ -339,6 +339,9 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  // Capture baseline BEFORE finalizeAssistantTexts updates it so we can discard
+  // intermediate-turn texts if this turn ends with toolUse (see pendingBlockReplies logic below).
+  const preTurnAssistantTextBaseline = ctx.state.assistantTextBaseline;
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -506,6 +509,11 @@ export function handleMessageEnd(
     const stopReason = (assistantMessage as { stopReason?: string }).stopReason;
     if (stopReason === "toolUse") {
       ctx.state.pendingBlockReplies.length = 0;
+      // Also remove intermediate-turn texts from assistantTexts so they don't
+      // appear in the final reply payload (hasSentPayload dedup won't catch them
+      // because they were never enqueued into the block-reply pipeline).
+      ctx.state.assistantTexts.splice(preTurnAssistantTextBaseline);
+      ctx.state.assistantTextBaseline = preTurnAssistantTextBaseline;
     } else {
       const pending = ctx.state.pendingBlockReplies.splice(0);
       for (const payload of pending) {
