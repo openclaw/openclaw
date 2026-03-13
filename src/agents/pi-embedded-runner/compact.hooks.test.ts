@@ -278,6 +278,7 @@ vi.mock("../../config/channel-capabilities.js", () => ({
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
   normalizeMessageChannel: vi.fn(() => undefined),
 }));
 
@@ -374,6 +375,16 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     estimateTokensMock.mockReturnValue(10);
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
+
+  async function runDirectCompaction(customInstructions = "focus on decisions") {
+    return await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions,
+    });
+  }
 
   it("bootstraps runtime plugins with the resolved workspace", async () => {
     await compactEmbeddedPiSessionDirect({
@@ -472,13 +483,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     hookRunner.hasHooks.mockReturnValue(true);
     sanitizeSessionHistoryMock.mockResolvedValue([]);
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
+    const result = await runDirectCompaction();
 
     expect(result.ok).toBe(true);
     const beforeContext = sessionHook("compact:before")?.context;
@@ -528,13 +533,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       details: { ok: true },
     });
 
-    const result = await compactEmbeddedPiSessionDirect({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      customInstructions: "focus on decisions",
-    });
+    const result = await runDirectCompaction();
 
     expect(result).toMatchObject({
       ok: true,
