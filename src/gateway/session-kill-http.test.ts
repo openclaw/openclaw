@@ -152,20 +152,41 @@ describe("POST /sessions/:sessionKey/kill", () => {
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
   });
 
-  it("rejects remote admin kills without requester ownership", async () => {
+  it("allows remote admin kills with an authorized bearer token", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
     });
+    killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
+    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
+      cfg,
+      sessionKey: "agent:main:subagent:worker",
+    });
+  });
+
+  it("rejects remote kills without requester ownership or an authorized token", async () => {
+    isLocalDirectRequestMock.mockReturnValue(false);
+    authMock.mockResolvedValueOnce({ ok: true });
+    loadSessionEntryMock.mockReturnValue({
+      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
+      canonicalKey: "agent:main:subagent:worker",
+    });
+
+    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
+      authorization: "",
+    });
     expect(response.status).toBe(403);
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
-  it("uses requester ownership checks when a requester session header is provided", async () => {
+  it("uses requester ownership checks when a requester session header is provided without admin bypass", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
+    authMock.mockResolvedValueOnce({ ok: true });
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
@@ -176,11 +197,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
     });
     killControlledSubagentRunMock.mockResolvedValue({ status: "ok" });
 
-    const response = await post(
-      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
-      TEST_GATEWAY_TOKEN,
-      { "x-openclaw-requester-session-key": "agent:main:main" },
-    );
+    const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill", "", {
+      "x-openclaw-requester-session-key": "agent:main:main",
+    });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
     expect(resolveSubagentControllerMock).toHaveBeenCalledWith({
@@ -188,5 +207,28 @@ describe("POST /sessions/:sessionKey/kill", () => {
       agentSessionKey: "agent:main:main",
     });
     expect(getSubagentRunByChildSessionKeyMock).toHaveBeenCalledWith("agent:main:subagent:worker");
+    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers admin kill when a valid bearer token is present alongside requester headers", async () => {
+    isLocalDirectRequestMock.mockReturnValue(false);
+    loadSessionEntryMock.mockReturnValue({
+      entry: { sessionId: "sess-worker", updatedAt: Date.now() },
+      canonicalKey: "agent:main:subagent:worker",
+    });
+    killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
+
+    const response = await post(
+      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
+      TEST_GATEWAY_TOKEN,
+      { "x-openclaw-requester-session-key": "agent:other:main" },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
+    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
+      cfg,
+      sessionKey: "agent:main:subagent:worker",
+    });
+    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
   });
 });
