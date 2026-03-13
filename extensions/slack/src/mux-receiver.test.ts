@@ -560,6 +560,62 @@ describe("installMuxApiProxy", () => {
     await receiver.stop();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
+
+  test("strips blank token from proxied API call params", async () => {
+    const port = await getAvailablePort();
+    const wss = new WebSocketServer({ port });
+    const runtime = createTestRuntime();
+    let capturedParams: Record<string, unknown> | undefined;
+
+    wss.on("connection", (ws) => {
+      ws.on("message", (data) => {
+        const msg = parseWsMessage(data);
+        if (msg.type === "slack_api") {
+          capturedParams = msg.params as Record<string, unknown>;
+          ws.send(
+            JSON.stringify({
+              type: "slack_api_response",
+              id: msg.id,
+              ok: true,
+              response: { ok: true },
+            }),
+          );
+        }
+      });
+    });
+
+    const receiver = new MuxReceiver({
+      mux: { url: `ws://127.0.0.1:${port}` },
+      runtime,
+    });
+    receiver.init({ processEvent: vi.fn(), client: { apiCall: vi.fn() } });
+
+    const fakeApp = {
+      client: {
+        apiCall: vi.fn() as unknown as (...args: unknown[]) => Promise<unknown>,
+      } as Record<string, unknown> & {
+        apiCall: (...args: unknown[]) => Promise<unknown>;
+      },
+    };
+
+    installMuxApiProxy(fakeApp, receiver);
+    await receiver.start();
+
+    // Pass token:"" as mux-mode Bolt calls do (authorize returns botToken:"")
+    await fakeApp.client.apiCall("auth.test", { token: "", channel: "C123" });
+
+    // Blank token must not reach the mux server
+    expect(capturedParams).not.toHaveProperty("token");
+    expect(capturedParams).toMatchObject({ channel: "C123" });
+
+    // Non-blank token should be preserved
+    capturedParams = undefined;
+    await fakeApp.client.apiCall("chat.postMessage", { token: "xoxb-real", text: "hi" });
+    expect(capturedParams).toMatchObject({ token: "xoxb-real", text: "hi" });
+
+    await receiver.stop();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  });
 });
 
 describe("installMuxApiProxy – convenience method rebinding", () => {

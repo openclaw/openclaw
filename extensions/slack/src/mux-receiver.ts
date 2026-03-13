@@ -530,7 +530,15 @@ export function installMuxApiProxy(
     method: string,
     options?: Record<string, unknown>,
   ): Promise<unknown> => {
-    return receiver.apiCall(method, options ?? {});
+    const params = options ?? {};
+    // Strip blank token — mux-mode callers pass token:"" when no bot token is
+    // configured (Bolt's authorize() returns botToken:"" for mux mode).
+    // Forwarding that to the mux server would override mux-side credentials
+    // and cause proxied Slack API calls to fail.
+    const { token, ...rest } = params;
+    const sanitizedParams =
+      token && typeof token === "string" && token.trim() ? { ...rest, token } : rest;
+    return receiver.apiCall(method, sanitizedParams);
   };
 
   // 1. Patch the top-level apiCall
