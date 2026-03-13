@@ -24,6 +24,7 @@ export type SafeOpenErrorCode =
   | "symlink"
   | "not-file"
   | "path-mismatch"
+  | "write-truncated"
   | "too-large";
 
 export class SafeOpenError extends Error {
@@ -329,10 +330,15 @@ async function writeTempFileForAtomicReplace(params: {
   }
 }
 
+function bufferFromWriteData(data: string | Buffer, encoding?: BufferEncoding): Buffer {
+  return Buffer.isBuffer(data) ? data : Buffer.from(data, encoding ?? "utf8");
+}
+
 async function verifyAtomicWriteResult(params: {
   rootDir: string;
   targetPath: string;
   expectedIdentity: { dev: number | bigint; ino: number | bigint };
+  expectedSize?: number;
 }): Promise<void> {
   const rootReal = await fs.realpath(params.rootDir);
   const rootWithSep = ensureTrailingSep(rootReal);
@@ -340,6 +346,12 @@ async function verifyAtomicWriteResult(params: {
   try {
     if (!sameFileIdentity(opened.stat, params.expectedIdentity)) {
       throw new SafeOpenError("path-mismatch", "path changed during write");
+    }
+    if (params.expectedSize !== undefined && opened.stat.size !== params.expectedSize) {
+      throw new SafeOpenError(
+        "write-truncated",
+        `write size mismatch: expected ${params.expectedSize}, got ${opened.stat.size}`,
+      );
     }
     if (!isPathInside(rootWithSep, opened.realPath)) {
       throw new SafeOpenError("outside-workspace", "file is outside workspace root");
@@ -560,6 +572,7 @@ export async function writeFileWithinRoot(params: {
     rootDir: params.rootDir,
     relativePath: params.relativePath,
   });
+  const payload = bufferFromWriteData(params.data, params.encoding);
 
   const identity = await runPinnedWriteHelper({
     rootPath: pinned.rootReal,
@@ -569,9 +582,9 @@ export async function writeFileWithinRoot(params: {
     mode: pinned.mode,
     input: {
       kind: "buffer",
-      data: params.data,
-      encoding: params.encoding,
+      data: payload,
     },
+    expectedSize: payload.length,
   }).catch((error) => {
     throw normalizePinnedWriteError(error);
   });
@@ -581,6 +594,7 @@ export async function writeFileWithinRoot(params: {
       rootDir: params.rootDir,
       targetPath: pinned.targetPath,
       expectedIdentity: identity,
+      expectedSize: payload.length,
     });
   } catch (err) {
     emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
@@ -628,6 +642,7 @@ export async function copyFileWithinRoot(params: {
         kind: "stream",
         stream: sourceStream,
       },
+      expectedSize: source.stat.size,
     }).catch((error) => {
       throw normalizePinnedWriteError(error);
     });
@@ -636,6 +651,7 @@ export async function copyFileWithinRoot(params: {
         rootDir: params.rootDir,
         targetPath: pinned.targetPath,
         expectedIdentity: identity,
+        expectedSize: source.stat.size,
       });
     } catch (err) {
       emitWriteBoundaryWarning(`post-copy verification failed: ${String(err)}`);
@@ -728,6 +744,9 @@ function normalizePinnedWriteError(error: unknown): Error {
   if (error instanceof SafeOpenError) {
     return error;
   }
+  if (error instanceof Error && error.message.includes("write size mismatch")) {
+    return new SafeOpenError("write-truncated", error.message, { cause: error });
+  }
   return new SafeOpenError("invalid-path", "path is not a regular file under root", {
     cause: error instanceof Error ? error : undefined,
   });
@@ -751,11 +770,11 @@ async function writeFileWithinRootLegacy(params: {
   await target.handle.close().catch(() => {});
   let tempPath: string | null = null;
   try {
+    const payload = bufferFromWriteData(params.data, params.encoding);
     tempPath = buildAtomicWriteTempPath(destinationPath);
     const writtenStat = await writeTempFileForAtomicReplace({
       tempPath,
-      data: params.data,
-      encoding: params.encoding,
+      data: payload,
       mode: targetMode || 0o600,
     });
     await fs.rename(tempPath, destinationPath);
@@ -765,6 +784,7 @@ async function writeFileWithinRootLegacy(params: {
         rootDir: params.rootDir,
         targetPath: destinationPath,
         expectedIdentity: writtenStat,
+        expectedSize: payload.length,
       });
     } catch (err) {
       emitWriteBoundaryWarning(`post-write verification failed: ${String(err)}`);
@@ -832,6 +852,7 @@ async function copyFileWithinRootLegacy(
         rootDir: params.rootDir,
         targetPath: destinationPath,
         expectedIdentity: writtenStat,
+        expectedSize: source.stat.size,
       });
     } catch (err) {
       emitWriteBoundaryWarning(`post-copy verification failed: ${String(err)}`);
