@@ -8,7 +8,7 @@ import {
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply.js";
-import { extractStatusDirective } from "./reply/directives.js";
+import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -47,6 +47,12 @@ describe("directive parsing", () => {
     const res = extractReasoningDirective("/reasoning stream please");
     expect(res.hasDirective).toBe(true);
     expect(res.reasoningLevel).toBe("stream");
+  });
+
+  it("matches fast directive", () => {
+    const res = extractFastDirective("/fast on please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.fastMode).toBe(true);
   });
 
   it("matches elevated with leading space", () => {
@@ -102,6 +108,14 @@ describe("directive parsing", () => {
     const res = extractVerboseDirective("/verbose:");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches fast with no argument", () => {
+    const res = extractFastDirective("/fast:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.fastMode).toBeUndefined();
     expect(res.rawLevel).toBeUndefined();
     expect(res.cleaned).toBe("");
   });

@@ -10,6 +10,7 @@ export const en: TranslationMap = {
     enabled: "Enabled",
     disabled: "Disabled",
     na: "n/a",
+    version: "Version",
     docs: "Docs",
     theme: "Theme",
     resources: "Resources",
