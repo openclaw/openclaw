@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.3.11",
+  "version": "2026.3.13",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -294,7 +294,7 @@
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "release:check": "node --import tsx scripts/release-check.ts",
@@ -339,7 +339,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.16.1",
-    "@aws-sdk/client-bedrock": "^3.1007.0",
+    "@aws-sdk/client-bedrock": "^3.1008.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.1.0",
     "@discordjs/voice": "^0.19.1",
@@ -388,7 +388,7 @@
     "sqlite-vec": "0.1.7-alpha.2",
     "tar": "7.5.11",
     "tslog": "^4.10.2",
-    "undici": "^7.22.0",
+    "undici": "^7.24.0",
     "ws": "^8.19.0",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
@@ -399,28 +399,34 @@
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.4.0",
+    "@types/node": "^25.5.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260311.1",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@typescript/native-preview": "7.0.0-dev.20260312.1",
+    "@vitest/coverage-v8": "^4.1.0",
     "jscpd": "4.0.8",
+    "jsdom": "^28.1.0",
     "lit": "^3.3.2",
-    "oxfmt": "0.38.0",
-    "oxlint": "^1.53.0",
+    "oxfmt": "0.40.0",
+    "oxlint": "^1.55.0",
     "oxlint-tsgolint": "^0.16.0",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.0"
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.16.2"
   },
+  "peerDependenciesMeta": {
+    "node-llama-cpp": {
+      "optional": true
+    }
+  },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.16.0"
   },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {

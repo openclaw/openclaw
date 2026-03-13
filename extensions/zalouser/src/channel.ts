@@ -22,6 +22,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
+  isDangerousNameMatchingEnabled,
   isNumericTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
@@ -216,6 +217,7 @@ function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       includeWildcard: true,
+      allowNameMatching: isDangerousNameMatchingEnabled(account.config),
     }),
   );
 }
