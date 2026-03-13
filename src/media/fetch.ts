@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
@@ -35,6 +35,7 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 };
 
 function stripQuotes(value: string): string {
@@ -92,6 +93,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    dispatcherPolicy,
   } = options;
 
   let res: Response;
@@ -106,6 +108,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         maxRedirects,
         policy: ssrfPolicy,
         lookupFn,
+        dispatcherPolicy,
       }),
     );
     res = result.response;
