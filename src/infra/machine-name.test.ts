@@ -34,12 +34,12 @@ afterEach(() => {
 });
 
 describe("getMachineDisplayName", () => {
-  it("uses the hostname fallback in test mode and trims .local", async () => {
-    const hostnameSpy = vi.spyOn(os, "hostname").mockReturnValue("  clawbox.local  ");
+  it("uses the hostname fallback in test mode and strips a trimmed .local suffix", async () => {
+    const hostnameSpy = vi.spyOn(os, "hostname").mockReturnValue("  clawbox.LOCAL  ");
     const machineName = await importMachineName("test-fallback");
 
-    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox.local");
-    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox.local");
+    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox");
+    await expect(machineName.getMachineDisplayName()).resolves.toBe("clawbox");
     expect(hostnameSpy).toHaveBeenCalledTimes(1);
     expect(execFileMock).not.toHaveBeenCalled();
   });
