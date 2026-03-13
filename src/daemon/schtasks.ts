@@ -12,7 +12,6 @@ import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
-import { inspectPortUsage } from "../infra/ports.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceControlArgs,
