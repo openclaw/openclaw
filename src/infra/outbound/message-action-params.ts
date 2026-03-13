@@ -105,23 +105,35 @@ function inferAttachmentFilename(params: {
   mediaHint?: string;
   contentType?: string;
 }): string | undefined {
+  const safeBaseName = (value: string) => path.win32.basename(path.posix.basename(value));
+  const stripQueryAndHash = (value: string) => {
+    const noHash = value.split("#")[0] ?? value;
+    return noHash.split("?")[0] ?? noHash;
+  };
   const mediaHint = params.mediaHint?.trim();
   if (mediaHint) {
     try {
       if (mediaHint.startsWith("file://")) {
         const filePath = fileURLToPath(mediaHint);
-        const base = path.basename(filePath);
+        const base = safeBaseName(filePath);
         if (base) {
           return base;
         }
       } else if (/^https?:\/\//i.test(mediaHint)) {
         const url = new URL(mediaHint);
-        const base = path.basename(url.pathname);
+        const decodedPath = (() => {
+          try {
+            return decodeURIComponent(url.pathname);
+          } catch {
+            return url.pathname;
+          }
+        })();
+        const base = safeBaseName(decodedPath);
         if (base) {
           return base;
         }
       } else {
-        const base = path.basename(mediaHint);
+        const base = safeBaseName(stripQueryAndHash(mediaHint));
         if (base) {
           return base;
         }

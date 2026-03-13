@@ -55,3 +55,39 @@ describe("message action sandbox media hydration", () => {
     }
   });
 });
+
+describe("message action attachment filename inference", () => {
+  it("strips Windows-style path segments from encoded media URLs", async () => {
+    const args: Record<string, unknown> = {
+      media: "https://example.com/uploads/..%5Csecret.txt?sig=123",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("secret.txt");
+  });
+
+  it("strips Windows-style path segments from raw media hints", async () => {
+    const args: Record<string, unknown> = {
+      media: "..\\private\\voice-note.m4a#fragment",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("voice-note.m4a");
+  });
+});
