@@ -11,11 +11,13 @@ describe("parseFiniteNumber", () => {
     { value: 42, expected: 42 },
     { value: "3.14", expected: 3.14 },
     { value: " 3.14ms", expected: 3.14 },
+    { value: "+7", expected: 7 },
+    { value: "1e3", expected: 1000 },
   ])("parses %j", ({ value, expected }) => {
     expect(parseFiniteNumber(value)).toBe(expected);
   });
 
-  it.each([Number.NaN, Number.POSITIVE_INFINITY, "not-a-number", " ", null])(
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, "not-a-number", " ", "", null])(
     "returns undefined for %j",
     (value) => {
       expect(parseFiniteNumber(value)).toBeUndefined();
@@ -28,13 +30,17 @@ describe("parseStrictInteger", () => {
     { value: "42", expected: 42 },
     { value: " -7 ", expected: -7 },
     { value: 12, expected: 12 },
+    { value: "+9", expected: 9 },
   ])("parses %j", ({ value, expected }) => {
     expect(parseStrictInteger(value)).toBe(expected);
   });
 
-  it.each(["42ms", "0abc", "1.5", " ", Number.MAX_SAFE_INTEGER + 1])("rejects %j", (value) => {
-    expect(parseStrictInteger(value)).toBeUndefined();
-  });
+  it.each(["42ms", "0abc", "1.5", "1e3", " ", Number.MAX_SAFE_INTEGER + 1])(
+    "rejects %j",
+    (value) => {
+      expect(parseStrictInteger(value)).toBeUndefined();
+    },
+  );
 });
 
 describe("parseStrictPositiveInteger", () => {

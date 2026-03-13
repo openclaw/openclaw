@@ -1,10 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
+  fetchJson,
+  parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 
 describe("provider usage fetch shared helpers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("builds a provider error snapshot", () => {
     expect(buildUsageErrorSnapshot("zai", "API error")).toEqual({
       provider: "zai",
@@ -12,6 +19,64 @@ describe("provider usage fetch shared helpers", () => {
       windows: [],
       error: "API error",
     });
+  });
+
+  it.each([
+    { value: 12, expected: 12 },
+    { value: "12.5", expected: 12.5 },
+    { value: "not-a-number", expected: undefined },
+  ])("parses finite numbers for %j", ({ value, expected }) => {
+    expect(parseFiniteNumber(value)).toBe(expected);
+  });
+
+  it("forwards request init and clears the timeout on success", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const fetchFn = vi.fn(
+      async (_url: string, init?: RequestInit) =>
+        new Response(JSON.stringify({ aborted: init?.signal?.aborted ?? false }), { status: 200 }),
+    );
+
+    const response = await fetchJson(
+      "https://example.com/usage",
+      {
+        method: "POST",
+        headers: { authorization: "Bearer test" },
+      },
+      1_000,
+      fetchFn,
+    );
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://example.com/usage",
+      expect.objectContaining({
+        method: "POST",
+        headers: { authorization: "Bearer test" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    await expect(response.json()).resolves.toEqual({ aborted: false });
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts timed out requests and clears the timer on rejection", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const fetchFn = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
+            once: true,
+          });
+        }),
+    );
+
+    const request = fetchJson("https://example.com/usage", {}, 50, fetchFn);
+    const rejection = expect(request).rejects.toThrow("aborted by timeout");
+    await vi.advanceTimersByTimeAsync(50);
+
+    await rejection;
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
   it("maps configured status codes to token expired", () => {
@@ -34,5 +99,15 @@ describe("provider usage fetch shared helpers", () => {
     });
 
     expect(snapshot.error).toBe("HTTP 403: missing scope");
+  });
+
+  it("omits empty HTTP error message suffixes", () => {
+    const snapshot = buildUsageHttpErrorSnapshot({
+      provider: "anthropic",
+      status: 429,
+      message: "   ",
+    });
+
+    expect(snapshot.error).toBe("HTTP 429");
   });
 });
