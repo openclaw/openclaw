@@ -301,7 +301,8 @@ async function dispatchSlashCommand(
     return;
   }
 
-  const result = await executeSlashCommand(host.client, host.sessionKey, name, args);
+  const targetSessionKey = host.sessionKey;
+  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
 
   if (result.content) {
     injectCommandResult(host, result.content);
@@ -310,7 +311,7 @@ async function dispatchSlashCommand(
   if (result.sessionPatch && "model" in result.sessionPatch) {
     host.chatModelOverrides = {
       ...host.chatModelOverrides,
-      [host.sessionKey]: result.sessionPatch.model ?? null,
+      [targetSessionKey]: result.sessionPatch.model ?? null,
     };
   }
 

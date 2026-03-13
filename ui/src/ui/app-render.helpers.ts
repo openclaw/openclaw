@@ -328,12 +328,21 @@ function resolveActiveSessionRow(state: AppViewState) {
 }
 
 function resolveModelOverrideValue(state: AppViewState): string {
+  // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
+  const cached = state.chatModelOverrides[state.sessionKey];
+  if (typeof cached === "string") {
+    return cached.trim();
+  }
+  // cached === null means explicitly cleared to default.
+  if (cached === null) {
+    return "";
+  }
+  // No local override recorded yet — fall back to server data.
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow) {
     return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
   }
-  const cached = state.chatModelOverrides[state.sessionKey];
-  return typeof cached === "string" ? cached.trim() : "";
+  return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
@@ -421,16 +430,18 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
   if (currentOverride === nextModel) {
     return;
   }
+  const targetSessionKey = state.sessionKey;
   state.lastError = null;
+  // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
+  state.chatModelOverrides = {
+    ...state.chatModelOverrides,
+    [targetSessionKey]: nextModel || null,
+  };
   try {
     await state.client.request("sessions.patch", {
-      key: state.sessionKey,
+      key: targetSessionKey,
       model: nextModel || null,
     });
-    state.chatModelOverrides = {
-      ...state.chatModelOverrides,
-      [state.sessionKey]: nextModel || null,
-    };
     await refreshSessionOptions(state);
   } catch (err) {
     state.lastError = `Failed to set model: ${String(err)}`;
