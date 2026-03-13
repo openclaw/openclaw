@@ -4,6 +4,7 @@ import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { isSyntheticSessionEventProvider } from "../../utils/system-turn-provider.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
@@ -43,17 +44,26 @@ const mergeOrigin = (
 };
 
 export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
-  const label = resolveConversationLabel(ctx)?.trim();
-  const providerRaw =
-    (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
-    ctx.Surface ||
-    ctx.Provider;
+  const originatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const ignoreSyntheticSystemOrigin =
+    !originatingChannel && isSyntheticSessionEventProvider(ctx.Provider);
+  const label = ignoreSyntheticSystemOrigin ? undefined : resolveConversationLabel(ctx)?.trim();
+  const providerRaw = ignoreSyntheticSystemOrigin
+    ? undefined
+    : (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
+      ctx.Surface ||
+      ctx.Provider;
   const provider = normalizeMessageChannel(providerRaw);
   const surface = ctx.Surface?.trim().toLowerCase();
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
-  const from = ctx.From?.trim();
-  const to =
-    (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
+  const from = ignoreSyntheticSystemOrigin ? undefined : ctx.From?.trim();
+  const to = (
+    ignoreSyntheticSystemOrigin
+      ? ctx.OriginatingTo
+      : typeof ctx.OriginatingTo === "string"
+        ? ctx.OriginatingTo
+        : ctx.To
+  )?.trim();
   const accountId = ctx.AccountId?.trim();
   const threadId = ctx.MessageThreadId ?? undefined;
 

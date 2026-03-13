@@ -384,6 +384,7 @@ export async function initSessionState(params: {
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
     originatingToRaw: ctx.OriginatingTo,
+    providerRaw: ctx.Provider,
     toRaw: ctx.To,
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,

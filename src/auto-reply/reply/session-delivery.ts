@@ -11,6 +11,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { isSyntheticSessionEventProvider } from "../../utils/system-turn-provider.js";
 import type { MsgContext } from "../templating.js";
 
 export type LegacyMainDeliveryRetirement = {
@@ -116,6 +117,7 @@ export function resolveLastChannelRaw(params: {
 export function resolveLastToRaw(params: {
   originatingChannelRaw?: string;
   originatingToRaw?: string;
+  providerRaw?: string;
   toRaw?: string;
   persistedLastTo?: string;
   persistedLastChannel?: string;
@@ -130,6 +132,12 @@ export function resolveLastToRaw(params: {
   }
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+  const ignoreSyntheticSystemTarget =
+    !originatingChannel && isSyntheticSessionEventProvider(params.providerRaw);
+
+  if (ignoreSyntheticSystemTarget) {
+    return params.originatingToRaw || params.persistedLastTo;
+  }
 
   // When the turn originates from an internal/non-deliverable source, do not
   // replace an established external destination with internal routing ids

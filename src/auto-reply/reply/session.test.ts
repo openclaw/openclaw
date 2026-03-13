@@ -2132,4 +2132,53 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
     expect(result.sessionEntry.deliveryContext?.to).toBe("session:webchat-main");
   });
+
+  it("does not let synthetic heartbeat turns overwrite main-session route or origin", async () => {
+    const storePath = await createStorePath("heartbeat-main-route-origin-");
+    const sessionKey = "agent:main:main";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-heartbeat-main-1",
+        updatedAt: Date.now(),
+        lastChannel: "webchat",
+        lastTo: "openclaw-control-ui",
+        deliveryContext: {
+          channel: "webchat",
+          to: "openclaw-control-ui",
+        },
+        origin: {
+          provider: "webchat",
+          surface: "webchat",
+          label: "openclaw-control-ui",
+          from: "openclaw-control-ui",
+          to: "openclaw-control-ui",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Read HEARTBEAT.md and reply HEARTBEAT_OK if nothing needs attention.",
+        SessionKey: sessionKey,
+        Provider: "heartbeat",
+        From: "heartbeat",
+        To: "heartbeat",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
+    expect(result.sessionEntry.lastTo).toBe("openclaw-control-ui");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("openclaw-control-ui");
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "webchat",
+      surface: "webchat",
+      label: "openclaw-control-ui",
+      from: "openclaw-control-ui",
+      to: "openclaw-control-ui",
+    });
+  });
 });
