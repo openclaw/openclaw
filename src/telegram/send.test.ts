@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
@@ -87,6 +88,29 @@ describe("sent-message-cache", () => {
 
     clearSentMessageCache();
     expect(wasSentByBot(123, 1)).toBe(false);
+  });
+
+  it("shares sent-message state across distinct module instances", async () => {
+    const cacheA = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=shared-a",
+    );
+    const cacheB = await importFreshModule<typeof import("./sent-message-cache.js")>(
+      import.meta.url,
+      "./sent-message-cache.js?scope=shared-b",
+    );
+
+    cacheA.clearSentMessageCache();
+
+    try {
+      cacheA.recordSentMessage(123, 1);
+      expect(cacheB.wasSentByBot(123, 1)).toBe(true);
+
+      cacheB.clearSentMessageCache();
+      expect(cacheA.wasSentByBot(123, 1)).toBe(false);
+    } finally {
+      cacheA.clearSentMessageCache();
+    }
   });
 });
 
@@ -1732,6 +1756,22 @@ describe("editMessageTelegram", () => {
       }),
     ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries editMessageTelegram on Telegram 5xx errors", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(Object.assign(new Error("502: Bad Gateway"), { error_code: 502 }))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await expect(
+      editMessageTelegram("123", 1, "hi", {
+        token: "tok",
+        cfg: {},
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
   });
 
   it("disables link previews when linkPreview is false", async () => {
