@@ -118,7 +118,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const pinnedWriteTarget = this.pathGuard.resolvePinnedEntry(target, "write files");
+    const pinnedWriteTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+      target,
+      "write files",
+    );
     await this.runCheckedCommand({
       ...buildPinnedWritePlan({
         check: writeCheck,
@@ -218,7 +221,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
-    const result = await this.runPlannedCommand(buildStatPlan(target), params.signal);
+    const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
+    const result = await this.runPlannedCommand(
+      buildStatPlan(target, anchoredTarget),
+      params.signal,
+    );
     if (result.code !== 0) {
       const stderr = result.stderr.toString("utf8");
       if (stderr.includes("No such file or directory")) {

@@ -157,7 +157,9 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
 }
 
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
+  return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
+    ? [8, 16, 32]
+    : [5_000, 10_000, 20_000];
 }
 
 async function retryTransientDirectCronDelivery<T>(params: {
@@ -256,6 +258,12 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          // Isolated cron direct delivery uses its own transient retry loop.
+          // Keep all attempts out of the write-ahead delivery queue so a
+          // late-successful first send cannot leave behind a failed queue
+          // entry that replays on the next restart.
+          // See: https://github.com/openclaw/openclaw/issues/40545
+          skipQueue: true,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
