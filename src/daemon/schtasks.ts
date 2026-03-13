@@ -482,7 +482,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
 }
 
 async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
-  const port = resolveConfiguredGatewayPort(env);
+  const port = (await resolveScheduledTaskPort(env)) ?? resolveConfiguredGatewayPort(env);
   if (!port) {
     return {
       status: "unknown",
