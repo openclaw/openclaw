@@ -24,15 +24,17 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
     host.chatScrollTimeout = null;
   }
   const pickScrollTarget = () => {
-    const container = host.querySelector(".chat-thread") as HTMLElement | null;
-    if (container) {
-      const overflowY = getComputedStyle(container).overflowY;
-      const canScroll =
-        overflowY === "auto" ||
-        overflowY === "scroll" ||
-        container.scrollHeight - container.clientHeight > 1;
-      if (canScroll) {
-        return container;
+    if (typeof host.querySelector === "function") {
+      const container = host.querySelector(".chat-thread") as HTMLElement | null;
+      if (container) {
+        const overflowY = getComputedStyle(container).overflowY;
+        const canScroll =
+          overflowY === "auto" ||
+          overflowY === "scroll" ||
+          container.scrollHeight - container.clientHeight > 1;
+        if (canScroll) {
+          return container;
+        }
       }
     }
     return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;

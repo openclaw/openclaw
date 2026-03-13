@@ -49,6 +49,17 @@ const telegramConfig = {
   },
 } as OpenClawConfig;
 
+const telegramConfigAllowWithinProvider = {
+  ...telegramConfig,
+  tools: {
+    message: {
+      crossContext: {
+        allowWithinProvider: true,
+      },
+    },
+  },
+} as OpenClawConfig;
+
 async function runThreadingAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
@@ -171,7 +182,7 @@ describe("runMessageAction threading auto-injection", () => {
     mockHandledSendAction();
 
     const call = await runThreadingAction({
-      cfg: telegramConfig,
+      cfg: telegramConfigAllowWithinProvider,
       actionParams: {
         channel: "telegram",
         target: testCase.target,
