@@ -1,0 +1,246 @@
+{
+  "_authored": "cc (Claude Code) | 2026-03-13",
+  "version": "1.0",
+  "generated": "2026-03-13",
+  "files": {
+    "openclaw.mjs": {
+      "purpose": "Node entry point — version guard, compile cache, loads dist/entry.js",
+      "exports": [],
+      "dependencies": ["dist/entry.js"]
+    },
+    "src/entry.ts": {
+      "purpose": "CLI bootstrap — respawn logic, profile env, warning filter, runs CLI program",
+      "exports": [],
+      "dependencies": [
+        "src/cli/argv.ts",
+        "src/cli/profile.ts",
+        "src/cli/respawn-policy.ts",
+        "src/infra/env.ts",
+        "src/infra/is-main.ts",
+        "src/process/child-process-bridge.ts"
+      ]
+    },
+    "src/index.ts": {
+      "purpose": "Web provider entry — auto-reply, channel monitoring, session management, config loading",
+      "exports": [
+        "monitorWebChannel",
+        "loadConfig",
+        "resolveSessionKey",
+        "loadSessionStore",
+        "saveSessionStore"
+      ],
+      "dependencies": [
+        "src/auto-reply/",
+        "src/channel-web.ts",
+        "src/cli/deps.ts",
+        "src/config/",
+        "src/infra/",
+        "src/process/exec.ts"
+      ]
+    },
+    "src/extensionAPI.ts": {
+      "purpose": "Plugin SDK surface — public API exported to extensions",
+      "exports": ["extensionAPI"],
+      "dependencies": ["src/plugin-sdk/"]
+    },
+    "src/cli/argv.ts": {
+      "purpose": "CLI argument parsing, help/version detection",
+      "exports": ["isRootHelpInvocation", "isRootVersionInvocation"],
+      "dependencies": []
+    },
+    "src/cli/deps.ts": {
+      "purpose": "Dependency injection — createDefaultDeps factory for CLI commands",
+      "exports": ["createDefaultDeps"],
+      "dependencies": ["src/config/", "src/infra/"]
+    },
+    "src/cli/banner.ts": {
+      "purpose": "CLI startup banner display",
+      "exports": ["printBanner"],
+      "dependencies": ["src/version.ts"]
+    },
+    "src/cli/acp-cli.ts": {
+      "purpose": "ACP (Anthropic Control Plane) CLI bindings",
+      "exports": [],
+      "dependencies": ["src/acp/"]
+    },
+    "src/cli/channels-cli.ts": {
+      "purpose": "Channel management CLI commands",
+      "exports": [],
+      "dependencies": ["src/channels/"]
+    },
+    "src/gateway/boot.ts": {
+      "purpose": "Gateway startup — initialization, port binding, channel probe",
+      "exports": ["bootGateway"],
+      "dependencies": ["src/config/", "src/infra/ports.ts", "src/channels/"]
+    },
+    "src/gateway/auth.ts": {
+      "purpose": "Gateway authentication — rate limiting, mode policy, install policy",
+      "exports": [],
+      "dependencies": ["src/gateway/auth-rate-limit.ts", "src/gateway/auth-mode-policy.ts"]
+    },
+    "src/gateway/call.ts": {
+      "purpose": "Gateway call handler — routes incoming messages to agent",
+      "exports": ["handleCall"],
+      "dependencies": ["src/agents/", "src/gateway/agent-prompt.ts"]
+    },
+    "src/gateway/agent-prompt.ts": {
+      "purpose": "Builds agent system prompt from config, skills, and context",
+      "exports": ["buildAgentPrompt"],
+      "dependencies": ["src/config/", "src/gateway/assistant-identity.ts"]
+    },
+    "src/channels/channel-config.ts": {
+      "purpose": "Channel configuration loading and validation",
+      "exports": ["loadChannelConfig"],
+      "dependencies": ["src/config/"]
+    },
+    "src/channels/allowlists/": {
+      "purpose": "Allowlist matching and allow-from policy for channels",
+      "exports": ["matchAllowlist"],
+      "dependencies": []
+    },
+    "src/channels/dock.ts": {
+      "purpose": "Channel dock — registration and lifecycle for built-in channels",
+      "exports": ["ChannelDock"],
+      "dependencies": ["src/channels/channel-config.ts"]
+    },
+    "src/routing/resolve-route.ts": {
+      "purpose": "Message routing — resolves account + channel to target agent/model",
+      "exports": ["resolveRoute"],
+      "dependencies": ["src/routing/account-id.ts", "src/routing/bindings.ts"]
+    },
+    "src/routing/account-id.ts": {
+      "purpose": "Account ID normalization and lookup",
+      "exports": ["normalizeAccountId"],
+      "dependencies": []
+    },
+    "src/config/config.ts": {
+      "purpose": "Configuration loading, merging, validation (openclaw.json + env)",
+      "exports": ["loadConfig"],
+      "dependencies": ["src/infra/"]
+    },
+    "src/config/sessions.ts": {
+      "purpose": "Session store — persist/load session state per channel+account",
+      "exports": ["loadSessionStore", "saveSessionStore", "resolveSessionKey", "deriveSessionKey"],
+      "dependencies": []
+    },
+    "src/agents/": {
+      "purpose": "Agent spawning, process management, event handling (546 files)",
+      "exports": ["spawnAgent", "AgentProcess"],
+      "dependencies": ["src/config/", "src/infra/", "src/process/"]
+    },
+    "src/media/fetch.ts": {
+      "purpose": "Media download — fetch remote media with retry and content-type detection",
+      "exports": ["fetchMedia"],
+      "dependencies": ["src/media/constants.ts"]
+    },
+    "src/media/audio.ts": {
+      "purpose": "Audio processing — transcoding, duration, format detection",
+      "exports": [],
+      "dependencies": ["src/media/ffmpeg-exec.ts"]
+    },
+    "src/media-understanding/": {
+      "purpose": "Media analysis providers — Anthropic, Google, Deepgram for image/audio/video",
+      "exports": [],
+      "dependencies": ["src/media/"]
+    },
+    "src/infra/env.ts": {
+      "purpose": "Environment variable normalization and truthy checks",
+      "exports": ["normalizeEnv", "isTruthyEnvValue"],
+      "dependencies": []
+    },
+    "src/infra/ports.ts": {
+      "purpose": "Port availability checks and ownership detection",
+      "exports": ["ensurePortAvailable", "PortInUseError", "describePortOwner"],
+      "dependencies": []
+    },
+    "src/infra/binaries.ts": {
+      "purpose": "Binary dependency resolution (ffmpeg, chromium, etc.)",
+      "exports": ["ensureBinary"],
+      "dependencies": []
+    },
+    "src/infra/errors.ts": {
+      "purpose": "Error formatting and uncaught error handlers",
+      "exports": ["formatUncaughtError"],
+      "dependencies": []
+    },
+    "src/plugin-sdk/index.ts": {
+      "purpose": "Plugin SDK — types and helpers for extension authors",
+      "exports": ["PluginSDK"],
+      "dependencies": []
+    },
+    "src/hooks/": {
+      "purpose": "Lifecycle hooks system — pre/post execution hooks for commands",
+      "exports": [],
+      "dependencies": ["src/config/"]
+    },
+    "src/security/": {
+      "purpose": "Security policy enforcement — sandbox, host env, credential scoping",
+      "exports": [],
+      "dependencies": ["src/config/"]
+    },
+    "src/secrets/": {
+      "purpose": "Secrets management — encryption, credential storage, audit",
+      "exports": [],
+      "dependencies": ["src/config/"]
+    },
+    "src/cron/": {
+      "purpose": "Cron scheduling — job definitions, execution, run history",
+      "exports": [],
+      "dependencies": ["src/config/"]
+    },
+    "src/memory/": {
+      "purpose": "Memory plugin system — storage backends for conversation memory",
+      "exports": [],
+      "dependencies": ["src/config/"]
+    },
+    "src/logging.ts": {
+      "purpose": "Structured logging setup — console capture, log levels",
+      "exports": ["enableConsoleCapture"],
+      "dependencies": []
+    },
+    "src/terminal/palette.ts": {
+      "purpose": "Shared CLI color palette — ANSI colors for TTY output",
+      "exports": ["palette"],
+      "dependencies": []
+    },
+    "src/terminal/table.ts": {
+      "purpose": "ANSI-safe table rendering for status output",
+      "exports": [],
+      "dependencies": ["src/terminal/palette.ts"]
+    },
+    "src/version.ts": {
+      "purpose": "Version string from package.json",
+      "exports": ["version"],
+      "dependencies": []
+    },
+    "src/utils.ts": {
+      "purpose": "Shared utilities — JID normalization, E164 phone parsing, assertions",
+      "exports": ["normalizeE164", "toWhatsappJid", "assertWebChannel"],
+      "dependencies": []
+    }
+  },
+  "extension_entry_points": {
+    "extensions/discord/": "Discord extension plugin",
+    "extensions/telegram/": "Telegram extension plugin",
+    "extensions/slack/": "Slack extension plugin",
+    "extensions/msteams/": "Microsoft Teams extension plugin",
+    "extensions/matrix/": "Matrix extension plugin",
+    "extensions/bluebubbles/": "BlueBubbles (iMessage) extension",
+    "extensions/voice-call/": "Voice call extension",
+    "extensions/memory-core/": "Core memory storage plugin",
+    "extensions/memory-lancedb/": "LanceDB memory backend",
+    "extensions/lobster/": "Lobster UI extension",
+    "extensions/diffs/": "Diff tracking extension",
+    "extensions/ollama/": "Ollama LLM provider extension",
+    "extensions/copilot-proxy/": "GitHub Copilot proxy extension"
+  },
+  "entry_points": ["openclaw.mjs", "src/entry.ts", "src/index.ts", "src/extensionAPI.ts"],
+  "test_conventions": "Vitest, colocated *.test.ts, V8 coverage 70% (lines/branches/functions/statements)",
+  "build": {
+    "bundler": "tsdown",
+    "output": "dist/",
+    "type_check": "pnpm tsgo",
+    "lint": "pnpm check (Oxlint + Oxfmt)",
+    "test": "pnpm test (Vitest)"
+  }
+}

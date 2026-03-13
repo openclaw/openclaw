@@ -1,0 +1,37 @@
+# Authored by: cc (Claude Code) | 2026-03-13
+# Template: Refactor
+# Variables: {TARGET_FILES}, {REFACTOR_GOAL}, {CONSTRAINTS}
+
+You are refactoring code in the OpenClaw repo (TypeScript/ESM).
+
+## Setup
+1. Read docs/repo-map.json and docs/architecture_summary.md.
+2. Read each file in {TARGET_FILES}.
+3. Identify all callers/importers: `rg "from ['\"].*module-name" --type ts -l`.
+
+## Refactoring Goal
+{REFACTOR_GOAL}
+
+## Constraints
+{CONSTRAINTS}
+
+## Chunking Strategy
+If the refactor touches more than 5 files, break it into chunks:
+- Chunk 1: Define new interfaces/types (verify with pnpm tsgo)
+- Chunk 2: Update core implementation (verify with pnpm build)
+- Chunk 3: Migrate callers (verify with pnpm build)
+- Chunk 4: Update tests (verify with pnpm test)
+- Chunk 5: Remove old code, clean up imports (verify with pnpm check)
+
+## Output Format
+For each chunk, return:
+1. The chunk description (one sentence)
+2. Unified diff for each modified file
+3. The verification command to run after applying
+
+## Rules
+- Preserve existing public API unless the goal explicitly changes it.
+- Do not rename exports unless callers are updated in the same chunk.
+- Do not introduce new dependencies — use existing patterns from the codebase.
+- Keep files under 700 LOC; split if a file grows past that.
+- Run pnpm build between chunks to catch breakage early.
