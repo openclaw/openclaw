@@ -99,15 +99,6 @@ export function createProfileSelectionOps({
       chosen = targetId ? resolveById(targetId) : pickDefault();
     }
 
-    if (
-      !chosen &&
-      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
-      candidates.length === 1
-    ) {
-      // If an agent passes a stale/foreign targetId but only one candidate remains,
-      // recover by using that tab instead of failing hard.
-      chosen = candidates[0] ?? null;
-    }
 
     if (chosen === "AMBIGUOUS") {
       throw new BrowserTargetAmbiguousError();

@@ -1460,7 +1460,7 @@ chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
         tabOperationLocks.add(tabId)
         try {
           console.log(`[OpenClaw] Auto-attaching to active tab ${tabId} for tracking continuity`)
-          await attachTab(tabId, { skipAttachedEvent: true })
+          await attachTab(tabId)
           tab = tabs.get(tabId) // Refresh local reference
         } finally {
           tabOperationLocks.delete(tabId)
