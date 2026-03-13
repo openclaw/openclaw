@@ -103,9 +103,16 @@ function normalizeQuery(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function stripTargetPrefixes(value: string): string {
-  return value
-    .replace(/^(channel|user):/i, "")
+function stripProviderPrefix(channel: ChannelId, value: string): string {
+  const trimmed = value.trim();
+  const lower = trimmed.toLowerCase();
+  const prefix = `${channel.toLowerCase()}:`;
+  return lower.startsWith(prefix) ? trimmed.slice(prefix.length).trim() : trimmed;
+}
+
+function stripTargetPrefixes(channel: ChannelId, value: string): string {
+  return stripProviderPrefix(channel, value)
+    .replace(/^(channel|group|chat|room|conversation|user|dm):/i, "")
     .replace(/^[@#]/, "")
     .trim();
 }
@@ -126,7 +133,8 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = trimmedTarget.toLowerCase();
+  const withoutProvider = stripProviderPrefix(params.channel, trimmedTarget);
+  const lowered = withoutProvider.toLowerCase();
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -151,11 +159,6 @@ export function formatTargetDisplay(params: {
   if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) {
     return trimmedTarget;
   }
-
-  const channelPrefix = `${params.channel}:`;
-  const withoutProvider = trimmedTarget.toLowerCase().startsWith(channelPrefix)
-    ? trimmedTarget.slice(channelPrefix.length)
-    : trimmedTarget;
 
   const withoutPrefix = withoutProvider.replace(/^telegram:/i, "");
   if (/^channel:/i.test(withoutPrefix)) {
@@ -196,17 +199,39 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
+  const lowered = trimmed.toLowerCase();
+  const providerPrefix = `${channel.toLowerCase()}:`;
+  const withoutProvider = lowered.startsWith(providerPrefix)
+    ? trimmed.slice(providerPrefix.length).trim()
+    : trimmed;
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+  if (
+    withoutProvider.startsWith("@") ||
+    /^<@!?/.test(withoutProvider) ||
+    /^(user|dm):/i.test(withoutProvider)
+  ) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
+  if (
+    withoutProvider.startsWith("#") ||
+    /^(channel|group|chat|room|conversation):/i.test(withoutProvider)
+  ) {
     return "group";
   }
 
   // For some channels (e.g., BlueBubbles/iMessage), bare phone numbers are almost always DM targets.
-  if ((channel === "bluebubbles" || channel === "imessage") && /^\+?\d{6,}$/.test(trimmed)) {
+  if (
+    (channel === "bluebubbles" || channel === "imessage") &&
+    /^\+?\d{6,}$/.test(withoutProvider)
+  ) {
     return "user";
+  }
+
+  // Allow channel plugins to declare a default target kind for bare names
+  // (e.g., plugin channels where plain-text names are direct contacts).
+  const pluginDefaultKind = getChannelPlugin(channel)?.messaging?.targetResolver?.defaultTargetKind;
+  if (pluginDefaultKind === "user" || pluginDefaultKind === "group") {
+    return pluginDefaultKind;
   }
 
   return "group";
@@ -226,9 +251,14 @@ function matchesDirectoryEntry(params: {
   if (!query) {
     return false;
   }
-  const id = stripTargetPrefixes(normalizeDirectoryEntryId(params.channel, params.entry));
-  const name = params.entry.name ? stripTargetPrefixes(params.entry.name) : "";
-  const handle = params.entry.handle ? stripTargetPrefixes(params.entry.handle) : "";
+  const id = stripTargetPrefixes(
+    params.channel,
+    normalizeDirectoryEntryId(params.channel, params.entry),
+  );
+  const name = params.entry.name ? stripTargetPrefixes(params.channel, params.entry.name) : "";
+  const handle = params.entry.handle
+    ? stripTargetPrefixes(params.channel, params.entry.handle)
+    : "";
   const candidates = [id, name, handle].map((value) => normalizeQuery(value)).filter(Boolean);
   return candidates.some((value) => value === query || value.includes(query));
 }
@@ -351,7 +381,7 @@ function buildNormalizedResolveResult(params: {
     target: {
       to: directTarget,
       kind: params.kind,
-      display: stripTargetPrefixes(params.raw),
+      display: stripTargetPrefixes(params.channel, params.raw),
       source: "normalized",
     },
   };
@@ -396,20 +426,21 @@ export async function resolveMessagingTarget(params: {
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
   const looksLikeTargetId = (): boolean => {
     const trimmed = raw.trim();
-    if (!trimmed) {
+    const withoutProvider = stripProviderPrefix(params.channel, trimmed);
+    if (!withoutProvider) {
       return false;
     }
     const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
     if (lookup) {
       return lookup(trimmed, normalized);
     }
-    if (/^(channel|group|user):/i.test(trimmed)) {
+    if (/^(channel|group|chat|room|conversation|user|dm):/i.test(withoutProvider)) {
       return true;
     }
-    if (/^[@#]/.test(trimmed)) {
+    if (/^[@#]/.test(withoutProvider)) {
       return true;
     }
-    if (/^\+?\d{6,}$/.test(trimmed)) {
+    if (/^\+?\d{6,}$/.test(withoutProvider)) {
       // BlueBubbles/iMessage phone numbers should usually resolve via the directory to a DM chat,
       // otherwise the provider may pick an existing group containing that handle.
       if (params.channel === "bluebubbles" || params.channel === "imessage") {
@@ -417,10 +448,7 @@ export async function resolveMessagingTarget(params: {
       }
       return true;
     }
-    if (trimmed.includes("@thread")) {
-      return true;
-    }
-    if (/^(conversation|user):/i.test(trimmed)) {
+    if (withoutProvider.includes("@thread")) {
       return true;
     }
     return false;
@@ -446,7 +474,7 @@ export async function resolveMessagingTarget(params: {
       kind,
     });
   }
-  const query = stripTargetPrefixes(raw);
+  const query = stripTargetPrefixes(params.channel, raw);
   const entries = await getDirectoryEntries({
     cfg: params.cfg,
     channel: params.channel,
@@ -464,7 +492,7 @@ export async function resolveMessagingTarget(params: {
       target: {
         to: normalizeDirectoryEntryId(params.channel, entry),
         kind,
-        display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
+        display: entry.name ?? entry.handle ?? stripTargetPrefixes(params.channel, entry.id),
         source: "directory",
       },
     };
@@ -479,7 +507,7 @@ export async function resolveMessagingTarget(params: {
           target: {
             to: normalizeDirectoryEntryId(params.channel, best),
             kind,
-            display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
+            display: best.name ?? best.handle ?? stripTargetPrefixes(params.channel, best.id),
             source: "directory",
           },
         };
