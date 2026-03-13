@@ -101,6 +101,13 @@ export function createAcpxRuntimeService(
           },
         };
         ctx.logger.info("chrome-devtools-mcp preset injected from browser.mcp config");
+      } else if (
+        ctx.config.browser?.mcp?.enabled &&
+        pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME]
+      ) {
+        ctx.logger.info(
+          "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+        );
       }
 
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;

@@ -294,6 +294,9 @@ describe("createAcpxRuntimeService", () => {
 
     const passedConfig = getPassedPluginConfig(runtimeFactory);
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
+    expect(context.logger.info).toHaveBeenCalledWith(
+      "chrome-devtools-mcp preset skipped: existing mcpServers entry takes precedence",
+    );
   });
 
   it("does not leak injected preset into subsequent restarts when disabled", async () => {

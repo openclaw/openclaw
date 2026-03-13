@@ -35,15 +35,17 @@ export type BrowserMcpConfig = {
   enabled?: boolean;
   /**
    * Tool exposure mode.
-  /**
-   * Tool exposure mode.
    * - "full": all 29 DevTools MCP tools (input, navigation, debugging, performance, network, emulation).
    * - "slim": 3 essential tools only (navigate, evaluate_script, take_screenshot).
-   *   Note: evaluate_script is unaffected by browser.evaluateEnabled; it is controlled
-   *   solely by ACPX permission modes (approve-all / approve-reads / deny-all).
+   *   Note: evaluate_script is unaffected by browser.evaluateEnabled; ACPX permission mode controls it.
    * Default: "full"
    */
   mode?: "full" | "slim";
+  /**
+   * Chrome channel to connect to.
+   * Default: "stable". Use "beta", "canary", or "dev" for pre-release Chrome builds.
+   */
+  channel?: "stable" | "beta" | "canary" | "dev";
 };
 export type BrowserConfig = {
   enabled?: boolean;
