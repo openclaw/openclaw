@@ -59,12 +59,22 @@ export type PluginHttpRequestHandler = (
   dispatchContext?: { gatewayAuthSatisfied?: boolean },
 ) => Promise<boolean>;
 
-export function createGatewayPluginRequestHandler(params: {
-  registry: PluginRegistry;
-  log: SubsystemLogger;
-}): PluginHttpRequestHandler {
-  const { registry, log } = params;
+type PluginRegistrySource =
+  | { getRegistry: () => PluginRegistry; registry?: PluginRegistry }
+  | { getRegistry?: undefined; registry: PluginRegistry };
+
+export function createGatewayPluginRequestHandler(
+  params: {
+    log: SubsystemLogger;
+  } & PluginRegistrySource,
+): PluginHttpRequestHandler {
+  const getRegistry = params.getRegistry ?? (params.registry ? () => params.registry : undefined);
+  if (!getRegistry) {
+    throw new Error("createGatewayPluginRequestHandler requires getRegistry or registry");
+  }
+  const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
+    const registry = getRegistry();
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;

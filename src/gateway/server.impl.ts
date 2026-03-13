@@ -468,15 +468,17 @@ export async function startGatewayServer(
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
-    ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-      });
+  const { pluginRegistry: initialPluginRegistry, gatewayMethods: baseGatewayMethods } =
+    minimalTestGateway
+      ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
+      : loadGatewayPlugins({
+          cfg: cfgAtStart,
+          workspaceDir: defaultWorkspaceDir,
+          log,
+          coreGatewayHandlers,
+          baseMethods,
+        });
+  let pluginRegistryCurrent = initialPluginRegistry;
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -616,7 +618,7 @@ export async function startGatewayServer(
     gatewayTls,
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
-    pluginRegistry,
+    getPluginRegistry: () => pluginRegistryCurrent,
     deps,
     canvasRuntime,
     canvasHostEnabled,
@@ -887,7 +889,7 @@ export async function startGatewayServer(
     logHealth,
     logWsControl,
     extraHandlers: {
-      ...pluginRegistry.gatewayHandlers,
+      ...initialPluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
       ...secretsHandlers,
     },
@@ -928,7 +930,7 @@ export async function startGatewayServer(
   if (!minimalTestGateway) {
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
-      pluginRegistry,
+      pluginRegistry: initialPluginRegistry,
       defaultWorkspaceDir,
       deps,
       startChannels,
