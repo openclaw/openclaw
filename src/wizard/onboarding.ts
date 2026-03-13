@@ -227,7 +227,7 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
+    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet" | "netbird") => {
       if (value === "loopback") {
         return "Loopback (127.0.0.1)";
       }
@@ -239,6 +239,9 @@ export async function runOnboardingWizard(
       }
       if (value === "tailnet") {
         return "Tailnet (Tailscale IP)";
+      }
+      if (value === "netbird") {
+        return "Netbird (WireGuard VPN IP, auto-TLS)";
       }
       return "Auto";
     };

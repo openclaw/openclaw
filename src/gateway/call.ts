@@ -147,9 +147,9 @@ export function buildGatewayConnectionDetails(
     options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort = resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
+  const tlsEnabled = config.gateway?.tls?.enabled === true || bindMode === "netbird";
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;

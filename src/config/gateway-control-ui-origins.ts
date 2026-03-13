@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "./config.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
-export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom";
+export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "netbird" | "custom";
 
 export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
-  return bind === "lan" || bind === "tailnet" || bind === "custom";
+  return bind === "lan" || bind === "tailnet" || bind === "netbird" || bind === "custom";
 }
 
 export function hasConfiguredControlUiAllowedOrigins(params: {

@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { pickPrimaryNetbirdIPv4 } from "../infra/netbird.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -458,7 +459,7 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
 export function resolveControlUiLinks(params: {
   port: number;
-  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  bind?: import("../config/config.js").GatewayBindMode;
   customBindHost?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
@@ -466,6 +467,7 @@ export function resolveControlUiLinks(params: {
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const netbirdIPv4 = pickPrimaryNetbirdIPv4();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;
@@ -473,16 +475,20 @@ export function resolveControlUiLinks(params: {
     if (bind === "tailnet" && tailnetIPv4) {
       return tailnetIPv4 ?? "127.0.0.1";
     }
+    if (bind === "netbird" && netbirdIPv4) {
+      return netbirdIPv4 ?? "127.0.0.1";
+    }
     if (bind === "lan") {
       return pickPrimaryLanIPv4() ?? "127.0.0.1";
     }
     return "127.0.0.1";
   })();
+  const useTls = bind === "netbird";
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const wsPath = basePath ? basePath : "";
   return {
-    httpUrl: `http://${host}:${port}${uiPath}`,
-    wsUrl: `ws://${host}:${port}${wsPath}`,
+    httpUrl: `${useTls ? "https" : "http"}://${host}:${port}${uiPath}`,
+    wsUrl: `${useTls ? "wss" : "ws"}://${host}:${port}${wsPath}`,
   };
 }

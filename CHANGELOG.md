@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/netbird bind mode: add `gateway.bind: "netbird"` to auto-detect NetBird wt\* interfaces and auto-enable TLS, so Control UI device identity works over VPN without manual TLS setup. (#32725)
 - Android/chat settings: redesign the chat settings sheet with grouped device and media sections, refresh the Connect and Voice tabs, and tighten the chat composer/session header for a denser mobile layout. (#44894) Thanks @obviyus.
 
 ### Fixes

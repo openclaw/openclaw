@@ -566,8 +566,13 @@ export async function startGatewayServer(
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
-  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
-  if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
+  const effectiveBindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
+  const effectiveTlsCfg =
+    effectiveBindMode === "netbird" && cfgAtStart.gateway?.tls?.enabled !== true
+      ? { ...cfgAtStart.gateway?.tls, enabled: true as const, autoGenerate: true }
+      : cfgAtStart.gateway?.tls;
+  const gatewayTls = await loadGatewayTlsRuntime(effectiveTlsCfg, log.child("tls"));
+  if (effectiveTlsCfg?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();

@@ -78,6 +78,7 @@ export async function configureGatewayForOnboarding(
             { value: "loopback", label: "Loopback (127.0.0.1)" },
             { value: "lan", label: "LAN (0.0.0.0)" },
             { value: "tailnet", label: "Tailnet (Tailscale IP)" },
+            { value: "netbird", label: "Netbird (WireGuard VPN IP, auto-TLS)" },
             { value: "auto", label: "Auto (Loopback → LAN)" },
             { value: "custom", label: "Custom IP" },
           ],

@@ -73,7 +73,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.mode":
     'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
   "gateway.bind":
-    'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" or "auto" for safest local operation unless external clients must connect.',
+    'Network bind profile: "auto", "lan", "loopback", "custom", "tailnet", or "netbird" to control interface exposure. Keep "loopback" or "auto" for safest local operation unless external clients must connect.',
   "gateway.customBindHost":
     "Explicit bind host/IP used when gateway.bind is set to custom for manual interface targeting. Use a precise address and avoid wildcard binds unless external exposure is required.",
   "gateway.controlUi":
