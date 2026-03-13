@@ -65,6 +65,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -891,6 +892,43 @@ export async function startGatewayServer(
         }
       });
 
+  const lifecycleUnsub = minimalTestGateway
+    ? null
+    : onSessionLifecycleEvent((event) => {
+        const connIds = sessionEventSubscribers.getAll();
+        if (connIds.size === 0) {
+          return;
+        }
+        const sessionRow = loadGatewaySessionRow(event.sessionKey);
+        broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey: event.sessionKey,
+            reason: event.reason,
+            parentSessionKey: event.parentSessionKey,
+            label: event.label,
+            displayName: event.displayName,
+            ts: Date.now(),
+            ...(sessionRow
+              ? {
+                  totalTokens: sessionRow.totalTokens,
+                  totalTokensFresh: sessionRow.totalTokensFresh,
+                  contextTokens: sessionRow.contextTokens,
+                  estimatedCostUsd: sessionRow.estimatedCostUsd,
+                  modelProvider: sessionRow.modelProvider,
+                  model: sessionRow.model,
+                  status: sessionRow.status,
+                  startedAt: sessionRow.startedAt,
+                  endedAt: sessionRow.endedAt,
+                  runtimeMs: sessionRow.runtimeMs,
+                }
+              : {}),
+          },
+          connIds,
+          { dropIfSlow: true },
+        );
+      });
+
   let heartbeatRunner: HeartbeatRunner = minimalTestGateway
     ? {
         stop: () => {},
@@ -1223,6 +1261,7 @@ export async function startGatewayServer(
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
+    lifecycleUnsub,
     chatRunState,
     clients,
     configReloader,

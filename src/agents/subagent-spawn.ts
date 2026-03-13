@@ -16,6 +16,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -808,6 +809,14 @@ export async function spawnSubagentDirect(
       // Spawn should still return accepted if spawn lifecycle hooks fail.
     }
   }
+
+  // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
+  emitSessionLifecycleEvent({
+    sessionKey: childSessionKey,
+    reason: "create",
+    parentSessionKey: requesterInternalKey,
+    label: label || undefined,
+  });
 
   // Check if we're in a cron isolated session - don't add "do not poll" note
   // because cron sessions end immediately after the agent produces a response,
