@@ -96,6 +96,14 @@ Configure the extension to use the derived relay port in the extension Options p
   - Badge shows `ON` when attached.
 - Click again to detach.
 
+**Common gotcha:** the extension attaches to the **currently active tab**.
+If you click it while focused on your OpenClaw Control UI (or any other page), you will attach that tab instead of the one you intended.
+
+To verify what’s attached:
+
+- CLI: `openclaw browser --browser-profile chrome tabs`
+- Tool: `browser` with `profile="chrome"` → `tabs`
+
 ## Which tab does it control?
 
 - It does **not** automatically control “whatever tab you’re looking at”.
