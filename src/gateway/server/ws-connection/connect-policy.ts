@@ -34,13 +34,20 @@ export function resolveControlUiAuthPolicy(params: {
 
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
-  sharedAuthOk: boolean,
+  _sharedAuthOk: boolean,
   trustedProxyAuthOk = false,
 ): boolean {
+  // When dangerouslyDisableDeviceAuth is true, skip pairing entirely
+  // This is the intended behavior for HTTP-only deployments
+  if (policy.dangerouslyDisableDeviceAuth) {
+    return true;
+  }
   if (trustedProxyAuthOk) {
     return true;
   }
-  return policy.allowBypass && sharedAuthOk;
+  // Note: sharedAuthOk alone no longer skips pairing - must use dangerouslyDisableDeviceAuth
+  // This is intentional: shared auth should still require device identity for security
+  return false;
 }
 
 export function isTrustedProxyControlUiOperatorAuth(params: {
@@ -76,6 +83,11 @@ export function evaluateMissingDeviceIdentity(params: {
   hasSharedAuth: boolean;
   isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
+  // When dangerouslyDisableDeviceAuth is true, always allow (skip all device identity checks)
+  // This is the intended behavior for HTTP-only deployments
+  if (params.isControlUi && params.controlUiAuthPolicy.dangerouslyDisableDeviceAuth) {
+    return { kind: "allow" };
+  }
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };
   }

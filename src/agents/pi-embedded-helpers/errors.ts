@@ -705,6 +705,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Handle tool_use_id mismatch errors (infinite retry loop prevention)
+  if (/tool.?use.?id.?mismatch|tool.?call.?id.?mismatch/i.test(raw)) {
+    return (
+      "Tool call ID mismatch - session state is corrupted. " +
+      "Use /reset (or /new) to start a fresh session and try again."
+    );
+  }
+
   if (isReasoningConstraintErrorMessage(raw)) {
     return (
       "Reasoning is required for this model endpoint. " +

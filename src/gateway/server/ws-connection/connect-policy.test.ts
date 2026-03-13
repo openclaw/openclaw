@@ -171,7 +171,7 @@ describe("ws connect policy", () => {
     ).toBe("allow");
   });
 
-  test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
+  test("dangerouslyDisableDeviceAuth skips pairing; trusted-proxy also bypasses", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -182,8 +182,10 @@ describe("ws connect policy", () => {
       controlUiConfig: undefined,
       deviceRaw: null,
     });
+    // When dangerouslyDisableDeviceAuth is true, always skip pairing
     expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
-    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(true);
+    // Without dangerouslyDisableDeviceAuth, shared auth alone does NOT skip pairing
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
   });
