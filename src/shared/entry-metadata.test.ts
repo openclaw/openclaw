@@ -46,4 +46,16 @@ describe("shared/entry-metadata", () => {
       homepage: "https://openclaw.ai/install",
     });
   });
+
+  it("does not fall back once frontmatter homepage aliases are present but blank", () => {
+    expect(
+      resolveEmojiAndHomepage({
+        frontmatter: {
+          homepage: " ",
+          website: "https://docs.openclaw.ai",
+          url: "https://openclaw.ai/install",
+        },
+      }),
+    ).toEqual({});
+  });
 });
