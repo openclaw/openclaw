@@ -179,4 +179,37 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
   });
+
+  it("emits the timeout payload instead of replaying live-delivered commentary", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: true,
+      promptError: null,
+      timedOut: true,
+      timedOutDuringCompaction: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Checking the repo state now."],
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-timeout-commentary-fallback",
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads[0]?.isError).toBe(true);
+    expect(result.payloads[0]?.text).toContain(
+      "Request timed out before a response was generated.",
+    );
+    expect(result.payloads[0]?.text).not.toContain("Checking the repo state now.");
+  });
 });

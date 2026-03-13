@@ -120,12 +120,20 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ]);
   });
 
-  it("falls back to assistantTexts when delivered commentary strips all assistantOutputs", () => {
+  it("does not revive assistantTexts when delivered commentary strips all assistantOutputs", () => {
     const payloads = buildPayloads({
       assistantOutputs: [
         { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
       ],
       deliveredCommentarySegmentIds: ["c1"],
+      assistantTexts: ["Checking the repo state now."],
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("still falls back to assistantTexts when structured outputs never existed", () => {
+    const payloads = buildPayloads({
       assistantTexts: ["Lint passed cleanly."],
     });
 

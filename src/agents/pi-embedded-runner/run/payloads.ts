@@ -265,6 +265,7 @@ export function buildEmbeddedRunPayloads(params: {
       if (filteredAssistantOutputs.length > 0) {
         return filteredAssistantOutputs;
       }
+      return [];
     }
     return params.assistantTexts.length
       ? params.assistantTexts
