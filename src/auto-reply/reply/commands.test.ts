@@ -2000,4 +2000,40 @@ describe("handleCommands /tts", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("TTS status");
   });
+
+  it("supports /tts always to set auto mode to always", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts-always.json") } },
+    } as OpenClawConfig;
+    const params = buildParams("/tts always", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("always");
+  });
+
+  it("supports /tts inbound to set auto mode to inbound", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts-inbound.json") } },
+    } as OpenClawConfig;
+    const params = buildParams("/tts inbound", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("inbound");
+  });
+
+  it("supports /tts tagged to set auto mode to tagged", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts-tagged.json") } },
+    } as OpenClawConfig;
+    const params = buildParams("/tts tagged", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("tagged");
+  });
 });
