@@ -197,6 +197,7 @@ export async function monitorWebChannel(
       accountId: account.accountId,
       authDir: account.authDir,
       mediaMaxMb: account.mediaMaxMb,
+      announcePresence: account.announcePresence,
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,

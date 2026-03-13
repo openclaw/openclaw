@@ -87,6 +87,9 @@ type WhatsAppConfigCore = {
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /** Announce WhatsApp presence as online on connect (default: false).
+   * When false, sends unavailable presence to preserve phone push notifications. */
+  announcePresence?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Inbound message prefix override (WhatsApp only). */
