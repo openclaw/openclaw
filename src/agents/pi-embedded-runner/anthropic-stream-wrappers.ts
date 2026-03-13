@@ -1,11 +1,13 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { resolveFastModeParam } from "../fast-mode.js";
 import {
   requiresOpenAiCompatibleAnthropicToolPayload,
   usesOpenAiFunctionAnthropicToolSchema,
   usesOpenAiStringModeAnthropicToolChoice,
 } from "../provider-capabilities.js";
 import { log } from "./logger.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
@@ -18,6 +20,7 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
   "oauth-2025-04-20",
   ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
 ] as const;
+type AnthropicServiceTier = "auto" | "standard_only";
 
 type CacheRetention = "none" | "short" | "long";
 
@@ -51,6 +54,25 @@ function mergeAnthropicBetaHeader(
 
 function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
+}
+
+function isAnthropicPublicApiBaseUrl(baseUrl: unknown): boolean {
+  if (baseUrl == null) {
+    return true;
+  }
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return true;
+  }
+
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.anthropic.com";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.anthropic.com");
+  }
+}
+
+function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
+  return enabled ? "auto" : "standard_only";
 }
 
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
@@ -302,6 +324,36 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
       },
     });
   };
+}
+
+export function createAnthropicFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  enabled: boolean,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  const serviceTier = resolveAnthropicFastServiceTier(enabled);
+  return (model, context, options) => {
+    if (
+      model.api !== "anthropic-messages" ||
+      model.provider !== "anthropic" ||
+      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
+      isAnthropicOAuthApiKey(options?.apiKey)
+    ) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
+    });
+  };
+}
+
+export function resolveAnthropicFastMode(
+  extraParams: Record<string, unknown> | undefined,
+): boolean | undefined {
+  return resolveFastModeParam(extraParams);
 }
 
 export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {

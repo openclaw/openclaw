@@ -103,6 +103,21 @@ export function normalizeDiscordSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+function resolveDiscordAllowListNameMatch(
+  list: DiscordAllowList,
+  candidate: { name?: string; tag?: string },
+): { matchKey: string; matchSource: "name" | "tag" } | null {
+  const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
+  if (nameSlug && list.names.has(nameSlug)) {
+    return { matchKey: nameSlug, matchSource: "name" };
+  }
+  const tagSlug = candidate.tag ? normalizeDiscordSlug(candidate.tag) : "";
+  if (tagSlug && list.names.has(tagSlug)) {
+    return { matchKey: tagSlug, matchSource: "tag" };
+  }
+  return null;
+}
+
 export function allowListMatches(
   list: DiscordAllowList,
   candidate: { id?: string; name?: string; tag?: string },
@@ -115,11 +130,7 @@ export function allowListMatches(
     return true;
   }
   if (params?.allowNameMatching === true) {
-    const slug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
-    if (slug && list.names.has(slug)) {
-      return true;
-    }
-    if (candidate.tag && list.names.has(normalizeDiscordSlug(candidate.tag))) {
+    if (resolveDiscordAllowListNameMatch(list, candidate)) {
       return true;
     }
   }
@@ -139,13 +150,9 @@ export function resolveDiscordAllowListMatch(params: {
     return { allowed: true, matchKey: candidate.id, matchSource: "id" };
   }
   if (params.allowNameMatching === true) {
-    const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
-    if (nameSlug && allowList.names.has(nameSlug)) {
-      return { allowed: true, matchKey: nameSlug, matchSource: "name" };
-    }
-    const tagSlug = candidate.tag ? normalizeDiscordSlug(candidate.tag) : "";
-    if (tagSlug && allowList.names.has(tagSlug)) {
-      return { allowed: true, matchKey: tagSlug, matchSource: "tag" };
+    const namedMatch = resolveDiscordAllowListNameMatch(allowList, candidate);
+    if (namedMatch) {
+      return { allowed: true, ...namedMatch };
     }
   }
   return { allowed: false };
