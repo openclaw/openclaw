@@ -60,6 +60,7 @@ export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export * from "./image-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
+export type { SessionHistoryMessage } from "../config/sessions/history.js";
 export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";

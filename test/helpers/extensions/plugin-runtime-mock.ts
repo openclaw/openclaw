@@ -241,8 +241,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
         updateLastRoute:
           vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
-        readRecentMessages:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["readRecentMessages"],
+        readRecentMessages: vi
+          .fn()
+          .mockResolvedValue(
+            [],
+          ) as unknown as PluginRuntime["channel"]["session"]["readRecentMessages"],
       },
       mentions: {
         buildMentionRegexes: vi.fn(() => [
