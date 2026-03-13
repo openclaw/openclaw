@@ -28,6 +28,8 @@ import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
+  DEFAULT_MINIMAX_MODEL,
+  DEFAULT_MINIMAX_VOICE,
   DEFAULT_OPENAI_BASE_URL,
   edgeTTS,
   elevenLabsTTS,
@@ -35,6 +37,7 @@ import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
@@ -121,6 +124,14 @@ export type ResolvedTtsConfig = {
     speed?: number;
     instructions?: string;
   };
+  minimax: {
+    apiKey?: string;
+    model: string;
+    voice: string;
+    speed?: number;
+    vol?: number;
+    sampleRate?: number;
+  };
   edge: {
     enabled: boolean;
     voice: string;
@@ -174,6 +185,10 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voice?: string;
+    model?: string;
   };
 };
 
@@ -309,6 +324,17 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    minimax: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
+      model: raw.minimax?.model?.trim() || DEFAULT_MINIMAX_MODEL,
+      voice: raw.minimax?.voice?.trim() || DEFAULT_MINIMAX_VOICE,
+      speed: raw.minimax?.speed,
+      vol: raw.minimax?.vol,
+      sampleRate: raw.minimax?.sampleRate,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -461,6 +487,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "edge";
 }
 
@@ -528,10 +557,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "minimax") {
+    return config.minimax.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -688,6 +720,19 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "minimax") {
+        const minimaxVoiceOverride = params.overrides?.minimax?.voice;
+        const minimaxModelOverride = params.overrides?.minimax?.model;
+        audioBuffer = await minimaxTTS({
+          text: params.text,
+          apiKey,
+          model: minimaxModelOverride ?? config.minimax.model,
+          voice: minimaxVoiceOverride ?? config.minimax.voice,
+          speed: config.minimax.speed,
+          vol: config.minimax.vol,
+          sampleRate: config.minimax.sampleRate,
+          timeoutMs: config.timeoutMs,
+        });
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -718,7 +763,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "minimax"
+              ? "mp3"
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {

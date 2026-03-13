@@ -716,3 +716,69 @@ export async function edgeTTS(params: {
   });
   await tts.ttsPromise(text, outputPath);
 }
+
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1";
+export const DEFAULT_MINIMAX_MODEL = "speech-02-hd";
+export const DEFAULT_MINIMAX_VOICE = "male-qn-qingse";
+const MINIMAX_VALID_SAMPLE_RATES = new Set([8000, 16000, 22050, 24000, 32000, 44100]);
+
+export async function minimaxTTS(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  vol?: number;
+  sampleRate?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, model, voice, timeoutMs } = params;
+  const speed = params.speed ?? 1.0;
+  const vol = params.vol ?? 1.0;
+  const sampleRate = MINIMAX_VALID_SAMPLE_RATES.has(params.sampleRate ?? 0)
+    ? params.sampleRate!
+    : 32000;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${DEFAULT_MINIMAX_BASE_URL}/t2a_v2`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        text,
+        stream: false,
+        voice_setting: { voice_id: voice, speed, vol, pitch: 0 },
+        audio_setting: { sample_rate: sampleRate, bitrate: 128000, format: "mp3", channel: 1 },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`MiniMax TTS API error (${response.status}): ${body.slice(0, 200)}`);
+    }
+
+    const json = (await response.json()) as {
+      base_resp?: { status_code?: number; status_msg?: string };
+      data?: { audio?: string };
+    };
+    if (json.base_resp?.status_code !== 0) {
+      throw new Error(
+        `MiniMax TTS error: ${json.base_resp?.status_msg ?? "unknown"} (code ${json.base_resp?.status_code})`,
+      );
+    }
+    const hexAudio = json.data?.audio;
+    if (!hexAudio) {
+      throw new Error("MiniMax TTS: empty audio in response");
+    }
+    return Buffer.from(hexAudio, "hex");
+  } finally {
+    clearTimeout(timeout);
+  }
+}

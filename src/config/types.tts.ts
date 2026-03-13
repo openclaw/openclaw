@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "minimax";
 
 export type TtsMode = "final" | "all";
 
@@ -65,6 +65,20 @@ export type TtsConfig = {
     speed?: number;
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
+  };
+  /** MiniMax TTS configuration. */
+  minimax?: {
+    apiKey?: SecretInput;
+    /** MiniMax TTS model (e.g. "speech-02-hd", "speech-02-turbo"). */
+    model?: string;
+    /** Voice ID (e.g. "male-qn-qingse", "female-shaonv"). */
+    voice?: string;
+    /** Playback speed (0.5–2.0, default 1.0). */
+    speed?: number;
+    /** Volume (0.5–2.0, default 1.0). */
+    vol?: number;
+    /** Audio sample rate in Hz (8000, 16000, 22050, 24000, 32000, 44100). */
+    sampleRate?: number;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

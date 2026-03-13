@@ -13,6 +13,7 @@ import {
   setTtsEnabled,
   setTtsProvider,
   textToSpeech,
+  TTS_PROVIDERS,
 } from "../../tts/tts.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
@@ -38,6 +39,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasMiniMaxKey: Boolean(resolveTtsApiKey(config, "minimax")),
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
       });
     } catch (err) {
@@ -100,13 +102,13 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    if (!(TTS_PROVIDERS as readonly string[]).includes(provider)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          `Invalid provider. Use ${TTS_PROVIDERS.join(", ")}.`,
         ),
       );
       return;
@@ -140,6 +142,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             name: "ElevenLabs",
             configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
             models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
+          },
+          {
+            id: "minimax",
+            name: "MiniMax",
+            configured: Boolean(resolveTtsApiKey(config, "minimax")),
+            models: ["speech-02-hd", "speech-02-turbo"],
           },
           {
             id: "edge",
