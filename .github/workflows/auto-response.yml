@@ -5,7 +5,7 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created]
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned label automation; no untrusted checkout or code execution
     types: [labeled]
 
 env:
