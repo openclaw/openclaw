@@ -33,7 +33,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function generateSelfSignedCert(params: {
   certPath: string;
   keyPath: string;
-  log?: { info?: (msg: string) => void };
+  log?: { info?: (msg: string) => void; warn?: (msg: string) => void };
 }): Promise<void> {
   const certDir = path.dirname(params.certPath);
   const keyDir = path.dirname(params.keyPath);
@@ -41,24 +41,39 @@ async function generateSelfSignedCert(params: {
   if (keyDir !== certDir) {
     await ensureDir(keyDir);
   }
-  await execFileAsync("openssl", [
-    "req",
-    "-x509",
-    "-newkey",
-    "rsa:2048",
-    "-sha256",
-    "-days",
-    "3650",
-    "-nodes",
-    "-keyout",
-    params.keyPath,
-    "-out",
-    params.certPath,
-    "-subj",
-    "/CN=openclaw-gateway",
-  ]);
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
+  // Set restrictive umask so openssl creates files owner-only (no race window)
+  const originalUmask = process.umask(0o077);
+  try {
+    await execFileAsync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      params.keyPath,
+      "-out",
+      params.certPath,
+      "-subj",
+      "/CN=openclaw-gateway",
+    ]);
+  } finally {
+    process.umask(originalUmask);
+  }
+  // Defense-in-depth: ensure correct permissions even if umask was ignored
+  await fs.chmod(params.keyPath, 0o600).catch((err: unknown) => {
+    params.log?.warn?.(
+      `Failed to set TLS key permissions to 0600: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+  await fs.chmod(params.certPath, 0o600).catch((err: unknown) => {
+    params.log?.warn?.(
+      `Failed to set TLS cert permissions to 0600: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
   params.log?.info?.(
     `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );
