@@ -52,4 +52,4 @@ Twitter/X, Instagram, Facebook, LinkedIn, TikTok, YouTube, Pinterest, Reddit, Bl
 
 ---
 
-*[Late](https://getlate.dev) - Social Media Scheduling API for Developers*
+_[Late](https://getlate.dev) - Social Media Scheduling API for Developers_

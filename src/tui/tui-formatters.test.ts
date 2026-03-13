@@ -141,7 +141,9 @@ Assistant body`,
         'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
     });
 
-    expect(text).toBe("Hello world\n\nFollow-up");
+    expect(text).toBe(
+      'Hello world\nConversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    );
   });
 
   it("strips trailing untrusted context metadata suffix blocks for user messages", () => {

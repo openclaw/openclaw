@@ -296,7 +296,7 @@ export class ConnectionAllowlist {
    */
   check(url: string, source?: string): ConnectionAttempt {
     const parsed = this.parseUrl(url);
-    const id = `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `conn-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
 
     if (!parsed) {
       const attempt: ConnectionAttempt = {
@@ -417,7 +417,11 @@ export class ConnectionAllowlist {
    */
   private findMatchingEntry(domain: string, port: number, protocol: string): AllowlistEntry | null {
     const normalizedDomain = domain.toLowerCase();
-    const normalizedProtocol = protocol.toLowerCase().replace(":", "");
+    const normalizedProtocol = protocol.toLowerCase().replace(":", "") as
+      | "http"
+      | "https"
+      | "ws"
+      | "wss";
 
     for (const entry of this.entries) {
       // Check domain match
@@ -434,7 +438,7 @@ export class ConnectionAllowlist {
       if (
         entry.protocols &&
         entry.protocols.length > 0 &&
-        !entry.protocols.includes(normalizedProtocol as any)
+        !entry.protocols.includes(normalizedProtocol)
       ) {
         continue;
       }
@@ -450,7 +454,9 @@ export class ConnectionAllowlist {
    */
   private domainMatches(domain: string, pattern: string): boolean {
     // Exact match
-    if (domain === pattern) return true;
+    if (domain === pattern) {
+      return true;
+    }
 
     // Wildcard matching
     if (pattern.includes("*")) {
@@ -517,11 +523,15 @@ export class ConnectionAllowlist {
     ];
 
     for (const pattern of ipv4PrivatePatterns) {
-      if (pattern.test(domain)) return true;
+      if (pattern.test(domain)) {
+        return true;
+      }
     }
 
     for (const pattern of ipv6PrivatePatterns) {
-      if (pattern.test(domain)) return true;
+      if (pattern.test(domain)) {
+        return true;
+      }
     }
 
     return false;

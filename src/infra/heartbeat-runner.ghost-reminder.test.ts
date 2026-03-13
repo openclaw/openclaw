@@ -70,7 +70,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ) => {
     expect(calledCtx).not.toBeNull();
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).toContain("scheduled task has been triggered");
     expect(calledCtx?.Body).toContain(reminderText);
     expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
     expect(calledCtx?.Body).not.toContain("heartbeat poll");
@@ -148,8 +148,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("heartbeat");
-    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).not.toContain("relay this reminder");
+    expect(calledCtx?.Body).not.toContain("scheduled task has been triggered");
+    expect(calledCtx?.Body).not.toContain("Execute the following instructions");
     expect(sendTelegram).toHaveBeenCalled();
   });
 
@@ -193,7 +193,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).toContain("scheduled task has been triggered");
     expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();

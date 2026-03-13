@@ -1198,7 +1198,7 @@ describe("runHeartbeatOnce", () => {
         if (testCase.expectCronContext) {
           const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
           expect(calledCtx.Provider, testCase.name).toBe("cron-event");
-          expect(calledCtx.Body, testCase.name).toContain("scheduled reminder has been triggered");
+          expect(calledCtx.Body, testCase.name).toContain("scheduled task has been triggered");
         }
       } finally {
         replySpy.mockRestore();

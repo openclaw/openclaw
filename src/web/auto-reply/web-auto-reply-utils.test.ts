@@ -78,8 +78,8 @@ describe("isBotMentionedFromTargets", () => {
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
-expectMentioned(msg, cfg, false);
-const targets = resolveMentionTargets(msg);
+    expectMentioned(msg, cfg, false);
+    const targets = resolveMentionTargets(msg);
     // In self-chat mode, @mentions that resolve to the bot's own number should still match
     // (e.g. WhatsApp LID mentions in group chats with requireMention: true)
     expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(true);

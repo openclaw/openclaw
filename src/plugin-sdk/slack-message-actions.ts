@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import { readNumberParam, readStringParam } from "../agents/tools/common.js";
+import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import { parseSlackBlocksInput } from "../slack/blocks-input.js";
 
 type SlackActionInvoke = (

@@ -455,7 +455,7 @@ export class LlmRateLimiter {
 
     // Queue the request
     return new Promise((resolve, reject) => {
-      const id = `${provider}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const id = `${provider}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
       const request: QueuedRequest = {
         id,
         provider,
@@ -608,7 +608,9 @@ export class LlmRateLimiter {
    * Start periodic queue processing.
    */
   private startQueueProcessor(): void {
-    if (this.processQueueTimer) return;
+    if (this.processQueueTimer) {
+      return;
+    }
     this.processQueueTimer = setInterval(() => {
       this.processQueue();
     }, 1000);
@@ -679,7 +681,18 @@ export class LlmRateLimiter {
       queueLength: number;
     };
   } {
-    const providers: Record<string, any> = {};
+    const providers: Record<
+      string,
+      {
+        tokensRemaining: number;
+        tokensUsedToday: number;
+        requestsThisMinute: number;
+        inFlight: number;
+        backoffUntil: number;
+        dailyLimit: number;
+        dailyUsagePercent: number;
+      }
+    > = {};
 
     for (const [provider, bucket] of this.buckets) {
       const limits = this.providerLimits.get(provider);

@@ -43,17 +43,17 @@ Once installed, Claude Code will help you with Late API integration:
 ## Quick Example
 
 ```typescript
-const response = await fetch('https://getlate.dev/api/v1/posts', {
-  method: 'POST',
+const response = await fetch("https://getlate.dev/api/v1/posts", {
+  method: "POST",
   headers: {
-    'Authorization': `Bearer ${process.env.LATE_API_KEY}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${process.env.LATE_API_KEY}`,
+    "Content-Type": "application/json",
   },
   body: JSON.stringify({
-    content: 'Hello from Late API!',
-    platforms: [{ platform: 'twitter', accountId: 'acc_123' }],
-    publishNow: true
-  })
+    content: "Hello from Late API!",
+    platforms: [{ platform: "twitter", accountId: "acc_123" }],
+    publishNow: true,
+  }),
 });
 ```
 
@@ -69,4 +69,4 @@ MIT
 
 ---
 
-*[Late](https://getlate.dev) - Social Media Scheduling API for Developers*
+_[Late](https://getlate.dev) - Social Media Scheduling API for Developers_

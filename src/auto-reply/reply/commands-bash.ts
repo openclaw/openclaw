@@ -1,7 +1,6 @@
 import { handleBashChatCommand } from "./bash-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { logVerbose } from "../../globals.js";
 
 export const handleBashCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {

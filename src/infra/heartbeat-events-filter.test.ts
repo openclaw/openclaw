@@ -4,7 +4,7 @@ import { buildCronEventPrompt, buildExecEventPrompt } from "./heartbeat-events-f
 describe("heartbeat event prompts", () => {
   it("builds user-relay cron prompt by default", () => {
     const prompt = buildCronEventPrompt(["Cron: rotate logs"]);
-    expect(prompt).toContain("Please relay this reminder to the user");
+    expect(prompt).toContain("A scheduled task has been triggered");
   });
 
   it("builds internal-only cron prompt when delivery is disabled", () => {

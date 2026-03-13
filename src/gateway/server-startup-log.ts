@@ -57,7 +57,7 @@ export function logGatewayStartup(params: {
 
   // Warn if trusted-proxy has empty allowUsers
   const trustedProxy = params.cfg.gateway?.auth?.trustedProxy;
-  if (trustedProxy?.enabled && (!trustedProxy.allowUsers || trustedProxy.allowUsers.length === 0)) {
+  if (trustedProxy && (!trustedProxy.allowUsers || trustedProxy.allowUsers.length === 0)) {
     params.log.info(
       `${chalk.bgYellow.black(" SECURITY NOTICE ")} trusted-proxy mode is active with empty allowUsers — all proxy-authenticated users are accepted`,
     );

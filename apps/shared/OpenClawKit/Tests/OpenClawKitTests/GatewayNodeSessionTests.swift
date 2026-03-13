@@ -266,6 +266,7 @@ struct GatewayNodeSessionTests {
         try await gateway.connect(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
+            bootstrapToken: nil,
             password: nil,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),

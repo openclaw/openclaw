@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
@@ -13,6 +13,12 @@ const gatewayClientCalls: Array<{
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+let waitForGatewayReachableMock:
+  | ((params: { url: string; token?: string; password?: string }) => Promise<{
+      ok: boolean;
+      detail?: string;
+    }>)
+  | undefined;
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
@@ -46,6 +52,10 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+    waitForGatewayReachable: (...args: Parameters<typeof actual.waitForGatewayReachable>) =>
+      waitForGatewayReachableMock
+        ? waitForGatewayReachableMock(args[0])
+        : actual.waitForGatewayReachable(...args),
   };
 });
 
@@ -114,6 +124,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
     envSnapshot.restore();
+  });
+
+  afterEach(() => {
+    waitForGatewayReachableMock = undefined;
   });
 
   it("writes gateway token auth into config", async () => {
@@ -299,6 +313,33 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
       expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(lastCall?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("explains local health failure when no daemon was requested", async () => {
+    await withStateDir("state-local-health-hint-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "socket closed: 1006 abnormal closure",
+      }));
+
+      await expect(
+        runNonInteractiveOnboarding(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: false,
+            gatewayBind: "loopback",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+      );
     });
   }, 60_000);
 

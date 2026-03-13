@@ -1,5 +1,5 @@
-import type { IncomingMessage } from "node:http";
 import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 
 export function createMockIncomingRequest(chunks: string[]): IncomingMessage {
   const req = new EventEmitter() as IncomingMessage & {

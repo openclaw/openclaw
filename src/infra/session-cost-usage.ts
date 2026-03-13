@@ -4,6 +4,10 @@ import readline from "node:readline";
 import { type NormalizedUsage, type UsageLike, normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionTranscriptsDirForAgent,
+} from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
@@ -28,10 +32,6 @@ import type {
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../config/sessions/paths.js";
 
 export type {
   CostUsageDailyEntry,

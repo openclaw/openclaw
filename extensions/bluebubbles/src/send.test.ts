@@ -9,7 +9,6 @@ import {
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
-import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();

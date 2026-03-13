@@ -22,10 +22,10 @@ curl https://getlate.dev/api/v1/profiles \
 ### TypeScript
 
 ```typescript
-const response = await fetch('https://getlate.dev/api/v1/profiles', {
+const response = await fetch("https://getlate.dev/api/v1/profiles", {
   headers: {
-    'Authorization': `Bearer ${process.env.LATE_API_KEY}`
-  }
+    Authorization: `Bearer ${process.env.LATE_API_KEY}`,
+  },
 });
 ```
 

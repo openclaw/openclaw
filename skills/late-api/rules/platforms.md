@@ -2,21 +2,21 @@
 
 ## Supported Platforms
 
-| Platform | OAuth | Features |
-|----------|-------|----------|
-| Twitter/X | Yes | Posts, threads, images, videos |
-| Instagram | Yes | Feed, Stories, Reels, Carousels |
-| Facebook | Yes | Pages, Reels, Stories |
-| LinkedIn | Yes | Posts, images, videos, documents |
-| TikTok | Yes | Videos with privacy controls |
-| YouTube | Yes | Videos, Shorts |
-| Pinterest | Yes | Pins with images/videos |
-| Reddit | Yes | Posts with subreddit targeting |
-| Bluesky | App password | Posts, images, videos |
-| Threads | Yes | Posts, images, videos |
-| Google Business | Yes | Updates, photos, offers |
-| Telegram | Bot token | Messages, images, videos |
-| Snapchat | Yes | Stories, Spotlight |
+| Platform        | OAuth        | Features                         |
+| --------------- | ------------ | -------------------------------- |
+| Twitter/X       | Yes          | Posts, threads, images, videos   |
+| Instagram       | Yes          | Feed, Stories, Reels, Carousels  |
+| Facebook        | Yes          | Pages, Reels, Stories            |
+| LinkedIn        | Yes          | Posts, images, videos, documents |
+| TikTok          | Yes          | Videos with privacy controls     |
+| YouTube         | Yes          | Videos, Shorts                   |
+| Pinterest       | Yes          | Pins with images/videos          |
+| Reddit          | Yes          | Posts with subreddit targeting   |
+| Bluesky         | App password | Posts, images, videos            |
+| Threads         | Yes          | Posts, images, videos            |
+| Google Business | Yes          | Updates, photos, offers          |
+| Telegram        | Bot token    | Messages, images, videos         |
+| Snapchat        | Yes          | Stories, Spotlight               |
 
 ## Platform-Specific Data
 
@@ -92,10 +92,12 @@ Platform-specific data goes inside each platform entry in the `platforms` array:
 ```
 
 **Required fields:**
+
 - `contentPreviewConfirmed` and `expressConsentGiven` must be `true`
 - `allowDuet`, `allowStitch` required for videos; `allowComment` for all
 
 **Optional fields:**
+
 - `draft: true` sends to Creator Inbox instead of publishing
 - `commercialContentType`: `none`, `brand_organic`, `brand_content`
 - `brandPartnerPromote`: Whether the post promotes a brand partner
@@ -224,6 +226,7 @@ Parse modes: `HTML`, `Markdown`, `MarkdownV2`. Supports up to 10 images or video
 ```
 
 Content types:
+
 - `story` - Ephemeral (24 hours), no text caption
 - `saved_story` - Permanent on Public Profile, title max 45 chars
 - `spotlight` - Video for entertainment feed, description max 160 chars

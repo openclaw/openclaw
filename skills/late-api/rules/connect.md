@@ -2,30 +2,30 @@
 
 ## Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/v1/connect/{platform}` | Start OAuth flow |
-| `POST` | `/v1/connect/bluesky/credentials` | Connect Bluesky (app password) |
-| `GET` | `/v1/connect/telegram` | Generate Telegram access code |
-| `POST` | `/v1/connect/telegram` | Direct connect via chat ID |
-| `PATCH` | `/v1/connect/telegram` | Poll connection status |
+| Method  | Endpoint                          | Description                    |
+| ------- | --------------------------------- | ------------------------------ |
+| `GET`   | `/v1/connect/{platform}`          | Start OAuth flow               |
+| `POST`  | `/v1/connect/bluesky/credentials` | Connect Bluesky (app password) |
+| `GET`   | `/v1/connect/telegram`            | Generate Telegram access code  |
+| `POST`  | `/v1/connect/telegram`            | Direct connect via chat ID     |
+| `PATCH` | `/v1/connect/telegram`            | Poll connection status         |
 
 ## Platform Selection Endpoints
 
 Some platforms require selecting a page/location after OAuth:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/v1/connect/facebook/select-page` | List Facebook pages |
-| `POST` | `/v1/connect/facebook/select-page` | Select Facebook page |
-| `GET` | `/v1/connect/linkedin/organizations` | List available LinkedIn orgs |
-| `POST` | `/v1/connect/linkedin/select-organization` | Select LinkedIn org |
-| `GET` | `/v1/connect/googlebusiness/locations` | List GMB locations |
-| `POST` | `/v1/connect/googlebusiness/select-location` | Select GMB location |
-| `GET` | `/v1/connect/pinterest/select-board` | List Pinterest boards |
-| `POST` | `/v1/connect/pinterest/select-board` | Select Pinterest board |
-| `GET` | `/v1/connect/snapchat/select-profile` | List Snapchat profiles |
-| `POST` | `/v1/connect/snapchat/select-profile` | Select Snapchat profile |
+| Method | Endpoint                                     | Description                  |
+| ------ | -------------------------------------------- | ---------------------------- |
+| `GET`  | `/v1/connect/facebook/select-page`           | List Facebook pages          |
+| `POST` | `/v1/connect/facebook/select-page`           | Select Facebook page         |
+| `GET`  | `/v1/connect/linkedin/organizations`         | List available LinkedIn orgs |
+| `POST` | `/v1/connect/linkedin/select-organization`   | Select LinkedIn org          |
+| `GET`  | `/v1/connect/googlebusiness/locations`       | List GMB locations           |
+| `POST` | `/v1/connect/googlebusiness/select-location` | Select GMB location          |
+| `GET`  | `/v1/connect/pinterest/select-board`         | List Pinterest boards        |
+| `POST` | `/v1/connect/pinterest/select-board`         | Select Pinterest board       |
+| `GET`  | `/v1/connect/snapchat/select-profile`        | List Snapchat profiles       |
+| `POST` | `/v1/connect/snapchat/select-profile`        | Select Snapchat profile      |
 
 ## OAuth Flow
 
@@ -87,18 +87,18 @@ The Late bot must already be added as admin in your channel/group.
 
 ## Supported Platforms
 
-| Platform | Auth Method | Notes |
-|----------|-------------|-------|
-| Twitter/X | OAuth 2.0 PKCE | Requires code verifier |
-| Instagram | OAuth 2.0 | 2-step token exchange |
-| Facebook | OAuth 2.0 | Requires page selection |
-| LinkedIn | OAuth 2.0 | Optional org selection |
-| TikTok | OAuth 2.0 | UX compliance required |
-| YouTube | Google OAuth | access_type=offline |
-| Pinterest | OAuth 2.0 | Requires board selection |
-| Reddit | OAuth 2.0 | Strict user-agent |
-| Bluesky | App password | No OAuth, uses AT Protocol |
-| Threads | OAuth 2.0 | Similar to Instagram |
-| Google Business | Google OAuth | Requires location selection |
-| Telegram | Chat ID | Uses Late's bot |
-| Snapchat | OAuth 2.0 | Allowlist-only |
+| Platform        | Auth Method    | Notes                       |
+| --------------- | -------------- | --------------------------- |
+| Twitter/X       | OAuth 2.0 PKCE | Requires code verifier      |
+| Instagram       | OAuth 2.0      | 2-step token exchange       |
+| Facebook        | OAuth 2.0      | Requires page selection     |
+| LinkedIn        | OAuth 2.0      | Optional org selection      |
+| TikTok          | OAuth 2.0      | UX compliance required      |
+| YouTube         | Google OAuth   | access_type=offline         |
+| Pinterest       | OAuth 2.0      | Requires board selection    |
+| Reddit          | OAuth 2.0      | Strict user-agent           |
+| Bluesky         | App password   | No OAuth, uses AT Protocol  |
+| Threads         | OAuth 2.0      | Similar to Instagram        |
+| Google Business | Google OAuth   | Requires location selection |
+| Telegram        | Chat ID        | Uses Late's bot             |
+| Snapchat        | OAuth 2.0      | Allowlist-only              |

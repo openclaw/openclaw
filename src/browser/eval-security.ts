@@ -284,7 +284,7 @@ export class BrowserEvalSecurity {
     }
 
     const entry: EvalLogEntry = {
-      id: `eval-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: `eval-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
       timestamp: Date.now(),
       code: opts.code.slice(0, 500), // Truncate for logging
       allowed: opts.allowed,

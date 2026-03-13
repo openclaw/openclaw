@@ -45,14 +45,17 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
+      blocklist: [],
     },
     agent: {
       security: "allowlist",
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
+      blocklist: [],
     },
     allowlist: [],
+    blocklist: [],
     file: {
       version: 1,
       socket: { path: "/tmp/exec-approvals.sock", token: "token" },
