@@ -323,6 +323,10 @@
     gap: 8px;
   }
 
+  .content--chat {
+    gap: 2px;
+  }
+
   .content--chat .content-header > div:first-child,
   .content--chat .page-meta,
   .content--chat .chat-controls {
@@ -417,8 +421,8 @@
   }
 
   .chat-thread {
-    margin-top: 8px;
-    padding: 12px 8px;
+    margin-top: 0;
+    padding: 0 8px 12px;
   }
 
   .chat-msg {

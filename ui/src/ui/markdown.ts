@@ -165,7 +165,7 @@ htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null 
   if (!INLINE_DATA_IMAGE_RE.test(href)) {
     return escapeHtml(label);
   }
-  return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+  return `<img class="markdown-inline-image" src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
 };
 
 function normalizeMarkdownImageLabel(text?: string | null): string {

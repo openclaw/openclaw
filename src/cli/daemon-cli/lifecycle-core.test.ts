@@ -46,6 +46,7 @@ describe("runServiceRestart token drift", () => {
     });
     resetLifecycleServiceMocks();
     service.readCommand.mockResolvedValue({
+      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
     stubEmptyGatewayEnv();
@@ -77,6 +78,7 @@ describe("runServiceRestart token drift", () => {
       },
     });
     service.readCommand.mockResolvedValue({
+      programArguments: [],
       environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
     });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");

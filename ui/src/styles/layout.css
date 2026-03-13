@@ -5,7 +5,7 @@
 .shell {
   --shell-pad: 16px;
   --shell-gap: 16px;
-  --shell-nav-width: 288px;
+  --shell-nav-width: 258px;
   --shell-nav-rail-width: 78px;
   --shell-topbar-height: 52px;
   --shell-focus-duration: 200ms;
@@ -340,7 +340,7 @@
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 14px 12px;
+  padding: 14px 10px 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -503,7 +503,7 @@
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 0 12px;
+  padding: 0 10px;
   min-height: 28px;
   background: transparent;
   border: none;
@@ -522,9 +522,9 @@
 }
 
 .nav-section__label-text {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -555,9 +555,9 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  min-height: 38px;
-  padding: 0 12px;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 9px;
   border-radius: 12px;
   border: 1px solid transparent;
   background: transparent;
@@ -595,8 +595,8 @@
 }
 
 .nav-item__text {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: 14px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -763,6 +763,24 @@
   margin: 0 auto;
 }
 
+.sidebar-version__status {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.sidebar-version__status.sidebar-connection-status--online {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.sidebar-version__status.sidebar-connection-status--offline {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
 .sidebar--collapsed .sidebar-shell__footer {
   padding: 8px 0 2px;
 }
@@ -778,6 +796,10 @@
   padding: 0;
   justify-content: center;
   border-radius: 16px;
+}
+
+.sidebar--collapsed .sidebar-version__status {
+  margin-left: 0;
 }
 
 .shell--nav-collapsed .shell-nav {
@@ -844,7 +866,7 @@
 .content--chat {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 2px;
   overflow: hidden;
   padding-bottom: 0;
 }
@@ -905,6 +927,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding-bottom: 0;
 }
 
 .content--chat .content-header > div:first-child {

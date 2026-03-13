@@ -14,9 +14,9 @@ vi.mock("../schtasks-exec.js", () => ({
 }));
 
 vi.mock("../../infra/ports.js", () => ({
-  inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
+  inspectPortUsage: (port: number) => inspectPortUsage(port),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTree(...args),
+  killProcessTree: (pid: number, opts?: { graceMs?: number }) => killProcessTree(pid, opts),
 }));

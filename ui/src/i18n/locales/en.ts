@@ -4,6 +4,7 @@ export const en: TranslationMap = {
   common: {
     health: "Health",
     ok: "OK",
+    online: "Online",
     offline: "Offline",
     connect: "Connect",
     refresh: "Refresh",
