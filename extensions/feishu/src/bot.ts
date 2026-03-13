@@ -893,6 +893,74 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
   const isGroup = ctx.chatType === "group";
+
+  // ── AgentLegion: START bot.ts patch ──
+  if (isGroup) {
+    const rawText = (ctx.content || "").trim();
+    const legionMatch = rawText.match(
+      /^\/legion-(set-leader|leader|join|status|assign|create)\s*(.*)$/i,
+    );
+    if (legionMatch) {
+      // 群内 /legion-* 必须走纯 CLI 链路，不应落入 LLM 会话。
+      // 严格按真实 mentions 判断是否发给当前 bot。
+      const mentions = event?.message?.mentions || [];
+      const mentionIds = mentions
+        .map((m: any) => (m?.id?.open_id ?? m?.id ?? "").toString())
+        .filter(Boolean);
+      const mentionedAll = mentions.some((m: any) => m?.name === "@_all");
+      const botMentioned = mentionedAll || (!!botOpenId && mentionIds.includes(botOpenId));
+
+      if (!botMentioned) {
+        log(
+          `feishu[${account.accountId}]: legion command ignored (bot not mentioned), skip agent dispatch: ${rawText.slice(0, 160)}`,
+        );
+        return;
+      }
+
+      const legionCmd = legionMatch[1].toLowerCase();
+      const legionArg = legionMatch[2]?.trim() || "";
+      // 运行时发现 skill 目录（不硬编码绝对路径）
+      const path = await import("node:path");
+      const fs = await import("node:fs");
+      const homeDir = process.env.HOME || "/root";
+      const clawRoot = process.env.OPENCLAW_ROOT || path.join(homeDir, ".openclaw");
+      const clawWorkspace = process.env.OPENCLAW_WORKSPACE || path.join(clawRoot, "workspace");
+      const candidates = Array.from(
+        new Set([
+          path.join(clawWorkspace, "skills/agentlegion"),
+          path.join(clawRoot, "skills/agentlegion"),
+          path.join(homeDir, ".openclaw/workspace/skills/agentlegion"),
+          path.join(homeDir, ".openclaw/skills/agentlegion"),
+        ]),
+      );
+      const skillDir = candidates.find((d) =>
+        fs.existsSync(path.join(d, "scripts/legion-cli.mjs")),
+      );
+      if (!skillDir) {
+        log(
+          `feishu[${account.accountId}]: legion command skipped: skill not found (no LLM fallback): ${rawText.slice(0, 160)}`,
+        );
+        return;
+      }
+
+      const cp = await import("node:child_process");
+      const legionAccount = account.accountId || "";
+      const cliArgs =
+        legionCmd === "leader"
+          ? ["scripts/legion-cli.mjs", "leader", "--chat-id", ctx.chatId]
+          : ["scripts/legion-cli.mjs", legionCmd, legionArg, "--chat-id", ctx.chatId];
+      if (legionAccount) cliArgs.push("--account", legionAccount);
+      log(
+        `feishu[${account.accountId}]: legion command intercepted: /legion-${legionCmd} ${legionArg} in ${ctx.chatId} (account=${legionAccount || "auto"})`,
+      );
+      cp.execFile("node", cliArgs, { cwd: skillDir, timeout: 60000 }, (err, stdout, stderr) => {
+        if (err) log(`feishu[${account.accountId}]: legion-cli error: ${err.message}\n${stderr}`);
+        else log(`feishu[${account.accountId}]: legion-cli done: ${stdout.slice(-200)}`);
+      });
+      return;
+    }
+  }
+  // ── AgentLegion: END bot.ts patch ──
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
 
