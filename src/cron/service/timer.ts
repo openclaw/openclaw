@@ -257,14 +257,18 @@ function resolveDeliveryState(params: { job: CronJob; delivered?: boolean }): {
   delivered?: boolean;
   status: CronDeliveryStatus;
 } {
-  if (!resolveCronDeliveryPlan(params.job).requested) {
-    return { status: "not-requested" };
-  }
+  const plan = resolveCronDeliveryPlan(params.job);
   if (params.delivered === true) {
     return { delivered: true, status: "delivered" };
   }
   if (params.delivered === false) {
+    if (plan.mode === "none") {
+      return { status: "not-requested" };
+    }
     return { delivered: false, status: "not-delivered" };
+  }
+  if (!plan.requested) {
+    return { status: "not-requested" };
   }
   return { status: "unknown" };
 }
