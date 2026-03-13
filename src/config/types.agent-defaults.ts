@@ -313,6 +313,8 @@ export type AgentCompactionConfig = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
   identifierInstructions?: string;
+  /** Custom instructions for compaction summaries (e.g. language preservation). Falls back to built-in language-preservation defaults when unset. */
+  customInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Post-compaction session memory index sync mode. */

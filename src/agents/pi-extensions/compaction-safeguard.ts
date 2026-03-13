@@ -23,6 +23,7 @@ import { collectTextContentBlocks } from "../content-blocks.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
+import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -751,8 +752,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
+      const resolvedInstructions = resolveCompactionInstructions(
         customInstructions,
+        runtime?.customInstructions,
+      );
+      const structuredInstructions = buildCompactionStructureInstructions(
+        resolvedInstructions,
         summarizationInstructions,
       );
 

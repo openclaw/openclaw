@@ -95,6 +95,8 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        /** Custom instructions for compaction summaries (e.g. language preservation). Falls back to built-in language-preservation defaults. */
+        customInstructions: z.string().optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
