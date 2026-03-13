@@ -55,9 +55,7 @@ function normalizeAccountId(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function normalizeAdditionalTargets(
-  raw: unknown,
-): CronDeliveryTarget[] | undefined {
+function normalizeAdditionalTargets(raw: unknown): CronDeliveryTarget[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) {
     return undefined;
   }
