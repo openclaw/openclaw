@@ -103,6 +103,14 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
       });
+      expect(parseModelRef("anthropic/opus-4.5", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+      });
+      expect(parseModelRef("opus-4.5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+      });
       expect(parseModelRef("anthropic/sonnet-4.6", "openai")).toEqual({
         provider: "anthropic",
         model: "claude-sonnet-4-6",
@@ -110,6 +118,14 @@ describe("model-selection", () => {
       expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
         provider: "anthropic",
         model: "claude-sonnet-4-6",
+      });
+      expect(parseModelRef("anthropic/sonnet-4.5", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      });
+      expect(parseModelRef("sonnet-4.5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
       });
     });
 
