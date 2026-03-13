@@ -16,14 +16,14 @@ import path from "node:path";
 import { RateLimitError, type RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { parseFfprobeCodecAndSampleRate, runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
+import { ensureVoiceFormat } from "../media/ensure-voice-format.js";
+import { runFfmpeg, runFfprobe } from "../media/ffmpeg-exec.js";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "../media/ffmpeg-limits.js";
 import { unlinkIfExists } from "../media/temp-files.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
-const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
 
 export type VoiceMessageMetadata = {
   durationSecs: number;
@@ -148,65 +148,7 @@ function generatePlaceholderWaveform(): string {
  * Returns path to the OGG file (may be same as input if already OGG/Opus)
  */
 export async function ensureOggOpus(filePath: string): Promise<{ path: string; cleanup: boolean }> {
-  const trimmed = filePath.trim();
-  // Defense-in-depth: callers should never hand ffmpeg/ffprobe a URL/protocol path.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
-    throw new Error(
-      `Voice message conversion requires a local file path; received a URL/protocol source: ${trimmed}`,
-    );
-  }
-
-  const ext = path.extname(filePath).toLowerCase();
-
-  // Check if already OGG
-  if (ext === ".ogg") {
-    // Fast-path only when the file is Opus at Discord's expected 48kHz.
-    try {
-      const stdout = await runFfprobe([
-        "-v",
-        "error",
-        "-select_streams",
-        "a:0",
-        "-show_entries",
-        "stream=codec_name,sample_rate",
-        "-of",
-        "csv=p=0",
-        filePath,
-      ]);
-      const { codec, sampleRateHz } = parseFfprobeCodecAndSampleRate(stdout);
-      if (codec === "opus" && sampleRateHz === DISCORD_OPUS_SAMPLE_RATE_HZ) {
-        return { path: filePath, cleanup: false };
-      }
-    } catch {
-      // If probe fails, convert anyway
-    }
-  }
-
-  // Convert to OGG/Opus
-  // Always resample to 48kHz to ensure Discord voice messages play at correct speed
-  // (Discord expects 48kHz; lower sample rates like 24kHz from some TTS providers cause 0.5x playback)
-  const tempDir = resolvePreferredOpenClawTmpDir();
-  const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
-
-  await runFfmpeg([
-    "-y",
-    "-i",
-    filePath,
-    "-vn",
-    "-sn",
-    "-dn",
-    "-t",
-    String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-    "-ar",
-    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
-    "-c:a",
-    "libopus",
-    "-b:a",
-    "64k",
-    outputPath,
-  ]);
-
-  return { path: outputPath, cleanup: true };
+  return ensureVoiceFormat(filePath);
 }
 
 /**
