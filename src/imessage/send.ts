@@ -65,18 +65,12 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
 }
 
 function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
-  const resolvedReplyToId = sanitizeReplyToId(replyToId);
-  if (!resolvedReplyToId) {
-    return message;
-  }
-  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
+  void sanitizeReplyToId(replyToId);
   const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
   if (existingLeadingTag) {
-    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
-    return remainder ? `${replyTag} ${remainder}` : replyTag;
+    return message.slice(existingLeadingTag[0].length).trimStart();
   }
-  const trimmedMessage = message.trimStart();
-  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
+  return message;
 }
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
