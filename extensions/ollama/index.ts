@@ -4,8 +4,10 @@ import {
   ensureOllamaModelPulled,
   OLLAMA_DEFAULT_BASE_URL,
   promptAndConfigureOllama,
+  configureOllamaNonInteractive,
   type OpenClawPluginApi,
   type ProviderAuthContext,
+  type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
@@ -50,6 +52,12 @@ const ollamaPlugin = {
               defaultModel: `ollama/${result.defaultModelId}`,
             };
           },
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
+            configureOllamaNonInteractive({
+              nextConfig: ctx.config,
+              opts: ctx.opts,
+              runtime: ctx.runtime,
+            }),
         },
       ],
       discovery: {
