@@ -8,6 +8,7 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  origin?: "agent" | "shared";
 };
 
 export type MemoryEmbeddingProbeResult = {
@@ -56,6 +57,12 @@ export type MemoryProviderStatus = {
     lastProvider?: string;
   };
   custom?: Record<string, unknown>;
+  shared?: {
+    dbPath: string;
+    files: number;
+    chunks: number;
+    paths: Array<{ path: string; weight: number }>;
+  };
 };
 
 export interface MemorySearchManager {

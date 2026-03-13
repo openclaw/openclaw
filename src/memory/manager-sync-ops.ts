@@ -703,10 +703,12 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
+    const excludePaths = this.settings.sharedPaths.map((sp) => sp.path);
     const files = await listMemoryFiles(
       this.workspaceDir,
       this.settings.extraPaths,
       this.settings.multimodal,
+      excludePaths,
     );
     const fileEntries = (
       await runWithConcurrency(
