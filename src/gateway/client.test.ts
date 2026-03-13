@@ -354,11 +354,17 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
-  it("uses explicit shared token and does not inject stored device token", () => {
+  it("sends stored device token alongside explicit shared token for fallback auth", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const identity: DeviceIdentity = {
+      deviceId: "dev-fallback-1",
+      privateKeyPem: "private-key", // pragma: allowlist secret
+      publicKeyPem: "public-key",
+    };
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
+      deviceIdentity: identity,
     });
 
     client.start();
@@ -368,16 +374,22 @@ describe("GatewayClient connect auth payload", () => {
 
     expect(connectFrameFrom(ws)).toMatchObject({
       token: "shared-token",
+      deviceToken: "stored-device-token",
     });
-    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
   });
 
-  it("uses explicit shared password and does not inject stored device token", () => {
+  it("sends stored device token alongside explicit shared password for fallback auth", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const identity: DeviceIdentity = {
+      deviceId: "dev-fallback-2",
+      privateKeyPem: "private-key", // pragma: allowlist secret
+      publicKeyPem: "public-key",
+    };
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       password: "shared-password", // pragma: allowlist secret
+      deviceIdentity: identity,
     });
 
     client.start();
@@ -387,9 +399,11 @@ describe("GatewayClient connect auth payload", () => {
 
     expect(connectFrameFrom(ws)).toMatchObject({
       password: "shared-password", // pragma: allowlist secret
+      deviceToken: "stored-device-token",
     });
-    expect(connectFrameFrom(ws).token).toBeUndefined();
-    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    // When password is the primary credential, auth.token falls back to
+    // the resolved device token for legacy compatibility.
+    expect(connectFrameFrom(ws).token).toBe("stored-device-token");
     client.stop();
   });
 
