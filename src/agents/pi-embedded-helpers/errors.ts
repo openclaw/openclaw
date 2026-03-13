@@ -181,8 +181,9 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-const MODEL_SPECIAL_TOKEN_RE =
-  /(?:#\+){2,}#?|\bassistant\s+to\s*=\s*\w+|\b(?:user|system|assistant)\s*:\s*$/gim;
+const MODEL_SPECIAL_TOKEN_RE = /(?:#\+){2,}#?|\bassistant\s+to\s*=\s*\w+/gi;
+const MODEL_SPECIAL_MARKER_LINE_RE = /^\s*(?:(?:#\+){2,}#?|\bassistant\s+to\s*=\s*\w+)\s*$/i;
+const MODEL_SPECIAL_ROLE_LABEL_LINE_RE = /^\s*(?:user|system|assistant)\s*:\s*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -398,7 +399,25 @@ function stripSpecialMarkupFromText(text: string): string {
   if (!text) {
     return text;
   }
-  return text.replace(FINAL_TAG_RE, "").replace(MODEL_SPECIAL_TOKEN_RE, "");
+  const withoutFinalTags = text.replace(FINAL_TAG_RE, "");
+  const originalLines = withoutFinalTags.split(/\r?\n/);
+  const withoutLeakedRoleLabels = originalLines
+    .filter((line, index, lines) => {
+      if (!MODEL_SPECIAL_ROLE_LABEL_LINE_RE.test(line)) {
+        return true;
+      }
+      const previousNonEmpty = lines
+        .slice(0, index)
+        .toReversed()
+        .find((entry) => entry.trim().length > 0);
+      const nextNonEmpty = lines.slice(index + 1).find((entry) => entry.trim().length > 0);
+      return !(
+        MODEL_SPECIAL_MARKER_LINE_RE.test(previousNonEmpty ?? "") ||
+        MODEL_SPECIAL_MARKER_LINE_RE.test(nextNonEmpty ?? "")
+      );
+    })
+    .join("\n");
+  return withoutLeakedRoleLabels.replace(MODEL_SPECIAL_TOKEN_RE, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
