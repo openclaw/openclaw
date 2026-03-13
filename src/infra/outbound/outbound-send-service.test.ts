@@ -26,10 +26,15 @@ vi.mock("../../media/local-roots.js", async (importOriginal) => {
   };
 });
 
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  __resetOutboundCircuitBreakerForTest,
+  executePollAction,
+  executeSendAction,
+} from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
   beforeEach(() => {
+    __resetOutboundCircuitBreakerForTest();
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
@@ -125,6 +130,67 @@ describe("executeSendAction", () => {
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("trips circuit breaker after repeated duplicate sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "telegram",
+      to: "channel:123",
+      via: "gateway",
+      mediaUrl: null,
+    });
+
+    const base = {
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: { __sessionKey: "s1" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "👌",
+    } as const;
+
+    await executeSendAction(base);
+    await executeSendAction(base);
+    await executeSendAction(base);
+
+    await expect(executeSendAction(base)).rejects.toThrow(/circuit breaker/i);
+  });
+
+  it("trips circuit breaker after too many sends within window", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "telegram",
+      to: "channel:123",
+      via: "gateway",
+      mediaUrl: null,
+    });
+
+    const ctx = {
+      cfg: {},
+      channel: "telegram",
+      params: { __sessionKey: "s1" },
+      dryRun: false,
+    } as const;
+
+    // 20 sends allowed; 21st should trip.
+    for (let i = 0; i < 20; i += 1) {
+      await executeSendAction({
+        ctx,
+        to: "channel:123",
+        message: `msg-${i}`,
+      });
+    }
+
+    await expect(
+      executeSendAction({
+        ctx,
+        to: "channel:123",
+        message: "msg-over",
+      }),
+    ).rejects.toThrow(/circuit breaker/i);
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
