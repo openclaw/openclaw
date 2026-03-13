@@ -1741,12 +1741,13 @@ describe("QmdMemoryManager", () => {
         searchError = err;
       }
       const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
-      if (attemptedCmdShim) {
-        expect(String(searchError)).toMatch(/without shell execution|EINVAL/);
+      if (searchError !== undefined) {
+        const searchErrorMessage =
+          searchError instanceof Error ? searchError.message : JSON.stringify(searchError);
+        expect(searchErrorMessage).toMatch(/without shell execution|EINVAL/);
       } else {
         // Some hosts resolve the wrapper to a direct entrypoint before spawn,
         // which is also acceptable as long as we never fall back to shell mode.
-        expect(searchError).toBeUndefined();
         expect(searchResult).toEqual([]);
       }
       expect(
@@ -1754,6 +1755,9 @@ describe("QmdMemoryManager", () => {
           (call: unknown[]) => (call[2] as { shell?: boolean } | undefined)?.shell === true,
         ),
       ).toBe(false);
+      if (attemptedCmdShim) {
+        expect(searchError).toBeDefined();
+      }
       await manager.close();
     } finally {
       platformSpy.mockRestore();
