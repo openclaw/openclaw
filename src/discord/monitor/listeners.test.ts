@@ -12,6 +12,14 @@ function fakeEvent(channelId: string) {
   return { channel_id: channelId } as never;
 }
 
+function createDeferred() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe("DiscordMessageListener", () => {
   it("returns immediately without awaiting handler completion", async () => {
     let resolveHandler: (() => void) | undefined;
@@ -38,23 +46,17 @@ describe("DiscordMessageListener", () => {
 
   it("runs handlers for the same channel concurrently (no per-channel serialization)", async () => {
     const order: string[] = [];
-    let resolveA: (() => void) | undefined;
-    let resolveB: (() => void) | undefined;
-    const doneA = new Promise<void>((r) => {
-      resolveA = r;
-    });
-    const doneB = new Promise<void>((r) => {
-      resolveB = r;
-    });
+    const deferredA = createDeferred();
+    const deferredB = createDeferred();
     let callCount = 0;
     const handler = vi.fn(async () => {
       callCount += 1;
       const id = callCount;
       order.push(`start:${id}`);
       if (id === 1) {
-        await doneA;
+        await deferredA.promise;
       } else {
-        await doneB;
+        await deferredB.promise;
       }
       order.push(`end:${id}`);
     });
@@ -71,35 +73,29 @@ describe("DiscordMessageListener", () => {
     expect(order).toContain("start:1");
     expect(order).toContain("start:2");
 
-    resolveB?.();
+    deferredB.resolve?.();
     await vi.waitFor(() => {
       expect(order).toContain("end:2");
     });
     // First handler is still running — no serialization.
     expect(order).not.toContain("end:1");
 
-    resolveA?.();
+    deferredA.resolve?.();
     await vi.waitFor(() => {
       expect(order).toContain("end:1");
     });
   });
 
   it("runs handlers for different channels in parallel", async () => {
-    let resolveA: (() => void) | undefined;
-    let resolveB: (() => void) | undefined;
-    const doneA = new Promise<void>((r) => {
-      resolveA = r;
-    });
-    const doneB = new Promise<void>((r) => {
-      resolveB = r;
-    });
+    const deferredA = createDeferred();
+    const deferredB = createDeferred();
     const order: string[] = [];
     const handler = vi.fn(async (data: { channel_id: string }) => {
       order.push(`start:${data.channel_id}`);
       if (data.channel_id === "ch-a") {
-        await doneA;
+        await deferredA.promise;
       } else {
-        await doneB;
+        await deferredB.promise;
       }
       order.push(`end:${data.channel_id}`);
     });
@@ -114,13 +110,13 @@ describe("DiscordMessageListener", () => {
     expect(order).toContain("start:ch-a");
     expect(order).toContain("start:ch-b");
 
-    resolveB?.();
+    deferredB.resolve?.();
     await vi.waitFor(() => {
       expect(order).toContain("end:ch-b");
     });
     expect(order).not.toContain("end:ch-a");
 
-    resolveA?.();
+    deferredA.resolve?.();
     await vi.waitFor(() => {
       expect(order).toContain("end:ch-a");
     });
