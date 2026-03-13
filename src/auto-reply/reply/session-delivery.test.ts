@@ -53,4 +53,27 @@ describe("session delivery direct-session routing overrides", () => {
       }),
     ).toBe("group:12345");
   });
+
+  it("keeps persisted webchat destination for synthetic heartbeat turns", () => {
+    expect(
+      resolveLastToRaw({
+        providerRaw: "heartbeat",
+        toRaw: "heartbeat",
+        persistedLastChannel: "webchat",
+        persistedLastTo: "openclaw-control-ui",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("openclaw-control-ui");
+  });
+
+  it("does not synthesize heartbeat as lastTo when no prior destination exists", () => {
+    expect(
+      resolveLastToRaw({
+        providerRaw: "heartbeat",
+        toRaw: "heartbeat",
+        persistedLastChannel: "webchat",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
 });
