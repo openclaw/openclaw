@@ -486,6 +486,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
+  "agents.list.*.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
   "agents.defaults.heartbeat.lightContext": "Heartbeat Light Context",
   "agents.list.*.heartbeat.lightContext": "Heartbeat Light Context",
   "agents.defaults.heartbeat.includeReasoning": "Heartbeat Include Reasoning",
@@ -869,6 +870,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].heartbeat.accountId": "Agent Heartbeat Account ID",
   "agents.list[].heartbeat.prompt": "Agent Heartbeat Prompt",
   "agents.list[].heartbeat.ackMaxChars": "Agent Heartbeat Ack Max Chars",
+  "agents.list[].heartbeat.directPolicy": "Agent Heartbeat Direct Policy",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

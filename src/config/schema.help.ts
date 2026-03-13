@@ -228,14 +228,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list.*.heartbeat.suppressToolErrorWarnings":
+    "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.lightContext":
     "Per-agent override for heartbeat lightweight context mode; set true to keep only HEARTBEAT.md in the bootstrap context for that agent's heartbeat runs.",
   "agents.list[].heartbeat.includeReasoning":
-    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent.",
+    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent. Security note: reasoning content may expose sensitive context; use only on trusted channels.",
   "agents.list[].heartbeat.every":
-    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, define its agents.list entry without a heartbeat block.",
+    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, define its agents.list entry without a heartbeat block. Caveat: the default agent has fallback behaviour — it runs heartbeats automatically when no agents.list entry has an explicit heartbeat block, regardless of this setting.",
   "agents.list[].heartbeat.activeHours":
     "Per-agent override for the active-hours window restricting when heartbeats run.",
   "agents.list[].heartbeat.activeHours.start":
@@ -256,18 +258,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for the heartbeat prompt body sent to the model.",
   "agents.list[].heartbeat.ackMaxChars":
     "Per-agent override for maximum characters allowed after HEARTBEAT_OK before delivery.",
+  "agents.list[].heartbeat.directPolicy":
+    'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
   "agents.defaults.heartbeat.lightContext":
     "When true, run heartbeat turns with lightweight bootstrap context that keeps only HEARTBEAT.md from workspace bootstrap files. Use this to avoid injecting the full agent context (AGENTS.md, SOUL.md, TOOLS.md, etc.) on every heartbeat tick, which prevents unbounded token growth and reduces API credit consumption. Default: false (full context).",
   "agents.list.*.heartbeat.lightContext":
     "Per-agent override for heartbeat lightweight context mode; set true to keep only HEARTBEAT.md in the bootstrap context for that agent's heartbeat runs.",
   "agents.defaults.heartbeat.includeReasoning":
-    'When true, deliver the model\'s reasoning payload for heartbeat runs (when available) as a separate message prefixed with "Reasoning:". Use this for debugging or auditing heartbeat decision-making. Default: false (only the final heartbeat payload is delivered).',
+    'When true, deliver the model\'s reasoning payload for heartbeat runs (when available) as a separate message prefixed with "Reasoning:". Use this for debugging or auditing heartbeat decision-making. Security note: reasoning content may contain system prompts, tool traces, or sensitive context data; avoid enabling this on channels routed to external or untrusted recipients. Default: false (only the final heartbeat payload is delivered).',
   "agents.list.*.heartbeat.includeReasoning":
-    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent.",
+    "Per-agent override for heartbeat reasoning delivery; enable to surface the model's chain-of-thought output alongside heartbeat results for that agent. Security note: reasoning content may expose sensitive context; use only on trusted channels.",
   "agents.defaults.heartbeat.every":
-    'Heartbeat interval as a duration string (e.g. "5m", "1h", "30s"). The default unit is minutes. Note: when no per-agent heartbeat blocks exist in agents.list, the default agent runs heartbeats automatically at this interval. To disable heartbeats entirely, add an explicit agents.list entry for the agent without a heartbeat block. Default: "30m".',
+    'Heartbeat interval as a duration string (e.g. "5m", "1h", "30s"). The default unit is minutes. Note: when no agents.list entry has an explicit heartbeat block, the default agent runs heartbeats automatically at this interval (fallback behavior). To disable heartbeats for the default agent, you must ensure at least one other agents.list entry defines a heartbeat block (so the system recognises explicit heartbeat configuration) while the default agent\'s entry omits it. Default: "30m".',
   "agents.list.*.heartbeat.every":
-    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, define its agents.list entry without a heartbeat block.",
+    "Per-agent override for heartbeat interval; use shorter intervals for high-priority agents and longer intervals for low-priority ones. To disable heartbeats for a specific agent, define its agents.list entry without a heartbeat block. Caveat: the default agent has fallback behaviour — it runs heartbeats automatically when no agents.list entry has an explicit heartbeat block, regardless of this setting.",
   "agents.defaults.heartbeat.activeHours":
     "Optional active-hours window restricting when heartbeats run. Use this to avoid unnecessary API calls and notifications outside working hours.",
   "agents.list.*.heartbeat.activeHours":
