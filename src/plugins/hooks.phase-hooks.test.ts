@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
+  PluginHookBeforeAgentRunResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
@@ -9,12 +10,17 @@ import type {
 
 function addTypedHook(
   registry: PluginRegistry,
-  hookName: "before_model_resolve" | "before_prompt_build",
+  hookName: "before_agent_run" | "before_model_resolve" | "before_prompt_build",
   pluginId: string,
   handler: () =>
+    | PluginHookBeforeAgentRunResult
     | PluginHookBeforeModelResolveResult
     | PluginHookBeforePromptBuildResult
-    | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
+    | Promise<
+        | PluginHookBeforeAgentRunResult
+        | PluginHookBeforeModelResolveResult
+        | PluginHookBeforePromptBuildResult
+      >,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -31,6 +37,23 @@ describe("phase hooks merger", () => {
 
   beforeEach(() => {
     registry = createEmptyPluginRegistry();
+  });
+
+  it("before_agent_run keeps the higher-priority skip decision", async () => {
+    addTypedHook(registry, "before_agent_run", "low", () => ({ skip: false }), 1);
+    addTypedHook(
+      registry,
+      "before_agent_run",
+      "high",
+      () => ({ skip: true, skipReason: "screened-out" }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeAgentRun({ prompt: "test" }, {});
+
+    expect(result?.skip).toBe(true);
+    expect(result?.skipReason).toBe("screened-out");
   });
 
   it("before_model_resolve keeps higher-priority override values", async () => {

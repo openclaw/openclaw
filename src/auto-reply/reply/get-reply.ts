@@ -11,6 +11,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -355,6 +356,30 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
+
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_run")) {
+    const beforeAgentRunResult = await hookRunner.runBeforeAgentRun(
+      { prompt: cleanedBody },
+      {
+        agentId,
+        sessionKey,
+        sessionId,
+        workspaceDir,
+        trigger: "user",
+        channelId:
+          groupResolution?.channel ??
+          sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
+          (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+          ctx.Provider,
+      },
+    );
+    if (beforeAgentRunResult?.skip) {
+      typing.cleanup();
+      return undefined;
+    }
+  }
 
   return runPreparedReply({
     ctx,
