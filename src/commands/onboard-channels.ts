@@ -1,6 +1,6 @@
 import type { ChannelMeta } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy } from "../config/types.js";
+import type { DmPolicy, DmScope } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import type { ChannelChoice } from "./onboard-types.js";
@@ -218,6 +218,57 @@ function resolveQuickstartDefault(
   return best?.channel;
 }
 
+function channelSupportsDirectMessages(channel: ChannelChoice): boolean {
+  return getChannelPlugin(channel)?.capabilities.chatTypes.includes("direct") ?? false;
+}
+
+function channelSupportsMultipleAccounts(channel: ChannelChoice, cfg: OpenClawConfig): boolean {
+  const plugin = getChannelPlugin(channel);
+  if (!plugin) {
+    return false;
+  }
+
+  const probeAccountId = "openclaw-dm-scope-probe";
+  const normalizedProbeAccountId = normalizeAccountId(probeAccountId);
+  try {
+    const setupResolvedAccountId = plugin.setup?.resolveAccountId?.({
+      cfg,
+      accountId: probeAccountId,
+    });
+    if (normalizeAccountId(setupResolvedAccountId) === normalizedProbeAccountId) {
+      return true;
+    }
+
+    const resolvedAccount = plugin.config.resolveAccount(cfg, probeAccountId) as
+      | { accountId?: string | null }
+      | undefined;
+    return normalizeAccountId(resolvedAccount?.accountId) === normalizedProbeAccountId;
+  } catch {
+    return false;
+  }
+}
+
+function resolveRecommendedDmScope(params: {
+  cfg: OpenClawConfig;
+  selection: ChannelChoice[];
+}): DmScope | null {
+  const dmCapableSelection = params.selection.filter((channel) =>
+    channelSupportsDirectMessages(channel),
+  );
+  if (dmCapableSelection.length < 2) {
+    return null;
+  }
+  return dmCapableSelection.some((channel) => channelSupportsMultipleAccounts(channel, params.cfg))
+    ? "per-account-channel-peer"
+    : "per-channel-peer";
+}
+
+function formatDmScopeSummary(dmScope: DmScope): string {
+  return dmScope === "per-account-channel-peer"
+    ? 'session.dmScope="per-account-channel-peer" to isolate DM context by account + channel + sender'
+    : 'session.dmScope="per-channel-peer" to isolate DM context by channel + sender';
+}
+
 async function maybeConfigureDmPolicies(params: {
   cfg: OpenClawConfig;
   selection: ChannelChoice[];
@@ -292,24 +343,24 @@ async function maybeConfigureDmScopeIsolation(params: {
     return params.cfg;
   }
 
-  const dmCapableSelection = params.selection.filter((channel) =>
-    Boolean(getChannelOnboardingAdapter(channel)?.dmPolicy),
-  );
-  if (dmCapableSelection.length < 2) {
+  const recommendedDmScope = resolveRecommendedDmScope({
+    cfg: params.cfg,
+    selection: params.selection,
+  });
+  if (!recommendedDmScope) {
     return params.cfg;
   }
 
   const shouldSet = params.skipConfirm
     ? true
     : await params.prompter.confirm({
-        message:
-          'Enable safe DM session isolation now? (recommended for multi-channel DM setups)',
+        message: "Enable safe DM session isolation now? (recommended for multi-channel DM setups)",
         initialValue: true,
       });
   if (!shouldSet) {
     await params.prompter.note(
-      'Skipped. To prevent cross-channel DM context mixing, set session.dmScope="per-channel-peer" later.',
-      'DM session scope',
+      `Skipped. To prevent DM context mixing, set ${formatDmScopeSummary(recommendedDmScope)} later.`,
+      "DM session scope",
     );
     return params.cfg;
   }
@@ -317,13 +368,13 @@ async function maybeConfigureDmScopeIsolation(params: {
   const next: OpenClawConfig = {
     ...params.cfg,
     session: {
-      ...(params.cfg.session ?? {}),
-      dmScope: 'per-channel-peer',
+      ...params.cfg.session,
+      dmScope: recommendedDmScope,
     },
   };
   await params.prompter.note(
-    'Set session.dmScope="per-channel-peer" to isolate DM context by channel+sender.',
-    'DM session scope',
+    `Set ${formatDmScopeSummary(recommendedDmScope)}.`,
+    "DM session scope",
   );
   return next;
 }

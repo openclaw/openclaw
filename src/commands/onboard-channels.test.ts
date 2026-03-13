@@ -9,6 +9,7 @@ import { slackPlugin } from "../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setupChannels } from "./onboard-channels.js";
 
@@ -27,6 +28,45 @@ vi.mock("../channel-web.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
+
+function createDirectOnboardingPlugin(params: { id: string; multiAccount: boolean }) {
+  const { id, multiAccount } = params;
+  return {
+    id,
+    meta: {
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
+      blurb: "test stub.",
+    },
+    capabilities: {
+      chatTypes: ["direct"],
+    },
+    onboarding: {
+      channel: id,
+      getStatus: async () => ({
+        channel: id,
+        configured: false,
+        statusLines: [`${id}: not configured`],
+        selectionHint: "not configured",
+        quickstartScore: 1,
+      }),
+      configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }),
+    },
+    config: {
+      listAccountIds: () => [DEFAULT_ACCOUNT_ID],
+      resolveAccount: (_cfg: OpenClawConfig, accountId?: string | null) => ({
+        accountId: multiAccount ? accountId?.trim() || DEFAULT_ACCOUNT_ID : DEFAULT_ACCOUNT_ID,
+      }),
+    },
+    setup: {
+      resolveAccountId: ({ accountId }: { accountId?: string }) =>
+        multiAccount ? accountId?.trim() || DEFAULT_ACCOUNT_ID : DEFAULT_ACCOUNT_ID,
+      applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+    },
+  };
+}
 
 describe("setupChannels", () => {
   beforeEach(() => {
@@ -204,5 +244,109 @@ describe("setupChannels", () => {
 
     expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("defaults DM isolation to per-account-channel-peer when selected channels support multiple accounts", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          plugin: createDirectOnboardingPlugin({ id: "alpha", multiAccount: true }),
+          source: "test",
+        },
+        {
+          pluginId: "beta",
+          plugin: createDirectOnboardingPlugin({ id: "beta", multiAccount: true }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("alpha")
+      .mockResolvedValueOnce("beta")
+      .mockResolvedValueOnce("__done__");
+    const note = vi.fn(async () => {});
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note,
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await setupChannels({} as OpenClawConfig, runtime, prompter, {
+      skipConfirm: true,
+      skipDmPolicyPrompt: true,
+    });
+
+    expect(result.session?.dmScope).toBe("per-account-channel-peer");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('session.dmScope="per-account-channel-peer"'),
+      "DM session scope",
+    );
+  });
+
+  it("defaults DM isolation to per-channel-peer when selected channels are single-account", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          plugin: createDirectOnboardingPlugin({ id: "alpha", multiAccount: false }),
+          source: "test",
+        },
+        {
+          pluginId: "beta",
+          plugin: createDirectOnboardingPlugin({ id: "beta", multiAccount: false }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("alpha")
+      .mockResolvedValueOnce("beta")
+      .mockResolvedValueOnce("__done__");
+    const note = vi.fn(async () => {});
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note,
+      select,
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await setupChannels({} as OpenClawConfig, runtime, prompter, {
+      skipConfirm: true,
+      skipDmPolicyPrompt: true,
+    });
+
+    expect(result.session?.dmScope).toBe("per-channel-peer");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('session.dmScope="per-channel-peer"'),
+      "DM session scope",
+    );
   });
 });
