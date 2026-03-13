@@ -120,6 +120,24 @@ describe("recordTokenUsage", () => {
     expect(records[0].outputTokens).toBe(50);
   });
 
+  it("does not overwrite a valid-but-non-array token-usage.json — rejects unexpected shape", async () => {
+    // Simulate a manual edit or migration that left a valid JSON object
+    await fs.mkdir(path.join(tmpDir, "memory"), { recursive: true });
+    await fs.writeFile(usageFile, '{"legacy": true, "records": []}', "utf-8");
+
+    await expect(
+      recordTokenUsage({
+        workspaceDir: tmpDir,
+        label: "llm_output",
+        usage: { input: 100, output: 50, total: 150 },
+      }),
+    ).rejects.toThrow("not an array");
+
+    // File must be unchanged — the legacy data is preserved.
+    const content = await fs.readFile(usageFile, "utf-8");
+    expect(content).toBe('{"legacy": true, "records": []}');
+  });
+
   it("does not overwrite a malformed token-usage.json — preserves corrupted file", async () => {
     // Simulate an interrupted write that left partial JSON
     await fs.mkdir(path.join(tmpDir, "memory"), { recursive: true });

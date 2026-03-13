@@ -27,7 +27,18 @@ async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
   try {
     const raw = await fs.readFile(file, "utf-8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as TokenUsageRecord[]) : [];
+    if (!Array.isArray(parsed)) {
+      // Valid JSON but unexpected shape (object, number, string, …).
+      // Returning [] here would cause appendRecord to overwrite the file
+      // with only the new entry, silently deleting prior data.
+      throw Object.assign(
+        new Error(
+          `token-usage.json contains valid JSON but is not an array (got ${typeof parsed})`,
+        ),
+        { code: "ERR_UNEXPECTED_TOKEN_LOG_SHAPE" },
+      );
+    }
+    return parsed as TokenUsageRecord[];
   } catch (err) {
     // File does not exist yet — start with an empty array.
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
