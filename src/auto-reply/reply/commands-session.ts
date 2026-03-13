@@ -563,6 +563,37 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  const preferLocalScriptRestart =
+    process.platform === "darwin" &&
+    isTelegramSurface(params) &&
+    typeof process.env.OPENCLAW_LOCAL_RESTART_SCRIPT === "string" &&
+    process.env.OPENCLAW_LOCAL_RESTART_SCRIPT.trim().length > 0;
+  // Telegram /restart is often invoked from the same process tree as the
+  // gateway itself on macOS dev setups. Prefer the detached local restart
+  // script so we can acknowledge the command before launchctl tears us down.
+  if (preferLocalScriptRestart) {
+    const restartMethod = triggerOpenClawRestart({ preferLocalScript: true });
+    if (!restartMethod.ok) {
+      const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
+        },
+      };
+    }
+    const usedLocalScript =
+      typeof restartMethod.detail === "string" &&
+      restartMethod.detail.startsWith("scheduled local restart script:");
+    return {
+      shouldContinue: false,
+      reply: {
+        text: usedLocalScript
+          ? "⚙️ Restarting OpenClaw via local restart script; give me a few seconds to come back online."
+          : `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+      },
+    };
+  }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
     scheduleGatewaySigusr1Restart({ reason: "/restart" });

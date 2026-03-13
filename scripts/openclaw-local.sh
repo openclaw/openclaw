@@ -17,6 +17,10 @@ if [[ -x "$PREFLIGHT" ]]; then
   "$PREFLIGHT" --quiet
 fi
 
+if [[ -x "$LOCAL_RESTART" ]]; then
+  export OPENCLAW_LOCAL_RESTART_SCRIPT="${OPENCLAW_LOCAL_RESTART_SCRIPT:-$LOCAL_RESTART}"
+fi
+
 # Hard-pin restart commands to the local fork service script.
 if [[ "${OPENCLAW_USE_LOCAL_RESTART_SCRIPT:-1}" != "0" && -x "$LOCAL_RESTART" ]]; then
   if [[ $# -eq 1 && "$1" == "restart" ]]; then
@@ -32,4 +36,3 @@ if [[ "${OPENCLAW_USE_LOCAL_RESTART_SCRIPT:-1}" != "0" && -x "$LOCAL_RESTART" ]]
 fi
 
 exec "$NODE" "$CLI" "$@"
-
