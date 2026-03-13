@@ -25,11 +25,13 @@ afterEach(() => {
 
 describe("sanitizeField", () => {
   it("strips control characters", () => {
-    expect(sanitizeField("hello\x00world\x1f!", 64)).toBe("helloworld!");
+    const input = `hello${String.fromCharCode(0)}world${String.fromCharCode(0x1f)}!`;
+    expect(sanitizeField(input, 64)).toBe("helloworld!");
   });
 
   it("strips zero-width characters", () => {
-    expect(sanitizeField("test\u200bvalue\ufeff", 64)).toBe("testvalue");
+    const input = `test${String.fromCharCode(0x200b)}value${String.fromCharCode(0xfeff)}`;
+    expect(sanitizeField(input, 64)).toBe("testvalue");
   });
 
   it("truncates to max length", () => {
@@ -76,11 +78,11 @@ describe("buildNotificationText", () => {
       requesterId: "+14155551234",
       channelId: "whatsapp",
       code: "ABCD1234",
-      meta: { name: "Evil\x00Name\u200b" },
+      meta: { name: `Evil${String.fromCharCode(0)}Name${String.fromCharCode(0x200b)}` },
     });
     expect(text).toContain("EvilName");
-    expect(text).not.toContain("\x00");
-    expect(text).not.toContain("\u200b");
+    expect(text).not.toContain(String.fromCharCode(0));
+    expect(text).not.toContain(String.fromCharCode(0x200b));
   });
 });
 
