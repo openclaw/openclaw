@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -90,6 +91,13 @@ export type HookClientIpConfig = Readonly<{
 type HookReplayEntry = {
   ts: number;
   runId: string;
+};
+
+type HookReplayScope = {
+  pathKey: string;
+  token: string | undefined;
+  idempotencyKey?: string;
+  dispatchScope: Record<string, unknown>;
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -405,16 +413,25 @@ export function createHooksRequestHandler(
     }
   };
 
-  const buildHookReplayCacheKey = (params: {
-    clientKey: string;
-    pathKey: string;
-    idempotencyKey?: string;
-  }): string | undefined => {
+  const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {
     const idem = params.idempotencyKey?.trim();
     if (!idem) {
       return undefined;
     }
-    return `${params.clientKey}:${params.pathKey}:${idem}`;
+    const tokenFingerprint = createHash("sha256")
+      .update(params.token ?? "", "utf8")
+      .digest("hex");
+    const idempotencyFingerprint = createHash("sha256").update(idem, "utf8").digest("hex");
+    const scopeFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          pathKey: params.pathKey,
+          dispatchScope: params.dispatchScope,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+    return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
   const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
@@ -427,7 +444,7 @@ export function createHooksRequestHandler(
       return undefined;
     }
     hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ...cached, ts: now });
+    hookReplayCache.set(key, cached);
     return cached.runId;
   };
 
@@ -551,22 +568,37 @@ export function createHooksRequestHandler(
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
       const replayKey = buildHookReplayCacheKey({
-        clientKey,
         pathKey: "agent",
+        token,
         idempotencyKey,
+        dispatchScope: {
+          agentId: targetAgentId ?? null,
+          sessionKey:
+            normalized.value.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+          message: normalized.value.message,
+          name: normalized.value.name,
+          wakeMode: normalized.value.wakeMode,
+          deliver: normalized.value.deliver,
+          channel: normalized.value.channel,
+          to: normalized.value.to ?? null,
+          model: normalized.value.model ?? null,
+          thinking: normalized.value.thinking ?? null,
+          timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+        },
       });
       const cachedRunId = resolveCachedHookRunId(replayKey, now);
       if (cachedRunId) {
         sendJson(res, 200, { ok: true, runId: cachedRunId });
         return true;
       }
+      const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
+        sessionKey: sessionKey.value,
+        targetAgentId,
+      });
       const runId = dispatchAgentHook({
         ...normalized.value,
         idempotencyKey,
-        sessionKey: normalizeHookDispatchSessionKey({
-          sessionKey: sessionKey.value,
-          targetAgentId,
-        }),
+        sessionKey: normalizedDispatchSessionKey,
         agentId: targetAgentId,
       });
       rememberHookRunId(replayKey, runId, now);
@@ -619,10 +651,28 @@ export function createHooksRequestHandler(
             return true;
           }
           const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
+          const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
+            sessionKey: sessionKey.value,
+            targetAgentId,
+          });
           const replayKey = buildHookReplayCacheKey({
-            clientKey,
             pathKey: subPath || "mapping",
+            token,
             idempotencyKey,
+            dispatchScope: {
+              agentId: targetAgentId ?? null,
+              sessionKey:
+                mapped.action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+              message: mapped.action.message,
+              name: mapped.action.name ?? "Hook",
+              wakeMode: mapped.action.wakeMode,
+              deliver: resolveHookDeliver(mapped.action.deliver),
+              channel,
+              to: mapped.action.to ?? null,
+              model: mapped.action.model ?? null,
+              thinking: mapped.action.thinking ?? null,
+              timeoutSeconds: mapped.action.timeoutSeconds ?? null,
+            },
           });
           const cachedRunId = resolveCachedHookRunId(replayKey, now);
           if (cachedRunId) {
@@ -635,10 +685,7 @@ export function createHooksRequestHandler(
             idempotencyKey,
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
-            sessionKey: normalizeHookDispatchSessionKey({
-              sessionKey: sessionKey.value,
-              targetAgentId,
-            }),
+            sessionKey: normalizedDispatchSessionKey,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,
             to: mapped.action.to,
