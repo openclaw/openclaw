@@ -347,10 +347,6 @@ export async function resolvePinnedHostname(
 }
 
 function resolveProcessAutoSelectFamily(): boolean | undefined {
-  // Respect process-level autoSelectFamily setting from:
-  // - Node.js default (true on Node 22+)
-  // - --no-network-family-autoselection CLI flag
-  // - net.setDefaultAutoSelectFamily(false) API call
   if (typeof net.getDefaultAutoSelectFamily !== "function") {
     return undefined;
   }
@@ -365,18 +361,9 @@ function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Respect process-level autoSelectFamily setting instead of hardcoding true.
-  // This ensures deployments that intentionally disabled family autoselection
-  // (via --no-network-family-autoselection or net.setDefaultAutoSelectFamily(false))
-  // are not forced back into IPv6/dual-stack probing.
   const processAutoSelectFamily = resolveProcessAutoSelectFamily();
-
-  // Only set attempt timeout when autoSelectFamily is enabled at process level.
-  // This provides Happy Eyeballs (RFC 8305) benefits without overriding policy.
   const defaultConnect: Record<string, unknown> =
-    processAutoSelectFamily === true
-      ? { autoSelectFamilyAttemptTimeout: 300 }
-      : {};
+    processAutoSelectFamily === true ? { autoSelectFamilyAttemptTimeout: 300 } : {};
 
   const mergedConnect = connect ? { ...defaultConnect, ...connect } : defaultConnect;
   return { ...mergedConnect, lookup };

@@ -1,25 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  agentCtor,
-  envHttpProxyAgentCtor,
-  proxyAgentCtor,
-  getDefaultAutoSelectFamily,
-} = vi.hoisted(() => ({
-  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
-    this.options = options;
+const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor, getDefaultAutoSelectFamily } = vi.hoisted(
+  () => ({
+    agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+      this.options = options;
+    }),
+    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+      this: { options: unknown },
+      options: unknown,
+    ) {
+      this.options = options;
+    }),
+    proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
+      this.options = options;
+    }),
+    getDefaultAutoSelectFamily: vi.fn(() => true),
   }),
-  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options: unknown },
-    options: unknown,
-  ) {
-    this.options = options;
-  }),
-  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
-    this.options = options;
-  }),
-  getDefaultAutoSelectFamily: vi.fn(() => true),
-}));
+);
 
 vi.mock("undici", () => ({
   Agent: agentCtor,
