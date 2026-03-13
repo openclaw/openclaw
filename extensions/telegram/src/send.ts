@@ -765,6 +765,7 @@ export async function sendMessageTelegram(
       buildOutboundMediaLoadOptions({
         maxBytes: mediaMaxBytes,
         mediaLocalRoots: opts.mediaLocalRoots,
+        optimizeImages: opts.forceDocument ? false : undefined,
       }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
