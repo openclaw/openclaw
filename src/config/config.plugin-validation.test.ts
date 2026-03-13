@@ -216,6 +216,36 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns instead of failing when the default memory slot is temporarily undiscoverable", async () => {
+    const emptyBundledDir = path.join(suiteHome, "empty-bundled");
+    await mkdirSafe(emptyBundledDir);
+    clearPluginManifestRegistryCache();
+
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: true,
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundledDir,
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.slots.memory",
+        message:
+          "default bundled memory slot unavailable: memory-core (continuing without fatal validation; check packaged plugin installation)",
+      });
+    }
+  });
+
   it("surfaces plugin config diagnostics", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
