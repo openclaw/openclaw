@@ -462,7 +462,14 @@ describe("resolveSessionDeliveryTarget", () => {
       expectedChannel: "none",
       expectedReason: "dm-blocked",
     },
-  ])("$name", ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
+  ] satisfies Array<{
+    name: string;
+    entry: NonNullable<Parameters<typeof resolveHeartbeatDeliveryTarget>[0]["entry"]>;
+    directPolicy?: "allow" | "block";
+    expectedChannel: string;
+    expectedTo?: string;
+    expectedReason?: string;
+  }>)("$name", ({ name, entry, directPolicy, expectedChannel, expectedTo, expectedReason }) => {
     expectHeartbeatTarget({
       name,
       entry,
