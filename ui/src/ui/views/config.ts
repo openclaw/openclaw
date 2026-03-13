@@ -799,7 +799,10 @@ export function renderConfig(props: ConfigProps) {
   const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
     ...cat,
     sections: cat.sections.filter(
-      (s) => (includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps,
+      (s) =>
+        ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+        (!include || include.has(s.key)) &&
+        (!exclude || !exclude.has(s.key)),
     ),
   })).filter((cat) => cat.sections.length > 0);
 

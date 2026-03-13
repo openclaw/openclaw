@@ -725,7 +725,25 @@ export class OpenClawApp extends LitElement {
       try {
         const { getExistingSubscription } = await import("./push-subscription.ts");
         const existing = await getExistingSubscription();
-        this.webPushSubscribed = existing !== null;
+        if (existing && this.client) {
+          // Re-register with the gateway to reconcile local/server state.
+          // Handles the case where the gateway lost the subscription (e.g.
+          // state-dir reset) but the browser still has one locally.
+          const subJson = existing.toJSON();
+          if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+            try {
+              await this.client.request("push.web.subscribe", {
+                endpoint: subJson.endpoint,
+                keys: { p256dh: subJson.keys.p256dh, auth: subJson.keys.auth },
+              });
+            } catch {
+              // Best-effort — don't block init if gateway is unreachable.
+            }
+          }
+          this.webPushSubscribed = true;
+        } else {
+          this.webPushSubscribed = existing !== null;
+        }
       } catch {
         // ignore — just means we can't check
       }
