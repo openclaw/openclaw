@@ -166,10 +166,22 @@ export function evaluateTruthfulEarlyStatusActivation(params: {
     };
   }
 
-  if (recommendation.level === "prioritize") {
+  if (
+    recommendation.level === "prioritize" &&
+    (params.queueMode === "followup" || params.queueMode === "collect")
+  ) {
     return {
       shouldEmit: true,
-      reason: "latency_pattern_indicates_a_truthful_status_would_reduce_visible_silence",
+      reason: "phase2_supplement_status_enabled_for_visible_silence_reduction",
+      decision,
+      recommendation,
+    };
+  }
+
+  if (recommendation.level === "prioritize") {
+    return {
+      shouldEmit: false,
+      reason: "phase2_not_enabled_for_correction_or_parallel_status_yet",
       decision,
       recommendation,
     };

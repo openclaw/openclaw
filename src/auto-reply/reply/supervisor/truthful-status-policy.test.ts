@@ -121,7 +121,26 @@ describe("decideTruthfulEarlyStatus", () => {
     });
   });
 
-  it("activates steer only when latency signals a first-visible silence problem", () => {
+  it("activates collect when latency signals a first-visible silence problem", () => {
+    expect(
+      evaluateTruthfulEarlyStatusActivation({
+        queueMode: "collect",
+        isActive: true,
+        isHeartbeat: false,
+        isExternallyRoutable: true,
+        isStreaming: true,
+        dominantSegments: [{ segment: "runToFirstVisible", count: 2 }],
+      }),
+    ).toMatchObject({
+      shouldEmit: true,
+      reason: "phase2_supplement_status_enabled_for_visible_silence_reduction",
+      recommendation: {
+        level: "prioritize",
+      },
+    });
+  });
+
+  it("keeps steer disabled until phase-2 expands beyond supplements", () => {
     expect(
       evaluateTruthfulEarlyStatusActivation({
         queueMode: "steer",
@@ -132,13 +151,12 @@ describe("decideTruthfulEarlyStatus", () => {
         dominantSegments: [{ segment: "runToFirstVisible", count: 2 }],
       }),
     ).toMatchObject({
-      shouldEmit: true,
-      reason: "latency_pattern_indicates_a_truthful_status_would_reduce_visible_silence",
+      shouldEmit: false,
+      reason: "phase2_not_enabled_for_correction_or_parallel_status_yet",
       recommendation: {
         level: "prioritize",
       },
     });
-
     expect(
       evaluateTruthfulEarlyStatusActivation({
         queueMode: "steer",
