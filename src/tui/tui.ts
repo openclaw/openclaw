@@ -234,6 +234,7 @@ export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
   pairingHint?: string;
+  suppressReconnectHint?: boolean;
 } {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
   if (/pairing required/i.test(reasonLabel)) {
@@ -242,6 +243,13 @@ export function resolveGatewayDisconnectState(reason?: string): {
       activityStatus: "pairing required: run openclaw devices list",
       pairingHint:
         "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+    };
+  }
+  if (/^unauthorized/i.test(reasonLabel)) {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "check credentials — ctrl+r to retry",
+      suppressReconnectHint: true,
     };
   }
   return {
@@ -966,7 +974,11 @@ export async function runTui(opts: TuiOptions) {
     if (disconnectState.pairingHint && !pairingHintShown) {
       pairingHintShown = true;
       chatLog.addSystem(disconnectState.pairingHint);
-    } else if (!disconnectHintShown && !disconnectState.pairingHint) {
+    } else if (
+      !disconnectHintShown &&
+      !disconnectState.pairingHint &&
+      !disconnectState.suppressReconnectHint
+    ) {
       disconnectHintShown = true;
       chatLog.addSystem(
         "Gateway disconnected. Auto-reconnecting… press ctrl+r to retry immediately.\n" +
