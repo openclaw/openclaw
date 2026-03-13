@@ -332,6 +332,15 @@ describe("resolveConfigEnvVars", () => {
       expect(containsEnvVarReference("")).toBe(false);
     });
 
+    it("returns false for non-string values (regression test for #42363)", () => {
+      // Config values can be numbers, booleans, etc. These should never crash
+      expect(containsEnvVarReference(123 as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(true as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(false as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(null as unknown as string)).toBe(false);
+      expect(containsEnvVarReference(undefined as unknown as string)).toBe(false);
+    });
+
     it("returns false for escaped placeholders", () => {
       expect(containsEnvVarReference("$${ESCAPED}")).toBe(false);
       expect(containsEnvVarReference("prefix-$${ESCAPED}-suffix")).toBe(false);
