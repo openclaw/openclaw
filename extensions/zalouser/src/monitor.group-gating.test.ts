@@ -187,6 +187,31 @@ function installRuntime(params: {
   };
 }
 
+function installGroupCommandAuthRuntime() {
+  return installRuntime({
+    resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
+      useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
+  });
+}
+
+async function processGroupControlCommand(params: {
+  account: ResolvedZalouserAccount;
+  content?: string;
+  commandContent?: string;
+}) {
+  await __testing.processMessage({
+    message: createGroupMessage({
+      content: params.content ?? "/new",
+      commandContent: params.commandContent ?? "/new",
+      hasAnyMention: true,
+      wasExplicitlyMentioned: true,
+    }),
+    account: params.account,
+    config: createConfig(),
+    runtime: createRuntimeEnv(),
+  });
+}
+
 function createGroupMessage(overrides: Partial<ZaloInboundMessage> = {}): ZaloInboundMessage {
   return {
     threadId: "g-1",
@@ -369,17 +394,8 @@ describe("zalouser monitor group mention gating", () => {
 
   it("allows group control commands when only allowFrom is configured", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher, resolveCommandAuthorizedFromAuthorizers } =
-      installRuntime({
-        resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
-          useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
-      });
-    await __testing.processMessage({
-      message: createGroupMessage({
-        content: "/new",
-        commandContent: "/new",
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-      }),
+      installGroupCommandAuthRuntime();
+    await processGroupControlCommand({
       account: {
         ...createAccount(),
         config: {
@@ -387,8 +403,6 @@ describe("zalouser monitor group mention gating", () => {
           allowFrom: ["123"],
         },
       },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
     });
 
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
@@ -493,17 +507,8 @@ describe("zalouser monitor group mention gating", () => {
 
   it("allows group control commands when sender is in groupAllowFrom", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher, resolveCommandAuthorizedFromAuthorizers } =
-      installRuntime({
-        resolveCommandAuthorizedFromAuthorizers: ({ useAccessGroups, authorizers }) =>
-          useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
-      });
-    await __testing.processMessage({
-      message: createGroupMessage({
-        content: "/new",
-        commandContent: "/new",
-        hasAnyMention: true,
-        wasExplicitlyMentioned: true,
-      }),
+      installGroupCommandAuthRuntime();
+    await processGroupControlCommand({
       account: {
         ...createAccount(),
         config: {
@@ -512,8 +517,6 @@ describe("zalouser monitor group mention gating", () => {
           groupAllowFrom: ["123"],
         },
       },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
     });
 
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
