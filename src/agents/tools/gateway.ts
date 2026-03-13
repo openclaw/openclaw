@@ -226,12 +226,12 @@ export function resolveGatewayTarget(opts?: GatewayCallOptions): GatewayOverride
         }
       }
     }
-    // No env override. When mode=remote with a configured remote URL → truly remote.
-    // When mode=remote but remote.url is absent, callGateway falls back to local loopback —
-    // classify that as local (undefined) so deliveryContext is not suppressed.
-    const remoteUrl =
-      cfg.gateway?.mode === "remote" ? trimToUndefined(cfg.gateway?.remote?.url) : undefined;
-    return cfg.gateway?.mode === "remote" && remoteUrl !== undefined ? "remote" : undefined;
+    // No env override. Classify as "remote" only when mode=remote is configured with a
+    // non-loopback remote URL. Loopback remote.url (e.g. ws://127.0.0.1:18789) is
+    // indistinguishable from a local gateway on a custom port; without a non-loopback
+    // URL proving SSH tunnel usage, treat it as local so deliveryContext is preserved
+    // and post-restart wake messages are not misrouted.
+    return isNonLoopbackRemoteUrlConfigured(cfg) ? "remote" : undefined;
   }
   return validateGatewayUrlOverrideForAgentTools({
     cfg,
