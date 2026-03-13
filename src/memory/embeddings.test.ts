@@ -245,7 +245,8 @@ describe("embedding provider remote overrides", () => {
     await provider.embedQuery("hello");
 
     const { init } = readFirstFetchRequest(fetchMock);
-    expect(init?.body ? JSON.parse(String(init.body)) : {}).toMatchObject({
+    const requestBody = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+    expect(requestBody).toMatchObject({
       outputDimensionality: 768,
     });
   });
