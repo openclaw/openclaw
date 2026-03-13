@@ -1,7 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import { dropThinkingBlocks, isAssistantMessageWithContent } from "./thinking.js";
+import {
+  dropThinkingBlocks,
+  isAssistantMessageWithContent,
+  stripInvalidThinkingSignatures,
+} from "./thinking.js";
 
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
@@ -57,5 +61,129 @@ describe("dropThinkingBlocks", () => {
     const result = dropThinkingBlocks(messages);
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+  });
+});
+
+describe("stripInvalidThinkingSignatures", () => {
+  it("returns the original reference when no thinking blocks are present", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("returns the original reference when all thinking blocks have valid signatures", () => {
+    const validSig = "a".repeat(356); // Real signatures are 356-2344+ chars
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: validSig },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("strips thinking blocks with empty thinkingSignature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: "" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("strips thinking blocks with missing thinkingSignature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("strips thinking blocks with too-short thinkingSignature", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: "short" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("preserves assistant turn when all thinking blocks are invalid", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reasoning", thinkingSignature: "" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+  });
+
+  it("keeps valid thinking blocks while stripping invalid ones in same message", () => {
+    const validSig = "b".repeat(100);
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "valid reasoning", thinkingSignature: validSig },
+          { type: "thinking", thinking: "bad reasoning", thinkingSignature: "" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toHaveLength(2);
+    expect((assistant.content[0] as { type: string }).type).toBe("thinking");
+    expect((assistant.content[1] as { type: string }).type).toBe("text");
+  });
+
+  it("does not touch non-assistant messages", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    expect(result).toBe(messages);
   });
 });
