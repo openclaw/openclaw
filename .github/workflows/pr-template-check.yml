@@ -1,0 +1,149 @@
+name: PR template check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+concurrency:
+  group: pr-template-check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  template-check:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr?.body ?? "";
+            const issues = [];
+
+            // Helper: extract text between a heading and the next heading of same or higher level.
+            const sectionContent = (heading) => {
+              const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(
+                `(?:^|\\n)##\\s+${escaped}[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
+              );
+              const match = body.match(regex);
+              return match ? match[1] : "";
+            };
+
+            // Helper: check if text has meaningful content beyond template placeholders.
+            const hasContent = (text, placeholders) => {
+              let cleaned = text;
+              for (const ph of placeholders) {
+                cleaned = cleaned.replace(new RegExp(ph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), "");
+              }
+              cleaned = cleaned
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line && line !== "-" && line !== "- [ ]" && line !== "- [x]")
+                .join("");
+              return cleaned.length > 0;
+            };
+
+            // --- No body at all ---
+            if (!body.trim()) {
+              issues.push("PR description is empty. Please use the PR template.");
+            } else {
+              // --- Summary ---
+              const summaryText = sectionContent("Summary");
+              const summaryPlaceholders = [
+                "Describe the problem and fix in 2–5 bullets:",
+                "Describe the problem and fix in 2-5 bullets:",
+                "- Problem:",
+                "- Why it matters:",
+                "- What changed:",
+                "- What did NOT change (scope boundary):",
+              ];
+              if (!summaryText) {
+                issues.push("Missing **Summary** section.");
+              } else if (!hasContent(summaryText, summaryPlaceholders)) {
+                issues.push("**Summary** section appears to only contain template placeholders. Please fill in the details.");
+              }
+
+              // --- Change Type ---
+              const changeTypeText = sectionContent("Change Type");
+              if (!changeTypeText) {
+                issues.push("Missing **Change Type** section.");
+              } else if (!/\[x\]/i.test(changeTypeText)) {
+                issues.push("**Change Type** section has no checked boxes. Please select at least one change type.");
+              }
+
+              // --- Security Impact ---
+              const securityText = sectionContent("Security Impact");
+              const securityPlaceholders = [
+                "- New permissions/capabilities? (`Yes/No`)",
+                "- Secrets/tokens handling changed? (`Yes/No`)",
+                "- New/changed network calls? (`Yes/No`)",
+                "- Command/tool execution surface changed? (`Yes/No`)",
+                "- Data access scope changed? (`Yes/No`)",
+                "- If any `Yes`, explain risk + mitigation:",
+              ];
+              if (!securityText) {
+                issues.push("Missing **Security Impact** section.");
+              } else {
+                const yesNoPattern = /\b(yes|no)\b/i;
+                const lines = securityText.split("\n").filter((l) => l.trim());
+                const answered = lines.some((line) => {
+                  const isQuestionLine = /\?\s*\(/.test(line) || /capabilities\?|changed\?|calls\?|surface changed\?|scope changed\?/i.test(line);
+                  if (!isQuestionLine) {
+                    return false;
+                  }
+                  const afterQuestion = line.split("?").slice(1).join("?");
+                  // Strip template placeholder (`Yes/No`) so unedited lines don't false-positive.
+                  const stripped = afterQuestion.replace(/\(\s*`?Yes\s*\/\s*No`?\s*\)/gi, "");
+                  return yesNoPattern.test(stripped);
+                });
+                if (!answered && !hasContent(securityText, securityPlaceholders)) {
+                  issues.push("**Security Impact** section has no answers filled in. Please answer Yes/No for each question.");
+                }
+              }
+
+              // --- Human Verification ---
+              const humanVerifText = sectionContent("Human Verification");
+              const humanVerifPlaceholders = [
+                "What you personally verified (not just CI), and how:",
+                "- Verified scenarios:",
+                "- Edge cases checked:",
+                "- What you did **not** verify:",
+              ];
+              if (!humanVerifText) {
+                issues.push("Missing **Human Verification** section.");
+              } else if (!hasContent(humanVerifText, humanVerifPlaceholders)) {
+                issues.push("**Human Verification** section appears to only contain template placeholders. Please describe what you verified.");
+              }
+            }
+
+            // --- Report via job summary ---
+            const templateUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/.github/pull_request_template.md`;
+
+            if (issues.length === 0) {
+              await core.summary
+                .addHeading("PR Template Compliance", 2)
+                .addRaw("All required sections filled. The PR description includes all required template sections with content.")
+                .write();
+              core.info("PR template check passed.");
+            } else {
+              const lines = [
+                "The following PR template sections need attention:",
+                "",
+                ...issues.map((issue) => `- ${issue}`),
+                "",
+                `Please update your PR description. See the [PR template](${templateUrl}) for guidance.`,
+              ];
+              await core.summary
+                .addHeading("PR Template Compliance", 2)
+                .addRaw(`${issues.length} section${issues.length === 1 ? "" : "s"} need attention`)
+                .addBreak()
+                .addRaw(lines.join("\n"))
+                .write();
+              // Emit warnings so they appear as annotations on the PR.
+              for (const issue of issues) {
+                core.warning(issue, { title: "PR Template" });
+              }
+              core.info(`PR template issues found:\n${issues.join("\n")}`);
+            }
