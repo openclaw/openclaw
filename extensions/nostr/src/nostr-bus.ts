@@ -42,8 +42,7 @@ export const MAX_PLAINTEXT_LENGTH = 65536; // 64 KiB cap on decrypted messages
  * Derived from MAX_PLAINTEXT_LENGTH so both constants stay in sync.
  * @internal Exported for testing.
  */
-export const MAX_CIPHERTEXT_LENGTH =
-  Math.ceil(MAX_PLAINTEXT_LENGTH * (4 / 3)) + 128; // ~87 509 chars
+export const MAX_CIPHERTEXT_LENGTH = Math.ceil(MAX_PLAINTEXT_LENGTH * (4 / 3)) + 128; // ~87 509 chars
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
