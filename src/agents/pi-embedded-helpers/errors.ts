@@ -853,8 +853,10 @@ export function isToolUseIdMismatchError(raw: string): boolean {
     (lower.includes("tool_use_id") &&
       (lower.includes("does not match") ||
         lower.includes("mismatch") ||
-        lower.includes("unexpected"))) ||
-    lower.includes("unexpected tool_use_id found in tool_result")
+        lower.includes("unexpected") ||
+        lower.includes("found without"))) ||
+    lower.includes("unexpected tool_use_id found in tool_result") ||
+    lower.includes("tool_use ids found without tool_result")
   );
 }
 

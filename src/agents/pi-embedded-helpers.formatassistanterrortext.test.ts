@@ -183,4 +183,14 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(result).toContain("Tool call ID mismatch");
     expect(result).toContain("/reset");
   });
+
+  it("handles tool_use ids found without tool_result blocks", () => {
+    const msg = {
+      stopReason: "error",
+      errorMessage: "tool_use ids found without tool_result blocks",
+    } as AssistantMessage;
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Tool call ID mismatch");
+    expect(result).toContain("/reset");
+  });
 });
