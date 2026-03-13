@@ -1206,10 +1206,15 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenRe
 // Sync all overlays globally. The broadcast logic handles showing/hiding on correct tabs.
 chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
   const tab = tabs.get(tabId)
-  if (!relayIsLocked && tab && tab.state === 'connected') {
-    lockedTabId = tabId
-    // Sync the session ID (e.g. "cb-tab-1") so the gateway logs the preferred tab
-    void setLockOnRelay(false, tab.sessionId || null).catch(() => {})
+  if (!relayIsLocked) {
+    if (tab && tab.state === 'connected') {
+      lockedTabId = tabId
+      // Sync the session ID so the gateway logs show the focused tab
+      void setLockOnRelay(false, tab.sessionId || null).catch(() => {})
+    } else {
+      // Tab switch to an unattached tab — log it but don't update preferred tab
+      void setLockOnRelay(false, null).catch(() => {})
+    }
   }
   updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
   await syncAllOverlays()
@@ -1316,7 +1321,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
       } catch {}
 
-      const result = await setLockOnRelay(!!locked, activeTabId)
+        // Resolve to session ID string (e.g. "cb-tab-1") for meaningful gateway logs
+        const activeSessionId = activeTabId ? (tabs.get(activeTabId)?.sessionId || null) : null
+      const result = await setLockOnRelay(!!locked, activeSessionId)
       if (result) {
         updateAllBadges()
       }

@@ -647,8 +647,14 @@ export async function ensureChromeExtensionRelayServer(opts: {
                     tabIdHint = ` (preferred tab: [unexpected type=${typeof rawTabId} value=${JSON.stringify(rawTabId)}])`;
                   }
                 }
+                // Human-readable mode: LOCK = locked to one tab, TRACKING = follows active tab, UNLOCK = reset
+                const mode = currentLockTab
+                  ? "LOCK"
+                  : tabIdHint
+                    ? "TRACKING"
+                    : "UNLOCK";
                 console.log(
-                  `[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}${tabIdHint}`,
+                  `[browser/extension-relay] Relay on ${info.port} mode: ${mode}${tabIdHint}`,
                 );
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
