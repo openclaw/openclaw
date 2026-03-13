@@ -9,25 +9,28 @@ import { createSelfChatCache } from "./self-chat-cache.js";
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
+  type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
 
-  it("drops inbound messages when outbound message id matches echo cache", () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
-      return lookup.messageId === "42";
-    });
-
-    const decision = resolveIMessageInboundDecision({
+  function createInboundDecisionParams(
+    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+      message?: Partial<InboundDecisionParams["message"]>;
+    } = {},
+  ): InboundDecisionParams {
+    const { message: messageOverrides, ...restOverrides } = overrides;
+    const message = {
+      id: 42,
+      sender: "+15555550123",
+      text: "ok",
+      is_from_me: false,
+      is_group: false,
+      ...messageOverrides,
+    };
+    const messageText = restOverrides.messageText ?? message.text ?? "";
+    const bodyText = restOverrides.bodyText ?? messageText;
+    const baseParams: Omit<InboundDecisionParams, "message" | "messageText" | "bodyText"> = {
       cfg,
       accountId: "default",
-      message: {
-        id: 42,
-        sender: "+15555550123",
-        text: "Reasoning:\n_step_",
-        is_from_me: false,
-        is_group: false,
-      },
       opts: undefined,
-      messageText: "Reasoning:\n_step_",
-      bodyText: "Reasoning:\n_step_",
       allowFrom: [],
       groupAllowFrom: [],
       groupPolicy: "open",
@@ -35,8 +38,40 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       storeAllowFrom: [],
       historyLimit: 0,
       groupHistories: new Map(),
-      echoCache: { has: echoHas },
+      echoCache: undefined,
+      selfChatCache: undefined,
       logVerbose: undefined,
+    };
+    return {
+      ...baseParams,
+      ...restOverrides,
+      message,
+      messageText,
+      bodyText,
+    };
+  }
+
+  function resolveDecision(
+    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+      message?: Partial<InboundDecisionParams["message"]>;
+    } = {},
+  ) {
+    return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
+  }
+
+  it("drops inbound messages when outbound message id matches echo cache", () => {
+    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+      return lookup.messageId === "42";
+    });
+
+    const decision = resolveDecision({
+      message: {
+        id: 42,
+        text: "Reasoning:\n_step_",
+      },
+      messageText: "Reasoning:\n_step_",
+      bodyText: "Reasoning:\n_step_",
+      echoCache: { has: echoHas },
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
@@ -54,58 +89,29 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      resolveIMessageInboundDecision({
-        cfg,
-        accountId: "default",
+      resolveDecision({
         message: {
           id: 9641,
-          sender: "+15555550123",
           text: "Do you want to report this issue?",
           created_at: createdAt,
           is_from_me: true,
-          is_group: false,
         },
-        opts: undefined,
         messageText: "Do you want to report this issue?",
         bodyText: "Do you want to report this issue?",
-        allowFrom: [],
-        groupAllowFrom: [],
-        groupPolicy: "open",
-        dmPolicy: "open",
-        storeAllowFrom: [],
-        historyLimit: 0,
-        groupHistories: new Map(),
-        echoCache: undefined,
         selfChatCache,
-        logVerbose: undefined,
       }),
     ).toEqual({ kind: "drop", reason: "from me" });
 
     expect(
-      resolveIMessageInboundDecision({
-        cfg,
-        accountId: "default",
+      resolveDecision({
         message: {
           id: 9642,
-          sender: "+15555550123",
           text: "Do you want to report this issue?",
           created_at: createdAt,
-          is_from_me: false,
-          is_group: false,
         },
-        opts: undefined,
         messageText: "Do you want to report this issue?",
         bodyText: "Do you want to report this issue?",
-        allowFrom: [],
-        groupAllowFrom: [],
-        groupPolicy: "open",
-        dmPolicy: "open",
-        storeAllowFrom: [],
-        historyLimit: 0,
-        groupHistories: new Map(),
-        echoCache: undefined,
         selfChatCache,
-        logVerbose: undefined,
       }),
     ).toEqual({ kind: "drop", reason: "self-chat echo" });
   });
@@ -113,56 +119,23 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   it("does not drop same-text messages when created_at differs", () => {
     const selfChatCache = createSelfChatCache();
 
-    resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    resolveDecision({
       message: {
         id: 9641,
-        sender: "+15555550123",
         text: "ok",
         created_at: "2026-03-02T20:58:10.649Z",
         is_from_me: true,
-        is_group: false,
       },
-      opts: undefined,
-      messageText: "ok",
-      bodyText: "ok",
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
-      logVerbose: undefined,
     });
 
-    const decision = resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    const decision = resolveDecision({
       message: {
         id: 9642,
-        sender: "+15555550123",
         text: "ok",
         created_at: "2026-03-02T20:58:11.649Z",
-        is_from_me: false,
-        is_group: false,
       },
-      opts: undefined,
-      messageText: "ok",
-      bodyText: "ok",
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
-      logVerbose: undefined,
     });
 
     expect(decision.kind).toBe("dispatch");
@@ -183,59 +156,28 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      resolveIMessageInboundDecision({
+      resolveDecision({
         cfg: groupedCfg,
-        accountId: "default",
         message: {
           id: 9701,
           chat_id: 123,
-          sender: "+15555550123",
           text: "same text",
           created_at: createdAt,
           is_from_me: true,
-          is_group: false,
         },
-        opts: undefined,
-        messageText: "same text",
-        bodyText: "same text",
-        allowFrom: [],
-        groupAllowFrom: [],
-        groupPolicy: "open",
-        dmPolicy: "open",
-        storeAllowFrom: [],
-        historyLimit: 0,
-        groupHistories: new Map(),
-        echoCache: undefined,
         selfChatCache,
-        logVerbose: undefined,
       }),
     ).toEqual({ kind: "drop", reason: "from me" });
 
-    const decision = resolveIMessageInboundDecision({
+    const decision = resolveDecision({
       cfg: groupedCfg,
-      accountId: "default",
       message: {
         id: 9702,
         chat_id: 456,
-        sender: "+15555550123",
         text: "same text",
         created_at: createdAt,
-        is_from_me: false,
-        is_group: false,
       },
-      opts: undefined,
-      messageText: "same text",
-      bodyText: "same text",
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
-      logVerbose: undefined,
     });
 
     expect(decision.kind).toBe("dispatch");
@@ -246,59 +188,29 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
-      resolveIMessageInboundDecision({
-        cfg,
-        accountId: "default",
+      resolveDecision({
         message: {
           id: 9751,
           chat_id: 123,
-          sender: "+15555550123",
           text: "same text",
           created_at: createdAt,
           is_from_me: true,
           is_group: true,
         },
-        opts: undefined,
-        messageText: "same text",
-        bodyText: "same text",
-        allowFrom: [],
-        groupAllowFrom: [],
-        groupPolicy: "open",
-        dmPolicy: "open",
-        storeAllowFrom: [],
-        historyLimit: 0,
-        groupHistories: new Map(),
-        echoCache: undefined,
         selfChatCache,
-        logVerbose: undefined,
       }),
     ).toEqual({ kind: "drop", reason: "from me" });
 
-    const decision = resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    const decision = resolveDecision({
       message: {
         id: 9752,
         chat_id: 123,
         sender: "+15555550999",
         text: "same text",
         created_at: createdAt,
-        is_from_me: false,
         is_group: true,
       },
-      opts: undefined,
-      messageText: "same text",
-      bodyText: "same text",
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
-      logVerbose: undefined,
     });
 
     expect(decision.kind).toBe("dispatch");
@@ -310,54 +222,27 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const createdAt = "2026-03-02T20:58:10.649Z";
     const bodyText = "line-1\nline-2\t\u001b[31mred";
 
-    resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    resolveDecision({
       message: {
         id: 9801,
-        sender: "+15555550123",
         text: bodyText,
         created_at: createdAt,
         is_from_me: true,
-        is_group: false,
       },
-      opts: undefined,
       messageText: bodyText,
       bodyText,
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
       logVerbose,
     });
 
-    resolveIMessageInboundDecision({
-      cfg,
-      accountId: "default",
+    resolveDecision({
       message: {
         id: 9802,
-        sender: "+15555550123",
         text: bodyText,
         created_at: createdAt,
-        is_from_me: false,
-        is_group: false,
       },
-      opts: undefined,
       messageText: bodyText,
       bodyText,
-      allowFrom: [],
-      groupAllowFrom: [],
-      groupPolicy: "open",
-      dmPolicy: "open",
-      storeAllowFrom: [],
-      historyLimit: 0,
-      groupHistories: new Map(),
-      echoCache: undefined,
       selfChatCache,
       logVerbose,
     });
