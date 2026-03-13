@@ -109,6 +109,20 @@ describe("exec PATH login shell merge", () => {
     expect(value).toBe("exec");
   });
 
+  it("sets NO_DNA for host=gateway commands", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-no-dna", {
+      command: 'printf "%s" "${NO_DNA:-}"',
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("1");
+  });
+
   it("throws security violation when env.PATH is provided", async () => {
     if (isWin) {
       return;

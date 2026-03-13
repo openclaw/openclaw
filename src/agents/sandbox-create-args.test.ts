@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { NO_DNA_ENV_VALUE, OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 
@@ -120,6 +120,8 @@ describe("buildSandboxCreateArgs", () => {
         "LANG=C.UTF-8",
         "--env",
         `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+        "--env",
+        `NO_DNA=${NO_DNA_ENV_VALUE}`,
       ]),
     );
 
@@ -160,6 +162,8 @@ describe("buildSandboxCreateArgs", () => {
         "NODE_ENV=test",
         "--env",
         `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+        "--env",
+        `NO_DNA=${NO_DNA_ENV_VALUE}`,
       ]),
     );
   });

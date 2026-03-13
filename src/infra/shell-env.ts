@@ -13,7 +13,7 @@ let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const execEnv = sanitizeHostExecEnv({ baseEnv: env });
+  const execEnv = sanitizeHostExecEnv({ baseEnv: env, includeNoDna: false });
 
   // Startup-file resolution must stay pinned to the real user home.
   const home = os.homedir().trim();

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
+import { markOpenClawChildCommandEnv } from "../infra/openclaw-exec-env.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -111,7 +112,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         // and is gated behind an explicit in-session approval prompt.
         shell: true,
         cwd: getCwd(),
-        env: { ...env, OPENCLAW_SHELL: "tui-local" },
+        env: markOpenClawChildCommandEnv({ ...env, OPENCLAW_SHELL: "tui-local" }),
       });
 
       let stdout = "";
