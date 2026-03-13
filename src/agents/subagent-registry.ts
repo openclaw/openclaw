@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
@@ -169,14 +170,25 @@ async function notifyAnnounceGiveUp(entry: SubagentRunRecord): Promise<void> {
     const retryCount = entry.announceRetryCount ?? 0;
     const resultText = (entry.frozenResultText ?? "").trim();
 
+    // Format as an announce-style message so the requester agent can synthesise
+    // a proper user notification.  Runs reaching retry-limit have an existing
+    // session (missing-session-entry runs are pruned by the orphan path before
+    // reaching this code), so the LLM round-trip is safe and consistent with the
+    // normal announce mechanism.
     const notifyText = [
-      `⚠️ Subagent result delivery failed after ${retryCount} attempts.`,
-      `Task: ${taskLabel}`,
-      resultText ? `\nResult (recovered):\n${resultText}` : "\n(No result text was captured.)",
-    ].join("\n");
+      `[Subagent delivery failed] Task: ${taskLabel}`,
+      `Announce attempts exhausted after ${retryCount} retries.`,
+      resultText ? `Recovered result:\n${resultText}` : "(No result text was captured.)",
+      "Inform the user that the background task completed but its result could not be delivered automatically. Include the recovered result if present. Keep it concise.",
+    ].join("\n\n");
 
     const threadId =
       origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+
+    // Deterministic key derived from the run ID so concurrent give-up calls for
+    // the same run deduplicate correctly (avoids the "agent:undefined" collision
+    // that an absent key would produce in the gateway dedup layer).
+    const idempotencyKey = buildAnnounceIdempotencyKey(`${entry.runId}:giveup-notify`);
 
     await callGateway({
       method: "agent",
@@ -193,6 +205,7 @@ async function notifyAnnounceGiveUp(entry: SubagentRunRecord): Promise<void> {
           sourceSessionKey: entry.childSessionKey,
           sourceTool: "subagent_announce_giveup_notify",
         },
+        idempotencyKey,
       },
       timeoutMs: 30_000,
     });
