@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -212,19 +214,26 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         verticalAlignment = Alignment.CenterVertically,
       ) {
         // Speaker toggle
-        IconButton(
-          onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
-          modifier = Modifier.size(48.dp),
-          colors =
-            IconButtonDefaults.iconButtonColors(
-              containerColor = if (speakerEnabled) mobileSurface else mobileDangerSoft,
-            ),
-        ) {
-          Icon(
-            imageVector = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-            contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
-            modifier = Modifier.size(22.dp),
-            tint = if (speakerEnabled) mobileTextSecondary else mobileDanger,
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          IconButton(
+            onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+            modifier = Modifier.size(48.dp),
+            colors =
+              IconButtonDefaults.iconButtonColors(
+                containerColor = if (speakerEnabled) mobileSurface else mobileDangerSoft,
+              ),
+          ) {
+            Icon(
+              imageVector = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+              contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
+              modifier = Modifier.size(22.dp),
+              tint = if (speakerEnabled) mobileTextSecondary else mobileDanger,
+            )
+          }
+          Text(
+            if (speakerEnabled) "Speaker" else "Muted",
+            style = mobileCaption2,
+            color = if (speakerEnabled) mobileTextTertiary else mobileDanger,
           )
         }
 
@@ -278,8 +287,12 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           }
         }
 
-        // Invisible spacer to balance the row (same size as speaker button)
-        Box(modifier = Modifier.size(48.dp))
+        // Invisible spacer to balance the row (matches speaker column width)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+          Box(modifier = Modifier.size(48.dp))
+          Spacer(modifier = Modifier.height(4.dp))
+          Text("", style = mobileCaption2)
+        }
       }
 
       // Status + labels
@@ -292,11 +305,24 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           micEnabled -> "Listening"
           else -> "Mic off"
         }
-      Text(
-        "$gatewayStatus · $stateText",
-        style = mobileCaption1,
-        color = mobileTextSecondary,
-      )
+      val stateColor =
+        when {
+          micEnabled -> mobileSuccess
+          micIsSending -> mobileAccent
+          else -> mobileTextSecondary
+        }
+      Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (micEnabled) mobileSuccessSoft else mobileSurface,
+        border = BorderStroke(1.dp, if (micEnabled) mobileSuccess.copy(alpha = 0.3f) else mobileBorder),
+      ) {
+        Text(
+          "$gatewayStatus · $stateText",
+          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+          color = stateColor,
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+        )
+      }
 
       if (!hasMicPermission) {
         val showRationale =
