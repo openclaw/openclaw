@@ -181,6 +181,8 @@ Notes:
 
 - Replies always go back to Matrix.
 - DMs share the agent's main session; rooms map to group sessions.
+- Outbound Matrix targets can use a room ID, room alias, or full Matrix user ID. For DM-style sends such as heartbeats, keep `to` as `@user:server` unless you explicitly need a room override.
+- When a Matrix target is a user ID, OpenClaw ranks the joined DM candidates for that account using `m.direct`, SDK DM state, membership flags, and unnamed 2-member fallback rooms, then refreshes `m.direct` after a successful send.
 
 ## Access control (DMs)
 

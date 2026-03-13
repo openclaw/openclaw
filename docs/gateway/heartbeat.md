@@ -218,12 +218,12 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last`: deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
+  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `matrix` / `msteams` / `signal` / `slack` / `imessage`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
 - `directPolicy`: controls direct/DM delivery behavior:
   - `allow` (default): allow direct/DM heartbeat delivery.
   - `block`: suppress direct/DM delivery (`reason=dm-blocked`).
-- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp, a Telegram chat id, or a full Matrix user ID like `@owner:example.org`). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
 - `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
@@ -243,6 +243,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `session` only affects the run context; delivery is controlled by `target` and `to`.
 - To deliver to a specific channel/recipient, set `target` + `to`. With
   `target: "last"`, delivery uses the last external channel for that session.
+- For Matrix DM heartbeats, set `target: "matrix"` and keep `to` as the full Matrix user ID. OpenClaw resolves the best joined DM for that account and updates `m.direct` after successful sends, so you usually do not need the raw `!roomId:server`.
 - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no

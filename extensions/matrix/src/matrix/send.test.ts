@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 
+const resolveMatrixClientMock = vi.hoisted(() => vi.fn());
+const matrixLogWarnMock = vi.hoisted(() => vi.fn());
 vi.mock("music-metadata", () => ({
   // `resolveMediaDurationMs` lazily imports `music-metadata`; in tests we don't
   // need real duration parsing and the real module is expensive to load.
@@ -18,6 +20,11 @@ vi.mock("@vector-im/matrix-bot-sdk", () => ({
   },
   LogService: {
     setLogger: vi.fn(),
+    warn: matrixLogWarnMock,
+    error: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
   },
   MatrixClient: vi.fn(),
   SimpleFsStorageProvider: vi.fn(),
@@ -27,6 +34,15 @@ vi.mock("@vector-im/matrix-bot-sdk", () => ({
 vi.mock("./send-queue.js", () => ({
   enqueueSend: async <T>(_roomId: string, fn: () => Promise<T>) => await fn(),
 }));
+
+vi.mock("./send/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./send/client.js")>();
+  return {
+    ...actual,
+    resolveMatrixClient: (...args: Parameters<typeof actual.resolveMatrixClient>) =>
+      resolveMatrixClientMock(...args),
+  };
+});
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -79,6 +95,57 @@ const makeClient = () => {
   return { client, sendMessage, uploadContent };
 };
 
+const makeMatrixSendError = (message: string, statusCode: number, errcode: string) => {
+  const err = new Error(message) as Error & {
+    statusCode?: number;
+    errcode?: string;
+  };
+  err.statusCode = statusCode;
+  err.errcode = errcode;
+  return err;
+};
+
+const makeUserTargetClient = (opts?: {
+  directContent?: Record<string, string[] | undefined>;
+  joinedRooms?: string[];
+  membersByRoom?: Record<string, string[]>;
+  roomStateEvents?: Record<string, Record<string, unknown>>;
+  sendMessage?: ReturnType<typeof vi.fn>;
+}) => {
+  const sendMessage = opts?.sendMessage ?? vi.fn().mockResolvedValue("evt1");
+  const client = {
+    sendMessage,
+    uploadContent: vi.fn().mockResolvedValue("mxc://example/file"),
+    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    getAccountData: vi.fn().mockResolvedValue(opts?.directContent ?? {}),
+    getJoinedRooms: vi.fn().mockResolvedValue(opts?.joinedRooms ?? []),
+    getJoinedRoomMembers: vi
+      .fn()
+      .mockImplementation(async (roomId: string) => opts?.membersByRoom?.[roomId] ?? []),
+    getRoomStateEvent: vi
+      .fn()
+      .mockImplementation(async (roomId: string, eventType: string, stateKey: string) => {
+        const key = `${roomId}|${eventType}|${stateKey}`;
+        const event = opts?.roomStateEvents?.[key];
+        if (event === undefined) {
+          const err = new Error(`missing state ${key}`) as Error & {
+            errcode?: string;
+            statusCode?: number;
+          };
+          err.errcode = "M_NOT_FOUND";
+          err.statusCode = 404;
+          throw err;
+        }
+        return event;
+      }),
+    dms: {
+      update: vi.fn().mockResolvedValue(undefined),
+      isDm: vi.fn().mockImplementation(() => false),
+    },
+  } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
+  return { client, sendMessage };
+};
+
 beforeAll(async () => {
   setMatrixRuntime(runtimeStub);
   ({ sendMessageMatrix } = await import("./send.js"));
@@ -88,6 +155,13 @@ beforeAll(async () => {
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    matrixLogWarnMock.mockReset();
+    resolveMatrixClientMock.mockImplementation(async (opts) => {
+      if (!opts.client) {
+        throw new Error("test expected a Matrix client");
+      }
+      return { client: opts.client, stopOnDone: false };
+    });
     runtimeLoadConfigMock.mockReset();
     runtimeLoadConfigMock.mockReturnValue({});
     mediaKindFromMimeMock.mockReturnValue("image");
@@ -213,6 +287,218 @@ describe("sendMessageMatrix media", () => {
     expect(mediaContent.msgtype).toBe("m.audio");
     expect(mediaContent.body).toBe("voice caption");
     expect(mediaContent["org.matrix.msc3245.voice"]).toBeUndefined();
+  });
+
+  it("re-resolves Matrix user targets once after a stale cached room send fails", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const activeRoom = "!active:example.org";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(makeMatrixSendError("stale room send failed", 404, "M_NOT_FOUND"))
+      .mockResolvedValueOnce("evt2");
+    const { client } = makeUserTargetClient({
+      directContent: {
+        [userId]: [staleRoom],
+      },
+      joinedRooms: [staleRoom],
+      membersByRoom: {
+        [staleRoom]: ["@bot:example.org", userId],
+        [activeRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${staleRoom}|m.room.member|${userId}`]: {},
+        [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+        [`${staleRoom}|m.room.name|`]: { name: "Old named room" },
+        [`${activeRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${activeRoom}|m.room.member|@bot:example.org`]: {},
+      },
+      sendMessage,
+    });
+
+    const { resolveMatrixRoomId } = await import("./send/targets.js");
+    await resolveMatrixRoomId(client, userId);
+    vi.mocked(client.getAccountData).mockResolvedValue({
+      [userId]: [staleRoom, activeRoom],
+    });
+    vi.mocked(client.getJoinedRooms).mockResolvedValue([staleRoom, activeRoom]);
+
+    const result = await sendMessageMatrix(userId, "hello", { client });
+
+    expect(result.roomId).toBe(activeRoom);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(staleRoom);
+    expect(sendMessage.mock.calls[1]?.[0]).toBe(activeRoom);
+    expect(matrixLogWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not retry generic Matrix user-target send failures", async () => {
+    const userId = "@user:example.org";
+    const activeRoom = "!active:example.org";
+    const sendMessage = vi.fn().mockRejectedValueOnce(new Error("network down"));
+    const { client } = makeUserTargetClient({
+      directContent: {
+        [userId]: [activeRoom],
+      },
+      joinedRooms: [activeRoom],
+      membersByRoom: {
+        [activeRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${activeRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${activeRoom}|m.room.member|@bot:example.org`]: {},
+      },
+      sendMessage,
+    });
+
+    await expect(sendMessageMatrix(userId, "hello", { client })).rejects.toThrow("network down");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(activeRoom);
+    expect(matrixLogWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replay already-sent chunks when a later Matrix user-target send fails", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const activeRoom = "!active:example.org";
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce("evt1")
+      .mockRejectedValueOnce(makeMatrixSendError("second chunk failed", 404, "M_NOT_FOUND"));
+    const { client } = makeUserTargetClient({
+      directContent: {
+        [userId]: [staleRoom],
+      },
+      joinedRooms: [staleRoom],
+      membersByRoom: {
+        [staleRoom]: ["@bot:example.org", userId],
+        [activeRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${staleRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+        [`${activeRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${activeRoom}|m.room.member|@bot:example.org`]: {},
+      },
+      sendMessage,
+    });
+
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = () => ["hello", "again"];
+
+    await expect(sendMessageMatrix(userId, "hello again", { client })).rejects.toThrow(
+      "second chunk failed",
+    );
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(staleRoom);
+    expect(sendMessage.mock.calls[1]?.[0]).toBe(staleRoom);
+    expect(matrixLogWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("logs and clears cache again when self-heal still fails, then re-resolves on the next invocation", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const failingFreshRoom = "!failing:example.org";
+    const recoveredRoom = "!recovered:example.org";
+    const directContent: Record<string, string[] | undefined> = {
+      [userId]: [staleRoom, failingFreshRoom],
+    };
+    const joinedRooms = [staleRoom, failingFreshRoom];
+    const membersByRoom: Record<string, string[]> = {
+      [staleRoom]: ["@bot:example.org", userId],
+      [failingFreshRoom]: ["@bot:example.org", userId],
+      [recoveredRoom]: ["@bot:example.org", userId],
+    };
+    const roomStateEvents: Record<string, Record<string, unknown>> = {
+      [`${staleRoom}|m.room.member|${userId}`]: {},
+      [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+      [`${staleRoom}|m.room.name|`]: { name: "Old named room" },
+      [`${failingFreshRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${failingFreshRoom}|m.room.member|@bot:example.org`]: {},
+      [`${recoveredRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${recoveredRoom}|m.room.member|@bot:example.org`]: {},
+    };
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(makeMatrixSendError("stale room send failed", 404, "M_NOT_FOUND"))
+      .mockRejectedValueOnce(makeMatrixSendError("fresh room send failed", 404, "M_NOT_FOUND"))
+      .mockResolvedValueOnce("evt4");
+    const { client } = makeUserTargetClient({
+      directContent,
+      joinedRooms: [staleRoom],
+      membersByRoom,
+      roomStateEvents,
+      sendMessage,
+    });
+
+    const { resolveMatrixRoomId } = await import("./send/targets.js");
+    await resolveMatrixRoomId(client, userId);
+    vi.mocked(client.getJoinedRooms).mockResolvedValue(joinedRooms);
+
+    await expect(sendMessageMatrix(userId, "hello", { client })).rejects.toThrow(
+      "fresh room send failed",
+    );
+
+    directContent[userId] = [staleRoom, recoveredRoom];
+    joinedRooms.splice(0, joinedRooms.length, staleRoom, recoveredRoom);
+
+    const recovered = await sendMessageMatrix(userId, "hello", { client });
+
+    expect(recovered.roomId).toBe(recoveredRoom);
+    expect(sendMessage.mock.calls[2]?.[0]).toBe(recoveredRoom);
+  });
+
+  it("keeps the refreshed DM cache when a retry already sent content before failing", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const refreshedRoom = "!fresh:example.org";
+    const directContent: Record<string, string[] | undefined> = {
+      [userId]: [staleRoom, refreshedRoom],
+    };
+    const joinedRooms = [staleRoom, refreshedRoom];
+    const membersByRoom: Record<string, string[]> = {
+      [staleRoom]: ["@bot:example.org", userId],
+      [refreshedRoom]: ["@bot:example.org", userId],
+    };
+    const roomStateEvents: Record<string, Record<string, unknown>> = {
+      [`${staleRoom}|m.room.member|${userId}`]: {},
+      [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+      [`${staleRoom}|m.room.name|`]: { name: "Old named room" },
+      [`${refreshedRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${refreshedRoom}|m.room.member|@bot:example.org`]: {},
+    };
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(makeMatrixSendError("stale room send failed", 404, "M_NOT_FOUND"))
+      .mockResolvedValueOnce("evt1")
+      .mockRejectedValueOnce(new Error("later chunk failed"))
+      .mockResolvedValueOnce("evt2");
+    const { client } = makeUserTargetClient({
+      directContent,
+      joinedRooms,
+      membersByRoom,
+      roomStateEvents,
+      sendMessage,
+    });
+
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = () => ["hello", "again"];
+
+    await expect(sendMessageMatrix(userId, "hello again", { client })).rejects.toThrow(
+      "later chunk failed",
+    );
+
+    directContent[userId] = [staleRoom];
+    joinedRooms.splice(0, joinedRooms.length, staleRoom);
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = (text: string) => (text ? [text] : []);
+
+    const retried = await sendMessageMatrix(userId, "hello", { client });
+
+    expect(retried.roomId).toBe(refreshedRoom);
+    expect(sendMessage.mock.calls[3]?.[0]).toBe(refreshedRoom);
+  });
+
+  afterEach(() => {
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = (text: string) => (text ? [text] : []);
   });
 });
 
