@@ -85,6 +85,13 @@ Implications:
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
 
+Important trust note:
+
+- `plugins.allow` trusts **plugin ids**, not source provenance.
+- A workspace plugin with the same id as a bundled plugin intentionally shadows
+  the bundled copy when that workspace plugin is enabled/allowlisted.
+- This is normal and useful for local development, patch testing, and hotfixes.
+
 ## Available plugins (official)
 
 - Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
@@ -363,6 +370,14 @@ manifest.
 If multiple plugins resolve to the same id, the first match in the order above
 wins and lower-precedence copies are ignored.
 
+That means:
+
+- workspace plugins intentionally shadow bundled plugins with the same id
+- `plugins.allow: ["foo"]` authorizes the active `foo` plugin by id, even when
+  the active copy comes from the workspace instead of the bundled extension root
+- if you need stricter provenance control, use explicit install/load paths and
+  inspect the resolved plugin source before enabling it
+
 ### Enablement rules
 
 Enablement is resolved after discovery:
@@ -372,6 +387,7 @@ Enablement is resolved after discovery:
 - `plugins.entries.<id>.enabled: false` disables that plugin
 - workspace-origin plugins are disabled by default
 - allowlists restrict the active set when `plugins.allow` is non-empty
+- allowlists are **id-based**, not source-based
 - bundled plugins are disabled by default unless:
   - the bundled id is in the built-in default-on set, or
   - you explicitly enable it, or
@@ -1322,6 +1338,8 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.
+- Remember that `plugins.allow` is id-based, so an enabled workspace plugin can
+  intentionally shadow a bundled plugin with the same id.
 - Restart the Gateway after changes.
 
 ## Testing plugins
