@@ -8,6 +8,10 @@ type RepairReport = {
   reason?: string;
 };
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 function isSessionHeader(entry: unknown): entry is { type: string; id: string } {
   if (!entry || typeof entry !== "object") {
     return false;
@@ -34,7 +38,9 @@ export async function repairSessionFileIfNeeded(params: {
       return { repaired: false, droppedLines: 0, reason: "missing session file" };
     }
     const reason = `failed to read session file: ${err instanceof Error ? err.message : "unknown error"}`;
-    params.warn?.(`session file repair skipped: ${reason} (${path.basename(sessionFile)})`);
+    params.warn?.(
+      `session file repair skipped: ${reason} (${basenameAcrossSeparators(sessionFile)})`,
+    );
     return { repaired: false, droppedLines: 0, reason };
   }
 
@@ -60,7 +66,7 @@ export async function repairSessionFileIfNeeded(params: {
 
   if (!isSessionHeader(entries[0])) {
     params.warn?.(
-      `session file repair skipped: invalid session header (${path.basename(sessionFile)})`,
+      `session file repair skipped: invalid session header (${basenameAcrossSeparators(sessionFile)})`,
     );
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
@@ -88,7 +94,7 @@ export async function repairSessionFileIfNeeded(params: {
       await fs.unlink(tmpPath);
     } catch (cleanupErr) {
       params.warn?.(
-        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
+        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${basenameAcrossSeparators(
           tmpPath,
         )})`,
       );
@@ -101,7 +107,7 @@ export async function repairSessionFileIfNeeded(params: {
   }
 
   params.warn?.(
-    `session file repaired: dropped ${droppedLines} malformed line(s) (${path.basename(
+    `session file repaired: dropped ${droppedLines} malformed line(s) (${basenameAcrossSeparators(
       sessionFile,
     )})`,
   );

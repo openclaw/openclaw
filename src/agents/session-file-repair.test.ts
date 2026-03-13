@@ -87,6 +87,27 @@ describe("repairSessionFileIfNeeded", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("invalid session header");
   });
 
+  it("normalizes Windows-style session file names in warnings", async () => {
+    const { dir } = await createTempSessionPath();
+    const file = path.join(dir, "C:\\temp\\session.jsonl");
+    const badHeader = {
+      type: "message",
+      id: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hello" },
+    };
+    const content = `${JSON.stringify(badHeader)}\n{"type":"message"`;
+    await fs.writeFile(file, content, "utf-8");
+
+    const warn = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+
+    expect(result.repaired).toBe(false);
+    expect(result.reason).toBe("invalid session header");
+    expect(warn.mock.calls[0]?.[0]).toContain("session.jsonl");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("C:\\temp\\");
+  });
+
   it("returns a detailed reason when read errors are not ENOENT", async () => {
     const { dir } = await createTempSessionPath();
     const warn = vi.fn();
