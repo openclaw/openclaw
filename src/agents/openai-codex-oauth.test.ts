@@ -142,4 +142,39 @@ describe("loginOpenAICodexOAuthFlow", () => {
     expect(directFetch).toHaveBeenCalledOnce();
     expect(creds.accountId).toBe("acct_manual");
   });
+
+  it("prefers a valid localhost callback over a concurrent manual input failure", async () => {
+    const directFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        access_token: encodeJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct_callback" },
+        }),
+        refresh_token: "refresh-token",
+        expires_in: 3600,
+      }),
+    }));
+
+    const creds = await loginOpenAICodexOAuthFlow({
+      onAuth: async ({ url }) => {
+        const authUrl = new URL(url);
+        const state = authUrl.searchParams.get("state");
+        expect(state).toBeTruthy();
+        setTimeout(() => {
+          void fetch(`http://127.0.0.1:1455/auth/callback?code=browser-code&state=${state}`);
+        }, 20);
+      },
+      onPrompt: async () => {
+        throw new Error("onPrompt should not be used when callback wins");
+      },
+      onManualCodeInput: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        throw new Error("manual input dismissed");
+      },
+      fetchFn: directFetch as unknown as typeof fetch,
+    });
+
+    expect(directFetch).toHaveBeenCalledOnce();
+    expect(creds.accountId).toBe("acct_callback");
+  });
 });

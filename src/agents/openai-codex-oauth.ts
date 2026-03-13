@@ -345,11 +345,10 @@ export async function loginOpenAICodexOAuthFlow(
           server.cancelWait();
         });
       const result = await server.waitForCode();
-      if (manualError) {
-        throw manualError;
-      }
       if (result?.code) {
         code = result.code;
+      } else if (manualError) {
+        throw manualError;
       } else if (manualCode) {
         const parsed = parseAuthorizationInput(manualCode);
         if (parsed.state && parsed.state !== state) {
