@@ -81,6 +81,22 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+function shouldAttachDeviceIdentityForGatewayCall(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  if (!(params.token || params.password)) {
+    return true;
+  }
+  try {
+    const parsed = new URL(params.url);
+    return !["127.0.0.1", "::1", "localhost"].includes(parsed.hostname);
+  } catch {
+    return true;
+  }
+}
+
 export type ExplicitGatewayAuth = {
   token?: string;
   password?: string;
@@ -818,7 +834,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: loadOrCreateDeviceIdentity(),
+      deviceIdentity: shouldAttachDeviceIdentityForGatewayCall({ url, token, password })
+        ? loadOrCreateDeviceIdentity()
+        : undefined,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
