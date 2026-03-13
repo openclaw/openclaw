@@ -20,6 +20,7 @@ import {
   type UpdateChannel,
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import { spawnDetachedUpdate } from "./update-detached-win32.js";
 import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
@@ -48,6 +49,13 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  /**
+   * When set, the update has been delegated to a detached helper process.
+   * The Gateway should shut down so the helper can replace locked files,
+   * then the helper will restart the Gateway via Scheduled Task.
+   * The result of the detached install is written to this path.
+   */
+  detachedResultPath?: string;
 };
 
 type CommandRunner = (
@@ -880,6 +888,59 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       tag,
       env: globalInstallEnv,
     });
+
+    // On Windows, npm cannot replace files that are locked by the running
+    // Gateway process (EBUSY).  Delegate the install to a detached helper
+    // that waits for the Gateway to exit, performs `npm i -g`, then relaunches
+    // the Gateway via its Scheduled Task.
+    if (process.platform === "win32") {
+      const installArgv = globalInstallArgs(globalManager, spec);
+      const detached = spawnDetachedUpdate({
+        installArgv,
+        env: globalInstallEnv as NodeJS.ProcessEnv | undefined,
+      });
+      if (!detached.ok) {
+        steps.push({
+          name: "detached update spawn",
+          command: installArgv.join(" "),
+          cwd: pkgRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: detached.detail ?? "failed to spawn detached update helper",
+        });
+        return {
+          status: "error",
+          mode: globalManager,
+          root: pkgRoot,
+          reason: "detached-update-spawn-failed",
+          before: { version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      steps.push({
+        name: "detached update (win32)",
+        command: installArgv.join(" "),
+        cwd: pkgRoot,
+        durationMs: 0,
+        exitCode: 0,
+        stdoutTail: `Delegated to detached helper. Result will be written to ${detached.resultPath}`,
+      });
+
+      // Return status "ok" so the caller schedules a graceful shutdown.
+      // The detached script handles the actual install + restart.
+      return {
+        status: "ok",
+        mode: globalManager,
+        root: pkgRoot,
+        before: { version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+        detachedResultPath: detached.resultPath,
+      };
+    }
+
     const updateStep = await runStep({
       runCommand,
       name: "global update",

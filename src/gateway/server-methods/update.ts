@@ -92,6 +92,37 @@ export const updateHandlers: GatewayRequestHandlers = {
       sentinelPath = null;
     }
 
+    // When the update was delegated to a detached helper (Windows EBUSY workaround),
+    // the Gateway must fully exit so the helper can replace locked files.
+    // The detached helper will restart the Gateway via Scheduled Task after install.
+    // Use a hard process.exit() after a brief delay to let the response flush.
+    if (result.detachedResultPath) {
+      context?.logGateway?.info(
+        `update.run delegated to detached helper ${formatControlPlaneActor(actor)} resultPath=${result.detachedResultPath}`,
+      );
+
+      respond(
+        true,
+        {
+          ok: true,
+          result,
+          restart: { ok: true, method: "detached-win32", delayMs: restartDelayMs },
+          sentinel: { path: sentinelPath, payload },
+        },
+        undefined,
+      );
+
+      // Give the response time to flush, then exit so the detached helper can proceed.
+      setTimeout(
+        () => {
+          context?.logGateway?.info("Exiting for detached Windows update...");
+          process.exit(0);
+        },
+        Math.max(restartDelayMs, 2000),
+      );
+      return;
+    }
+
     // Only restart the gateway when the update actually succeeded.
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
