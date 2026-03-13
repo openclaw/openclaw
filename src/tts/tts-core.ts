@@ -135,6 +135,16 @@ export function parseTtsDirectives(
     return "";
   });
 
+  // Match bare [[tts]] tag (no colon/args) as a simple TTS trigger.
+  // The system prompt tells AI to use [[tts]] to signal tagged-mode TTS,
+  // but the directive regex below requires a colon after "tts". This
+  // dedicated pass strips the bare tag and sets hasDirective = true.
+  const bareTtsRegex = /\[\[tts\]\]/gi;
+  cleanedText = cleanedText.replace(bareTtsRegex, () => {
+    hasDirective = true;
+    return "";
+  });
+
   const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
