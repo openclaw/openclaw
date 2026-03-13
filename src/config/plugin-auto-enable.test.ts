@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import {
   clearPluginManifestRegistryCache,
@@ -11,15 +11,34 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 const tempDirs: string[] = [];
+const previousUmask = process.umask(0o022);
+
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdtempSafe(prefix: string) {
+  const dir = fs.mkdtempSync(prefix);
+  chmodSafeDir(dir);
+  return dir;
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
 
 function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
+  const dir = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-auto-enable-"));
   tempDirs.push(dir);
   return dir;
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
-  fs.mkdirSync(params.rootDir, { recursive: true });
+  mkdirSafe(params.rootDir);
   fs.writeFileSync(
     path.join(params.rootDir, "openclaw.plugin.json"),
     JSON.stringify(
@@ -105,6 +124,10 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+afterAll(() => {
+  process.umask(previousUmask);
 });
 
 describe("applyPluginAutoEnable", () => {
@@ -214,6 +237,7 @@ describe("applyPluginAutoEnable", () => {
       },
       env: {
         ...process.env,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
         CLAWDBOT_STATE_DIR: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
@@ -227,7 +251,7 @@ describe("applyPluginAutoEnable", () => {
   it("uses env-scoped catalog metadata for preferOver auto-enable decisions", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    mkdirSafe(path.dirname(catalogPath));
     fs.writeFileSync(
       catalogPath,
       JSON.stringify({
@@ -439,6 +463,7 @@ describe("applyPluginAutoEnable", () => {
         config: makeApnChannelConfig(),
         env: {
           ...process.env,
+          OPENCLAW_HOME: undefined,
           OPENCLAW_STATE_DIR: stateDir,
           CLAWDBOT_STATE_DIR: undefined,
           OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
