@@ -1241,6 +1241,64 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
   });
+
+  it("suppresses internal tool-trace envelopes", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.memory_search comment json",
+          '{"query":"incident","maxResults":3}',
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
+  });
+
+  it("suppresses NO_REPLY reasoning-style leakage text", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: [
+          "NO_REPLY",
+          "user continues cron spam maybe expects no_reply unless new.",
+          "should output NO_REPLY if exact result already delivered in this same turn.",
+          "Need include reply tag first token.",
+          "Final.",
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
+  });
+
+  it("does not suppress normal technical discussion messages", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: "Can you explain how function_call works in the OpenAI API and when to use functions.search?",
+      },
+    ]);
+    expect(normalized).toEqual([
+      {
+        text: "Can you explain how function_call works in the OpenAI API and when to use functions.search?",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        channelData: undefined,
+      },
+    ]);
+  });
+
+  it("does not suppress benign mentions of NO_REPLY", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      { text: "In this protocol, NO_REPLY means skip auto-response output." },
+    ]);
+    expect(normalized).toEqual([
+      {
+        text: "In this protocol, NO_REPLY means skip auto-response output.",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        channelData: undefined,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -1256,6 +1314,42 @@ describe("normalizeOutboundPayloads", () => {
       { text: "final answer" },
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
+  });
+
+  it("suppresses internal tool-trace envelopes", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.memory_search մեկնաբանություն json",
+          '{"query":"recent incident internal tool trace leaked into user chat happened today","maxResults":3}',
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
+  });
+
+  it("suppresses NO_REPLY reasoning-style leakage text", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: [
+          "NO_REPLY",
+          "should output NO_REPLY if exact result already delivered in this same turn.",
+          "This is a system instruction checkpoint.",
+          "Final.",
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
+  });
+
+  it("does not suppress normal messages mentioning functions.* identifiers", () => {
+    const normalized = normalizeOutboundPayloads([
+      { text: "The functions.memory_search endpoint is unavailable right now." },
+    ]);
+    expect(normalized).toEqual([
+      { text: "The functions.memory_search endpoint is unavailable right now.", mediaUrls: [] },
+    ]);
   });
 });
 

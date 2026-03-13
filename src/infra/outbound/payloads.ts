@@ -18,6 +18,46 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
+const INTERNAL_TRACE_ENVELOPE_PATTERNS = {
+  noReply: /(?:^|\n)\s*NO_REPLY\b/i,
+  assistantToFunctions: /(?:^|\n)[^\n]*\bassistant\s+to=functions\.[a-z0-9_]+\b/i,
+} as const;
+
+const INTERNAL_TRACE_REASONING_MARKERS: ReadonlyArray<RegExp> = [
+  /\bshould\s+output\s+no_reply\b/i,
+  /\b(system\s+message|system\s+instruction)\b/i,
+  /\bneed\s+include\s+reply\s+tag\b/i,
+  /\bexact\s+result\s+already\s+delivered\b/i,
+  /(?:^|\n)\s*Final\.\s*(?:$|\n)/im,
+];
+
+function isNoReplyReasoningLeak(text: string): boolean {
+  if (!INTERNAL_TRACE_ENVELOPE_PATTERNS.noReply.test(text)) {
+    return false;
+  }
+  let matchedMarkers = 0;
+  for (const marker of INTERNAL_TRACE_REASONING_MARKERS) {
+    if (marker.test(text)) {
+      matchedMarkers += 1;
+      if (matchedMarkers >= 2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isInternalTraceLeakText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return (
+    (INTERNAL_TRACE_ENVELOPE_PATTERNS.noReply.test(text) &&
+      INTERNAL_TRACE_ENVELOPE_PATTERNS.assistantToFunctions.test(text)) ||
+    isNoReplyReasoningLeak(text)
+  );
+}
+
 function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -67,6 +107,9 @@ export function normalizeReplyPayloadsForDelivery(
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
+    if (isInternalTraceLeakText(next.text)) {
+      return [];
+    }
     if (parsed.isSilent && mergedMedia.length === 0) {
       continue;
     }
