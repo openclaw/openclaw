@@ -26,4 +26,14 @@ describe("shared/process-scoped-map", () => {
 
     expect(second).not.toBe(first);
   });
+
+  it("reuses a prepopulated process map without replacing it", () => {
+    const existing = new Map<string, number>([["a", 1]]);
+    (process as unknown as Record<symbol, unknown>)[MAP_KEY] = existing;
+
+    const resolved = resolveProcessScopedMap<number>(MAP_KEY);
+
+    expect(resolved).toBe(existing);
+    expect(resolved.get("a")).toBe(1);
+  });
 });
