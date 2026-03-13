@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+] as const;
+
+const ORIGINAL_PROXY_ENV = Object.fromEntries(
+  PROXY_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
+
 const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, getLastAgent } =
   vi.hoisted(() => {
     const undiciFetch = vi.fn();
@@ -40,6 +53,22 @@ vi.mock("undici", () => ({
 
 import { makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
 
+function clearProxyEnv(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+function restoreProxyEnv(): void {
+  clearProxyEnv();
+  for (const key of PROXY_ENV_KEYS) {
+    const value = ORIGINAL_PROXY_ENV[key];
+    if (typeof value === "string") {
+      process.env[key] = value;
+    }
+  }
+}
+
 describe("makeProxyFetch", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -60,8 +89,15 @@ describe("makeProxyFetch", () => {
 });
 
 describe("resolveProxyFetchFromEnv", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    clearProxyEnv();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    restoreProxyEnv();
+  });
 
   it("returns undefined when no proxy env vars are set", () => {
     expect(resolveProxyFetchFromEnv({})).toBeUndefined();
