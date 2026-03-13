@@ -407,9 +407,9 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry on 400 validation error", async () => {
-    const validationErr = Object.assign(new Error("bad request"), { status: 400 });
-    sendMessageDiscordMock.mockRejectedValueOnce(validationErr);
+  it("does not retry on 403 permission error", async () => {
+    const forbiddenErr = Object.assign(new Error("forbidden"), { status: 403 });
+    sendMessageDiscordMock.mockRejectedValueOnce(forbiddenErr);
 
     await expect(
       deliverDiscordReply({
@@ -420,7 +420,7 @@ describe("deliverDiscordReply", () => {
         cfg,
         textLimit: 2000,
       }),
-    ).rejects.toThrow("bad request");
+    ).rejects.toThrow("forbidden");
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
   });

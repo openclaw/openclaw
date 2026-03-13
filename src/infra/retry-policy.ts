@@ -69,8 +69,9 @@ export function isRetryableDiscordNetworkError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  if (typeof (err as { code?: unknown }).code === "string") {
-    return DISCORD_RETRYABLE_ERROR_CODES.has((err as { code: string }).code);
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string" && DISCORD_RETRYABLE_ERROR_CODES.has(code)) {
+    return true;
   }
   return err instanceof TypeError && DISCORD_NETWORK_ERROR_RE.test(err.message);
 }
@@ -88,7 +89,7 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError || isRetryableDiscordNetworkError(err),
+      shouldRetry: (err) => err instanceof RateLimitError,
       retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
       onRetry: params.verbose
         ? (info) => {
