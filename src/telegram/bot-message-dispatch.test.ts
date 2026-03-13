@@ -244,6 +244,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("passes the configured session store path when mirroring Telegram replies", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello from Telegram" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:main",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "main",
+          accountId: "default",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+      cfg: {
+        session: {
+          store: "custom-session-store.json",
+        },
+      },
+      streamMode: "off",
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith("custom-session-store.json", {
+      agentId: "main",
+    });
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      text: "Hello from Telegram",
+      mediaUrls: undefined,
+      storePath: "/tmp/sessions.json",
+    });
+  });
+
   it("mirrors preview-finalized Telegram replies to the session transcript", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -116,6 +116,7 @@ async function mirrorTelegramReplyToSessionTranscript(params: {
   sessionKey?: string;
   agentId: string;
   payload: ReplyPayload;
+  storePath?: string;
 }): Promise<void> {
   try {
     const sessionKey = params.sessionKey?.trim();
@@ -129,6 +130,7 @@ async function mirrorTelegramReplyToSessionTranscript(params: {
       mediaUrls:
         params.payload.mediaUrls ??
         (params.payload.mediaUrl ? [params.payload.mediaUrl] : undefined),
+      ...(params.storePath ? { storePath: params.storePath } : {}),
     });
     if (!mirrored.ok) {
       logVerbose(
@@ -490,6 +492,9 @@ export const dispatchTelegramMessage = async ({
     linkPreview: telegramCfg.linkPreview,
     replyQuoteText,
   };
+  const configuredSessionStorePath = cfg.session?.store
+    ? resolveStorePath(cfg.session.store, { agentId: route.agentId })
+    : undefined;
   const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload => {
     if (payload.text === text) {
       return payload;
@@ -502,6 +507,7 @@ export const dispatchTelegramMessage = async ({
         sessionKey: ctxPayload.SessionKey,
         agentId: route.agentId,
         payload: mirroredPayload,
+        storePath: configuredSessionStorePath,
       });
     }
   };
@@ -901,6 +907,7 @@ export const dispatchTelegramMessage = async ({
         sessionKey: ctxPayload.SessionKey,
         agentId: route.agentId,
         payload: fallbackPayload,
+        storePath: configuredSessionStorePath,
       });
     }
   }
