@@ -1,3 +1,7 @@
+import {
+  resolveConfiguredAcpRoute,
+  ensureConfiguredAcpRouteReady,
+} from "../../acp/persistent-bindings.route.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
@@ -146,6 +150,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     routing: {
       buildAgentSessionKey,
       resolveAgentRoute,
+      resolveConfiguredAcpRoute,
+      ensureConfiguredAcpRouteReady,
     },
     pairing: {
       buildPairingReply,
