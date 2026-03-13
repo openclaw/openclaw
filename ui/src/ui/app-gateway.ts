@@ -184,6 +184,14 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function isProtocolMismatchClose(code: number, reason: string): boolean {
+  if (code !== 1008) {
+    return false;
+  }
+  const normalized = reason.toLowerCase();
+  return normalized.includes("invalid request frame") || normalized.includes("invalid handshake");
+}
+
 export function connectGateway(host: GatewayHost) {
   host.lastError = null;
   host.lastErrorCode = null;
@@ -237,6 +245,11 @@ export function connectGateway(host: GatewayHost) {
         resolveGatewayErrorDetailCode(error) ??
         (typeof error?.code === "string" ? error.code : null);
       if (code !== 1012) {
+        if (isProtocolMismatchClose(code, reason)) {
+          host.lastError =
+            "gateway protocol mismatch: close 1008 invalid request frame; refresh the Control UI and verify gateway/UI versions match";
+          return;
+        }
         if (error?.message) {
           host.lastError =
             host.lastErrorCode && isGenericBrowserFetchFailure(error.message)

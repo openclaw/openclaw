@@ -129,6 +129,44 @@ function resolvePinnedClientMetadata(params: {
   };
 }
 
+function classifyInvalidFirstFrame(parsed: unknown): {
+  classification: string;
+  message: string;
+} | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      classification: "non-object-frame",
+      message: "invalid request frame: first frame must be an object request",
+    };
+  }
+
+  const frame = parsed as { type?: unknown; method?: unknown };
+  const frameType = typeof frame.type === "string" ? frame.type : undefined;
+  const frameMethod = typeof frame.method === "string" ? frame.method : undefined;
+
+  if (frameType === "handshake") {
+    return {
+      classification: "legacy-handshake-frame",
+      message:
+        "invalid request frame: legacy handshake frame (type=handshake); expected type=req method=connect",
+    };
+  }
+  if (frameType && frameType !== "req") {
+    return {
+      classification: "invalid-first-frame-type",
+      message: `invalid request frame: unexpected first-frame type=${frameType}; expected type=req`,
+    };
+  }
+  if (frameMethod === "handshake") {
+    return {
+      classification: "legacy-handshake-method",
+      message:
+        "invalid request frame: legacy handshake method (method=handshake); expected method=connect",
+    };
+  }
+  return null;
+}
+
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
@@ -306,17 +344,19 @@ export function attachGatewayWsMessageHandler(params: {
           parsed.method !== "connect" ||
           !validateConnectParams(parsed.params)
         ) {
+          const invalidFirstFrame = !isRequestFrame ? classifyInvalidFirstFrame(parsed) : null;
           const handshakeError = isRequestFrame
             ? parsed.method === "connect"
               ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
               : "invalid handshake: first request must be connect"
-            : "invalid request frame";
+            : (invalidFirstFrame?.message ?? "invalid request frame");
           setHandshakeState("failed");
           setCloseCause("invalid-handshake", {
             frameType,
             frameMethod,
             frameId,
             handshakeError,
+            firstFrameClassification: invalidFirstFrame?.classification,
           });
           if (isRequestFrame) {
             const req = parsed;
@@ -328,7 +368,7 @@ export function attachGatewayWsMessageHandler(params: {
             });
           } else {
             logWsControl.warn(
-              `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"}`,
+              `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"} class=${invalidFirstFrame?.classification ?? "invalid-request-frame"}`,
             );
           }
           const closeReason = truncateCloseReason(handshakeError || "invalid handshake");

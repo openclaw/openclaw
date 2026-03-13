@@ -2588,6 +2588,10 @@ Quick fixes:
 1. Use the WS URL: `ws://<host>:18789` (or `wss://...` if HTTPS).
 2. Don't open the WS port in a normal browser tab.
 3. If auth is on, include the token/password in the `connect` frame.
+4. If this happens in Control UI, hard-refresh the page. A stale dashboard bundle
+   can send an older handshake shape and trigger `1008 invalid request frame`.
+5. When using custom clients, ensure the first frame is `type:"req"` +
+   `method:"connect"` (not legacy `type:"handshake"`).
 
 If you're using the CLI or TUI, the URL should look like:
 
@@ -2596,6 +2600,7 @@ openclaw tui --url ws://<host>:18789 --token <token>
 ```
 
 Protocol details: [Gateway protocol](/gateway/protocol).
+Deep runbook: [/gateway/troubleshooting#1008-invalid-request-frame-or-invalid-handshake](/gateway/troubleshooting#1008-invalid-request-frame-or-invalid-handshake).
 
 ## Logging and debugging
 
