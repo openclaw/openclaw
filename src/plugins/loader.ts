@@ -8,6 +8,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -16,9 +17,9 @@ import {
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -302,6 +303,16 @@ type PluginProvenanceIndex = {
   installRules: Map<string, InstallTrackingRule>;
 };
 
+type ResolvedDiscoveredPlugin = {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+};
+
+type PreferredPluginSelection = {
+  preferredRootById: Map<string, string>;
+  shadowedConfigSourcesById: Map<string, string[]>;
+};
+
 function createPathMatcher(): PathMatcher {
   return { exact: new Set<string>(), dirs: [] };
 }
@@ -439,6 +450,112 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
+function isConfigShadowingBundledPlugin(params: {
+  candidate: PluginCandidate;
+  activeBundledDir?: string | null;
+}): boolean {
+  if (params.candidate.origin !== "config") {
+    return false;
+  }
+  const candidateRoot = resolveUserPath(params.candidate.rootDir);
+  const activeBundledDir = params.activeBundledDir
+    ? resolveUserPath(params.activeBundledDir)
+    : null;
+  if (
+    activeBundledDir &&
+    (candidateRoot === activeBundledDir || isPathInside(activeBundledDir, candidateRoot))
+  ) {
+    return false;
+  }
+  const candidatePackageRoot = resolveOpenClawPackageRootSync({ cwd: candidateRoot });
+  if (!candidatePackageRoot) {
+    return false;
+  }
+  const candidateBundledDir = path.join(candidatePackageRoot, "extensions");
+  return candidateRoot === candidateBundledDir || isPathInside(candidateBundledDir, candidateRoot);
+}
+
+function choosePreferredDiscoveredPlugin(params: {
+  current: ResolvedDiscoveredPlugin;
+  next: ResolvedDiscoveredPlugin;
+  activeBundledDir?: string | null;
+}): ResolvedDiscoveredPlugin {
+  const currentIsBundled = params.current.candidate.origin === "bundled";
+  const nextIsBundled = params.next.candidate.origin === "bundled";
+  if (currentIsBundled === nextIsBundled) {
+    return params.current;
+  }
+  if (
+    currentIsBundled &&
+    isConfigShadowingBundledPlugin({
+      candidate: params.next.candidate,
+      activeBundledDir: params.activeBundledDir,
+    })
+  ) {
+    return params.current;
+  }
+  if (
+    nextIsBundled &&
+    isConfigShadowingBundledPlugin({
+      candidate: params.current.candidate,
+      activeBundledDir: params.activeBundledDir,
+    })
+  ) {
+    return params.next;
+  }
+  return params.current;
+}
+
+function buildPreferredPluginSelection(
+  discoveredPlugins: ResolvedDiscoveredPlugin[],
+): PreferredPluginSelection {
+  const groupedById = new Map<string, ResolvedDiscoveredPlugin[]>();
+  for (const entry of discoveredPlugins) {
+    const existing = groupedById.get(entry.manifestRecord.id);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      groupedById.set(entry.manifestRecord.id, [entry]);
+    }
+  }
+
+  const activeBundledDir = resolveBundledPluginsDir();
+  const preferredRootById = new Map<string, string>();
+  const shadowedConfigSourcesById = new Map<string, string[]>();
+  for (const [pluginId, entries] of groupedById.entries()) {
+    let preferred = entries[0];
+    for (const entry of entries.slice(1)) {
+      preferred = choosePreferredDiscoveredPlugin({
+        current: preferred,
+        next: entry,
+        activeBundledDir,
+      });
+    }
+    preferredRootById.set(pluginId, preferred.candidate.rootDir);
+
+    if (preferred.candidate.origin !== "bundled") {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.candidate.rootDir === preferred.candidate.rootDir) {
+        continue;
+      }
+      if (
+        isConfigShadowingBundledPlugin({
+          candidate: entry.candidate,
+          activeBundledDir,
+        })
+      ) {
+        const existing = shadowedConfigSourcesById.get(pluginId) ?? [];
+        existing.push(entry.candidate.source);
+        shadowedConfigSourcesById.set(pluginId, existing);
+      }
+    }
+  }
+
+  return { preferredRootById, shadowedConfigSourcesById };
+}
+
 function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
   setActivePluginRegistry(registry, cacheKey);
   initializeGlobalHookRunner(registry);
@@ -560,18 +677,52 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
   );
+  const discoveredPlugins: ResolvedDiscoveredPlugin[] = [];
+  for (const candidate of discovery.candidates) {
+    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    if (!manifestRecord) {
+      continue;
+    }
+    discoveredPlugins.push({ candidate, manifestRecord });
+  }
+  const preferredSelection = buildPreferredPluginSelection(discoveredPlugins);
+  for (const [pluginId, sources] of preferredSelection.shadowedConfigSourcesById.entries()) {
+    for (const source of sources) {
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId,
+        source,
+        message:
+          "config load path points at another OpenClaw checkout's bundled plugin; using the active bundled plugin instead",
+      });
+    }
+  }
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   let memorySlotMatched = false;
 
-  for (const candidate of discovery.candidates) {
-    const manifestRecord = manifestByRoot.get(candidate.rootDir);
-    if (!manifestRecord) {
+  for (const { candidate, manifestRecord } of discoveredPlugins) {
+    const pluginId = manifestRecord.id;
+    const preferredRoot = preferredSelection.preferredRootById.get(pluginId);
+    if (preferredRoot && preferredRoot !== candidate.rootDir) {
+      const record = createPluginRecord({
+        id: pluginId,
+        name: manifestRecord.name ?? pluginId,
+        description: manifestRecord.description,
+        version: manifestRecord.version,
+        source: candidate.source,
+        origin: candidate.origin,
+        workspaceDir: candidate.workspaceDir,
+        enabled: false,
+        configSchema: Boolean(manifestRecord.configSchema),
+      });
+      record.status = "disabled";
+      record.error = "overridden by bundled plugin";
+      registry.plugins.push(record);
       continue;
     }
-    const pluginId = manifestRecord.id;
     const existingOrigin = seenIds.get(pluginId);
     if (existingOrigin) {
       const record = createPluginRecord({

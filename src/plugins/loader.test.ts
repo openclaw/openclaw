@@ -1099,6 +1099,60 @@ describe("loadOpenClawPlugins", () => {
     expect(overridden?.origin).toBe("bundled");
   });
 
+  it("prefers the active bundled plugin over a config load path into another OpenClaw checkout's bundled extension", () => {
+    const bundledDir = makeTempDir();
+    writePlugin({
+      id: "shadow",
+      body: `module.exports = { id: "shadow", register() {} };`,
+      dir: bundledDir,
+      filename: "shadow.cjs",
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const externalRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(externalRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2),
+      "utf-8",
+    );
+    const externalPluginDir = path.join(externalRoot, "extensions", "shadow");
+    fs.mkdirSync(externalPluginDir, { recursive: true });
+    writePlugin({
+      id: "shadow",
+      body: `module.exports = { id: "shadow", register() {} };`,
+      dir: externalPluginDir,
+      filename: "index.cjs",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["shadow"],
+          load: { paths: [externalPluginDir] },
+          entries: {
+            shadow: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const entries = registry.plugins.filter((entry) => entry.id === "shadow");
+    const loaded = entries.find((entry) => entry.status === "loaded");
+    const overridden = entries.find((entry) => entry.status === "disabled");
+    expect(loaded?.origin).toBe("bundled");
+    expect(overridden?.origin).toBe("config");
+    expect(overridden?.error).toContain("overridden by bundled plugin");
+    expect(
+      registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === "shadow" &&
+          diagnostic.level === "warn" &&
+          diagnostic.message?.includes("another OpenClaw checkout's bundled plugin"),
+      ),
+    ).toBe(true);
+  });
+
   it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
     const bundledDir = makeTempDir();
     writePlugin({
