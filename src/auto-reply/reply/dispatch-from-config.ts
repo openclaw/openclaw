@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -18,9 +19,12 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
+  logMessageFirstVisible,
+  logMessageFirstVisibleTimeout,
   logMessageProcessed,
   logMessageQueued,
   logSessionStateChange,
+  logTurnLatencyStage,
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -31,10 +35,16 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import { resolveFirstVisibleWatchdogStrategy } from "./first-visible-watchdog.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import {
+  beginSessionGeneration,
+  isSessionGenerationCurrent,
+  registerSessionGenerationListener,
+} from "./session-generation.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -118,8 +128,12 @@ export async function dispatchReplyFromConfig(params: {
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
+  const turnLatencyId = diagnosticsEnabled ? crypto.randomUUID() : undefined;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
-
+  const firstVisibleWatchdog = resolveFirstVisibleWatchdogStrategy({ cfg, channel });
+  let firstVisibleSeen = false;
+  let runFirstOutputSeen = false;
+  let firstVisibleWatchdogTimer: ReturnType<typeof setTimeout> | undefined;
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
     opts?: {
@@ -169,6 +183,101 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+
+  const generationToken = await beginSessionGeneration({ sessionKey, cfg });
+  const canEmitCurrent = () => isSessionGenerationCurrent(generationToken);
+  const replyGeneration = generationToken?.generation;
+  dispatcher.setDeliveryGuard?.(canEmitCurrent);
+  if (turnLatencyId) {
+    logTurnLatencyStage({
+      turnLatencyId,
+      stage: "dispatch_started",
+      channel,
+      chatId,
+      messageId,
+      sessionKey,
+      originatingChannel: ctx.OriginatingChannel,
+      replyGeneration,
+      durationMs: 0,
+    });
+  }
+  if (firstVisibleWatchdog.mode === "diagnose_only") {
+    firstVisibleWatchdogTimer = setTimeout(() => {
+      if (firstVisibleSeen) {
+        return;
+      }
+      logMessageFirstVisibleTimeout({
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        thresholdMs: firstVisibleWatchdog.thresholdMs,
+      });
+    }, firstVisibleWatchdog.thresholdMs);
+  }
+  if (firstVisibleWatchdog.mode === "diagnose_only") {
+    dispatcher.setFirstVisibleHandler?.((info) => {
+      firstVisibleSeen = true;
+      if (firstVisibleWatchdogTimer) {
+        clearTimeout(firstVisibleWatchdogTimer);
+        firstVisibleWatchdogTimer = undefined;
+      }
+      logMessageFirstVisible({
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        kind: info.kind,
+        dispatchToFirstVisibleMs: Math.max(0, Date.now() - startTime),
+      });
+      if (turnLatencyId) {
+        logTurnLatencyStage({
+          turnLatencyId,
+          stage: "first_visible_emitted",
+          channel,
+          chatId,
+          messageId,
+          sessionKey,
+          originatingChannel: ctx.OriginatingChannel,
+          routed: shouldRouteToOriginating,
+          replyGeneration,
+          durationMs: Math.max(0, Date.now() - startTime),
+          firstVisibleKind: info.kind,
+        });
+      }
+      dispatcher.setFirstVisibleHandler?.(undefined);
+    });
+  } else {
+    dispatcher.setFirstVisibleHandler?.(undefined);
+  }
+  const unregisterSupersededListener =
+    sessionKey && generationToken
+      ? registerSessionGenerationListener(sessionKey, () => {
+          if (!canEmitCurrent()) {
+            dispatcher.notifySuperseded?.();
+          }
+        })
+      : undefined;
+
+  const markRunFirstOutput = (kind: "tool" | "block" | "status" | "final") => {
+    if (runFirstOutputSeen || !turnLatencyId) {
+      return;
+    }
+    runFirstOutputSeen = true;
+    logTurnLatencyStage({
+      turnLatencyId,
+      stage: "run_first_output",
+      channel,
+      chatId,
+      messageId,
+      sessionKey,
+      originatingChannel: ctx.OriginatingChannel,
+      routed: shouldRouteToOriginating,
+      replyGeneration,
+      durationMs: Math.max(0, Date.now() - startTime),
+      firstVisibleKind: kind,
+    });
+  };
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -243,16 +352,20 @@ export async function dispatchReplyFromConfig(params: {
    */
   const sendPayloadAsync = async (
     payload: ReplyPayload,
+    kind: ReplyDispatchKind,
     abortSignal?: AbortSignal,
     mirror?: boolean,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) {
-      return;
+      return false;
+    }
+    if (!canEmitCurrent()) {
+      return false;
     }
     if (abortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReply({
       payload,
@@ -269,7 +382,10 @@ export async function dispatchReplyFromConfig(params: {
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
+      return false;
     }
+    dispatcher.reportVisibleDelivery?.({ kind, payload });
+    return true;
   };
 
   markProcessing();
@@ -352,6 +468,7 @@ export async function dispatchReplyFromConfig(params: {
       shouldSendToolSummaries,
       bypassForCommand: bypassAcpForCommand,
       onReplyStart: params.replyOptions?.onReplyStart,
+      onLatencyStage: params.replyOptions?.onLatencyStage,
       recordProcessed,
       markIdle,
     });
@@ -407,10 +524,30 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        onLatencyStage: (info) => {
+          if (!turnLatencyId) {
+            return;
+          }
+          logTurnLatencyStage({
+            turnLatencyId,
+            channel,
+            chatId,
+            messageId,
+            sessionKey,
+            originatingChannel: ctx.OriginatingChannel,
+            routed: shouldRouteToOriginating,
+            replyGeneration,
+            ...info,
+          });
+        },
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
+          if (!canEmitCurrent()) {
+            return;
+          }
           const run = async () => {
+            markRunFirstOutput("tool");
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
@@ -423,16 +560,49 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
+            if (!canEmitCurrent()) {
+              return;
+            }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              await sendPayloadAsync(deliveryPayload, "tool", undefined, false);
             } else {
               dispatcher.sendToolResult(deliveryPayload);
             }
           };
           return run();
         },
-        onBlockReply: (payload: ReplyPayload, context) => {
+        onStatusReply: (payload: ReplyPayload) => {
+          if (!canEmitCurrent()) {
+            return;
+          }
           const run = async () => {
+            markRunFirstOutput("status");
+            const ttsPayload = await maybeApplyTtsToPayload({
+              payload,
+              cfg,
+              channel: ttsChannel,
+              kind: "status",
+              inboundAudio,
+              ttsAuto: sessionTtsAuto,
+            });
+            if (!canEmitCurrent()) {
+              return false;
+            }
+            if (shouldRouteToOriginating) {
+              return sendPayloadAsync(ttsPayload, "status", undefined, false);
+            }
+            return (
+              dispatcher.sendStatusReply?.(ttsPayload) ?? dispatcher.sendBlockReply(ttsPayload)
+            );
+          };
+          return run();
+        },
+        onBlockReply: (payload: ReplyPayload, context) => {
+          if (!canEmitCurrent()) {
+            return;
+          }
+          const run = async () => {
+            markRunFirstOutput("block");
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -455,10 +625,29 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            if (!canEmitCurrent()) {
+              return;
+            }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              const result = await routeReply({
+                payload: ttsPayload,
+                channel: originatingChannel!,
+                to: originatingTo!,
+                sessionKey: ctx.SessionKey,
+                accountId: ctx.AccountId,
+                threadId: ctx.MessageThreadId,
+                cfg,
+                abortSignal: context?.abortSignal,
+                mirror: false,
+                isGroup,
+                groupId,
+              });
+              if (result.ok) {
+                dispatcher.reportVisibleDelivery?.({ kind: "block", payload: ttsPayload });
+              }
+              return result.ok;
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              return dispatcher.sendBlockReply(ttsPayload);
             }
           };
           return run();
@@ -485,6 +674,7 @@ export async function dispatchReplyFromConfig(params: {
         shouldSendToolSummaries,
         bypassForCommand: false,
         onReplyStart: params.replyOptions?.onReplyStart,
+        onLatencyStage: params.replyOptions?.onLatencyStage,
         recordProcessed,
         markIdle,
       });
@@ -511,6 +701,10 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      if (!canEmitCurrent()) {
+        continue;
+      }
+      markRunFirstOutput("final");
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
@@ -532,9 +726,39 @@ export async function dispatchReplyFromConfig(params: {
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) {
           routedFinalCount += 1;
+          dispatcher.reportVisibleDelivery?.({ kind: "final", payload: ttsReply });
+          if (turnLatencyId) {
+            logTurnLatencyStage({
+              turnLatencyId,
+              stage: "final_dispatched",
+              channel,
+              chatId,
+              messageId,
+              sessionKey,
+              originatingChannel: ctx.OriginatingChannel,
+              routed: true,
+              replyGeneration,
+              durationMs: Math.max(0, Date.now() - startTime),
+            });
+          }
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        const didQueueFinal = dispatcher.sendFinalReply(ttsReply);
+        queuedFinal = didQueueFinal || queuedFinal;
+        if (didQueueFinal && turnLatencyId) {
+          logTurnLatencyStage({
+            turnLatencyId,
+            stage: "final_dispatched",
+            channel,
+            chatId,
+            messageId,
+            sessionKey,
+            originatingChannel: ctx.OriginatingChannel,
+            routed: false,
+            replyGeneration,
+            durationMs: Math.max(0, Date.now() - startTime),
+          });
+        }
       }
     }
 
@@ -546,7 +770,8 @@ export async function dispatchReplyFromConfig(params: {
       ttsMode === "final" &&
       replies.length === 0 &&
       blockCount > 0 &&
-      accumulatedBlockText.trim()
+      accumulatedBlockText.trim() &&
+      canEmitCurrent()
     ) {
       try {
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
@@ -557,6 +782,14 @@ export async function dispatchReplyFromConfig(params: {
           inboundAudio,
           ttsAuto: sessionTtsAuto,
         });
+        if (!canEmitCurrent()) {
+          await dispatcher.waitForIdle();
+          const counts = dispatcher.getQueuedCounts();
+          counts.final += routedFinalCount;
+          recordProcessed("completed");
+          markIdle("message_completed");
+          return { queuedFinal, counts };
+        }
         // Only send if TTS was actually applied (mediaUrl exists)
         if (ttsSyntheticReply.mediaUrl) {
           // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
@@ -579,6 +812,7 @@ export async function dispatchReplyFromConfig(params: {
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
               routedFinalCount += 1;
+              dispatcher.reportVisibleDelivery?.({ kind: "final", payload: ttsOnlyPayload });
             }
             if (!result.ok) {
               logVerbose(
@@ -588,6 +822,20 @@ export async function dispatchReplyFromConfig(params: {
           } else {
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
             queuedFinal = didQueue || queuedFinal;
+            if (didQueue && turnLatencyId) {
+              logTurnLatencyStage({
+                turnLatencyId,
+                stage: "final_dispatched",
+                channel,
+                chatId,
+                messageId,
+                sessionKey,
+                originatingChannel: ctx.OriginatingChannel,
+                routed: false,
+                replyGeneration,
+                durationMs: Math.max(0, Date.now() - startTime),
+              });
+            }
           }
         }
       } catch (err) {
@@ -599,6 +847,20 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    if (turnLatencyId) {
+      logTurnLatencyStage({
+        turnLatencyId,
+        stage: "completed",
+        channel,
+        chatId,
+        messageId,
+        sessionKey,
+        originatingChannel: ctx.OriginatingChannel,
+        routed: shouldRouteToOriginating,
+        replyGeneration,
+        durationMs: Math.max(0, Date.now() - startTime),
+      });
+    }
     recordProcessed("completed");
     markIdle("message_completed");
     return { queuedFinal, counts };
@@ -606,5 +868,16 @@ export async function dispatchReplyFromConfig(params: {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
+  } finally {
+    void dispatcher.waitForIdle().finally(() => {
+      if (firstVisibleWatchdogTimer) {
+        clearTimeout(firstVisibleWatchdogTimer);
+        firstVisibleWatchdogTimer = undefined;
+      }
+      dispatcher.setFirstVisibleHandler?.(undefined);
+    });
+    if (unregisterSupersededListener) {
+      void dispatcher.waitForIdle().finally(unregisterSupersededListener);
+    }
   }
 }

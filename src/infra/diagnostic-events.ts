@@ -82,6 +82,62 @@ export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   error?: string;
 };
 
+export type DiagnosticMessageFirstVisibleEvent = DiagnosticBaseEvent & {
+  type: "message.first_visible";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  kind: "tool" | "block" | "status" | "final";
+  dispatchToFirstVisibleMs: number;
+};
+
+export type DiagnosticMessageFirstVisibleTimeoutEvent = DiagnosticBaseEvent & {
+  type: "message.first_visible_timeout";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  thresholdMs: number;
+};
+
+export type DiagnosticTurnLatencyStageEvent = DiagnosticBaseEvent & {
+  type: "turn.latency.stage";
+  turnLatencyId: string;
+  stage:
+    | "dispatch_started"
+    | "queue_arbitrated"
+    | "first_visible_scheduled"
+    | "run_started"
+    | "run_first_output"
+    | "first_visible_emitted"
+    | "final_dispatched"
+    | "completed"
+    | "acp_ensure_session_started"
+    | "acp_ensure_session_completed"
+    | "acp_run_started"
+    | "acp_first_event";
+  channel: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  sessionKey?: string;
+  sessionId?: string;
+  originatingChannel?: string;
+  routed?: boolean;
+  replyGeneration?: number;
+  durationMs?: number;
+  queueModeConfigured?: string;
+  queueModeFinal?: string;
+  supervisorAction?: string;
+  supervisorRelation?: string;
+  firstVisibleKind?: "tool" | "block" | "status" | "final";
+  provider?: string;
+  model?: string;
+  backend?: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -132,6 +188,13 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  firstVisible?: {
+    sampleCount: number;
+    avgMs: number;
+    p95Ms: number;
+    maxMs: number;
+    timeoutCount: number;
+  };
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
@@ -153,6 +216,9 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageFirstVisibleEvent
+  | DiagnosticMessageFirstVisibleTimeoutEvent
+  | DiagnosticTurnLatencyStageEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent

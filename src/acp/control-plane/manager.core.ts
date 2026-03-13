@@ -57,6 +57,7 @@ import {
 } from "./manager.utils.js";
 import { CachedRuntimeState, RuntimeCache } from "./runtime-cache.js";
 import {
+  applyDefaultRuntimeOptions,
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
   normalizeRuntimeOptions,
@@ -244,9 +245,13 @@ export class AcpSessionManager {
         fallbackMessage: "Could not initialize ACP session runtime.",
       });
       const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
-      const effectiveRuntimeOptions = normalizeRuntimeOptions({
-        ...initialRuntimeOptions,
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      const effectiveRuntimeOptions = applyDefaultRuntimeOptions({
+        backend: handle.backend || backend.id,
+        agent,
+        options: {
+          ...initialRuntimeOptions,
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        },
       });
 
       const identityNow = Date.now();
@@ -603,11 +608,15 @@ export class AcpSessionManager {
     }
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     await this.withSessionActor(sessionKey, async () => {
+      const dispatchStartedAt = Date.now();
       const resolution = this.resolveSession({
         cfg: input.cfg,
         sessionKey,
       });
       const resolvedMeta = requireReadySessionMeta(resolution);
+      await input.onLifecycleStage?.({
+        stage: "acp_ensure_session_started",
+      });
 
       const {
         runtime,
@@ -617,6 +626,11 @@ export class AcpSessionManager {
         cfg: input.cfg,
         sessionKey,
         meta: resolvedMeta,
+      });
+      await input.onLifecycleStage?.({
+        stage: "acp_ensure_session_completed",
+        durationMs: Math.max(0, Date.now() - dispatchStartedAt),
+        backend: ensuredHandle.backend || resolvedMeta.backend,
       });
       let handle = ensuredHandle;
       const meta = ensuredMeta;
@@ -659,6 +673,12 @@ export class AcpSessionManager {
           input.signal && typeof AbortSignal.any === "function"
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
+        await input.onLifecycleStage?.({
+          stage: "acp_run_started",
+          durationMs: Math.max(0, Date.now() - dispatchStartedAt),
+          backend: handle.backend || meta.backend,
+        });
+        let firstEventSeen = false;
         for await (const event of runtime.runTurn({
           handle,
           text: input.text,
@@ -667,6 +687,15 @@ export class AcpSessionManager {
           requestId: input.requestId,
           signal: combinedSignal,
         })) {
+          if (!firstEventSeen) {
+            firstEventSeen = true;
+            await input.onLifecycleStage?.({
+              stage: "acp_first_event",
+              durationMs: Math.max(0, Date.now() - dispatchStartedAt),
+              backend: handle.backend || meta.backend,
+              eventType: event.type,
+            });
+          }
           if (event.type === "error") {
             streamError = new AcpRuntimeError(
               normalizeAcpErrorCode(event.code),
@@ -949,9 +978,13 @@ export class AcpSessionManager {
     const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
     const now = Date.now();
     const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
-    const nextRuntimeOptions = normalizeRuntimeOptions({
-      ...runtimeOptions,
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+    const nextRuntimeOptions = applyDefaultRuntimeOptions({
+      backend: ensured.backend || backend.id,
+      agent,
+      options: {
+        ...runtimeOptions,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      },
     });
     const nextIdentity =
       mergeSessionIdentity({

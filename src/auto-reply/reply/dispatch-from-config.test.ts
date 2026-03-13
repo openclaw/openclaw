@@ -18,9 +18,12 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
+  logMessageFirstVisible: vi.fn(),
+  logMessageFirstVisibleTimeout: vi.fn(),
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
+  logTurnLatencyStage: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -50,7 +53,7 @@ const ttsMocks = vi.hoisted(() => {
     maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
         payload: ReplyPayload;
-        kind: "tool" | "block" | "final";
+        kind: "tool" | "block" | "status" | "final";
       };
       if (
         state.synthesizeFinalAudio &&
@@ -96,9 +99,13 @@ vi.mock("./abort.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  resolveFirstVisibleWarnMs: vi.fn(() => 4000),
+  logMessageFirstVisible: diagnosticMocks.logMessageFirstVisible,
+  logMessageFirstVisibleTimeout: diagnosticMocks.logMessageFirstVisibleTimeout,
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  logTurnLatencyStage: diagnosticMocks.logTurnLatencyStage,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -146,7 +153,9 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+const { createReplyDispatcher } = await import("./reply-dispatcher.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
+const { __resetSessionGenerationsForTest } = await import("./session-generation.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
 
 const noAbortResult = { handled: false, aborted: false } as const;
@@ -154,13 +163,43 @@ const emptyConfig = {} as OpenClawConfig;
 type DispatchReplyArgs = Parameters<typeof dispatchReplyFromConfig>[0];
 
 function createDispatcher(): ReplyDispatcher {
+  let firstVisibleHandler:
+    | Parameters<NonNullable<ReplyDispatcher["setFirstVisibleHandler"]>>[0]
+    | undefined;
+  let firstVisibleDelivered = false;
+  const markFirstVisible = (kind: "tool" | "block" | "status" | "final", payload: ReplyPayload) => {
+    if (firstVisibleDelivered) {
+      return;
+    }
+    firstVisibleDelivered = true;
+    firstVisibleHandler?.({ kind, payload });
+  };
   return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
+    sendToolResult: vi.fn((payload: ReplyPayload) => {
+      markFirstVisible("tool", payload);
+      return true;
+    }),
+    sendBlockReply: vi.fn((payload: ReplyPayload) => {
+      markFirstVisible("block", payload);
+      return true;
+    }),
+    sendStatusReply: vi.fn((payload: ReplyPayload) => {
+      markFirstVisible("status", payload);
+      return true;
+    }),
+    sendFinalReply: vi.fn((payload: ReplyPayload) => {
+      markFirstVisible("final", payload);
+      return true;
+    }),
     waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, status: 0, final: 0 })),
     markComplete: vi.fn(),
+    setFirstVisibleHandler: vi.fn((handler) => {
+      firstVisibleHandler = handler;
+    }),
+    reportVisibleDelivery: vi.fn((info) => {
+      markFirstVisible(info.kind, info.payload);
+    }),
   };
 }
 
@@ -183,6 +222,15 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
         yield event;
       }
     }),
+    getCapabilities: vi.fn(async () => ({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+    })),
+    getStatus: vi.fn(async () => ({
+      summary: "status=alive",
+      details: { status: "alive" },
+    })),
+    setMode: vi.fn(async () => {}),
+    setConfigOption: vi.fn(async () => {}),
     cancel: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
   };
@@ -209,12 +257,16 @@ describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetInboundDedupe();
+    __resetSessionGenerationsForTest();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
+    diagnosticMocks.logMessageFirstVisible.mockClear();
+    diagnosticMocks.logMessageFirstVisibleTimeout.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
+    diagnosticMocks.logTurnLatencyStage.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageReceived.mockClear();
@@ -346,6 +398,9 @@ describe("dispatchReplyFromConfig", () => {
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).toHaveBeenCalledWith(
@@ -1834,6 +1889,188 @@ describe("dispatchReplyFromConfig", () => {
         sessionKey: "agent:main:main",
       }),
     );
+    expect(diagnosticMocks.logMessageFirstVisible).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        kind: "final",
+        dispatchToFirstVisibleMs: expect.any(Number),
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("records routed status replies as first-visible deliveries", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:chat-1",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-status-routed",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onStatusReply?.({ text: "我会先接上这个新方向。" });
+      return { text: "done" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        payload: { text: "我会先接上这个新方向。" },
+      }),
+    );
+    expect(diagnosticMocks.logMessageFirstVisible).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        kind: "status",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("emits turn latency stages across dispatch and runtime seams", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:chat-1",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-latency",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      opts?.onLatencyStage?.({
+        stage: "queue_arbitrated",
+        queueModeConfigured: "collect",
+        queueModeFinal: "collect",
+        supervisorAction: "append",
+        supervisorRelation: "same_task_supplement",
+      });
+      opts?.onLatencyStage?.({
+        stage: "run_started",
+        provider: "anthropic",
+        model: "claude-opus",
+      });
+      await opts?.onStatusReply?.({ text: "我会先接上这个新方向。" });
+      return { text: "done" };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const stageCalls = diagnosticMocks.logTurnLatencyStage.mock.calls.map((call) => call[0]);
+    const stageNames = stageCalls.map((event) => event.stage);
+    expect(stageNames).toEqual(
+      expect.arrayContaining([
+        "dispatch_started",
+        "queue_arbitrated",
+        "run_started",
+        "run_first_output",
+        "first_visible_emitted",
+        "final_dispatched",
+        "completed",
+      ]),
+    );
+    const turnLatencyIds = new Set(stageCalls.map((event) => event.turnLatencyId));
+    expect(turnLatencyIds.size).toBe(1);
+  });
+
+  it("leaves first-visible diagnostics empty when nothing is delivered", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.setFirstVisibleHandler = vi.fn();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-empty",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => undefined;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(diagnosticMocks.logMessageFirstVisible).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        outcome: "completed",
+      }),
+    );
+  });
+
+  it("emits a first-visible timeout diagnostic when silence exceeds the watchdog", async () => {
+    vi.useFakeTimers();
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    dispatcher.setFirstVisibleHandler = vi.fn();
+    dispatcher.waitForIdle = vi.fn(async () => {
+      await new Promise(() => undefined);
+    });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:main:main",
+      MessageSid: "msg-timeout",
+      To: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(diagnosticMocks.logMessageFirstVisibleTimeout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        thresholdMs: 4000,
+      }),
+    );
+    vi.useRealTimers();
+  });
+
+  it("skips the first-visible watchdog on non-routable channels", async () => {
+    vi.useFakeTimers();
+    setNoAbort();
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "internal_webchat",
+        Surface: "internal_webchat",
+        SessionKey: "agent:main:main",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+        return { text: "done" };
+      },
+    });
+
+    expect(diagnosticMocks.logMessageFirstVisible).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageFirstVisibleTimeout).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
@@ -1904,5 +2141,118 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("drops stale queued replies after a newer message starts", async () => {
+    setNoAbort();
+    let releaseOldBlock: (() => void) | undefined;
+    const waitForOldBlock = new Promise<void>((resolve) => {
+      releaseOldBlock = resolve;
+    });
+    const oldDelivered: string[] = [];
+    const newDelivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        oldDelivered.push(payload.text ?? "");
+        if (payload.text === "old-block") {
+          await waitForOldBlock;
+        }
+      },
+    });
+    const newDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        newDelivered.push(payload.text ?? "");
+      },
+    });
+    const sessionKey = "agent:main:session-guard";
+
+    const firstRun = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-old",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "old-block" });
+        return { text: "old-final" } satisfies ReplyPayload;
+      },
+    });
+
+    await expect.poll(() => oldDelivered.length).toBe(1);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-new",
+      }),
+      cfg: emptyConfig,
+      dispatcher: newDispatcher,
+      replyResolver: async () => ({ text: "new-final" }) satisfies ReplyPayload,
+    });
+
+    releaseOldBlock?.();
+    await firstRun;
+
+    expect(oldDelivered).toEqual(["old-block"]);
+    expect(newDelivered).toEqual(["new-final"]);
+  });
+
+  it("notifies an older dispatcher as soon as a newer generation starts", async () => {
+    setNoAbort();
+    let releaseOldBlock: (() => void) | undefined;
+    const oldBlock = new Promise<void>((resolve) => {
+      releaseOldBlock = resolve;
+    });
+    const oldDelivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        oldDelivered.push(payload.text ?? "");
+        if (payload.text === "old-block") {
+          await oldBlock;
+        }
+      },
+    });
+    oldDispatcher.notifySuperseded = vi.fn();
+    const sessionKey = "agent:main:session-supersede";
+
+    const firstRun = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-old",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "old-block" });
+        return { text: "old-final" } satisfies ReplyPayload;
+      },
+    });
+
+    await expect.poll(() => oldDelivered.length).toBe(1);
+    expect(oldDispatcher.notifySuperseded).not.toHaveBeenCalled();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        SessionKey: sessionKey,
+        MessageSid: "msg-new",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "new-final" }) satisfies ReplyPayload,
+    });
+
+    expect(oldDispatcher.notifySuperseded).toHaveBeenCalledTimes(1);
+
+    releaseOldBlock?.();
+    await firstRun;
   });
 });

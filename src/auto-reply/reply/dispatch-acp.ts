@@ -29,6 +29,7 @@ import {
   shouldHandleTextCommands,
 } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import type { TurnLatencyStageInfo } from "../types.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -198,6 +199,7 @@ export async function tryDispatchAcpReply(params: {
   shouldSendToolSummaries: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onLatencyStage?: (info: TurnLatencyStageInfo) => void;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
@@ -309,6 +311,13 @@ export async function tryDispatchAcpReply(params: {
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
       onEvent: async (event) => await projector.onEvent(event),
+      onLifecycleStage: async (info) => {
+        params.onLatencyStage?.({
+          stage: info.stage,
+          durationMs: "durationMs" in info ? info.durationMs : undefined,
+          backend: "backend" in info ? (info.backend ?? "acp") : "acp",
+        });
+      },
     });
 
     await projector.flush(true);

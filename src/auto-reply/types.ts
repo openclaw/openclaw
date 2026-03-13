@@ -20,6 +20,33 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type TurnLatencyStage =
+  | "dispatch_started"
+  | "queue_arbitrated"
+  | "first_visible_scheduled"
+  | "run_started"
+  | "run_first_output"
+  | "first_visible_emitted"
+  | "final_dispatched"
+  | "completed"
+  | "acp_ensure_session_started"
+  | "acp_ensure_session_completed"
+  | "acp_run_started"
+  | "acp_first_event";
+
+export type TurnLatencyStageInfo = {
+  stage: TurnLatencyStage;
+  durationMs?: number;
+  queueModeConfigured?: string;
+  queueModeFinal?: string;
+  supervisorAction?: string;
+  supervisorRelation?: string;
+  firstVisibleKind?: "tool" | "block" | "status" | "final";
+  provider?: string;
+  model?: string;
+  backend?: string;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -50,7 +77,11 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
-  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  onBlockReply?: (
+    payload: ReplyPayload,
+    context?: BlockReplyContext,
+  ) => Promise<boolean | void> | boolean | void;
+  onStatusReply?: (payload: ReplyPayload) => Promise<boolean | void> | boolean | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
@@ -61,6 +92,7 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  onLatencyStage?: (info: TurnLatencyStageInfo) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
