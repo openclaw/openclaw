@@ -220,6 +220,7 @@ async function runGuildPreflight(params: {
   discordConfig: DiscordConfig;
   cfg?: import("../../config/config.js").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
+  botUserId?: string;
 }) {
   return preflightDiscordMessage({
     ...createPreflightArgs({
@@ -233,6 +234,7 @@ async function runGuildPreflight(params: {
       }),
       client: createGuildTextClient(params.channelId),
     }),
+    botUserId: params.botUserId ?? "openclaw-bot",
     guildEntries: params.guildEntries,
   });
 }
@@ -434,6 +436,33 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).not.toBeNull();
+  });
+
+  it("accepts raw Discord mention tokens even when mentionedUsers is empty", async () => {
+    const channelId = "channel-raw-mention-token";
+    const guildId = "guild-raw-mention-token";
+    const message = createMessage({
+      id: "m-raw-mention-token",
+      channelId,
+      content: "hi <@ops-bot>",
+      mentionedUsers: [],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      botUserId: "ops-bot",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
+    expect(result?.hasAnyMention).toBe(true);
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {

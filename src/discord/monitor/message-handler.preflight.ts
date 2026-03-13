@@ -95,6 +95,19 @@ function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
+function discordRawTextMentionsBot(text: string | undefined, botId: string | undefined): boolean {
+  const normalizedBotId = botId?.trim();
+  if (!normalizedBotId) {
+    return false;
+  }
+  const body = text?.trim();
+  if (!body) {
+    return false;
+  }
+  const mentionPattern = new RegExp(`<@!?${normalizedBotId}>`);
+  return mentionPattern.test(body);
+}
+
 export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   isBoundThreadSession: boolean;
@@ -405,13 +418,16 @@ export async function preflightDiscordMessage(
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      discordRawTextMentionsBot(baseText, botId)),
   );
   const hasAnyMention = Boolean(
     !isDirectMessage &&
     ((message.mentionedUsers?.length ?? 0) > 0 ||
       (message.mentionedRoles?.length ?? 0) > 0 ||
-      (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
+      (message.mentionedEveryone && (!author.bot || sender.isPluralKit)) ||
+      discordRawTextMentionsBot(baseText, botId)),
   );
   const hasUserOrRoleMention = Boolean(
     !isDirectMessage &&
