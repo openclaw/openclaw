@@ -54,9 +54,6 @@ let reconnectTimer = null
 const TAB_VALIDATION_ATTEMPTS = 2
 const TAB_VALIDATION_RETRY_DELAY_MS = 1000
 
-// Track which tab currently has the floating overlay so we can remove it when switching.
-/** @type {number|null} */
-let lastOverlayTabId = null
 
 function nowStack() {
   try {
@@ -162,10 +159,20 @@ function updateAllBadges() {
     globalKind = 'error';
   } else if (relayIsLocked) {
     globalKind = 'off';
-  } else if (isUp && tabs.size > 0 && Array.from(tabs.values()).some(t => t.state === 'connected')) {
-    globalKind = 'on';
+  } else if (isUp && tabs.size > 0) {
+    const tabList = Array.from(tabs.values());
+    if (tabList.some(t => t.state === 'connected')) {
+      globalKind = 'on';
+    } else if (tabList.some(t => t.state === 'connecting')) {
+      globalKind = 'connecting';
+    } else {
+      globalKind = 'error';
+    }
   } else {
-    extensionIsDisabled = true;
+    // Only set disabled if we are truly disconnected and no tabs are being handled.
+    if (!isUp && tabs.size === 0) {
+      extensionIsDisabled = true;
+    }
     globalKind = 'error';
   }
 
