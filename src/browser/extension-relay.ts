@@ -254,6 +254,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
     if (existing.server.bindHost !== bindHost) {
       await existing.server.stop();
     } else {
+      if (opts.lockTab !== undefined) {
+        existing.server.setLocked(opts.lockTab);
+      }
       return existing.server;
     }
   }
@@ -262,6 +265,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
   if (inFlight) {
     const server = await inFlight;
     if (server.bindHost === bindHost) {
+      if (opts.lockTab !== undefined) {
+        server.setLocked(opts.lockTab);
+      }
       return server;
     }
     await server.stop();
