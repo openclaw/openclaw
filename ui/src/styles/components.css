@@ -3766,3 +3766,16 @@
     gap: 4px;
   }
 }
+
+/* Context Notice (dashboard context usage warning) */
+.context-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-notice__icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
