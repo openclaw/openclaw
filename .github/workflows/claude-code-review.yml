@@ -1,0 +1,104 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Prevent concurrent reviews on the same PR
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    # Restrict to primary maintainer to control Claude API costs
+    if: github.event.pull_request.user.login == '0x666c6f'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Check workflow drift
+        id: workflow_guard
+        run: |
+          git fetch origin main
+          if git diff --quiet origin/main -- .github/workflows/claude-code-review.yml; then
+            echo "run_claude=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_claude=false" >> "$GITHUB_OUTPUT"
+            echo "Workflow modified in PR; skipping Claude Code Review."
+          fi
+
+      - name: Run Claude Code Review
+        id: claude-review
+        if: steps.workflow_guard.outputs.run_claude == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            ## PR Context
+            REPO: ${{ github.repository }}
+            PR_NUMBER: ${{ github.event.pull_request.number }}
+            PR_TITLE: ${{ github.event.pull_request.title }}
+            PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+            BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+
+            ## Review Task
+            Perform a code review on PR #${{ github.event.pull_request.number }}.
+
+            ## TypeScript / SRE Repository - Specialized Review Guidelines
+
+            This is an **OpenClaw SRE runtime** repository (TypeScript/ESM, Node 22+, Vitest). Apply these domain-specific checks:
+
+            ### Code Quality
+            - **TypeScript**: Strict typing, no `any`, no `@ts-nocheck`
+            - **ESM**: Proper module boundaries, no mixed static/dynamic imports for the same module
+            - **Naming**: Follow existing conventions in the codebase
+            - **File size**: Flag files over ~700 LOC that could be split
+            - **Error handling**: Verify errors are propagated, not silently swallowed
+
+            ### SRE / Infrastructure Patterns
+            - **Incident evidence**: Verify evidence gates are properly enforced
+            - **Slack thread replies**: Ensure thread_ts is used correctly for threaded replies
+            - **Reward calculations**: Check for correct reward math and edge cases
+            - **Configuration**: No hardcoded secrets, tokens, or environment-specific values
+            - **Observability**: Proper logging for debugging and audit trails
+
+            ### Security Focus
+            - **Secrets**: NO hardcoded credentials, API keys, or tokens
+            - **Input validation**: Verify user inputs and external data are validated
+            - **Injection**: No command injection, template injection, or similar OWASP risks
+            - **Dependencies**: Flag any suspicious or unnecessary new dependencies
+
+            ### Testing
+            - **Coverage**: New logic should have corresponding tests (*.test.ts)
+            - **Edge cases**: Verify boundary conditions and error paths are tested
+            - **Mocking**: Prefer realistic test doubles over shallow mocks
+
+            ### Review Output Format
+            Categorize findings by severity prefix in your comments:
+            - `[CRITICAL]`: Must fix before merge (security vulnerabilities, data loss risks)
+            - `[HIGH]`: Should fix before merge (bugs, logic errors, best practice violations)
+            - `[MEDIUM]`: Consider fixing (improvements, minor issues)
+            - `[LOW]`: Nice to have (style, documentation)
+
+            ### How to Post Your Review
+            - Use `mcp__github_inline_comment__create_inline_comment` to highlight specific code issues on specific lines
+            - Use `gh pr comment` for top-level summary feedback
+            - Only post GitHub comments - don't submit review text as messages
+
+          claude_args: |
+            --model claude-sonnet-4-20250514
+            --max-turns 200
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git diff:*),Bash(git log:*),Read,Glob,Grep"
