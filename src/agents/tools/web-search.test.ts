@@ -24,6 +24,8 @@ const {
   extractKimiCitations,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveTavilyApiKey,
+  resolveTavilySearchDepth,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -466,5 +468,37 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+const tavilyApiKeyEnv = ["TAVILY_API", "KEY"].join("_");
+
+describe("web_search tavily config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveTavilyApiKey({ apiKey: "tvly-test-key" })).toBe("tvly-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to TAVILY_API_KEY env var", () => {
+    const envValue = "tvly-env-key"; // pragma: allowlist secret
+    withEnv({ [tavilyApiKeyEnv]: envValue }, () => {
+      expect(resolveTavilyApiKey({})).toBe(envValue);
+    });
+  });
+
+  it("returns undefined when no Tavily key is configured", () => {
+    withEnv({ [tavilyApiKeyEnv]: undefined }, () => {
+      expect(resolveTavilyApiKey({})).toBeUndefined();
+      expect(resolveTavilyApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves searchDepth from config", () => {
+    expect(resolveTavilySearchDepth({ searchDepth: "advanced" })).toBe("advanced");
+    expect(resolveTavilySearchDepth({ searchDepth: "basic" })).toBe("basic");
+  });
+
+  it("defaults searchDepth to basic", () => {
+    expect(resolveTavilySearchDepth({})).toBe("basic");
+    expect(resolveTavilySearchDepth(undefined)).toBe("basic");
   });
 });
