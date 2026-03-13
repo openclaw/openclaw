@@ -319,10 +319,15 @@ export async function recoverPendingDeliveries(opts: {
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
+  /**
+   * Optional preloaded pending entries to avoid rescanning queue files when
+   * the caller has already read them (e.g. startup preflight target resolution).
+   */
+  pending?: QueuedDelivery[];
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
-  const pending = await loadPendingDeliveries(opts.stateDir);
+  const pending = [...(opts.pending ?? (await loadPendingDeliveries(opts.stateDir)))];
   if (pending.length === 0) {
     return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
   }
