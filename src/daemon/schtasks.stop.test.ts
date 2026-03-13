@@ -121,6 +121,52 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
+    await withWindowsEnv(async ({ env }) => {
+      await writeGatewayScript(env);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+      );
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "node.exe" }],
+        hints: [],
+      });
+      for (let i = 0; i < 20; i += 1) {
+        inspectPortUsage.mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 4242, command: "node.exe" }],
+          hints: [],
+        });
+      }
+      inspectPortUsage
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5252, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+
+      const stdout = new PassThrough();
+      await stopScheduledTask({ env, stdout });
+
+      expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
+      expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+      expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
+    });
+  });
+
   it("falls back to inspected gateway listeners when sync verification misses on Windows", async () => {
     await withWindowsEnv(async ({ env }) => {
       await writeGatewayScript(env);
