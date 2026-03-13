@@ -1594,6 +1594,7 @@ async function runTavilySearch(params: {
   }>
 > {
   const body = {
+    api_key: params.apiKey,
     query: params.query,
     max_results: params.count,
     search_depth: params.searchDepth,
@@ -1607,7 +1608,6 @@ async function runTavilySearch(params: {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
         },
         body: JSON.stringify(body),
       },
