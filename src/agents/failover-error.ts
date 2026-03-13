@@ -68,20 +68,36 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
   }
 }
 
-function getStatusCode(err: unknown): number | undefined {
+function findErrorProperty<T>(
+  err: unknown,
+  reader: (candidate: unknown) => T | undefined,
+  seen: Set<object> = new Set(),
+): T | undefined {
+  const direct = reader(err);
+  if (direct !== undefined) {
+    return direct;
+  }
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  // Dig into nested `err.error` shapes (e.g. Google Vertex abort wrappers)
-  const nestedError =
-    "error" in err && err.error && typeof err.error === "object"
-      ? (err.error as { status?: unknown; code?: unknown })
-      : undefined;
+  if (seen.has(err)) {
+    return undefined;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return (
+    findErrorProperty(candidate.error, reader, seen) ??
+    findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+function readDirectStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
   const candidate =
     (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode ??
-    nestedError?.code ??
-    nestedError?.status;
+    (err as { statusCode?: unknown }).statusCode;
   if (typeof candidate === "number") {
     return candidate;
   }
@@ -91,53 +107,55 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorCode(err: unknown): string | undefined {
+function getStatusCode(err: unknown): number | undefined {
+  return findErrorProperty(err, readDirectStatusCode);
+}
+
+function readDirectErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const nestedError =
-    "error" in err && err.error && typeof err.error === "object"
-      ? (err.error as { code?: unknown; status?: unknown })
-      : undefined;
-  const candidate = (err as { code?: unknown }).code ?? nestedError?.status ?? nestedError?.code;
-  if (typeof candidate !== "string") {
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
   }
-  const trimmed = candidate.trim();
+  const trimmed = status.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function getErrorMessage(err: unknown): string {
+function getErrorCode(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorCode);
+}
+
+function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
-    return err.message;
+    return err.message || undefined;
   }
   if (typeof err === "string") {
-    return err;
+    return err || undefined;
   }
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? "";
+    return err.description ?? undefined;
   }
   if (err && typeof err === "object") {
     const message = (err as { message?: unknown }).message;
     if (typeof message === "string") {
-      return message;
-    }
-    // Extract message from nested `err.error.message` (e.g. Google Vertex wrappers)
-    const nestedMessage =
-      "error" in err &&
-      err.error &&
-      typeof err.error === "object" &&
-      typeof (err.error as { message?: unknown }).message === "string"
-        ? ((err.error as { message: string }).message ?? "")
-        : "";
-    if (nestedMessage) {
-      return nestedMessage;
+      return message || undefined;
     }
   }
-  return "";
+  return undefined;
+}
+
+function getErrorMessage(err: unknown): string {
+  return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
 function getErrorCause(err: unknown): unknown {
