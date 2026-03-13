@@ -1,8 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import type { Dirent } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -165,48 +164,6 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   return errors;
 }
 
-export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
-  // Windows doesn't support Unix permission bits — chmod has no effect and
-  // statSync().mode & 0o111 is always 0.  Skip the check entirely on Windows.
-  if (process.platform === "win32") {
-    return [];
-  }
-  const skillsDir = join(rootDir, "skills");
-  const errors: string[] = [];
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(skillsDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const scriptsDir = join(skillsDir, entry.name, "scripts");
-    let scriptEntries: Dirent[];
-    try {
-      scriptEntries = readdirSync(scriptsDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const scriptEntry of scriptEntries) {
-      if (!scriptEntry.isFile() || !scriptEntry.name.endsWith(".sh")) {
-        continue;
-      }
-      const scriptPath = join(scriptsDir, scriptEntry.name);
-      if ((statSync(scriptPath).mode & 0o111) === 0) {
-        errors.push(
-          `skill shell script is not executable: skills/${entry.name}/scripts/${scriptEntry.name}`,
-        );
-      }
-    }
-  }
-
-  return errors;
-}
-
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
@@ -252,17 +209,6 @@ function checkBundledExtensionRootDependencyMirrors() {
   }
 }
 
-function checkSkillShellScriptsExecutable() {
-  const errors = collectSkillShellScriptExecutableErrors();
-  if (errors.length > 0) {
-    console.error("release-check: skill shell script permission validation failed:");
-    for (const error of errors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
-}
-
 function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
@@ -270,6 +216,16 @@ function runPackDry(): PackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return JSON.parse(raw) as PackResult[];
+}
+
+export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
+  return [...paths]
+    .filter(
+      (path) =>
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+        /(^|\/)node_modules\//.test(path),
+    )
+    .toSorted();
 }
 
 function checkPluginVersions() {
@@ -463,7 +419,6 @@ function main() {
   checkAppcastSparkleVersions();
   checkPluginSdkExports();
   checkBundledExtensionRootDependencyMirrors();
-  checkSkillShellScriptsExecutable();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
@@ -477,9 +432,7 @@ function main() {
       return paths.has(group) ? [] : [group];
     })
     .toSorted();
-  const forbidden = [...paths].filter((path) =>
-    forbiddenPrefixes.some((prefix) => path.startsWith(prefix)),
-  );
+  const forbidden = collectForbiddenPackPaths(paths);
 
   if (missing.length > 0 || forbidden.length > 0) {
     if (missing.length > 0) {

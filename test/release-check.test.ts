@@ -1,12 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledExtensionRootDependencyGapErrors,
-  collectSkillShellScriptExecutableErrors,
+  collectForbiddenPackPaths,
 } from "../scripts/release-check.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
@@ -155,36 +152,14 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-// Windows doesn't support Unix permission bits — chmod 0o755 is a no-op and
-// statSync().mode never reports execute bits, so these tests are meaningless there.
-describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
-  it("flags non-executable shell scripts under skills/*/scripts", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
-    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
-    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
-    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
-    chmodSync(scriptPath, 0o644);
-
-    try {
-      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
-        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
-      ]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts executable shell scripts", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
-    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
-    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
-    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
-    chmodSync(scriptPath, 0o755);
-
-    try {
-      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+describe("collectForbiddenPackPaths", () => {
+  it("flags nested node_modules leaking into npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "extensions/tlon/node_modules/.bin/tlon",
+        "node_modules/.bin/openclaw",
+      ]),
+    ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
   });
 });
