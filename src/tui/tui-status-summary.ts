@@ -44,6 +44,35 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`Heartbeat: ${heartbeatParts.join(", ")}`);
   }
 
+  const dominantLatency = summary.heartbeat?.diagnostics?.latency?.dominant?.[0];
+  const earlyStatusGuidance = summary.heartbeat?.diagnostics?.earlyStatus?.guidance;
+  const phase2Supplements = summary.heartbeat?.diagnostics?.earlyStatus?.phase2Supplements;
+  if (dominantLatency || earlyStatusGuidance || phase2Supplements) {
+    lines.push("");
+    lines.push("Early status:");
+    if (dominantLatency) {
+      lines.push(`  Dominant latency: ${dominantLatency.segment} x${dominantLatency.count ?? 0}`);
+    }
+    if (phase2Supplements) {
+      const supplementLine = [
+        `Phase-2 supplements: ${phase2Supplements.eligibleCount ?? 0}/${phase2Supplements.sampleCount ?? 0} (${phase2Supplements.hitRatePct ?? 0}%)`,
+        typeof phase2Supplements.statusFirstVisibleAvgMs === "number"
+          ? `status visible ${phase2Supplements.statusFirstVisibleAvgMs}/${phase2Supplements.statusFirstVisibleP95Ms ?? phase2Supplements.statusFirstVisibleAvgMs}ms`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+      lines.push(`  ${supplementLine}`);
+      const topSkip = phase2Supplements.topSkipReasons?.[0];
+      if (topSkip?.reason) {
+        lines.push(`  Top skip: ${topSkip.reason} x${topSkip.count ?? 0}`);
+      }
+    }
+    if (earlyStatusGuidance?.focus) {
+      lines.push(`  Next: ${earlyStatusGuidance.focus} | ${earlyStatusGuidance.reason ?? ""}`);
+    }
+  }
+
   const sessionPaths = summary.sessions?.paths ?? [];
   if (sessionPaths.length === 1) {
     lines.push(`Session store: ${sessionPaths[0]}`);

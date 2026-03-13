@@ -37,6 +37,73 @@ import {
   resolveUpdateAvailability,
 } from "./status.update.js";
 
+function formatEarlyStatusDiagnostics(summary: {
+  heartbeat?: {
+    diagnostics?: {
+      latency?: {
+        dominant?: Array<{ segment: string; count: number }>;
+        earlyStatusPriority?: {
+          level: "prioritize" | "observe" | "deprioritize";
+          reason: string;
+        };
+      };
+      earlyStatus?: {
+        guidance?: {
+          focus: string;
+          reason: string;
+        };
+        phase2Supplements?: {
+          sampleCount: number;
+          eligibleCount: number;
+          hitRatePct: number;
+          topSkipReasons?: Array<{ reason: string; count: number }>;
+          statusFirstVisibleAvgMs?: number;
+          statusFirstVisibleP95Ms?: number;
+        };
+      };
+    };
+  };
+}) {
+  const diagnostics = summary.heartbeat?.diagnostics;
+  const dominant = diagnostics?.latency?.dominant?.[0];
+  const priority = diagnostics?.latency?.earlyStatusPriority;
+  const guidance = diagnostics?.earlyStatus?.guidance;
+  const supplements = diagnostics?.earlyStatus?.phase2Supplements;
+  if (!dominant && !priority && !guidance && !supplements) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (dominant || priority) {
+    lines.push(
+      [
+        dominant ? `dominant ${dominant.segment} x${dominant.count}` : null,
+        priority ? `priority ${priority.level}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+  }
+  if (supplements) {
+    const supplementParts = [
+      `phase-2 supplements ${supplements.eligibleCount}/${supplements.sampleCount} (${supplements.hitRatePct}%)`,
+      typeof supplements.statusFirstVisibleAvgMs === "number"
+        ? `status visible ${supplements.statusFirstVisibleAvgMs}/${supplements.statusFirstVisibleP95Ms}ms`
+        : null,
+    ].filter(Boolean);
+    lines.push(supplementParts.join(" · "));
+    if (supplements.topSkipReasons?.length) {
+      const top = supplements.topSkipReasons[0];
+      if (top) {
+        lines.push(`top skip ${top.reason} x${top.count}`);
+      }
+    }
+  }
+  if (guidance) {
+    lines.push(`next ${guidance.focus} · ${guidance.reason}`);
+  }
+  return lines;
+}
+
 function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
@@ -584,6 +651,15 @@ export async function statusCommand(
             ],
     }).trimEnd(),
   );
+
+  const earlyStatusLines = formatEarlyStatusDiagnostics(summary);
+  if (earlyStatusLines.length > 0) {
+    runtime.log("");
+    runtime.log(theme.heading("Early status"));
+    for (const line of earlyStatusLines) {
+      runtime.log(line);
+    }
+  }
 
   if (summary.queuedSystemEvents.length > 0) {
     runtime.log("");
