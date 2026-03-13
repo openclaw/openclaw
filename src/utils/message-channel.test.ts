@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMSTeamsTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveGatewayMessageChannel } from "./message-channel.js";
+import {
+  INTER_SESSION_CHANNEL,
+  normalizeMessageChannel,
+  resolveGatewayMessageChannel,
+} from "./message-channel.js";
 
 const emptyRegistry = createTestRegistry([]);
 const msteamsPlugin: ChannelPlugin = {
@@ -30,5 +34,20 @@ describe("message-channel", () => {
       createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
     );
     expect(resolveGatewayMessageChannel("teams")).toBe("msteams");
+  });
+
+  it("does not remap reserved sentinel ids through mutable plugin aliases", () => {
+    const plugin: ChannelPlugin = {
+      ...createMSTeamsTestPluginBase(),
+      meta: {
+        ...createMSTeamsTestPluginBase().meta,
+        aliases: ["teams"],
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "msteams", plugin, source: "test" }]));
+
+    plugin.meta.aliases?.push(INTER_SESSION_CHANNEL);
+
+    expect(normalizeMessageChannel(INTER_SESSION_CHANNEL)).toBe(INTER_SESSION_CHANNEL);
   });
 });
