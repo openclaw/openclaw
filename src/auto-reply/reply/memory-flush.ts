@@ -1,6 +1,7 @@
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -160,10 +161,18 @@ function ensureMemoryFlushSafetyHints(text: string): string {
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
+  providerId?: string;
   agentCfgContextTokens?: number;
 }): number {
+  const qualified =
+    params.providerId && params.modelId
+      ? lookupContextTokens(`${normalizeProviderId(params.providerId)}/${params.modelId}`)
+      : undefined;
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    qualified ??
+    lookupContextTokens(params.modelId) ??
+    params.agentCfgContextTokens ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 

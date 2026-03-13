@@ -62,7 +62,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -73,6 +73,18 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
+      // Store with provider-qualified key (e.g. "rdsec/claude-4.6-sonnet") so
+      // models that share the same id across providers but differ in context
+      // window are resolved correctly via lookupContextTokens.
+      // Use normalizeProviderId so the key format matches resolveContextTokensForModel
+      // which also normalizes before constructing the qualified lookup key.
+      if (providerId) {
+        params.cache.set(`${normalizeProviderId(providerId)}/${modelId}`, contextWindow);
+      }
+      // Also store by bare model id as a fallback for callers that only have
+      // the model name. When multiple providers define the same id the last
+      // one wins, but a provider-qualified lookup above will always take
+      // precedence when provider info is available.
       params.cache.set(modelId, contextWindow);
     }
   }
