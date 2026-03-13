@@ -305,7 +305,7 @@ describe("exec approval handlers", () => {
     systemRunPlan: {
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/tmp",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     },
@@ -358,7 +358,7 @@ describe("exec approval handlers", () => {
       requestParams.systemRunPlan = {
         argv: commandArgv,
         cwd: cwdValue,
-        rawCommand: commandText,
+        commandText: commandText ?? commandArgv.join(" "),
         agentId:
           typeof (requestParams as { agentId?: unknown }).agentId === "string"
             ? ((requestParams as { agentId: string }).agentId ?? null)
@@ -586,7 +586,8 @@ describe("exec approval handlers", () => {
         systemRunPlan: {
           argv: ["/usr/bin/echo", "ok"],
           cwd: "/real/cwd",
-          rawCommand: "/usr/bin/echo ok",
+          commandText: "/usr/bin/echo ok",
+          commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
         },
@@ -596,17 +597,76 @@ describe("exec approval handlers", () => {
     expect(requested).toBeTruthy();
     const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
     expect(request["command"]).toBe("/usr/bin/echo ok");
-    expect(request["commandArgv"]).toEqual(["/usr/bin/echo", "ok"]);
+    expect(request["commandPreview"]).toBeUndefined();
+    expect(request["commandArgv"]).toBeUndefined();
     expect(request["cwd"]).toBe("/real/cwd");
     expect(request["agentId"]).toBe("main");
     expect(request["sessionKey"]).toBe("agent:main:main");
     expect(request["systemRunPlan"]).toEqual({
       argv: ["/usr/bin/echo", "ok"],
       cwd: "/real/cwd",
-      rawCommand: "/usr/bin/echo ok",
+      commandText: "/usr/bin/echo ok",
+      commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
     });
+  });
+
+  it("derives a command preview from the fallback command for older node plans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        systemRunPlan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/real/cwd",
+          commandText: './env sh -c "jq --version"',
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe('./env sh -c "jq --version"');
+    expect(request["commandPreview"]).toBeUndefined();
+    expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
+      "jq --version",
+    );
+  });
+
+  it("sanitizes invisible Unicode format chars in approval display text without changing node bindings", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "bash safe\u200B.sh",
+        commandArgv: ["bash", "safe\u200B.sh"],
+        systemRunPlan: {
+          argv: ["bash", "safe\u200B.sh"],
+          cwd: "/real/cwd",
+          commandText: "bash safe\u200B.sh",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).toBe("bash safe\\u{200B}.sh");
+    expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
+      "bash safe\u200B.sh",
+    );
   });
 
   it("accepts resolve during broadcast", async () => {

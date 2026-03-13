@@ -16,8 +16,9 @@ MUTED='\033[38;2;90;100;128m'       # text-muted    #5a6480
 NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
+NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=12
+NODE_MIN_MINOR=16
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -1316,14 +1317,14 @@ print_active_node_paths() {
     return 0
 }
 
-ensure_macos_node22_active() {
+ensure_macos_default_node_active() {
     if [[ "$OS" != "macos" ]]; then
         return 0
     fi
 
     local brew_node_prefix=""
     if command -v brew &> /dev/null; then
-        brew_node_prefix="$(brew --prefix node@22 2>/dev/null || true)"
+        brew_node_prefix="$(brew --prefix "node@${NODE_DEFAULT_MAJOR}" 2>/dev/null || true)"
         if [[ -n "$brew_node_prefix" && -x "${brew_node_prefix}/bin/node" ]]; then
             export PATH="${brew_node_prefix}/bin:$PATH"
             refresh_shell_command_cache
@@ -1340,17 +1341,17 @@ ensure_macos_node22_active() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Node.js v22 was installed but this shell is using ${active_version} (${active_path})"
+    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
     if [[ -n "$brew_node_prefix" ]]; then
         echo "Add this to your shell profile and restart shell:"
         echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
     else
-        echo "Ensure Homebrew node@22 is first on PATH, then rerun installer."
+        echo "Ensure Homebrew node@${NODE_DEFAULT_MAJOR} is first on PATH, then rerun installer."
     fi
     return 1
 }
 
-ensure_node22_active_shell() {
+ensure_default_node_active_shell() {
     if node_is_at_least_required; then
         return 0
     fi
@@ -1373,13 +1374,13 @@ ensure_node22_active_shell() {
     if [[ "$nvm_detected" -eq 1 ]]; then
         echo "nvm appears to be managing Node for this shell."
         echo "Run:"
-        echo "  nvm install 22"
-        echo "  nvm use 22"
-        echo "  nvm alias default 22"
+        echo "  nvm install ${NODE_DEFAULT_MAJOR}"
+        echo "  nvm use ${NODE_DEFAULT_MAJOR}"
+        echo "  nvm alias default ${NODE_DEFAULT_MAJOR}"
         echo "Then open a new shell and rerun:"
         echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
     else
-        echo "Install/select Node.js 22+ and ensure it is first on PATH, then rerun installer."
+        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} (or Node ${NODE_MIN_VERSION}+ minimum) and ensure it is first on PATH, then rerun installer."
     fi
 
     return 1
@@ -1410,9 +1411,9 @@ check_node() {
 install_node() {
     if [[ "$OS" == "macos" ]]; then
         ui_info "Installing Node.js via Homebrew"
-        run_quiet_step "Installing node@22" brew install node@22
-        brew link node@22 --overwrite --force 2>/dev/null || true
-        if ! ensure_macos_node22_active; then
+        run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"
+        brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force 2>/dev/null || true
+        if ! ensure_macos_default_node_active; then
             exit 1
         fi
         ui_success "Node.js installed"
@@ -1435,7 +1436,7 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            ui_success "Node.js v22 installed"
+            ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
             print_active_node_paths || true
             return 0
         fi
@@ -1444,7 +1445,7 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://deb.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" apt-get install -y -qq nodejs
@@ -1455,7 +1456,7 @@ install_node() {
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" dnf install -y -q nodejs
@@ -1466,7 +1467,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            download_file "https://rpm.nodesource.com/setup_22.x" "$tmp"
+            download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
                 run_quiet_step "Installing Node.js" yum install -y -q nodejs
@@ -1476,11 +1477,11 @@ install_node() {
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js 22+ manually: https://nodejs.org"
+            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually (or Node ${NODE_MIN_VERSION}+ minimum): https://nodejs.org"
             exit 1
         fi
 
-        ui_success "Node.js v22 installed"
+        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
         print_active_node_paths || true
     fi
 }
@@ -2267,7 +2268,7 @@ main() {
     if ! check_node; then
         install_node
     fi
-    if ! ensure_node22_active_shell; then
+    if ! ensure_default_node_active_shell; then
         exit 1
     fi
 
