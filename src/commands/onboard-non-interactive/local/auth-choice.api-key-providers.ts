@@ -17,6 +17,7 @@ import {
   applyOpencodeGoConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applyDeepSeekConfig,
   applyQianfanConfig,
   applySyntheticConfig,
   applyTogetherConfig,
@@ -37,6 +38,7 @@ import {
   setOpencodeGoApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setDeepSeekApiKey,
   setQianfanApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
@@ -200,6 +202,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
             mode: "api_key",
           }),
           "byteplus-plan/ark-code-latest",
+        ),
+    },
+    {
+      authChoices: ["deepseek-api-key"],
+      provider: "deepseek",
+      flagValue: params.opts.deepseekApiKey,
+      flagName: "--deepseek-api-key",
+      envVar: "DEEPSEEK_API_KEY",
+      profileId: "deepseek:default",
+      setCredential: withStorage(setDeepSeekApiKey),
+      applyConfig: (cfg) =>
+        applyDeepSeekConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "deepseek:default",
+            provider: "deepseek",
+            mode: "api_key",
+          }),
         ),
     },
     {

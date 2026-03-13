@@ -9,13 +9,11 @@ import {
   buildQianfanProvider,
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.js";
-import {
   DEEPSEEK_DEFAULT_MODEL_ID,
   DEEPSEEK_BASE_URL,
   buildDeepSeekProvider,
-} from "../agents/models-config.providers.static.js";
+  XIAOMI_DEFAULT_MODEL_ID,
+} from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
