@@ -48,6 +48,20 @@ function createHandlerWithTracker(overrides?: {
   return { handler, trackEvent };
 }
 
+async function handleDirectMessage(
+  handler: ReturnType<typeof createHandlerWithTracker>["handler"],
+) {
+  await handler(
+    {
+      type: "message",
+      channel: "D1",
+      ts: "123.456",
+      text: "hello",
+    } as never,
+    { source: "message" },
+  );
+}
+
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
@@ -82,15 +96,7 @@ describe("createSlackMessageHandler", () => {
   it("does not track duplicate messages that are already seen", async () => {
     const { handler, trackEvent } = createHandlerWithTracker({ markMessageSeen: () => true });
 
-    await handler(
-      {
-        type: "message",
-        channel: "D1",
-        ts: "123.456",
-        text: "hello",
-      } as never,
-      { source: "message" },
-    );
+    await handleDirectMessage(handler);
 
     expect(trackEvent).not.toHaveBeenCalled();
     expect(resolveThreadTsMock).not.toHaveBeenCalled();
@@ -100,15 +106,7 @@ describe("createSlackMessageHandler", () => {
   it("tracks accepted non-duplicate messages", async () => {
     const { handler, trackEvent } = createHandlerWithTracker();
 
-    await handler(
-      {
-        type: "message",
-        channel: "D1",
-        ts: "123.456",
-        text: "hello",
-      } as never,
-      { source: "message" },
-    );
+    await handleDirectMessage(handler);
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
