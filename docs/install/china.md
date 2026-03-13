@@ -217,11 +217,11 @@ Get your API key at [DeepSeek Platform](https://platform.deepseek.com/).
     "mode": "merge",
     "providers": {
       "moonshot": {
-        "baseUrl": "https://api.moonshot.ai/v1",
+        "baseUrl": "https://api.moonshot.cn/v1",
         "apiKey": "${MOONSHOT_API_KEY}",
         "api": "openai-completions",
         "models": [
-          { "id": "kimi-k2.5", "name": "Kimi K2.5", "contextWindow": 131072, "maxTokens": 8192 }
+          { "id": "kimi-k2.5", "name": "Kimi K2.5", "contextWindow": 256000, "maxTokens": 8192 }
         ]
       }
     }
@@ -270,7 +270,7 @@ A practical setup for China users — use Qwen for daily tasks (no proxy needed,
     "defaults": {
       "model": {
         "primary": "qwen/qwen-max",
-        "secondary": "anthropic/claude-sonnet-4-6"
+        "fallbacks": ["anthropic/claude-sonnet-4-6"]
       }
     }
   }
