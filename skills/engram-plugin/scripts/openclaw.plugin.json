@@ -1,0 +1,44 @@
+{
+  "id": "engram-memory",
+  "name": "Engram Memory",
+  "description": "Bridges Engram (emotional + conceptual memory) into OpenClaw prompt pipeline. Auto-retrieves on before_prompt_build, auto-writes on turn end.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Engram server base URL",
+        "default": "http://localhost:3000"
+      },
+      "maxResults": {
+        "type": "number",
+        "description": "Max memory results to inject per turn",
+        "default": 5
+      },
+      "maxConcepts": {
+        "type": "number",
+        "description": "Max concept results to inject per turn",
+        "default": 3
+      },
+      "writeEnabled": {
+        "type": "boolean",
+        "description": "Whether to write turn content back to Engram",
+        "default": true
+      },
+      "sessionFilter": {
+        "type": "string",
+        "description": "Only process sessions matching this prefix (e.g. 'agent:main:'). Empty = all sessions.",
+        "default": "agent:main:"
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": { "label": "Engram Server URL", "placeholder": "http://localhost:3000" },
+    "maxResults": { "label": "Max Memory Results" },
+    "maxConcepts": { "label": "Max Concept Results" },
+    "writeEnabled": { "label": "Write turns to Engram" },
+    "sessionFilter": { "label": "Session Key Prefix Filter" }
+  }
+}

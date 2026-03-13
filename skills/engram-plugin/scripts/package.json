@@ -1,0 +1,12 @@
+{
+  "name": "engram-memory",
+  "version": "0.1.0",
+  "description": "Engram emotional memory bridge for OpenClaw",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
