@@ -762,7 +762,7 @@ async function runSlashHandler(params: {
     text: string;
     trigger_id: string;
   }> &
-    Pick<{ channel_id: string; channel_name: string }, "channel_id" | "channel_name">;
+  Pick<{ channel_id: string; channel_name: string }, "channel_id" | "channel_name">;
 }): Promise<{ respond: ReturnType<typeof vi.fn>; ack: ReturnType<typeof vi.fn> }> {
   const handler = [...params.commands.values()][0];
   if (!handler) {
@@ -964,7 +964,7 @@ describe("slack slash commands access groups", () => {
 describe("slack slash command session metadata", () => {
   const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
 
-  it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
+  it("calls recordInboundSessionMetaSafe after dispatching a slash command", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
 

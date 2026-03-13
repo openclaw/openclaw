@@ -38,9 +38,20 @@ vi.mock("../../channels/reply-prefix.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
-  recordSessionMetaFromInbound: (...args: unknown[]) =>
-    mocks.recordSessionMetaFromInboundMock(...args),
   resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),
+}));
+
+vi.mock("./slash-dispatch.runtime.js", () => ({
+  recordInboundSessionMetaSafe: (...args: unknown[]) =>
+    mocks.recordSessionMetaFromInboundMock(...args),
+  deliverSlackSlashReplies: vi.fn(),
+  dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
+  finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
+  resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
+  createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
+  resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
+  resolveChunkMode: vi.fn(),
+  resolveMarkdownTableMode: vi.fn(),
 }));
 
 type SlashHarnessMocks = {
@@ -70,7 +81,7 @@ export function resetSlackSlashMocks() {
   });
   mocks.finalizeInboundContextMock.mockReset().mockImplementation((ctx: unknown) => ctx);
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
-  mocks.createReplyPrefixOptionsMock.mockReset().mockReturnValue({ onModelSelected: () => {} });
+  mocks.createReplyPrefixOptionsMock.mockReset().mockReturnValue({ onModelSelected: () => { } });
   mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
   mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
 }

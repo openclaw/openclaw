@@ -9,6 +9,11 @@ vi.mock("../agents/model-auth.js", async () => {
   return createModelAuthMockModule();
 });
 
+vi.mock("../infra/net/ssrf.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../infra/net/ssrf.js")>();
+  return { ...orig, resolvePinnedHostnameWithPolicy: async () => "1.2.3.4" };
+});
+
 const createFetchMock = () => {
   const fetchMock = vi.fn<FetchMock>(
     async (_input: RequestInfo | URL, _init?: RequestInit) =>

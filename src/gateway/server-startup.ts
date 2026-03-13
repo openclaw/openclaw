@@ -22,6 +22,7 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { WorldModelManager } from "../world-model/manager.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -180,6 +181,12 @@ export async function startGatewaySidecars(params: {
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
   });
+
+  void WorldModelManager.getInstance()
+    .initialize(params.cfg)
+    .catch((err) => {
+      params.log.warn(`world model initialization failed: ${String(err)}`);
+    });
 
   if (shouldWakeFromRestartSentinel()) {
     setTimeout(() => {

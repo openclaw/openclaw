@@ -1,0 +1,44 @@
+# OpenClaw World Model Docker Image
+#
+# Build:
+#   docker build -f Dockerfile.world-model -t openclaw-world-model .
+#
+# Run:
+#   docker run -d \
+#     -e OPENCLAW_TELEGRAM_TOKEN=your_token \
+#     -e OPENCLAW_TELEGRAM_ADMIN_ID=your_id \
+#     -v $(pwd)/world-model-data:/app/world-model-data \
+#     -v $(pwd)/.env:/app/.env \
+#     --name openclaw-agent \
+#     openclaw-world-model
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install pnpm
+RUN npm install -g pnpm
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY . .
+
+# Create data directory
+RUN mkdir -p world-model-data
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "process.exit(0)" || exit 1
+
+# Default environment
+ENV NODE_ENV=production
+ENV WORLD_MODEL_ENABLED=true
+ENV WORLD_MODEL_PROVIDER=lstm
+
+# Start agent
+CMD ["pnpm", "start"]

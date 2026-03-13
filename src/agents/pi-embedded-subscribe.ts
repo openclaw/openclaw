@@ -6,6 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { WorldModelManager } from "../world-model/manager.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -639,6 +640,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    worldModelManager: WorldModelManager.getInstance(),
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
