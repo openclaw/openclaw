@@ -65,6 +65,7 @@ type FeishuMessageGetItem = {
   message_id?: string;
   chat_id?: string;
   chat_type?: FeishuChatType;
+  thread_id?: string;
   msg_type?: string;
   body?: { content?: string };
   sender?: FeishuMessageSender;
@@ -151,13 +152,19 @@ function parseInteractiveCardContent(parsed: unknown): string {
     return "[Interactive Card]";
   }
 
-  const candidate = parsed as { elements?: unknown };
-  if (!Array.isArray(candidate.elements)) {
+  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
+  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
+  const elements = Array.isArray(candidate.elements)
+    ? candidate.elements
+    : Array.isArray(candidate.body?.elements)
+      ? candidate.body!.elements
+      : null;
+  if (!elements) {
     return "[Interactive Card]";
   }
 
   const texts: string[] = [];
-  for (const element of candidate.elements) {
+  for (const element of elements) {
     if (!element || typeof element !== "object") {
       continue;
     }
@@ -272,10 +279,119 @@ export async function getMessageFeishu(params: {
       content,
       contentType: msgType,
       createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+      threadId: item.thread_id || undefined,
     };
   } catch {
     return null;
   }
+}
+
+export type FeishuThreadMessageInfo = {
+  messageId: string;
+  senderId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+};
+
+/**
+ * List messages in a Feishu thread (topic).
+ * Uses container_id_type=thread to directly query thread messages,
+ * which includes both the root message and all replies (including bot replies).
+ */
+export async function listFeishuThreadMessages(params: {
+  cfg: ClawdbotConfig;
+  threadId: string;
+  currentMessageId?: string;
+  /** Exclude the root message (already provided separately as ThreadStarterBody). */
+  rootMessageId?: string;
+  limit?: number;
+  accountId?: string;
+}): Promise<FeishuThreadMessageInfo[]> {
+  const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  const response = (await client.im.message.list({
+    params: {
+      container_id_type: "thread",
+      container_id: threadId,
+      // Fetch newest messages first so long threads keep the most recent turns.
+      // Results are reversed below to restore chronological order.
+      sort_type: "ByCreateTimeDesc",
+      page_size: Math.min(limit + 1, 50),
+    },
+  })) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      items?: Array<{
+        message_id?: string;
+        root_id?: string;
+        parent_id?: string;
+        msg_type?: string;
+        body?: { content?: string };
+        sender?: {
+          id: string;
+          id_type: string;
+          sender_type: string;
+        };
+        create_time?: string;
+      }>;
+    };
+  };
+
+  if (response.code !== 0) {
+    throw new Error(
+      `Feishu thread list failed: code=${response.code} msg=${response.msg ?? "unknown"}`,
+    );
+  }
+
+  const items = response.data?.items ?? [];
+  const results: FeishuThreadMessageInfo[] = [];
+
+  for (const item of items) {
+    if (currentMessageId && item.message_id === currentMessageId) continue;
+    if (rootMessageId && item.message_id === rootMessageId) continue;
+
+    let content = item.body?.content ?? "";
+    try {
+      const parsed = JSON.parse(content);
+      if (item.msg_type === "text" && parsed.text) {
+        content = parsed.text;
+      } else if (item.msg_type === "post") {
+        content = parsePostContent(content).textContent;
+      } else if (item.msg_type === "interactive") {
+        content = parseInteractiveCardContent(parsed);
+      } else {
+        // For unsupported types (image, file, share, system, etc.) use a
+        // concise placeholder instead of leaking raw JSON into the prompt.
+        content = `[${item.msg_type ?? "unknown"} message]`;
+      }
+    } catch {
+      // Keep raw content if parsing fails
+    }
+
+    results.push({
+      messageId: item.message_id ?? "",
+      senderId: item.sender?.id,
+      senderType: item.sender?.sender_type,
+      content,
+      contentType: item.msg_type ?? "text",
+      createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+    });
+
+    if (results.length >= limit) break;
+  }
+
+  // Restore chronological order (oldest first) since we fetched newest-first.
+  results.reverse();
+  return results;
 }
 
 export type SendFeishuMessageParams = {
