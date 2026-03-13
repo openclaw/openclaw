@@ -66,6 +66,16 @@ describe("backup commands", () => {
     }
   }
 
+  function expectWorkspaceCoveredByState(
+    plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+  ) {
+    expect(plan.included).toHaveLength(1);
+    expect(plan.included[0]?.kind).toBe("state");
+    expect(plan.skipped).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
+    );
+  }
+
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
@@ -75,12 +85,7 @@ describe("backup commands", () => {
     await fs.writeFile(path.join(stateDir, "workspace", "SOUL.md"), "# soul\n", "utf8");
 
     const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-
-    expect(plan.included).toHaveLength(1);
-    expect(plan.included[0]?.kind).toBe("state");
-    expect(plan.skipped).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
-    );
+    expectWorkspaceCoveredByState(plan);
   });
 
   it("orders coverage checks by canonical path so symlinked workspaces do not duplicate state", async () => {
@@ -109,12 +114,7 @@ describe("backup commands", () => {
       );
 
       const plan = await resolveBackupPlanFromDisk({ includeWorkspace: true, nowMs: 123 });
-
-      expect(plan.included).toHaveLength(1);
-      expect(plan.included[0]?.kind).toBe("state");
-      expect(plan.skipped).toEqual(
-        expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
-      );
+      expectWorkspaceCoveredByState(plan);
     } finally {
       await fs.rm(symlinkDir, { recursive: true, force: true });
     }
