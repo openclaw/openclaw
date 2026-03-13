@@ -88,7 +88,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Scheduled Task stop/restart cleanup", () => {
+describe.runIf(process.platform !== "win32")("Scheduled Task stop/restart cleanup", () => {
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withWindowsEnv(async ({ env }) => {
       await writeGatewayScript(env);

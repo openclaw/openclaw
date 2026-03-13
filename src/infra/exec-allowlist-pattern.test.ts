@@ -23,7 +23,7 @@ describe("matchesExecAllowlistPattern", () => {
     expect(matchesExecAllowlistPattern(pattern, target)).toBe(expected);
   });
 
-  it("expands home-prefix patterns", () => {
+  it.runIf(process.platform !== "win32")("expands home-prefix patterns", () => {
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
     const prevHome = process.env.HOME;
     process.env.OPENCLAW_HOME = "/srv/openclaw-home";

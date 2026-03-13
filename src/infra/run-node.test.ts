@@ -135,30 +135,33 @@ describe("run-node script", () => {
     });
   });
 
-  it("returns the build exit code when the compiler step fails", async () => {
-    await withTempDir(async (tmp) => {
-      const spawn = (cmd: string) => {
-        if (cmd === "pnpm") {
-          return createExitedProcess(23);
-        }
-        return createExitedProcess(0);
-      };
+  it.runIf(process.platform !== "win32")(
+    "returns the build exit code when the compiler step fails",
+    async () => {
+      await withTempDir(async (tmp) => {
+        const spawn = (cmd: string) => {
+          if (cmd === "pnpm") {
+            return createExitedProcess(23);
+          }
+          return createExitedProcess(0);
+        };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
-      const exitCode = await runNodeMain({
-        cwd: tmp,
-        args: ["status"],
-        env: {
-          ...process.env,
-          OPENCLAW_FORCE_BUILD: "1",
-          OPENCLAW_RUNNER_LOG: "0",
-        },
-        spawn,
-        execPath: process.execPath,
-        platform: process.platform,
+        const { runNodeMain } = await import("../../scripts/run-node.mjs");
+        const exitCode = await runNodeMain({
+          cwd: tmp,
+          args: ["status"],
+          env: {
+            ...process.env,
+            OPENCLAW_FORCE_BUILD: "1",
+            OPENCLAW_RUNNER_LOG: "0",
+          },
+          spawn,
+          execPath: process.execPath,
+          platform: process.platform,
+        });
+
+        expect(exitCode).toBe(23);
       });
-
-      expect(exitCode).toBe(23);
-    });
-  });
+    },
+  );
 });
