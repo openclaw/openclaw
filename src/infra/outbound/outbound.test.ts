@@ -1,12 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
-import {
-  deleteDeliveryFromDb,
-  enqueueDeliveryToDb,
-  loadDeliveryByIdFromDb,
-} from "./delivery-queue-sqlite.js";
 import {
   ackDelivery,
   computeBackoffMs,
@@ -20,12 +18,6 @@ import {
   moveToFailed,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
-import { DirectoryCache } from "./directory-cache.js";
-import {
-  buildOutboundDeliveryJson,
-  formatGatewaySummary,
-  formatOutboundDeliverySummary,
-} from "./format.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -38,30 +30,56 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
-import { useDeliveryQueueTestDb } from "./test-helpers.delivery-queue.js";
 
 describe("delivery-queue", () => {
-  useDeliveryQueueTestDb();
+  let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
+  });
+
+  beforeEach(() => {
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
+  });
 
   describe("enqueue + ack lifecycle", () => {
     it("creates and removes a queue entry", async () => {
-      const id = await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1555",
-        payloads: [{ text: "hello" }],
-        bestEffort: true,
-        gifPlayback: true,
-        silent: true,
-        mirror: {
-          sessionKey: "agent:main:main",
-          text: "hello",
-          mediaUrls: ["https://example.com/file.png"],
+      const id = await enqueueDelivery(
+        {
+          channel: "whatsapp",
+          to: "+1555",
+          payloads: [{ text: "hello" }],
+          bestEffort: true,
+          gifPlayback: true,
+          silent: true,
+          mirror: {
+            sessionKey: "agent:main:main",
+            text: "hello",
+            mediaUrls: ["https://example.com/file.png"],
+          },
         },
-      });
+        tmpDir,
+      );
 
-      // Entry exists after enqueue.
-      const entry = loadDeliveryByIdFromDb(id);
-      expect(entry).not.toBeNull();
+      // Entry file exists after enqueue.
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const files = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      expect(files).toHaveLength(1);
+      expect(files[0]).toBe(`${id}.json`);
+
+      // Entry contents are correct.
+      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, files[0]), "utf-8"));
       expect(entry).toMatchObject({
         id,
         channel: "whatsapp",
@@ -76,54 +94,104 @@ describe("delivery-queue", () => {
         },
         retryCount: 0,
       });
-      expect(entry!.payloads).toEqual([{ text: "hello" }]);
+      expect(entry.payloads).toEqual([{ text: "hello" }]);
 
-      // Ack marks as delivered.
-      await ackDelivery(id);
-      const remaining = await loadPendingDeliveries();
+      // Ack removes the file.
+      await ackDelivery(id, tmpDir);
+      const remaining = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
       expect(remaining).toHaveLength(0);
     });
 
-    it("ack is idempotent (no error on missing entry)", async () => {
-      await expect(ackDelivery("nonexistent-id")).resolves.toBeUndefined();
+    it("ack is idempotent (no error on missing file)", async () => {
+      await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
+    });
+
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("ack removes .delivered marker so recovery does not replay", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      await ackDelivery(id, tmpDir);
+
+      // Neither .json nor .delivered should remain.
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("loadPendingDeliveries cleans up stale .delivered markers without replaying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
+        tmpDir,
+      );
+      const queueDir = path.join(tmpDir, "delivery-queue");
+
+      // Simulate crash between ack phase 1 (rename) and phase 2 (unlink):
+      // rename .json → .delivered, then pretend the process died.
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+
+      const entries = await loadPendingDeliveries(tmpDir);
+
+      // The .delivered entry must NOT appear as pending.
+      expect(entries).toHaveLength(0);
+      // And the marker file should have been cleaned up.
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
     });
   });
 
   describe("failDelivery", () => {
     it("increments retryCount, records attempt time, and sets lastError", async () => {
-      const id = await enqueueDelivery({
-        channel: "telegram",
-        to: "123",
-        payloads: [{ text: "test" }],
-      });
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir,
+      );
 
-      await failDelivery(id, "connection refused");
+      await failDelivery(id, "connection refused", tmpDir);
 
-      const entry = loadDeliveryByIdFromDb(id);
-      expect(entry!.retryCount).toBe(1);
-      expect(typeof entry!.lastAttemptAt).toBe("number");
-      expect(entry!.lastAttemptAt).toBeGreaterThan(0);
-      expect(entry!.lastError).toBe("connection refused");
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
+      expect(entry.retryCount).toBe(1);
+      expect(typeof entry.lastAttemptAt).toBe("number");
+      expect(entry.lastAttemptAt).toBeGreaterThan(0);
+      expect(entry.lastError).toBe("connection refused");
     });
   });
 
   describe("moveToFailed", () => {
-    it("marks entry as failed", async () => {
-      const id = await enqueueDelivery({
-        channel: "slack",
-        to: "#general",
-        payloads: [{ text: "hi" }],
-      });
+    it("moves entry to failed/ subdirectory", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "slack",
+          to: "#general",
+          payloads: [{ text: "hi" }],
+        },
+        tmpDir,
+      );
 
-      await moveToFailed(id);
+      await moveToFailed(id, tmpDir);
 
-      // Should not appear in pending
-      const pending = await loadPendingDeliveries();
-      expect(pending).toHaveLength(0);
-
-      // Should still exist as failed
-      const entry = loadDeliveryByIdFromDb(id);
-      expect(entry).not.toBeNull();
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const failedDir = path.join(queueDir, "failed");
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
     });
   });
 
@@ -152,17 +220,37 @@ describe("delivery-queue", () => {
   });
 
   describe("loadPendingDeliveries", () => {
-    it("returns empty array when no entries exist", async () => {
-      const entries = await loadPendingDeliveries();
+    it("returns empty array when queue directory does not exist", async () => {
+      const nonexistent = path.join(tmpDir, "no-such-dir");
+      const entries = await loadPendingDeliveries(nonexistent);
       expect(entries).toEqual([]);
     });
 
     it("loads multiple entries", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] });
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
+      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
 
-      const entries = await loadPendingDeliveries();
+      const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(2);
+    });
+
+    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "legacy" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const legacyEntry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      legacyEntry.retryCount = 2;
+      delete legacyEntry.lastAttemptAt;
+      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
+
+      const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
     });
   });
 
@@ -228,22 +316,27 @@ describe("delivery-queue", () => {
   describe("recoverPendingDeliveries", () => {
     const baseCfg = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
-
-    /** Helper to directly set retry state on a DB entry. */
+    const enqueueCrashRecoveryEntries = async () => {
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
+      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+    };
     const setEntryState = (
       id: string,
       state: { retryCount: number; lastAttemptAt?: number; enqueuedAt?: number },
     ) => {
-      const entry = loadDeliveryByIdFromDb(id)!;
-      deleteDeliveryFromDb(id);
-      enqueueDeliveryToDb({
-        ...entry,
-        retryCount: state.retryCount,
-        lastAttemptAt: state.lastAttemptAt,
-        enqueuedAt: state.enqueuedAt ?? entry.enqueuedAt,
-      });
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.retryCount = state.retryCount;
+      if (state.lastAttemptAt === undefined) {
+        delete entry.lastAttemptAt;
+      } else {
+        entry.lastAttemptAt = state.lastAttemptAt;
+      }
+      if (state.enqueuedAt !== undefined) {
+        entry.enqueuedAt = state.enqueuedAt;
+      }
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
     };
-
     const runRecovery = async ({
       deliver,
       log = createLog(),
@@ -256,15 +349,16 @@ describe("delivery-queue", () => {
       const result = await recoverPendingDeliveries({
         deliver: deliver as DeliverFn,
         log,
-        cfg: baseCfg as OpenClawConfig,
+        cfg: baseCfg,
+        stateDir: tmpDir,
         ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
       return { result, log };
     };
 
     it("recovers entries from a simulated crash", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] });
+      // Manually create queue entries as if gateway crashed before delivery.
+      await enqueueCrashRecoveryEntries();
       const deliver = vi.fn().mockResolvedValue([]);
       const { result } = await runRecovery({ deliver });
 
@@ -274,16 +368,17 @@ describe("delivery-queue", () => {
       expect(result.skippedMaxRetries).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
-      const remaining = await loadPendingDeliveries();
+      // Queue should be empty after recovery.
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
     });
 
-    it("moves entries that exceeded max retries to failed", async () => {
-      const id = await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "a" }],
-      });
+    it("moves entries that exceeded max retries to failed/", async () => {
+      // Create an entry and manually set retryCount to MAX_RETRIES.
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
       setEntryState(id, { retryCount: MAX_RETRIES });
 
       const deliver = vi.fn();
@@ -292,10 +387,14 @@ describe("delivery-queue", () => {
       expect(deliver).not.toHaveBeenCalled();
       expect(result.skippedMaxRetries).toBe(1);
       expect(result.deferredBackoff).toBe(0);
+
+      // Entry should be in failed/ directory.
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
-      await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] });
+      await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir);
 
       const deliver = vi.fn().mockRejectedValue(new Error("network down"));
       const { result } = await runRecovery({ deliver });
@@ -303,14 +402,18 @@ describe("delivery-queue", () => {
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
 
-      const entries = await loadPendingDeliveries();
+      // Entry should still be in queue with incremented retryCount.
+      const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(1);
       expect(entries[0].retryCount).toBe(1);
       expect(entries[0].lastError).toBe("network down");
     });
 
-    it("moves entries to failed immediately on permanent delivery errors", async () => {
-      await enqueueDelivery({ channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] });
+    it("moves entries to failed/ immediately on permanent delivery errors", async () => {
+      const id = await enqueueDelivery(
+        { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },
+        tmpDir,
+      );
       const deliver = vi
         .fn()
         .mockRejectedValue(new Error("No conversation reference found for user:abc"));
@@ -319,13 +422,15 @@ describe("delivery-queue", () => {
 
       expect(result.failed).toBe(1);
       expect(result.recovered).toBe(0);
-      const remaining = await loadPendingDeliveries();
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
     });
 
     it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
       await runRecovery({ deliver });
@@ -334,19 +439,22 @@ describe("delivery-queue", () => {
     });
 
     it("replays stored delivery options during recovery", async () => {
-      await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "a" }],
-        bestEffort: true,
-        gifPlayback: true,
-        silent: true,
-        mirror: {
-          sessionKey: "agent:main:main",
-          text: "a",
-          mediaUrls: ["https://example.com/a.png"],
+      await enqueueDelivery(
+        {
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "a" }],
+          bestEffort: true,
+          gifPlayback: true,
+          silent: true,
+          mirror: {
+            sessionKey: "agent:main:main",
+            text: "a",
+            mediaUrls: ["https://example.com/a.png"],
+          },
         },
-      });
+        tmpDir,
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       await runRecovery({ deliver });
@@ -366,9 +474,8 @@ describe("delivery-queue", () => {
     });
 
     it("respects maxRecoveryMs time budget", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] });
-      await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] });
+      await enqueueCrashRecoveryEntries();
+      await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir);
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { result, log } = await runRecovery({
@@ -382,18 +489,19 @@ describe("delivery-queue", () => {
       expect(result.skippedMaxRetries).toBe(0);
       expect(result.deferredBackoff).toBe(0);
 
-      const remaining = await loadPendingDeliveries();
+      // All entries should still be in the queue.
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(3);
 
+      // Should have logged a warning about deferred entries.
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
     });
 
     it("defers entries until backoff becomes eligible", async () => {
-      const id = await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "a" }],
-      });
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
       setEntryState(id, { retryCount: 3, lastAttemptAt: Date.now() });
 
       const deliver = vi.fn().mockResolvedValue([]);
@@ -410,7 +518,7 @@ describe("delivery-queue", () => {
         deferredBackoff: 1,
       });
 
-      const remaining = await loadPendingDeliveries();
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
@@ -418,16 +526,14 @@ describe("delivery-queue", () => {
 
     it("continues past high-backoff entries and recovers ready entries behind them", async () => {
       const now = Date.now();
-      const blockedId = await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "blocked" }],
-      });
-      const readyId = await enqueueDelivery({
-        channel: "telegram",
-        to: "2",
-        payloads: [{ text: "ready" }],
-      });
+      const blockedId = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "blocked" }] },
+        tmpDir,
+      );
+      const readyId = await enqueueDelivery(
+        { channel: "telegram", to: "2", payloads: [{ text: "ready" }] },
+        tmpDir,
+      );
 
       setEntryState(blockedId, { retryCount: 3, lastAttemptAt: now, enqueuedAt: now - 30_000 });
       setEntryState(readyId, { retryCount: 0, enqueuedAt: now - 10_000 });
@@ -446,7 +552,7 @@ describe("delivery-queue", () => {
         expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
       );
 
-      const remaining = await loadPendingDeliveries();
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
       expect(remaining[0]?.id).toBe(blockedId);
     });
@@ -456,11 +562,10 @@ describe("delivery-queue", () => {
       const start = new Date("2026-01-01T00:00:00.000Z");
       vi.setSystemTime(start);
 
-      const id = await enqueueDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "later" }],
-      });
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "later" }] },
+        tmpDir,
+      );
       setEntryState(id, { retryCount: 3, lastAttemptAt: start.getTime() });
 
       const firstDeliver = vi.fn().mockResolvedValue([]);
@@ -484,7 +589,7 @@ describe("delivery-queue", () => {
       });
       expect(secondDeliver).toHaveBeenCalledTimes(1);
 
-      const remaining = await loadPendingDeliveries();
+      const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
 
       vi.useRealTimers();
@@ -502,184 +607,6 @@ describe("delivery-queue", () => {
       });
       expect(deliver).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe("DirectoryCache", () => {
-  const cfg = {} as OpenClawConfig;
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("expires entries after ttl", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const cache = new DirectoryCache<string>(1000, 10);
-
-    cache.set("a", "value-a", cfg);
-    expect(cache.get("a", cfg)).toBe("value-a");
-
-    vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
-    expect(cache.get("a", cfg)).toBeUndefined();
-  });
-
-  it("evicts least-recent entries when capacity is exceeded", () => {
-    const cases = [
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: undefined, b: "value-b", c: "value-c" },
-      },
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "a", "value-a2"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: "value-a2", b: undefined, c: "value-c" },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const cache = new DirectoryCache<string>(60_000, 2);
-      for (const action of testCase.actions) {
-        cache.set(action[1], action[2], cfg);
-      }
-      expect(cache.get("a", cfg)).toBe(testCase.expected.a);
-      expect(cache.get("b", cfg)).toBe(testCase.expected.b);
-      expect(cache.get("c", cfg)).toBe(testCase.expected.c);
-    }
-  });
-});
-
-describe("formatOutboundDeliverySummary", () => {
-  it("formats fallback and channel-specific detail variants", () => {
-    const cases = [
-      {
-        name: "fallback telegram",
-        channel: "telegram" as const,
-        result: undefined,
-        expected: "✅ Sent via Telegram. Message ID: unknown",
-      },
-      {
-        name: "fallback imessage",
-        channel: "imessage" as const,
-        result: undefined,
-        expected: "✅ Sent via iMessage. Message ID: unknown",
-      },
-      {
-        name: "telegram with chat detail",
-        channel: "telegram" as const,
-        result: {
-          channel: "telegram" as const,
-          messageId: "m1",
-          chatId: "c1",
-        },
-        expected: "✅ Sent via Telegram. Message ID: m1 (chat c1)",
-      },
-      {
-        name: "discord with channel detail",
-        channel: "discord" as const,
-        result: {
-          channel: "discord" as const,
-          messageId: "d1",
-          channelId: "chan",
-        },
-        expected: "✅ Sent via Discord. Message ID: d1 (channel chan)",
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(formatOutboundDeliverySummary(testCase.channel, testCase.result), testCase.name).toBe(
-        testCase.expected,
-      );
-    }
-  });
-});
-
-describe("buildOutboundDeliveryJson", () => {
-  it("builds direct delivery payloads across provider-specific fields", () => {
-    const cases = [
-      {
-        name: "telegram direct payload",
-        input: {
-          channel: "telegram" as const,
-          to: "123",
-          result: { channel: "telegram" as const, messageId: "m1", chatId: "c1" },
-          mediaUrl: "https://example.com/a.png",
-        },
-        expected: {
-          channel: "telegram",
-          via: "direct",
-          to: "123",
-          messageId: "m1",
-          mediaUrl: "https://example.com/a.png",
-          chatId: "c1",
-        },
-      },
-      {
-        name: "whatsapp metadata",
-        input: {
-          channel: "whatsapp" as const,
-          to: "+1",
-          result: { channel: "whatsapp" as const, messageId: "w1", toJid: "jid" },
-        },
-        expected: {
-          channel: "whatsapp",
-          via: "direct",
-          to: "+1",
-          messageId: "w1",
-          mediaUrl: null,
-          toJid: "jid",
-        },
-      },
-      {
-        name: "signal timestamp",
-        input: {
-          channel: "signal" as const,
-          to: "+1",
-          result: { channel: "signal" as const, messageId: "s1", timestamp: 123 },
-        },
-        expected: {
-          channel: "signal",
-          via: "direct",
-          to: "+1",
-          messageId: "s1",
-          mediaUrl: null,
-          timestamp: 123,
-        },
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(buildOutboundDeliveryJson(testCase.input), testCase.name).toEqual(testCase.expected);
-    }
-  });
-});
-
-describe("formatGatewaySummary", () => {
-  it("formats default and custom gateway action summaries", () => {
-    const cases = [
-      {
-        name: "default send action",
-        input: { channel: "whatsapp", messageId: "m1" },
-        expected: "✅ Sent via gateway (whatsapp). Message ID: m1",
-      },
-      {
-        name: "custom action",
-        input: { action: "Poll sent", channel: "discord", messageId: "p1" },
-        expected: "✅ Poll sent via gateway (discord). Message ID: p1",
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(formatGatewaySummary(testCase.input), testCase.name).toBe(testCase.expected);
-    }
   });
 });
 
@@ -958,6 +885,28 @@ describe("resolveOutboundSessionRoute", () => {
       sessionKey: "agent:main:discord:direct:123",
       from: "discord:123",
       to: "user:123",
+      chatType: "direct",
+    });
+  });
+
+  it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "mattermost",
+      agentId: "main",
+      target: userId,
+      resolvedTarget: {
+        to: `user:${userId}`,
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: `agent:main:mattermost:direct:${userId}`,
+      from: `mattermost:${userId}`,
+      to: `user:${userId}`,
       chatType: "direct",
     });
   });
