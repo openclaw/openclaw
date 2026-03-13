@@ -31,6 +31,7 @@ vi.mock("../process/kill-tree.js", () => ({
 
 vi.mock("node:child_process", () => ({
   spawn,
+  execFile: vi.fn(),
 }));
 
 const {
