@@ -1,3 +1,5 @@
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
+
 export type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
 
 export function splitArgsPreservingQuotes(
@@ -45,4 +47,18 @@ export function splitArgsPreservingQuotes(
     args.push(current);
   }
   return args;
+}
+
+/**
+ * Validate that the command (first element) of a parsed argv is a safe
+ * executable value. This prevents using splitArgsPreservingQuotes output
+ * as a trusted command without validation (CWE-78).
+ */
+export function assertSafeArgv(argv: string[]): void {
+  if (argv.length === 0) {
+    return;
+  }
+  if (!isSafeExecutableValue(argv[0])) {
+    throw new Error(`Parsed command is not a safe executable value: ${argv[0]}`);
+  }
 }
