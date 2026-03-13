@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { inspectTelegramAccount } from "../telegram/account-inspect.js";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "../telegram/accounts.js";
@@ -70,6 +71,10 @@ function makeSlackHttpSummaryPlugin(): ChannelPlugin {
 }
 
 describe("buildChannelSummary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
     vi.mocked(listChannelPlugins).mockReturnValue([makeSlackHttpSummaryPlugin()]);
 
@@ -86,6 +91,19 @@ describe("buildChannelSummary", () => {
   });
 
   it("treats multi-account Telegram tokenFile setups as configured", async () => {
+    const tokenFiles = new Set([
+      "/tmp/openclaw-telegram-default-token",
+      "/tmp/openclaw-telegram-flint-token",
+    ]);
+    const realExistsSync = fs.existsSync.bind(fs);
+    vi.spyOn(fs, "existsSync").mockImplementation((pathValue) => {
+      const candidate = String(pathValue);
+      if (tokenFiles.has(candidate)) {
+        return false;
+      }
+      return realExistsSync(pathValue);
+    });
+
     vi.mocked(listChannelPlugins).mockReturnValue([
       makeDirectPlugin({
         id: "telegram",
