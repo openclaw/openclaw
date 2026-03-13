@@ -6,6 +6,7 @@ import { createFolderSnapshotStore } from "./provider-folder.js";
 import type { BackupSnapshotEnvelope } from "./types.js";
 
 const tempDirs: string[] = [];
+const SNAPSHOT_LIST_READ_CONCURRENCY = 8;
 const VALID_SALT = Buffer.alloc(16, 1).toString("base64url");
 const VALID_NONCE = Buffer.alloc(12, 2).toString("base64url");
 const VALID_AUTH_TAG = Buffer.alloc(16, 3).toString("base64url");
@@ -259,6 +260,37 @@ describe("folder snapshot store", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects oversize envelopes before storing snapshots", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-envelope-oversize-");
+    const payloadPath = path.join(targetDir, "source.payload");
+    await fs.writeFile(payloadPath, "payload-data", "utf8");
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+
+    await expect(
+      store.uploadSnapshot({
+        installationId: VALID_INSTALLATION_ID,
+        snapshotId: VALID_SNAPSHOT_ID,
+        envelope: {
+          ...createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID),
+          snapshotName: "x".repeat(1024 * 1024),
+        },
+        payloadPath,
+      }),
+    ).rejects.toThrow("Envelope file exceeds maximum allowed size");
+
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    await expect(
+      fs.access(path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.payload.bin`)),
+    ).rejects.toThrow();
+    await expect(
+      fs.access(path.join(snapshotRoot, `${VALID_SNAPSHOT_ID}.envelope.json`)),
+    ).rejects.toThrow();
+  });
+
   it("surfaces envelope read failures other than ENOENT", async () => {
     const targetDir = await createTempDir("openclaw-snapshot-store-readfile-");
     const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
@@ -292,5 +324,60 @@ describe("folder snapshot store", () => {
         installationId: VALID_INSTALLATION_ID,
       }),
     ).rejects.toThrow("i/o error");
+  });
+
+  it("bounds concurrent envelope reads while listing snapshots", async () => {
+    const targetDir = await createTempDir("openclaw-snapshot-store-concurrency-");
+    const snapshotRoot = path.join(targetDir, "snapshots", VALID_INSTALLATION_ID);
+    const envelope = createEnvelope(VALID_SNAPSHOT_ID, VALID_INSTALLATION_ID);
+    await fs.mkdir(snapshotRoot, { recursive: true });
+
+    for (let index = 0; index < SNAPSHOT_LIST_READ_CONCURRENCY * 2 + 1; index += 1) {
+      const snapshotId = `snap_2026-03-10T00-00-${String(index).padStart(2, "0")}-000Z_deadbeef`;
+      await fs.writeFile(
+        path.join(snapshotRoot, `${snapshotId}.envelope.json`),
+        `${JSON.stringify({ ...envelope, snapshotId }, null, 2)}\n`,
+        "utf8",
+      );
+    }
+
+    const actualReadFile = fs.readFile.bind(fs);
+    const pendingReads: Array<() => void> = [];
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    vi.spyOn(fs, "readFile").mockImplementation(async (filePath, ...args) => {
+      if (typeof filePath !== "string" || !filePath.endsWith(".envelope.json")) {
+        return actualReadFile(filePath, ...args);
+      }
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await new Promise<void>((resolve) => pendingReads.push(resolve));
+      try {
+        return await actualReadFile(filePath, ...args);
+      } finally {
+        activeReads -= 1;
+      }
+    });
+
+    const store = createFolderSnapshotStore({
+      targetDir,
+      encryptionKey: "secret",
+    });
+    const listPromise = store.listSnapshots({
+      installationId: VALID_INSTALLATION_ID,
+    });
+
+    const expectedBatches = [SNAPSHOT_LIST_READ_CONCURRENCY, SNAPSHOT_LIST_READ_CONCURRENCY, 1];
+    for (const batchSize of expectedBatches) {
+      await vi.waitFor(() => {
+        expect(pendingReads.length).toBe(batchSize);
+      });
+      expect(maxActiveReads).toBeLessThanOrEqual(SNAPSHOT_LIST_READ_CONCURRENCY);
+      pendingReads.splice(0).forEach((resolve) => resolve());
+    }
+
+    const listed = await listPromise;
+    expect(listed).toHaveLength(SNAPSHOT_LIST_READ_CONCURRENCY * 2 + 1);
+    expect(maxActiveReads).toBe(SNAPSHOT_LIST_READ_CONCURRENCY);
   });
 });

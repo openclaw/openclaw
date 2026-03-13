@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import type { ResolvedSnapshotStoreConfig, ResolvedSnapshotStoreTargetConfig } from "./config.js";
 import { isValidInstallationId } from "./installation-id.js";
 import {
@@ -18,6 +19,7 @@ const SNAPSHOT_ID_PATTERN = /^snap_[0-9TZ-]+_[0-9a-f]{8}$/;
 const MAX_ENVELOPE_BYTES = 1 * 1024 * 1024;
 /** Max payload size (10 GiB) – upper bound for a single encrypted snapshot payload. */
 const MAX_PAYLOAD_BYTES = 10 * 1024 * 1024 * 1024;
+const SNAPSHOT_LIST_READ_CONCURRENCY = 8;
 
 /**
  * Assert that `filePath` is a regular file (not a symlink/device/etc.) and
@@ -103,6 +105,14 @@ async function readEnvelopeFile(filePath: string): Promise<BackupSnapshotEnvelop
   return parseBackupSnapshotEnvelope(raw);
 }
 
+function serializeEnvelope(envelope: BackupSnapshotEnvelope): string {
+  const raw = `${JSON.stringify(envelope, null, 2)}\n`;
+  if (Buffer.byteLength(raw, "utf8") > MAX_ENVELOPE_BYTES) {
+    throw new Error(`Envelope file exceeds maximum allowed size (${MAX_ENVELOPE_BYTES} bytes).`);
+  }
+  return raw;
+}
+
 async function listSnapshotsFromDir(
   targetDir: string,
   params: { installationId: string },
@@ -119,8 +129,10 @@ async function listSnapshotsFromDir(
     throw error;
   }
   const envelopes = entries.filter((entry) => entry.endsWith(".envelope.json")).toSorted();
-  const listed = await Promise.all(
-    envelopes.map(async (entry) => {
+  const { results, hasError, firstError } = await runTasksWithConcurrency({
+    errorMode: "stop",
+    limit: SNAPSHOT_LIST_READ_CONCURRENCY,
+    tasks: envelopes.map((entry) => async () => {
       const filePath = path.join(root, entry);
       let raw: string;
       try {
@@ -139,8 +151,11 @@ async function listSnapshotsFromDir(
         return undefined;
       }
     }),
-  );
-  return listed.filter((entry): entry is BackupSnapshotEnvelope => entry !== undefined);
+  });
+  if (hasError) {
+    throw firstError;
+  }
+  return results.filter((entry): entry is BackupSnapshotEnvelope => entry !== undefined);
 }
 
 export function createFolderSnapshotStore(
@@ -148,6 +163,7 @@ export function createFolderSnapshotStore(
 ): BackupSnapshotStore {
   return {
     async uploadSnapshot(params) {
+      const serializedEnvelope = serializeEnvelope(params.envelope);
       await assertRegularFileWithinLimit(params.payloadPath, MAX_PAYLOAD_BYTES, "Payload file");
       await copyFileAtomic(
         params.payloadPath,
@@ -155,7 +171,7 @@ export function createFolderSnapshotStore(
       );
       await writeFileAtomic(
         envelopePath(config.targetDir, params.installationId, params.snapshotId),
-        `${JSON.stringify(params.envelope, null, 2)}\n`,
+        serializedEnvelope,
       );
     },
 
