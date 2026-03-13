@@ -845,7 +845,7 @@ async function executeSingleAction(
       break;
     case "batch":
       // Nested batches: delegate recursively
-      await batchViaPlaywright({
+      const nestedResult = await batchViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
         actions: action.actions,
@@ -853,6 +853,10 @@ async function executeSingleAction(
         evaluateEnabled,
         depth: depth + 1,
       });
+      const nestedFailure = nestedResult.results.find((result) => !result.ok);
+      if (nestedFailure) {
+        throw new Error(nestedFailure.error ?? "Nested batch action failed");
+      }
       break;
     default:
       throw new Error(`Unsupported batch action kind: ${(action as { kind: string }).kind}`);
