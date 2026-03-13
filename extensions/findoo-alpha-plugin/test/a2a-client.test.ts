@@ -78,6 +78,48 @@ describe("A2AClient", () => {
     fetchSpy.mockRestore();
   });
 
+  it("includes metadata when provided (webhook injection)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await client.sendMessage("分析茅台", {
+      metadata: {
+        webhook_url: "http://gateway:18789/hooks/wake",
+        webhook_token: "test-token",
+        query_summary: "分析茅台",
+      },
+    });
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+    expect(body.params.message.metadata).toEqual({
+      webhook_url: "http://gateway:18789/hooks/wake",
+      webhook_token: "test-token",
+      query_summary: "分析茅台",
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("omits metadata field when not provided", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await client.sendMessage("简单查询");
+
+    const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
+    expect(body.params.message.metadata).toBeUndefined();
+
+    fetchSpy.mockRestore();
+  });
+
   it("throws on non-200 response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("Not Found", { status: 404, statusText: "Not Found" }),
@@ -104,7 +146,7 @@ describe("A2AClient", () => {
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string);
     expect(body.method).toBe("tasks/get");
-    expect(body.params.taskId).toBe("t-1");
+    expect(body.params.id).toBe("t-1");
     expect(resp.result?.status).toBe("completed");
 
     fetchSpy.mockRestore();

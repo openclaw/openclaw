@@ -41,8 +41,7 @@ describe("findoo-alpha-plugin registration", () => {
     expect(findooPlugin.kind).toBe("financial");
   });
 
-  it("registers 1 tool (async submit + heartbeat push mode)", () => {
-    // Mock fetch for startup health check
+  it("registers 1 tool (fin_analyze)", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
@@ -52,8 +51,6 @@ describe("findoo-alpha-plugin registration", () => {
 
     expect(api.tools.size).toBe(1);
     expect(api.tools.has("fin_analyze")).toBe(true);
-    // fin_analyze_skills removed — no longer needed
-    expect(api.tools.has("fin_analyze_skills")).toBe(false);
 
     vi.restoreAllMocks();
   });
@@ -83,6 +80,37 @@ describe("findoo-alpha-plugin registration", () => {
     expect(api.tools.size).toBe(0);
     expect(api.services.size).toBe(0);
     expect(api.logs.some((l) => l.msg.includes("license key not configured"))).toBe(true);
+  });
+
+  it("logs webhook mode when webhookUrl configured", () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const api = createMockApi();
+    (api as unknown as { pluginConfig: Record<string, unknown> }).pluginConfig = {
+      apiKey: "test-key",
+      webhookUrl: "http://gateway:18789/hooks/wake",
+      hooksToken: "test-token",
+    };
+    findooPlugin.register(api);
+
+    expect(api.logs.some((l) => l.msg.includes("webhook mode"))).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
+  it("logs sync fallback mode when no webhookUrl", () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const api = createMockApi();
+    findooPlugin.register(api);
+
+    expect(api.logs.some((l) => l.msg.includes("sync fallback mode"))).toBe(true);
+
+    vi.restoreAllMocks();
   });
 
   it("logs startup info", () => {

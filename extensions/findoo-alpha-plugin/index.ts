@@ -1,7 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { A2AClient } from "./src/a2a-client.js";
 import { resolveConfig } from "./src/config.js";
-import { extractSummary, PendingTaskTracker } from "./src/pending-task-tracker.js";
 import { registerTools } from "./src/register-tools.js";
 
 const findooPlugin = {
@@ -28,7 +27,12 @@ const findooPlugin = {
     log.info(`findoo-alpha: connecting to ${config.strategyAgentUrl}`);
     log.info(`findoo-alpha: assistant ${config.strategyAssistantId}`);
 
-    // Shared A2AClient instance (used by both tools and tracker)
+    if (config.webhookUrl) {
+      log.info(`findoo-alpha: webhook mode → ${config.webhookUrl}`);
+    } else {
+      log.info("findoo-alpha: sync fallback mode (no webhookUrl configured)");
+    }
+
     const a2a = new A2AClient(config.strategyAgentUrl, config.strategyAssistantId);
 
     // Verify connectivity at startup (non-blocking)
@@ -48,63 +52,8 @@ const findooPlugin = {
         );
       });
 
-    // ── enqueueSystemEvent bridge (heartbeat push) ──
-    type RuntimeServices = {
-      system?: {
-        enqueueSystemEvent?: (
-          text: string,
-          options: { sessionKey: string; contextKey?: string },
-        ) => void;
-        requestHeartbeatNow?: (opts?: { reason?: string; coalesceSec?: number }) => void;
-      };
-    };
-
-    const runtime = api.runtime as unknown as RuntimeServices | undefined;
-    const enqueueSystemEvent = runtime?.system?.enqueueSystemEvent;
-    const requestHeartbeatNow = runtime?.system?.requestHeartbeatNow;
-
-    // ── PendingTaskTracker (background stream consumer) ──
-    let tracker: PendingTaskTracker | undefined;
-
-    if (enqueueSystemEvent) {
-      tracker = new PendingTaskTracker({
-        a2aClient: a2a,
-        timeoutMs: config.taskTimeoutMs,
-        log: (level, msg) => {
-          if (level === "warn" || level === "error") log.warn(msg);
-          else log.info(msg);
-        },
-
-        onTaskCompleted(task, result) {
-          const summary = extractSummary(result);
-          enqueueSystemEvent(`[findoo] 深度分析完成 — "${task.query.slice(0, 40)}"\n\n${summary}`, {
-            sessionKey: "agent:main:main",
-            contextKey: "findoo-analysis",
-          });
-          // Immediately wake heartbeat so LLM sees the result
-          requestHeartbeatNow?.({ reason: "findoo-analysis-complete", coalesceSec: 5 });
-        },
-
-        onTaskFailed(task, error) {
-          enqueueSystemEvent(`[findoo] 分析任务失败 — "${task.query.slice(0, 40)}": ${error}`, {
-            sessionKey: "agent:main:main",
-            contextKey: "findoo-analysis",
-          });
-          requestHeartbeatNow?.({ reason: "findoo-analysis-failed", coalesceSec: 5 });
-        },
-      });
-
-      log.info(
-        `findoo-alpha: task tracker ready (timeout=${config.taskTimeoutMs}ms, stream-based)`,
-      );
-    } else {
-      log.info(
-        "findoo-alpha: enqueueSystemEvent not available, tracker disabled (async results won't be pushed)",
-      );
-    }
-
     // Register A2A-bridged tools
-    registerTools(api, config, a2a, tracker);
+    registerTools(api, config, a2a);
 
     // Expose service for cross-plugin consumption
     api.runtime?.services?.set("fin-strategy-agent", {

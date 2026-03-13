@@ -47,7 +47,6 @@ describe.skipIf(SKIP)("L2 — Findoo A2A Live", { timeout: 180_000 }, () => {
 
     expect(resp.jsonrpc).toBe("2.0");
     expect(resp.id).toBeDefined();
-    // Should have result (success) or error
     expect(resp.result !== undefined || resp.error !== undefined).toBe(true);
 
     if (resp.result) {
@@ -73,25 +72,22 @@ describe.skipIf(SKIP)("L2 — Findoo A2A Live", { timeout: 180_000 }, () => {
     }
   });
 
-  it("5. A2A message/stream returns SSE events and final result", async () => {
-    const events: Array<{ kind: string; state?: string; final: boolean }> = [];
-
-    for await (const event of client.sendMessageStream("你好，请简要介绍你的能力", {
+  it("5. A2A message/send with metadata (webhook injection)", async () => {
+    const resp = await client.sendMessage("你好", {
+      metadata: {
+        webhook_url: "http://test-gateway:18789/hooks/wake",
+        webhook_token: "test-token",
+        query_summary: "你好",
+      },
       timeoutMs: 120_000,
-    })) {
-      events.push({
-        kind: event.kind,
-        state: event.status?.state,
-        final: event.final,
-      });
-      console.log("[SSE]", event.kind, event.status?.state, event.final ? "(final)" : "");
-    }
+    });
 
-    // Should have at least one event
-    expect(events.length).toBeGreaterThan(0);
-    // Last event should be final
-    const last = events[events.length - 1];
-    expect(last.final).toBe(true);
+    expect(resp.jsonrpc).toBe("2.0");
+    expect(resp.result !== undefined || resp.error !== undefined).toBe(true);
+    console.log(
+      "[A2A with metadata] Response:",
+      JSON.stringify(resp.result ?? resp.error).slice(0, 300),
+    );
   });
 
   it("6. collectStreamResult returns A2AResponse from stream", async () => {
@@ -110,78 +106,18 @@ describe.skipIf(SKIP)("L2 — Findoo A2A Live", { timeout: 180_000 }, () => {
     }
   });
 
-  it("7. A2A stream → grab taskId fast → background stream completes", async () => {
-    // The real async pattern: open stream, grab taskId from first event (~1-2s),
-    // then let the stream run in background until final event.
-    // Note: tasks/get doesn't work after stream ends (LangGraph cleans up),
-    // so the stream itself is the only reliable completion channel.
-    const start = Date.now();
-    let taskId: string | undefined;
-
-    const stream = client.sendMessageStream("简要分析A股大盘趋势", {
-      timeoutMs: 300_000,
-    });
-
-    // Step 1: Read first event → get taskId (must be fast)
-    const first = await stream.next();
-    expect(first.done).toBe(false);
-    const firstRaw = first.value.raw as Record<string, unknown>;
-    taskId = (firstRaw.id ?? firstRaw.taskId) as string | undefined;
-
-    const submitMs = Date.now() - start;
-    console.log(`[Async] Got taskId in ${submitMs}ms:`, taskId);
-    expect(taskId).toBeDefined();
-    expect(submitMs).toBeLessThan(10_000); // taskId must arrive within 10s
-
-    // Step 2: Continue consuming stream until final event
-    let lastMessage: Record<string, unknown> | undefined;
-    let finalState: string | undefined;
-
-    for await (const event of stream) {
-      const msg = event.status?.message;
-      if (msg && typeof msg === "object") {
-        lastMessage = msg as Record<string, unknown>;
-      }
-      if (event.final) {
-        finalState = event.status?.state;
-        break;
-      }
-    }
-
-    const totalMs = Date.now() - start;
-    console.log(`[Async] Stream completed in ${totalMs}ms, state=${finalState}`);
-
-    expect(finalState).toBe("completed");
-
-    // Verify we got actual content from the stream
-    if (lastMessage) {
-      const parts = lastMessage.parts as Array<Record<string, unknown>> | undefined;
-      if (Array.isArray(parts)) {
-        const text = parts
-          .filter((p: Record<string, unknown>) => typeof p.text === "string")
-          .map((p: Record<string, unknown>) => String(p.text))
-          .join("");
-        console.log(`[Async] Got ${text.length} chars of content`);
-        expect(text.length).toBeGreaterThan(0);
-      }
-    }
-  });
-
-  it("8. A2A supports threaded conversation", async () => {
-    // First message — establish context
+  it("7. A2A supports threaded conversation", async () => {
     const resp1 = await client.sendMessage("记住这个：我关注茅台", {
       timeoutMs: 120_000,
     });
     expect(resp1.jsonrpc).toBe("2.0");
 
-    // Extract threadId if available in result
     const result1 = resp1.result as Record<string, unknown> | undefined;
     const threadId = (result1?.thread_id ?? result1?.threadId ?? result1?.taskId) as
       | string
       | undefined;
 
     if (threadId) {
-      // Second message — should have context
       const resp2 = await client.sendMessage("我刚才说关注什么？", {
         threadId,
         timeoutMs: 120_000,

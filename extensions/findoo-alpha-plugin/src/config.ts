@@ -5,8 +5,10 @@ export type PluginConfig = {
   strategyAgentUrl: string;
   strategyAssistantId: string;
   requestTimeoutMs: number;
-  pollIntervalMs: number;
-  taskTimeoutMs: number;
+  /** Gateway /hooks/wake URL — enables async webhook mode when set */
+  webhookUrl?: string;
+  /** Bearer token for /hooks/wake authentication */
+  hooksToken?: string;
 };
 
 function readEnv(keys: string[]): string | undefined {
@@ -36,25 +38,27 @@ export function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   const timeoutRaw = raw?.requestTimeoutMs ?? readEnv(["OPENFINCLAW_STRATEGY_TIMEOUT_MS"]);
   const timeout = Number(timeoutRaw);
 
-  const pollRaw = raw?.pollIntervalMs ?? readEnv(["OPENFINCLAW_FINDOO_POLL_INTERVAL_MS"]);
-  const pollInterval = Number(pollRaw);
-
-  const taskTimeoutRaw = raw?.taskTimeoutMs ?? readEnv(["OPENFINCLAW_FINDOO_TASK_TIMEOUT_MS"]);
-  const taskTimeout = Number(taskTimeoutRaw);
-
   const apiKey =
     (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ??
     readEnv(["FINDOO_API_KEY", "OPENFINCLAW_FINDOO_API_KEY"]) ??
     "";
+
+  const webhookUrl =
+    (typeof raw?.webhookUrl === "string" ? raw.webhookUrl : undefined) ??
+    readEnv(["OPENFINCLAW_FINDOO_WEBHOOK_URL"]) ??
+    undefined;
+
+  const hooksToken =
+    (typeof raw?.hooksToken === "string" ? raw.hooksToken : undefined) ??
+    readEnv(["OPENFINCLAW_HOOKS_TOKEN"]) ??
+    undefined;
 
   return {
     apiKey,
     strategyAgentUrl: strategyAgentUrl.replace(/\/+$/, ""),
     strategyAssistantId,
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 5000 ? Math.floor(timeout) : 120_000,
-    pollIntervalMs:
-      Number.isFinite(pollInterval) && pollInterval >= 5000 ? Math.floor(pollInterval) : 15_000,
-    taskTimeoutMs:
-      Number.isFinite(taskTimeout) && taskTimeout >= 60_000 ? Math.floor(taskTimeout) : 1_200_000,
+    webhookUrl: webhookUrl?.replace(/\/+$/, ""),
+    hooksToken,
   };
 }

@@ -5,7 +5,7 @@
  * with LangGraph strategy-agent.
  *
  * Protocol: POST /a2a/{assistant_id}
- * Methods:  message/send, message/stream, tasks/get
+ * Methods:  message/send, tasks/get
  */
 
 export type A2ATextPart = { kind: "text"; text: string };
@@ -16,6 +16,7 @@ export type A2AMessage = {
   role: "user" | "assistant";
   parts: A2APart[];
   messageId: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type A2ARequest = {
@@ -37,7 +38,7 @@ export type A2AResponse = {
   error?: { code: number; message: string };
 };
 
-/** A single parsed SSE event from message/stream */
+/** A single parsed SSE event from message/stream (used by collectStreamResult) */
 export type A2AStreamEvent = {
   kind: "task" | "status-update" | "artifact-update" | "error" | "unknown";
   status?: { state: string; message?: Record<string, unknown> };
@@ -52,12 +53,14 @@ export class A2AClient {
   ) {}
 
   /**
-   * Send a message to the strategy agent via A2A protocol.
+   * Send a message to the strategy agent via A2A protocol (message/send).
+   * Supports optional metadata for webhook callback injection.
    */
   async sendMessage(
     text: string,
     options?: {
       data?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
       threadId?: string;
       timeoutMs?: number;
     },
@@ -67,16 +70,21 @@ export class A2AClient {
       parts.push({ kind: "data", data: options.data });
     }
 
+    const message: A2AMessage = {
+      role: "user",
+      parts,
+      messageId: `msg-${Date.now()}`,
+    };
+    if (options?.metadata) {
+      message.metadata = options.metadata;
+    }
+
     const body: A2ARequest = {
       jsonrpc: "2.0",
       id: `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       method: "message/send",
       params: {
-        message: {
-          role: "user",
-          parts,
-          messageId: `msg-${Date.now()}`,
-        },
+        message,
         ...(options?.threadId ? { thread: { threadId: options.threadId } } : {}),
       },
     };
@@ -99,17 +107,17 @@ export class A2AClient {
   }
 
   /**
-   * Send a message via A2A SSE stream (message/stream).
-   * Yields parsed events; the final event has `final: true`.
+   * Send message via SSE stream, consume all events, return final result
+   * as an A2AResponse (synchronous blocking fallback).
    */
-  async *sendMessageStream(
+  async collectStreamResult(
     text: string,
     options?: {
       data?: Record<string, unknown>;
       threadId?: string;
       timeoutMs?: number;
     },
-  ): AsyncGenerator<A2AStreamEvent> {
+  ): Promise<A2AResponse> {
     const parts: A2APart[] = [{ kind: "text", text }];
     if (options?.data) {
       parts.push({ kind: "data", data: options.data });
@@ -147,10 +155,11 @@ export class A2AClient {
       throw new Error("A2A stream response has no body");
     }
 
-    // Parse SSE line by line from the ReadableStream
+    // Parse SSE and collect until final event
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let lastEvent: A2AStreamEvent | undefined;
 
     try {
       while (true) {
@@ -159,71 +168,53 @@ export class A2AClient {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        // Keep the last partial line in buffer
         buffer = lines.pop() ?? "";
 
         let currentData = "";
 
         for (const line of lines) {
-          // Heartbeat comment — ignore
           if (line.startsWith(":")) continue;
-          // Empty line = end of event block
           if (line.trim() === "") {
             if (currentData) {
               const event = A2AClient.parseStreamData(currentData);
               currentData = "";
-              yield event;
-              if (event.final) return;
+
+              if (event.kind === "error") {
+                const errMsg =
+                  (event.raw as Record<string, unknown>)?.error ??
+                  event.status?.message ??
+                  "Unknown stream error";
+                return {
+                  jsonrpc: "2.0",
+                  id: "",
+                  error: {
+                    code: -1,
+                    message: typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg),
+                  },
+                };
+              }
+
+              lastEvent = event;
+              if (event.final) {
+                const result = event.status?.message ?? event.raw;
+                return { jsonrpc: "2.0", id: "", result: result as Record<string, unknown> };
+              }
             }
             continue;
           }
           if (line.startsWith("data: ")) {
             currentData += line.slice(6);
           }
-          // "event:" lines are informational; we derive kind from the data payload
         }
       }
 
-      // Flush remaining data in buffer
+      // Flush remaining
       if (buffer.trim().startsWith("data: ")) {
         const event = A2AClient.parseStreamData(buffer.trim().slice(6));
-        yield event;
+        lastEvent = event;
       }
     } finally {
       reader.releaseLock();
-    }
-  }
-
-  /**
-   * Consume the stream until final event, return the completed result
-   * as an A2AResponse (same shape as sendMessage for drop-in replacement).
-   */
-  async collectStreamResult(
-    text: string,
-    options?: {
-      data?: Record<string, unknown>;
-      threadId?: string;
-      timeoutMs?: number;
-    },
-  ): Promise<A2AResponse> {
-    let lastEvent: A2AStreamEvent | undefined;
-
-    for await (const event of this.sendMessageStream(text, options)) {
-      lastEvent = event;
-      if (event.kind === "error") {
-        const errMsg =
-          (event.raw as Record<string, unknown>)?.error ??
-          event.status?.message ??
-          "Unknown stream error";
-        return {
-          jsonrpc: "2.0",
-          id: "",
-          error: {
-            code: -1,
-            message: typeof errMsg === "string" ? errMsg : JSON.stringify(errMsg),
-          },
-        };
-      }
     }
 
     if (!lastEvent) {
@@ -234,7 +225,6 @@ export class A2AClient {
       };
     }
 
-    // Extract result from the final event's status.message or raw payload
     const result = lastEvent.status?.message ?? lastEvent.raw;
     return { jsonrpc: "2.0", id: "", result: result as Record<string, unknown> };
   }
@@ -262,7 +252,7 @@ export class A2AClient {
   }
 
   /**
-   * Get task status/result by task ID.
+   * Get task status/result by task ID (for debugging).
    */
   async getTask(taskId: string, contextId?: string): Promise<A2AResponse> {
     const body: A2ARequest = {
