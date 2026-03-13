@@ -672,12 +672,7 @@ function resolveSessionScopedOptionLabel(
   if (!row) {
     return rest?.trim() || key;
   }
-  // Priority: label > displayName > key
-  const label =
-    typeof row.label === "string" && row.label.trim().length > 0 ? row.label.trim() : null;
-  if (label) {
-    return label;
-  }
+  // Priority: displayName > label > rest > key
   const displayName =
     typeof row.displayName === "string" && row.displayName.trim().length > 0
       ? row.displayName.trim()
@@ -685,7 +680,12 @@ function resolveSessionScopedOptionLabel(
   if (displayName && displayName !== key) {
     return displayName;
   }
-  return key;
+  const label =
+    typeof row.label === "string" && row.label.trim().length > 0 ? row.label.trim() : null;
+  if (label) {
+    return label;
+  }
+  return rest?.trim() || key;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };
