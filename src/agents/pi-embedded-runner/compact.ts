@@ -90,6 +90,10 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+import {
+  assertReplayProtectionIntact,
+  latestAssistantMessageHasReplayProtectedBlocks,
+} from "./thinking.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
@@ -268,6 +272,24 @@ function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+function looksLikeEmbeddingOnlyModelRef(modelRef: string): boolean {
+  const normalized = modelRef.trim().toLowerCase();
+  return (
+    normalized.includes("embedding") ||
+    normalized.startsWith("text-embed") ||
+    normalized.includes("/text-embed") ||
+    normalized.includes("nomic-embed")
+  );
+}
+
+function shouldAssertReplayProtection(): boolean {
+  return Boolean(
+    process.env.VITEST ||
+    process.env.NODE_ENV === "test" ||
+    /^(1|true)$/iu.test(process.env.OPENCLAW_DEBUG_REPLAY_PROTECTION ?? ""),
+  );
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -289,12 +311,27 @@ export async function compactEmbeddedPiSessionDirect(
   const prevCwd = process.cwd();
 
   // Resolve compaction model: prefer config override, then fall back to caller-supplied model
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
+  const configuredCompactionModelOverride =
+    params.config?.agents?.defaults?.compaction?.model?.trim();
+  const compactionModelOverride =
+    configuredCompactionModelOverride &&
+    !looksLikeEmbeddingOnlyModelRef(configuredCompactionModelOverride)
+      ? configuredCompactionModelOverride
+      : undefined;
   let provider: string;
   let modelId: string;
   // When switching provider via override, drop the primary auth profile to avoid
   // sending the wrong credentials (e.g. OpenAI profile token to OpenRouter).
   let authProfileId: string | undefined = params.authProfileId;
+  if (
+    configuredCompactionModelOverride &&
+    compactionModelOverride === undefined &&
+    looksLikeEmbeddingOnlyModelRef(configuredCompactionModelOverride)
+  ) {
+    log.warn(
+      `ignoring embedding-like compaction model override (${configuredCompactionModelOverride}); using the primary session model instead`,
+    );
+  }
   if (compactionModelOverride) {
     const slashIdx = compactionModelOverride.indexOf("/");
     if (slashIdx > 0) {
@@ -674,6 +711,7 @@ export async function compactEmbeddedPiSessionDirect(
       }
 
       try {
+        const preSanitizeMessages = session.messages.slice();
         const prior = await sanitizeSessionHistory({
           messages: session.messages,
           modelApi: model.api,
@@ -685,11 +723,21 @@ export async function compactEmbeddedPiSessionDirect(
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
+        if (shouldAssertReplayProtection()) {
+          assertReplayProtectionIntact(
+            preSanitizeMessages,
+            prior,
+            "compact:sanitizeSessionHistory",
+          );
+        }
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)
           : prior;
         const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
+          ? validateAnthropicTurns(validatedGemini, {
+              preserveLatestAssistantMessage:
+                latestAssistantMessageHasReplayProtectedBlocks(validatedGemini),
+            })
           : validatedGemini;
         // Apply validated transcript to the live session even when no history limit is configured,
         // so compaction and hook metrics are based on the same message set.
@@ -704,9 +752,20 @@ export async function compactEmbeddedPiSessionDirect(
         // Re-run tool_use/tool_result pairing repair after truncation, since
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
+        // Recompute replay-protection from post-truncation transcript.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, {
+              preserveLatestAssistantMessage:
+                latestAssistantMessageHasReplayProtectedBlocks(truncated),
+            })
           : truncated;
+        if (shouldAssertReplayProtection()) {
+          assertReplayProtectionIntact(
+            truncated,
+            limited,
+            "compact:post-truncation sanitizeToolUseResultPairing",
+          );
+        }
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }

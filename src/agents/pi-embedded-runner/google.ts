@@ -32,7 +32,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { log } from "./logger.js";
-import { dropThinkingBlocks } from "./thinking.js";
+import { dropThinkingBlocks, latestAssistantMessageHasReplayProtectedBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -537,6 +537,11 @@ export async function sanitizeSessionHistory(params: {
       modelId: params.modelId,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const hasReplayProtectedLatestAssistant =
+    latestAssistantMessageHasReplayProtectedBlocks(withInterSessionMarkers);
+  // Structural sanitizers must never rewrite the newest replay-protected assistant turn,
+  // even when the provider later requires thinking blocks to be stripped from all turns.
+  const preserveLatestAssistantMessage = hasReplayProtectedLatestAssistant;
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",
@@ -545,6 +550,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeToolCallIds: policy.sanitizeToolCallIds,
       toolCallIdMode: policy.toolCallIdMode,
       preserveSignatures: policy.preserveSignatures,
+      preserveLatestAssistantMessage,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
       ...resolveImageSanitizationLimits(params.config),
     },
@@ -554,9 +560,12 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
+    preserveLatestAssistantMessage,
   });
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls)
+    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+        preserveLatestAssistantMessage,
+      })
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
