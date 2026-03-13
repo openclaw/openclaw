@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Runtime/build: stabilize long-lived lazy `dist` runtime entry paths and harden bundled plugin npm staging so local rebuilds stop breaking on missing hashed chunks or broken shell `npm` shims. (#53855) Thanks @vincentkoc.
 - Slack/runtime defaults: trim Slack DM reply overhead, restore Codex auto transport, and tighten Slack/web-search runtime defaults around DM preview threading, cache scoping, warning dedupe, and explicit web-search opt-in. (#53957) Thanks @vincentkoc.
 - Discord/timeouts: send a visible timeout reply when the inbound Discord worker times out before a final reply starts, including created auto-thread targets and queued-run ordering. (#53823) Thanks @Kimbo7870.
+- Models/google: normalize bare Google Generative AI API roots for custom provider names, and keep built-in Google model-id rewrites working when `api` is declared only on individual models, so custom Google lanes and older configs stop missing `/v1beta` or preview-id normalization. (#44969) Thanks @Kathie-yu.
 
 ## 2026.3.23
 
