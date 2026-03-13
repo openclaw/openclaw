@@ -398,6 +398,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       agentId: decision.route.agentId,
       channel: "imessage",
       accountId: decision.route.accountId,
+      sessionKey: decision.route.sessionKey,
     });
 
     const dispatcher = createReplyDispatcher({

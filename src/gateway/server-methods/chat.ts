@@ -1283,6 +1283,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
+        sessionKey,
       });
       const finalReplyParts: string[] = [];
       const dispatcher = createReplyDispatcher({

@@ -198,6 +198,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
+    sessionKey: route.mainSessionKey,
   });
 
   const slackStreaming = resolveSlackStreamingConfig({

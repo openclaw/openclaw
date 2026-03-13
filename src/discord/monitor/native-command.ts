@@ -1685,6 +1685,7 @@ async function dispatchDiscordCommandInteraction(params: {
     agentId: effectiveRoute.agentId,
     channel: "discord",
     accountId: effectiveRoute.accountId,
+    sessionKey,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
 

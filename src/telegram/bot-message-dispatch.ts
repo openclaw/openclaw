@@ -379,6 +379,7 @@ export const dispatchTelegramMessage = async ({
     agentId: route.agentId,
     channel: "telegram",
     accountId: route.accountId,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
   });
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 

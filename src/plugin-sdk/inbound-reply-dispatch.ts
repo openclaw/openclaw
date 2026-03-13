@@ -124,6 +124,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     agentId: params.agentId,
     channel: params.channel,
     accountId: params.accountId,
+    sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 

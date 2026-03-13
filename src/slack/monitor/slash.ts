@@ -612,6 +612,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         agentId: route.agentId,
         channel: "slack",
         accountId: route.accountId,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       });
 
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
