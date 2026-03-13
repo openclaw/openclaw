@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -80,6 +81,43 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("uses agent-specific workspace when agentId and config are provided", async () => {
+    // Create two separate workspaces: one for the parent, one for the subagent
+    const parentWorkspace = await makeTempWorkspace("openclaw-parent-");
+    const agentWorkspace = await makeTempWorkspace("openclaw-agent-");
+
+    // Create bootstrap file in agent workspace only (subagent should use this)
+    await fs.writeFile(path.join(agentWorkspace, "SOUL.md"), "agent specific bootstrap", "utf8");
+
+    // Create a file in parent workspace only (should NOT appear in results)
+    await fs.writeFile(path.join(parentWorkspace, "PARENT_ONLY.md"), "parent only file", "utf8");
+
+    // Config with custom workspace for the subagent
+    const config: OpenClawConfig = {
+      agents: {
+        list: [{ id: "subagent-123", workspace: agentWorkspace }],
+      },
+    };
+
+    // Call with parent workspace but agentId pointing to subagent
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir: parentWorkspace, // This should be ignored
+      config,
+      agentId: "subagent-123",
+    });
+
+    // Should resolve to agent-specific workspace, not parent workspace
+    const agentFile = files.find((f) => f.name === "SOUL.md");
+    expect(agentFile).toBeDefined();
+    expect(agentFile?.content).toBe("agent specific bootstrap");
+
+    // Prove isolation: parent-only file should NOT be in results
+    const parentOnlyFile = files.find(
+      (f) => f.path === path.join(parentWorkspace, "PARENT_ONLY.md"),
+    );
+    expect(parentOnlyFile).toBeUndefined();
   });
 });
 
