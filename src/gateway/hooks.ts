@@ -11,6 +11,7 @@ import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.j
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
+const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 
 export type HooksConfigResolved = {
   basePath: string;
@@ -265,7 +266,14 @@ export function resolveHookDeliver(raw: unknown): boolean {
 }
 
 function resolveOptionalHookIdempotencyKey(raw: unknown): string | undefined {
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > MAX_HOOK_IDEMPOTENCY_KEY_LENGTH) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function resolveHookIdempotencyKey(params: {
