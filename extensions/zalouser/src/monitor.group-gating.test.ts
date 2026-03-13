@@ -424,6 +424,73 @@ describe("zalouser monitor group mention gating", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("does not accept a different group id by matching only the mutable group name by default", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    await __testing.processMessage({
+      message: createGroupMessage({
+        threadId: "g-attacker-001",
+        groupName: "Trusted Team",
+        senderId: "666",
+        hasAnyMention: true,
+        wasExplicitlyMentioned: true,
+        content: "ping @bot",
+      }),
+      account: {
+        ...createAccount(),
+        config: {
+          ...createAccount().config,
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["*"],
+          groups: {
+            "group:g-trusted-001": { allow: true },
+            "Trusted Team": { allow: true },
+          },
+        },
+      },
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("accepts mutable group-name matches only when dangerouslyAllowNameMatching is enabled", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    await __testing.processMessage({
+      message: createGroupMessage({
+        threadId: "g-attacker-001",
+        groupName: "Trusted Team",
+        senderId: "666",
+        hasAnyMention: true,
+        wasExplicitlyMentioned: true,
+        content: "ping @bot",
+      }),
+      account: {
+        ...createAccount(),
+        config: {
+          ...createAccount().config,
+          dangerouslyAllowNameMatching: true,
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["*"],
+          groups: {
+            "group:g-trusted-001": { allow: true },
+            "Trusted Team": { allow: true },
+          },
+        },
+      },
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    expect(callArg?.ctx?.To).toBe("zalouser:group:g-attacker-001");
+  });
+
   it("allows group control commands when sender is in groupAllowFrom", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher, resolveCommandAuthorizedFromAuthorizers } =
       installRuntime({
