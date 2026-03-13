@@ -18,6 +18,10 @@ function stripQuery(value: string): string {
   return noHash.split("?")[0] ?? noHash;
 }
 
+function safeBaseName(value: string): string {
+  return path.win32.basename(path.posix.basename(value));
+}
+
 function extractFileNameFromMediaUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -26,17 +30,17 @@ function extractFileNameFromMediaUrl(value: string): string | null {
   const cleaned = stripQuery(trimmed);
   try {
     const parsed = new URL(cleaned);
-    const base = path.basename(parsed.pathname);
+    const base = safeBaseName(parsed.pathname);
     if (!base) {
       return null;
     }
     try {
-      return decodeURIComponent(base);
+      return safeBaseName(decodeURIComponent(base));
     } catch {
       return base;
     }
   } catch {
-    const base = path.basename(cleaned);
+    const base = safeBaseName(cleaned);
     if (!base || base === "/" || base === ".") {
       return null;
     }
