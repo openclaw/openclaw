@@ -198,6 +198,41 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("invalidates cached command lists after plugin registry updates", () => {
+    const before = listChatCommands();
+    expect(before.find((command) => command.key === "dock:msteams")).toBeFalsy();
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "test-plugin",
+          source: "test",
+          plugin: {
+            id: "msteams",
+            meta: {
+              id: "msteams",
+              label: "Microsoft Teams",
+              selectionLabel: "Microsoft Teams",
+              docsPath: "/channels/msteams",
+              blurb: "test stub.",
+            },
+            capabilities: {
+              chatTypes: ["direct"],
+              nativeCommands: true,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    const after = listChatCommands();
+    expect(after.find((command) => command.key === "dock:msteams")).toBeTruthy();
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
