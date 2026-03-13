@@ -22,6 +22,7 @@ import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
+  parseExecApprovalExpired,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   removeExecApproval,
@@ -382,7 +383,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
       host.execApprovalError = null;
       const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
+      globalThis.setTimeout(() => {
         host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
       }, delay);
     }
@@ -393,6 +394,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const resolved = parseExecApprovalResolved(evt.payload);
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
+    return;
+  }
+
+  if (evt.event === "exec.approval.expired") {
+    const expired = parseExecApprovalExpired(evt.payload);
+    if (expired) {
+      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, expired.id);
     }
     return;
   }

@@ -23,6 +23,16 @@ export type ExecApprovalResolved = {
   ts?: number | null;
 };
 
+export type ExecApprovalExpired = {
+  id: string;
+  ts?: number | null;
+};
+
+export type ExecApprovalDecisionTarget =
+  | { kind: "ready"; entry: ExecApprovalRequest; queue: ExecApprovalRequest[] }
+  | { kind: "expired"; queue: ExecApprovalRequest[] }
+  | { kind: "missing"; queue: ExecApprovalRequest[] };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -78,16 +88,37 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   };
 }
 
-export function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
-  const now = Date.now();
+export function parseExecApprovalExpired(payload: unknown): ExecApprovalExpired | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const id = typeof payload.id === "string" ? payload.id.trim() : "";
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    ts: typeof payload.ts === "number" ? payload.ts : null,
+  };
+}
+
+export function isExecApprovalExpired(entry: ExecApprovalRequest, now = Date.now()): boolean {
+  return entry.expiresAtMs <= now;
+}
+
+export function pruneExecApprovalQueue(
+  queue: ExecApprovalRequest[],
+  now = Date.now(),
+): ExecApprovalRequest[] {
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
 
 export function addExecApproval(
   queue: ExecApprovalRequest[],
   entry: ExecApprovalRequest,
+  now = Date.now(),
 ): ExecApprovalRequest[] {
-  const next = pruneExecApprovalQueue(queue).filter((item) => item.id !== entry.id);
+  const next = pruneExecApprovalQueue(queue, now).filter((item) => item.id !== entry.id);
   next.push(entry);
   return next;
 }
@@ -95,6 +126,31 @@ export function addExecApproval(
 export function removeExecApproval(
   queue: ExecApprovalRequest[],
   id: string,
+  now = Date.now(),
 ): ExecApprovalRequest[] {
-  return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
+  return pruneExecApprovalQueue(queue, now).filter((entry) => entry.id !== id);
+}
+
+export function resolveExecApprovalDecisionTarget(
+  queue: ExecApprovalRequest[],
+  id: string,
+  now = Date.now(),
+): ExecApprovalDecisionTarget {
+  const normalizedId = id.trim();
+  const nextQueue = pruneExecApprovalQueue(queue, now);
+  if (!normalizedId) {
+    return { kind: "missing", queue: nextQueue };
+  }
+  const entry = queue.find((candidate) => candidate.id === normalizedId);
+  if (!entry) {
+    return { kind: "missing", queue: nextQueue };
+  }
+  if (isExecApprovalExpired(entry, now)) {
+    return { kind: "expired", queue: nextQueue };
+  }
+  const active = nextQueue.find((candidate) => candidate.id === normalizedId);
+  if (!active) {
+    return { kind: "missing", queue: nextQueue };
+  }
+  return { kind: "ready", entry: active, queue: nextQueue };
 }

@@ -153,4 +153,35 @@ describe("TelegramExecApprovalHandler", () => {
       }),
     );
   });
+
+  it("clears buttons from tracked approval messages when expired", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["8460800771"],
+            target: "both",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, editReplyMarkup } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+    await handler.handleExpired({
+      id: baseRequest.id,
+      ts: 2000,
+    });
+
+    expect(editReplyMarkup).toHaveBeenCalled();
+    expect(editReplyMarkup).toHaveBeenCalledWith(
+      "-1003841603622",
+      "m1",
+      [],
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
 });

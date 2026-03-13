@@ -96,6 +96,12 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
+export type ExecApprovalExpired = {
+  id: string;
+  ts: number;
+  request?: ExecApprovalRequest["request"];
+};
+
 export type ExecApprovalsDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;

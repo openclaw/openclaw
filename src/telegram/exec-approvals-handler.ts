@@ -8,7 +8,11 @@ import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
 } from "../infra/exec-approval-reply.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalExpired,
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+} from "../infra/exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -384,9 +388,32 @@ export class TelegramExecApprovalHandler {
     );
   }
 
+  async handleExpired(expired: ExecApprovalExpired): Promise<void> {
+    const pending = this.pending.get(expired.id);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeoutId);
+    this.pending.delete(expired.id);
+
+    await Promise.allSettled(
+      pending.messages.map(async (message) => {
+        await this.editReplyMarkup(message.chatId, message.messageId, [], {
+          cfg: this.opts.cfg,
+          token: this.opts.token,
+          accountId: this.opts.accountId,
+        });
+      }),
+    );
+  }
+
   private handleGatewayEvent(evt: EventFrame): void {
     if (evt.event === "exec.approval.requested") {
       void this.handleRequested(evt.payload as ExecApprovalRequest);
+      return;
+    }
+    if (evt.event === "exec.approval.expired") {
+      void this.handleExpired(evt.payload as ExecApprovalExpired);
       return;
     }
     if (evt.event === "exec.approval.resolved") {

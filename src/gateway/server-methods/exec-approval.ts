@@ -225,6 +225,17 @@ export function createExecApprovalHandlers(
       }
 
       const decision = await decisionPromise;
+      if (decision === null) {
+        context.broadcast(
+          "exec.approval.expired",
+          {
+            id: record.id,
+            ts: Date.now(),
+            request: record.request,
+          },
+          { dropIfSlow: true },
+        );
+      }
       // Send final response with decision for callers using expectFinal:true.
       respond(
         true,

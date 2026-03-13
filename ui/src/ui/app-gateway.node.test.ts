@@ -190,6 +190,38 @@ describe("connectGateway", () => {
     });
   });
 
+  it("removes expired exec approvals when the gateway broadcasts an expiry event", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-1",
+        request: {
+          command: "echo hello",
+          host: "gateway",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    expect(host.execApprovalQueue).toHaveLength(1);
+
+    client.emitEvent({
+      event: "exec.approval.expired",
+      payload: {
+        id: "approval-1",
+        ts: 2_000,
+      },
+    });
+
+    expect(host.execApprovalQueue).toEqual([]);
+  });
+
   it("ignores stale client onClose callbacks after reconnect", () => {
     const host = createHost();
 

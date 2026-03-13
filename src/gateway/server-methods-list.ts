@@ -128,6 +128,7 @@ export const GATEWAY_EVENTS = [
   "device.pair.resolved",
   "voicewake.changed",
   "exec.approval.requested",
+  "exec.approval.expired",
   "exec.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

@@ -123,6 +123,7 @@ type ExecApprovalHandlerInternals = {
   >;
   requestCache: Map<string, ExecApprovalRequest>;
   handleApprovalRequested: (request: ExecApprovalRequest) => Promise<void>;
+  handleApprovalExpired: (expired: { id: string; ts: number }) => Promise<void>;
   handleApprovalTimeout: (approvalId: string, source?: "channel" | "dm") => Promise<void>;
 };
 
@@ -750,6 +751,39 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
     expect(internals.pending.has("abc:dm")).toBe(false);
     expect(internals.requestCache.has("abc")).toBe(false);
     expect(internals.requestCache.has("abc2")).toBe(true);
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("finalizes all pending messages for an expired approval", async () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    const internals = getHandlerInternals(handler);
+    const request = { ...createRequest(), id: "abc" };
+
+    internals.requestCache.set("abc", request);
+
+    const timeoutIdChannel = setTimeout(() => {}, 0);
+    const timeoutIdDm = setTimeout(() => {}, 0);
+    clearTimeout(timeoutIdChannel);
+    clearTimeout(timeoutIdDm);
+
+    internals.pending.set("abc:channel", {
+      discordMessageId: "m1",
+      discordChannelId: "c1",
+      timeoutId: timeoutIdChannel,
+    });
+    internals.pending.set("abc:dm", {
+      discordMessageId: "m2",
+      discordChannelId: "c2",
+      timeoutId: timeoutIdDm,
+    });
+
+    await internals.handleApprovalExpired({ id: "abc", ts: Date.now() });
+
+    expect(internals.pending.has("abc:channel")).toBe(false);
+    expect(internals.pending.has("abc:dm")).toBe(false);
+    expect(internals.requestCache.has("abc")).toBe(false);
+    expect(mockRestPatch).toHaveBeenCalledTimes(2);
 
     clearPendingTimeouts(handler);
   });

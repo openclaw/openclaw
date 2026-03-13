@@ -19,6 +19,7 @@ import type { EventFrame } from "../../gateway/protocol/index.js";
 import { resolveExecApprovalCommandDisplay } from "../../infra/exec-approval-command-display.js";
 import { getExecApprovalApproverDmNoticeText } from "../../infra/exec-approval-reply.js";
 import type {
+  ExecApprovalExpired,
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
@@ -474,6 +475,9 @@ export class DiscordExecApprovalHandler {
     if (evt.event === "exec.approval.requested") {
       const request = evt.payload as ExecApprovalRequest;
       void this.handleApprovalRequested(request);
+    } else if (evt.event === "exec.approval.expired") {
+      const expired = evt.payload as ExecApprovalExpired;
+      void this.handleApprovalExpired(expired);
     } else if (evt.event === "exec.approval.resolved") {
       const resolved = evt.payload as ExecApprovalResolved;
       void this.handleApprovalResolved(resolved);
@@ -651,6 +655,36 @@ export class DiscordExecApprovalHandler {
 
     for (const suffix of [":channel", ":dm", ""]) {
       const key = `${resolved.id}${suffix}`;
+      const pending = this.pending.get(key);
+      if (!pending) {
+        continue;
+      }
+
+      clearTimeout(pending.timeoutId);
+      this.pending.delete(key);
+
+      await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
+    }
+  }
+
+  private async handleApprovalExpired(expired: ExecApprovalExpired): Promise<void> {
+    const request = this.requestCache.get(expired.id);
+    this.requestCache.delete(expired.id);
+
+    if (!request) {
+      return;
+    }
+
+    logDebug(`discord exec approvals: expired ${expired.id}`);
+
+    const container = createExpiredContainer({
+      request,
+      cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
+    });
+
+    for (const suffix of [":channel", ":dm", ""]) {
+      const key = `${expired.id}${suffix}`;
       const pending = this.pending.get(key);
       if (!pending) {
         continue;

@@ -867,6 +867,46 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("broadcasts exec.approval.expired when a pending approval times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          id: "approval-expired",
+          timeoutMs: 10,
+        },
+      });
+
+      await drainApprovalRequestTicks();
+      await vi.runOnlyPendingTimersAsync();
+      await requestPromise;
+
+      expect(broadcasts).toContainEqual(
+        expect.objectContaining({
+          event: "exec.approval.expired",
+          payload: expect.objectContaining({
+            id: "approval-expired",
+            request: expect.objectContaining({
+              command: "echo ok",
+            }),
+          }),
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ id: "approval-expired", decision: null }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards turn-source metadata to exec approval forwarding", async () => {
     vi.useFakeTimers();
     try {

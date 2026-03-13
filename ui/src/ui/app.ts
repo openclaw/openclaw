@@ -57,6 +57,10 @@ import { exportChatMarkdown } from "./chat/export.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import {
+  removeExecApproval,
+  resolveExecApprovalDecisionTarget,
+} from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
@@ -636,11 +640,24 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
-    const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) {
+  async handleExecApprovalDecision(
+    approvalId: string,
+    decision: "allow-once" | "allow-always" | "deny",
+  ) {
+    if (!this.client || this.execApprovalBusy) {
       return;
     }
+    const target = resolveExecApprovalDecisionTarget(this.execApprovalQueue, approvalId);
+    this.execApprovalQueue = target.queue;
+    if (target.kind === "expired") {
+      this.execApprovalError = "Exec approval expired.";
+      return;
+    }
+    if (target.kind === "missing") {
+      this.execApprovalError = "Exec approval is no longer pending.";
+      return;
+    }
+    const active = target.entry;
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
@@ -648,9 +665,13 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      this.execApprovalQueue = removeExecApproval(this.execApprovalQueue, active.id);
     } catch (err) {
-      this.execApprovalError = `Exec approval failed: ${String(err)}`;
+      const message = String(err);
+      if (/unknown or expired approval id/i.test(message)) {
+        this.execApprovalQueue = removeExecApproval(this.execApprovalQueue, active.id);
+      }
+      this.execApprovalError = `Exec approval failed: ${message}`;
     } finally {
       this.execApprovalBusy = false;
     }

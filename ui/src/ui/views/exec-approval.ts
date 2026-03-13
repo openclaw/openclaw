@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "../app-view-state.ts";
+import { isExecApprovalExpired } from "../controllers/exec-approval.ts";
 
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);
@@ -29,6 +30,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   }
   const request = active.request;
   const remainingMs = active.expiresAtMs - Date.now();
+  const expired = isExecApprovalExpired(active);
   const remaining = remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";
   const queueCount = state.execApprovalQueue.length;
   return html`
@@ -63,22 +65,22 @@ export function renderExecApprovalPrompt(state: AppViewState) {
         <div class="exec-approval-actions">
           <button
             class="btn primary"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("allow-once")}
+            ?disabled=${state.execApprovalBusy || expired}
+            @click=${() => state.handleExecApprovalDecision(active.id, "allow-once")}
           >
             Allow once
           </button>
           <button
             class="btn"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("allow-always")}
+            ?disabled=${state.execApprovalBusy || expired}
+            @click=${() => state.handleExecApprovalDecision(active.id, "allow-always")}
           >
             Always allow
           </button>
           <button
             class="btn danger"
-            ?disabled=${state.execApprovalBusy}
-            @click=${() => state.handleExecApprovalDecision("deny")}
+            ?disabled=${state.execApprovalBusy || expired}
+            @click=${() => state.handleExecApprovalDecision(active.id, "deny")}
           >
             Deny
           </button>
