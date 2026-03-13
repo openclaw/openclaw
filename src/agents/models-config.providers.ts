@@ -182,6 +182,8 @@ type ProfileApiKeyResolution = {
   discoveryApiKey?: string;
 };
 
+export { normalizeGoogleModelId };
+
 function toDiscoveryApiKey(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {

@@ -1,5 +1,5 @@
-// Keep model ID normalization dependency-free so config parsing and other
-// startup-only paths do not pull in provider discovery or plugin loading.
+// Keep these helpers dependency-free so config/model parsing can use them
+// without pulling in provider discovery or auth-profile graphs.
 export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3-pro") {
     return "gemini-3-pro-preview";
