@@ -8,6 +8,7 @@ import {
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
+import { reloadOnboardingPluginRegistry } from "./onboarding/plugin-install.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
@@ -190,6 +191,7 @@ vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
 describe("setupChannels", () => {
   beforeEach(() => {
     setDefaultChannelPluginRegistryForTests();
+    vi.mocked(reloadOnboardingPluginRegistry).mockClear();
   });
   it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
     const select = vi.fn(async () => "whatsapp");
@@ -257,6 +259,26 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
+    expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("reloads built-in plugins for configured Telegram when registry is empty", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const select = createQuickstartTelegramSelect({
+      configuredAction: "skip",
+      strictUnexpected: true,
+    });
+    const { prompter } = createUnexpectedQuickstartPrompter(
+      select as unknown as WizardPrompter["select"],
+    );
+
+    await runSetupChannels(createTelegramCfg("token"), prompter, {
+      quickstartDefaults: true,
+      allowDisable: true,
+    });
+
+    expect(reloadOnboardingPluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {

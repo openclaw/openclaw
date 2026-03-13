@@ -348,6 +348,7 @@ export async function setupChannels(
 
   const quickstartDefault =
     options?.initialSelection?.[0] ?? resolveQuickstartDefault(statusByChannel);
+  const builtInChannelIds = coreIds;
 
   const shouldPromptAccountIds = options?.promptAccountIds === true;
   const accountIdsByChannel = new Map<ChannelChoice, string>();
@@ -462,6 +463,12 @@ export async function setupChannels(
       );
       return false;
     }
+    const adapter = getChannelOnboardingAdapter(channel);
+    const configured = statusByChannel.get(channel)?.configured === true;
+    if (adapter && builtInChannelIds.has(channel) && !configured) {
+      await refreshStatus(channel);
+      return true;
+    }
     const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
     reloadOnboardingPluginRegistry({
       cfg: next,
@@ -469,10 +476,9 @@ export async function setupChannels(
       workspaceDir,
     });
     if (!getChannelPlugin(channel)) {
-      // Some installs/environments can fail to populate the plugin registry during onboarding,
-      // even for built-in channels. If the channel supports onboarding, proceed with config
-      // so setup isn't blocked; the gateway can still load plugins on startup.
-      const adapter = getChannelOnboardingAdapter(channel);
+      // Some installs/environments can fail to populate the plugin registry during onboarding.
+      // If the channel supports onboarding, proceed with config so setup isn't blocked;
+      // the gateway can still load plugins on startup.
       if (adapter) {
         await prompter.note(
           `${channel} plugin not available (continuing with onboarding). If the channel still doesn't work after setup, run \`${formatCliCommand(
