@@ -114,7 +114,6 @@ function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
