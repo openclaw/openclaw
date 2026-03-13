@@ -3,6 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAgentCortexModeStatus, resolveCortexChannelTarget } from "../../agents/cortex.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
