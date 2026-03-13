@@ -45,6 +45,9 @@ import type {
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
+  PluginHookBeforeToolsResolveEvent,
+  PluginHookBeforeToolsResolveResult,
+  PluginHookBeforeToolsResolveContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -76,6 +79,9 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookBeforeToolsResolveEvent,
+  PluginHookBeforeToolsResolveResult,
+  PluginHookBeforeToolsResolveContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -463,6 +469,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_tools_resolve hook.
+   * Allows plugins to dynamically filter the tool list based on caller identity.
+   * Runs sequentially; results are merged (deny lists unioned, allow lists intersected).
+   */
+  async function runBeforeToolsResolve(
+    event: PluginHookBeforeToolsResolveEvent,
+    ctx: PluginHookBeforeToolsResolveContext,
+  ): Promise<PluginHookBeforeToolsResolveResult | undefined> {
+    return runModifyingHook<"before_tools_resolve", PluginHookBeforeToolsResolveResult>(
+      "before_tools_resolve",
+      event,
+      ctx,
+      (acc, next) => ({
+        deny: [...(acc?.deny ?? []), ...(next.deny ?? [])],
+        allow: next.allow ?? acc?.allow,
+      }),
+    );
+  }
+
+  /**
    * Run tool_result_persist hook.
    *
    * This hook is intentionally synchronous: it runs in hot paths where session
@@ -740,6 +766,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runBeforeToolsResolve,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
