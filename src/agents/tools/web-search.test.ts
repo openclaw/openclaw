@@ -28,6 +28,7 @@ const {
   resolveTavilySearchDepth,
   isRetriableSearchError,
   classifySearchError,
+  resolveProviderRunParams,
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
@@ -577,5 +578,40 @@ describe("classifySearchError", () => {
 
   it("returns unknown for non-Error values", () => {
     expect(classifySearchError("not an error")).toBe("unknown");
+  });
+});
+
+const braveApiKeyEnv = ["BRAVE_API", "KEY"].join("_");
+
+describe("resolveProviderRunParams", () => {
+  it("returns undefined for provider with no API key", () => {
+    withEnv({ [braveApiKeyEnv]: undefined }, () => {
+      expect(resolveProviderRunParams("brave", {})).toBeUndefined();
+    });
+  });
+
+  it("resolves tavily params from config", () => {
+    const search = {
+      tavily: {
+        apiKey: "tvly-test-key", // pragma: allowlist secret
+        searchDepth: "advanced",
+      },
+    };
+    const result = resolveProviderRunParams(
+      "tavily",
+      search as Parameters<typeof resolveProviderRunParams>[1],
+    );
+    expect(result).toBeDefined();
+    expect(result?.apiKey).toBe("tvly-test-key"); // pragma: allowlist secret
+    expect(result?.tavilySearchDepth).toBe("advanced");
+  });
+
+  it("resolves brave params from env", () => {
+    withEnv({ [braveApiKeyEnv]: "test-brave-key" }, () => {
+      // pragma: allowlist secret
+      const result = resolveProviderRunParams("brave", {});
+      expect(result).toBeDefined();
+      expect(result?.apiKey).toBe("test-brave-key"); // pragma: allowlist secret
+    });
   });
 });

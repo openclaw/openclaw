@@ -2226,7 +2226,7 @@ export function createWebSearchTool(options?: {
                   ? resolveTavilyApiKey(tavilyConfig)
                   : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      if (!apiKey && !(search?.fallbacks && search.fallbacks.length > 0)) {
         return jsonResult(missingSearchKeyPayload(provider));
       }
 
@@ -2570,4 +2570,5 @@ export const __testing = {
   resolveTavilySearchDepth,
   isRetriableSearchError,
   classifySearchError,
+  resolveProviderRunParams,
 } as const;

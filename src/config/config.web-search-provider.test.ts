@@ -104,6 +104,51 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts fallbacks array in search config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            fallbacks: ["gemini", "tavily"],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid provider in fallbacks array", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            fallbacks: ["not-a-provider"],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts empty fallbacks array", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            fallbacks: [],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
