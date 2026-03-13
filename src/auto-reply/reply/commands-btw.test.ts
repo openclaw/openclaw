@@ -1,0 +1,93 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { buildCommandTestParams } from "./commands.test-harness.js";
+
+const runBtwSideQuestionMock = vi.fn();
+
+vi.mock("../../agents/btw.js", () => ({
+  runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
+}));
+
+const { handleBtwCommand } = await import("./commands-btw.js");
+
+function buildParams(commandBody: string) {
+  const cfg = {
+    commands: { text: true },
+    channels: { whatsapp: { allowFrom: ["*"] } },
+  } as OpenClawConfig;
+  return buildCommandTestParams(commandBody, cfg, undefined, { workspaceDir: "/tmp/workspace" });
+}
+
+describe("handleBtwCommand", () => {
+  beforeEach(() => {
+    runBtwSideQuestionMock.mockReset();
+  });
+
+  it("returns usage when the side question is missing", async () => {
+    const result = await handleBtwCommand(buildParams("/btw"), true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Usage: /btw <side question>" },
+    });
+  });
+
+  it("requires an active session context", async () => {
+    const params = buildParams("/btw what changed?");
+    params.sessionEntry = undefined;
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ /btw requires an active session with existing context." },
+    });
+  });
+
+  it("still delegates while the session is actively running", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "snapshot answer" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "what changed?",
+        sessionEntry: params.sessionEntry,
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "snapshot answer" },
+    });
+  });
+
+  it("delegates to the side-question runner", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "nothing important" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "what changed?",
+        agentDir: "/tmp/agent",
+        sessionEntry: params.sessionEntry,
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "nothing important" },
+    });
+  });
+});

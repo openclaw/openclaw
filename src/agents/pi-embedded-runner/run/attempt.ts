@@ -111,6 +111,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -2376,6 +2377,10 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
+        updateActiveEmbeddedRunSnapshot(params.sessionId, {
+          transcriptLeafId:
+            (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null,
+        });
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
