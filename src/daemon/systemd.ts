@@ -572,6 +572,19 @@ export async function restartSystemdService({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  // Prefer reload (SIGUSR1 via ExecReload) for a graceful in-process restart
+  // that drains active tasks before re-initializing. Fall back to full restart
+  // only when the unit has no ExecReload (older installs before the fix).
+  const serviceEnv = env ?? process.env;
+  await assertSystemdAvailable(serviceEnv);
+  const serviceName = resolveSystemdServiceName(serviceEnv);
+  const unitName = `${serviceName}.service`;
+  const reload = await execSystemctlUser(serviceEnv, ["reload", unitName]);
+  if (reload.code === 0) {
+    stdout.write(`${formatLine("Reloaded systemd service (SIGUSR1)", unitName)}\n`);
+    return { outcome: "completed" };
+  }
+  // reload failed (likely no ExecReload in unit); fall back to hard restart.
   await runSystemdServiceAction({
     stdout,
     env,

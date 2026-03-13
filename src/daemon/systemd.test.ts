@@ -62,7 +62,10 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   const { write, stdout } = createWritableStreamMock();
   await restartSystemdService({ stdout, env });
   expect(write).toHaveBeenCalledTimes(1);
-  expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+  const output = String(write.mock.calls[0]?.[0]);
+  expect(
+    output.includes("Restarted systemd service") || output.includes("Reloaded systemd service"),
+  ).toBe(true);
 };
 
 describe("systemd availability", () => {
@@ -631,7 +634,10 @@ describe("readSystemdServiceExecStart", () => {
 
 describe("systemd service control", () => {
   const assertMachineRestartArgs = (args: string[]) => {
-    expect(args).toEqual(["--machine", "debian@", "--user", "restart", "openclaw-gateway.service"]);
+    // Accept both reload (SIGUSR1 path) and restart (fallback path)
+    const action = args[3];
+    expect(["reload", "restart"]).toContain(action);
+    expect(args).toEqual(["--machine", "debian@", "--user", action, "openclaw-gateway.service"]);
   };
 
   beforeEach(() => {
@@ -674,14 +680,37 @@ describe("systemd service control", () => {
     });
   });
 
-  it("restarts a profile-specific user unit", async () => {
+  it("restarts a profile-specific user unit via reload (SIGUSR1)", async () => {
     execFileMock
+      // assertSystemdAvailable → status
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      // reload (sends SIGUSR1 via ExecReload)
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "restart", "openclaw-gateway-work.service"]);
+        expect(args).toEqual(["--user", "reload", "openclaw-gateway-work.service"]);
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+  });
+
+  it("falls back to hard restart when reload fails (no ExecReload)", async () => {
+    execFileMock
+      // assertSystemdAvailable → status
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      // reload fails (unit has no ExecReload)
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "reload", "openclaw-gateway.service"]);
+        const err = new Error("reload failed") as Error & { code?: number };
+        err.code = 1;
+        cb(err, "", "Job type reload is not applicable");
+      })
+      // assertSystemdAvailable → status (for fallback restart)
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      // hard restart
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        cb(null, "", "");
+      });
+    await assertRestartSuccess({});
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
@@ -741,7 +770,10 @@ describe("systemd service control", () => {
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        // reload or restart depending on ExecReload availability
+        const action = args[1];
+        expect(["reload", "restart"]).toContain(action);
+        expect(args).toEqual(["--user", action, "openclaw-gateway.service"]);
         cb(null, "", "");
       });
     await assertRestartSuccess({ SUDO_USER: "root", USER: "root" });
@@ -762,7 +794,10 @@ describe("systemd service control", () => {
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
-        expect(args).toEqual(["--user", "restart", "openclaw-gateway.service"]);
+        // reload attempt (direct scope fails, then machine scope)
+        const action = args[1];
+        expect(["reload", "restart"]).toContain(action);
+        expect(args).toEqual(["--user", action, "openclaw-gateway.service"]);
         const err = createExecFileError("Failed to connect to user scope bus", {
           stderr: "Failed to connect to user scope bus",
         });

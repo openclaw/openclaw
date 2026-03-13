@@ -57,6 +57,9 @@ export function buildSystemdUnit({
     "",
     "[Service]",
     `ExecStart=${execStart}`,
+    // Send SIGUSR1 on reload so the gateway performs a graceful in-process
+    // restart (drain active tasks, then re-init) instead of a hard stop.
+    "ExecReload=/bin/kill -USR1 $MAINPID",
     "Restart=always",
     "RestartSec=5",
     "TimeoutStopSec=30",
