@@ -74,17 +74,30 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
 
   // Start browser (profile-aware)
   app.post("/start", async (req, res) => {
-    const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx) {
-      return jsonError(res, profileCtx.status, profileCtx.error);
-    }
-
-    try {
-      await profileCtx.ensureBrowserAvailable();
-      res.json({ ok: true, profile: profileCtx.profile.name });
-    } catch (err) {
-      jsonError(res, 500, String(err));
-    }
+    await withBasicProfileRoute({
+      req,
+      res,
+      ctx,
+      run: async (profileCtx) => {
+        // Allow runtime headless override via query param (e.g. ?headless=true)
+        const headlessParam = (req.query as Record<string, string>)?.headless;
+        if (headlessParam === "true") {
+          const current = ctx.state();
+          current.resolved.headless = true;
+          // Headless mode only works with locally-launched profiles (openclaw driver).
+          // Extension-based profiles (chrome) attach to an existing browser and cannot be made headless.
+          if (profileCtx.profile.driver === "extension") {
+            return jsonError(
+              res,
+              400,
+              `Headless mode is not supported with extension-based profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
+            );
+          }
+        }
+        await profileCtx.ensureBrowserAvailable();
+        res.json({ ok: true, profile: profileCtx.profile.name });
+      },
+    });
   });
 
   // Stop browser (profile-aware)
