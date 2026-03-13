@@ -1,4 +1,55 @@
 /* Tool Card Styles */
+
+/* Expandable tool card styles */\n.chat-tool-card--expandable {
+  cursor: pointer;
+}
+
+.chat-tool-card__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.chat-tool-card__toggle:hover {
+  background: var(--bg-hover);
+}
+
+.chat-tool-card__output {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.chat-tool-card__output--expanded {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.chat-tool-card__full {
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Mobile: ensure expanded output doesn't block chat */\n@media (max-width: 768px) {
+  .chat-tool-card__output--expanded {
+    max-height: 300px;
+  }
+}
+
 .chat-tool-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

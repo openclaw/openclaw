@@ -35,3 +35,18 @@ export function getTruncatedPreview(text: string): string {
   }
   return lines.length < allLines.length ? preview + "…" : preview;
 }
+
+/**
+ * Check if tool output is considered "long" (exceeds threshold).
+ * Used to determine if expand/collapse toggle should shown.
+ */
+export function isLongToolOutput(text: string): boolean {
+  return text.length > TOOL_INLINE_THRESHOLD;
+}
+
+/**
+ * Get full tool output content (for expanded view).
+ */
+export function getFullToolOutput(text: string): string {
+  return text;
+}
