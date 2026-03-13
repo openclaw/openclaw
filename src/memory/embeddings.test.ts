@@ -210,6 +210,31 @@ describe("embedding provider remote overrides", () => {
     expect(headers["Content-Type"]).toBe("application/json");
   });
 
+  it("passes Gemini outputDimensionality when configured", async () => {
+    const fetchMock = createGeminiFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: {
+        apiKey: "gemini-key",
+      },
+      model: "text-embedding-004",
+      outputDimensionality: 768,
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    const { init } = readFirstFetchRequest(fetchMock);
+    expect(init?.body ? JSON.parse(String(init.body)) : {}).toMatchObject({
+      outputDimensionality: 768,
+    });
+  });
+
   it("fails fast when Gemini remote apiKey is an unresolved SecretRef", async () => {
     await expect(
       createEmbeddingProvider({
