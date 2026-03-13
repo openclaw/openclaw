@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway**: fix circular dependency crash when Anthropic models configured, preventing "Cannot access ANTHROPIC_MODEL_ALIASES before initialization" error on `openclaw gateway restart`. (#44724)
 - **File Tools**: fix atomic write to sync before stat, preventing 0-byte file regression in v2026.3.11 (affected Kimi, Grok, GPT-5.4). (#44372)
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
 
