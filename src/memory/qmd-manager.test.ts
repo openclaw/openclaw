@@ -122,8 +122,6 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
-const originalPath = process.env.PATH;
-const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
 
 describe("QmdMemoryManager", () => {
@@ -1695,7 +1693,7 @@ describe("QmdMemoryManager", () => {
     }
   });
 
-  it("fails closed on Windows EINVAL cmd-shim failures instead of retrying through the shell", async () => {
+  it("does not retry Windows mcporter wrapper failures through the shell", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
     try {
@@ -1735,19 +1733,27 @@ describe("QmdMemoryManager", () => {
       });
 
       const { manager } = await createManager();
-      await expect(
-        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
-      ).rejects.toThrow(/without shell execution|EINVAL/);
+      let searchResult: unknown;
+      let searchError: unknown;
+      try {
+        searchResult = await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+      } catch (err) {
+        searchError = err;
+      }
       const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
       if (attemptedCmdShim) {
-        expect(
-          spawnMock.mock.calls.some(
-            (call: unknown[]) =>
-              call[0] === "mcporter" &&
-              (call[2] as { shell?: boolean } | undefined)?.shell === true,
-          ),
-        ).toBe(false);
+        expect(String(searchError)).toMatch(/without shell execution|EINVAL/);
+      } else {
+        // Some hosts resolve the wrapper to a direct entrypoint before spawn,
+        // which is also acceptable as long as we never fall back to shell mode.
+        expect(searchError).toBeUndefined();
+        expect(searchResult).toEqual([]);
       }
+      expect(
+        spawnMock.mock.calls.some(
+          (call: unknown[]) => (call[2] as { shell?: boolean } | undefined)?.shell === true,
+        ),
+      ).toBe(false);
       await manager.close();
     } finally {
       platformSpy.mockRestore();
