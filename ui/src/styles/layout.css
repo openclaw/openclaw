@@ -832,7 +832,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 4px 8px;
-  overflow: hidden;
+  overflow: visible; /* allow tooltips to escape bounds */
   transform-origin: top center;
   transition:
     opacity var(--shell-focus-duration) var(--shell-focus-ease),
@@ -843,6 +843,7 @@
 }
 
 .shell--chat-focus .content-header {
+  overflow: hidden; /* added for collapse clipping */
   opacity: 0;
   transform: translateY(-8px);
   max-height: 0px;
