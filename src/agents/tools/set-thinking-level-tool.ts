@@ -55,6 +55,13 @@ function resolveToolThinkingLevel(params: {
   return normalized;
 }
 
+function resolveToolThinkingScope(raw: string): "turn" | "session" {
+  if (raw === "turn" || raw === "session") {
+    return raw;
+  }
+  throw new ToolInputError(`Invalid scope "${raw}". Use one of: turn|session.`);
+}
+
 export function createSetThinkingLevelTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
@@ -74,7 +81,7 @@ export function createSetThinkingLevelTool(opts?: {
     parameters: SetThinkingLevelToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const scope = readStringParam(params, "scope", { required: true }) as "turn" | "session";
+      const scope = resolveToolThinkingScope(readStringParam(params, "scope", { required: true }));
       const cfg = options.config ?? loadConfig();
       const priorRequestedLevel = options.getRequestedThinkingLevel?.();
       const levelRaw = readStringParam(params, "level", { required: true });

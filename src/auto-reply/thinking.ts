@@ -43,6 +43,9 @@ function normalizeProviderId(provider?: string | null): string {
     return "";
   }
   const normalized = provider.trim().toLowerCase();
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
