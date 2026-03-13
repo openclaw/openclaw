@@ -623,8 +623,29 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
+  // Capture PID and identity BEFORE kickstart so that, if `kickstart -k` does
+  // not fully drain the old process, we can verify the old PID is gone before
+  // the new instance races for the port (mirrors the stopLaunchAgent pattern).
+  const printBefore = await execLaunchctl(["print", serviceTarget]);
+  const prevPid =
+    printBefore.code === 0
+      ? parseLaunchctlPrint(printBefore.stdout || printBefore.stderr || "").pid
+      : undefined;
+  const prevPidIdentity = typeof prevPid === "number" ? await getPidStartTime(prevPid) : undefined;
+
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
+    // Verify the previous process is actually gone; `kickstart -k` should
+    // handle this, but warn if the PID is still alive after the restart so
+    // the port-still-busy race is observable.
+    if (typeof prevPid === "number") {
+      const gone = await ensurePidGone(prevPid, prevPidIdentity);
+      if (!gone) {
+        stdout.write(
+          `Warning: PID ${prevPid} may still be running after restart; port may not be free yet.\n`,
+        );
+      }
+    }
     try {
       stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
     } catch (err: unknown) {
