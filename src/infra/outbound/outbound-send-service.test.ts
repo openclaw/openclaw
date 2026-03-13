@@ -339,4 +339,52 @@ describe("executeSendAction", () => {
       }),
     );
   });
+
+  it("suppresses outbound message when content is SILENT_REPLY_TOKEN", async () => {
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: {},
+        dryRun: false,
+      },
+      to: "user:123",
+      message: "NO_REPLY",
+    });
+
+    expect(result.handledBy).toBe("silent");
+    expect(result.sendResult?.channel).toBe("telegram");
+    expect(result.sendResult?.to).toBe("user:123");
+    expect(result.sendResult?.via).toBe("direct");
+    expect(result.sendResult?.mediaUrl).toBeNull();
+    expect(result.sendResult?.delivered).toBe(false);
+    expect(result.sendResult?.discarded).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does NOT suppress SILENT_REPLY_TOKEN when media is attached", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "telegram",
+      to: "user:123",
+      via: "direct",
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "telegram",
+        params: {},
+        dryRun: false,
+      },
+      to: "user:123",
+      message: "NO_REPLY",
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expect(result.handledBy).toBe("core");
+    expect(mocks.sendMessage).toHaveBeenCalled();
+  });
 });
