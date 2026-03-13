@@ -151,14 +151,17 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
-  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+  it("persists not-requested when delivery.mode=none and runner reports delivered=false", async () => {
+    // When delivery was never requested (mode: "none"), delivered=false from
+    // the runner should resolve to "not-requested", not "not-delivered".
+    // See: https://github.com/openclaw/openclaw/issues/44533
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivered-false"),
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(false);
-    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
