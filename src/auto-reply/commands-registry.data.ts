@@ -1,4 +1,5 @@
 import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -124,6 +125,7 @@ function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedNativeCommandSurfaces: Set<string> | null = null;
+let cachedPluginRegistryVersion: number | null = null;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
@@ -756,17 +758,20 @@ function buildChatCommands(): ChatCommandDefinition[] {
 }
 
 export function getChatCommands(): ChatCommandDefinition[] {
-  if (cachedCommands) {
+  const registryVersion = getActivePluginRegistryVersion();
+  if (cachedCommands && cachedPluginRegistryVersion === registryVersion) {
     return cachedCommands;
   }
   const commands = buildChatCommands();
   cachedCommands = commands;
   cachedNativeCommandSurfaces = null;
+  cachedPluginRegistryVersion = registryVersion;
   return commands;
 }
 
 export function getNativeCommandSurfaces(): Set<string> {
-  if (cachedNativeCommandSurfaces) {
+  const registryVersion = getActivePluginRegistryVersion();
+  if (cachedNativeCommandSurfaces && cachedPluginRegistryVersion === registryVersion) {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
@@ -774,5 +779,6 @@ export function getNativeCommandSurfaces(): Set<string> {
       .filter((dock) => dock.capabilities.nativeCommands)
       .map((dock) => dock.id),
   );
+  cachedPluginRegistryVersion = registryVersion;
   return cachedNativeCommandSurfaces;
 }
