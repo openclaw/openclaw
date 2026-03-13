@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -43,14 +44,15 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("ensureConfigReady", () => {
-  async function loadEnsureConfigReady() {
-    vi.resetModules();
-    return await import("./config-guard.js");
-  }
+  let ensureConfigReady: (params: {
+    runtime: RuntimeEnv;
+    commandPath?: string[];
+    suppressDoctorStdout?: boolean;
+  }) => Promise<void>;
+  let resetConfigGuardStateForTests: () => void;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
-    const { ensureConfigReady } = await loadEnsureConfigReady();
     await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
     return runtime;
   }
@@ -65,8 +67,16 @@ describe("ensureConfigReady", () => {
     });
   }
 
+  beforeAll(async () => {
+    ({
+      ensureConfigReady,
+      __test__: { resetConfigGuardStateForTests },
+    } = await import("./config-guard.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    resetConfigGuardStateForTests();
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
   });
 
@@ -107,7 +117,6 @@ describe("ensureConfigReady", () => {
   it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
-    const { ensureConfigReady } = await loadEnsureConfigReady();
 
     await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });

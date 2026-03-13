@@ -1,93 +1,119 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { canonicalizePathVariant } from "../security-path.js";
-import { isProtectedPluginRoutePath } from "../security-path.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
+import { PROTOCOL_VERSION } from "../protocol/index.js";
+import type { GatewayRequestOptions } from "../server-methods/types.js";
+import {
+  resolvePluginRoutePathContext,
+  type PluginRoutePathContext,
+} from "./plugins-http/path-context.js";
+import { matchedPluginRoutesRequireGatewayAuth } from "./plugins-http/route-auth.js";
+import { findMatchingPluginHttpRoutes } from "./plugins-http/route-match.js";
+
+export {
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+  type PluginRoutePathContext,
+} from "./plugins-http/path-context.js";
+export {
+  findRegisteredPluginHttpRoute,
+  isRegisteredPluginHttpRoutePath,
+} from "./plugins-http/route-match.js";
+export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+function createPluginRouteRuntimeClient(params: {
+  requiresGatewayAuth: boolean;
+  gatewayAuthSatisfied?: boolean;
+}): GatewayRequestOptions["client"] {
+  // Plugin-authenticated webhooks can still use non-admin subagent helpers,
+  // but they must not inherit admin-only gateway methods by default.
+  const scopes =
+    params.requiresGatewayAuth && params.gatewayAuthSatisfied !== false
+      ? [ADMIN_SCOPE, APPROVALS_SCOPE, PAIRING_SCOPE]
+      : [WRITE_SCOPE];
+  return {
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        version: "internal",
+        platform: "node",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      role: "operator",
+      scopes,
+    },
+  };
+}
 
 export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: { gatewayAuthSatisfied?: boolean },
 ) => Promise<boolean>;
-
-type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
-
-export function findRegisteredPluginHttpRoute(
-  registry: PluginRegistry,
-  pathname: string,
-): PluginHttpRouteEntry | undefined {
-  const canonicalPath = canonicalizePathVariant(pathname);
-  const routes = registry.httpRoutes ?? [];
-  return routes.find((entry) => canonicalizePathVariant(entry.path) === canonicalPath);
-}
-
-// Only checks specific routes registered via registerHttpRoute, not wildcard handlers
-// registered via registerHttpHandler. Wildcard handlers (e.g., webhooks) implement
-// their own signature-based auth and are handled separately in the auth enforcement logic.
-export function isRegisteredPluginHttpRoutePath(
-  registry: PluginRegistry,
-  pathname: string,
-): boolean {
-  return findRegisteredPluginHttpRoute(registry, pathname) !== undefined;
-}
-
-export function shouldEnforceGatewayAuthForPluginPath(
-  registry: PluginRegistry,
-  pathname: string,
-): boolean {
-  return (
-    isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
-  );
-}
 
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
 }): PluginHttpRequestHandler {
   const { registry, log } = params;
-  return async (req, res) => {
+  return async (req, res, providedPathContext, dispatchContext) => {
     const routes = registry.httpRoutes ?? [];
-    const handlers = registry.httpHandlers ?? [];
-    if (routes.length === 0 && handlers.length === 0) {
+    if (routes.length === 0) {
       return false;
     }
 
-    if (routes.length > 0) {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const route = findRegisteredPluginHttpRoute(registry, url.pathname);
-      if (route) {
-        try {
-          await route.handler(req, res);
-          return true;
-        } catch (err) {
-          log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Internal Server Error");
-          }
-          return true;
-        }
-      }
+    const pathContext =
+      providedPathContext ??
+      (() => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        return resolvePluginRoutePathContext(url.pathname);
+      })();
+    const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
+    if (matchedRoutes.length === 0) {
+      return false;
     }
+    const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
+    if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied === false) {
+      log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
+      return false;
+    }
+    const runtimeClient = createPluginRouteRuntimeClient({
+      requiresGatewayAuth,
+      gatewayAuthSatisfied: dispatchContext?.gatewayAuthSatisfied,
+    });
 
-    for (const entry of handlers) {
-      try {
-        const handled = await entry.handler(req, res);
-        if (handled) {
-          return true;
+    return await withPluginRuntimeGatewayRequestScope(
+      {
+        client: runtimeClient,
+        isWebchatConnect: () => false,
+      },
+      async () => {
+        for (const route of matchedRoutes) {
+          try {
+            const handled = await route.handler(req, res);
+            if (handled !== false) {
+              return true;
+            }
+          } catch (err) {
+            log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
+            if (!res.headersSent) {
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.end("Internal Server Error");
+            }
+            return true;
+          }
         }
-      } catch (err) {
-        log.warn(`plugin http handler failed (${entry.pluginId}): ${String(err)}`);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Internal Server Error");
-        }
-        return true;
-      }
-    }
-    return false;
+        return false;
+      },
+    );
   };
 }

@@ -407,6 +407,13 @@ enum WatchPromptNotificationBridge {
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             if !granted { return false }
             let updatedStatus = await self.notificationAuthorizationStatus(center: center)
+            if self.isAuthorizationStatusAllowed(updatedStatus) {
+                // Refresh APNs registration immediately after the first permission grant so the
+                // gateway can receive a push registration without requiring an app relaunch.
+                await MainActor.run {
+                    UIApplication.shared.registerForRemoteNotifications()
+                }
+            }
             return self.isAuthorizationStatusAllowed(updatedStatus)
         case .denied:
             return false
@@ -456,11 +463,7 @@ enum WatchPromptNotificationBridge {
     ) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             center.add(request) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
+                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
     }

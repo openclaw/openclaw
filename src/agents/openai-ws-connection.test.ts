@@ -171,6 +171,34 @@ function buildManager(opts?: ConstructorParameters<typeof OpenAIWebSocketManager
   });
 }
 
+function attachErrorCollector(manager: OpenAIWebSocketManager) {
+  const errors: Error[] = [];
+  manager.on("error", (e) => errors.push(e));
+  return errors;
+}
+
+async function connectManagerAndGetSocket(manager: OpenAIWebSocketManager) {
+  const connectPromise = manager.connect("sk-test");
+  const sock = lastSocket();
+  sock.simulateOpen();
+  await connectPromise;
+  return sock;
+}
+
+async function createConnectedManager(
+  opts?: ConstructorParameters<typeof OpenAIWebSocketManager>[0],
+): Promise<{ manager: OpenAIWebSocketManager; sock: MockWS }> {
+  const manager = buildManager(opts);
+  const sock = await connectManagerAndGetSocket(manager);
+  return { manager, sock };
+}
+
+function connectIgnoringFailure(manager: OpenAIWebSocketManager): Promise<void> {
+  return manager.connect("sk-test").catch(() => {
+    /* ignore rejection */
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,11 +273,7 @@ describe("OpenAIWebSocketManager", () => {
 
   describe("send()", () => {
     it("sends a JSON-serialized event over the socket", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const event: ResponseCreateEvent = {
         type: "response.create",
@@ -272,11 +296,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("includes previous_response_id when provided", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const event: ResponseCreateEvent = {
         type: "response.create",
@@ -295,11 +315,7 @@ describe("OpenAIWebSocketManager", () => {
 
   describe("onMessage()", () => {
     it("calls handler for each incoming message", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const received: OpenAIWebSocketEvent[] = [];
       manager.onMessage((e) => received.push(e));
@@ -318,11 +334,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("returns an unsubscribe function that stops delivery", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const received: OpenAIWebSocketEvent[] = [];
       const unsubscribe = manager.onMessage((e) => received.push(e));
@@ -335,11 +347,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("supports multiple simultaneous handlers", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const calls: number[] = [];
       manager.onMessage(() => calls.push(1));
@@ -359,11 +367,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("is updated when a response.completed event is received", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       const completedEvent: ResponseCompletedEvent = {
         type: "response.completed",
@@ -375,11 +379,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("tracks the most recent completed response", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       sock.simulateMessage({
         type: "response.completed",
@@ -394,11 +394,7 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("is not updated for non-completed events", async () => {
-      const manager = buildManager();
-      const connectPromise = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await connectPromise;
+      const { manager, sock } = await createConnectedManager();
 
       sock.simulateMessage({ type: "response.in_progress", response: makeResponse("resp_x") });
 
@@ -510,6 +506,53 @@ describe("OpenAIWebSocketManager", () => {
       expect(maxRetryError).toBeDefined();
     });
 
+    it("does not double-count retries when error and close both fire on a reconnect attempt", async () => {
+      // In the real `ws` library, a failed connection fires "error" followed
+      // by "close". Previously, both the onClose handler AND the promise
+      // .catch() in _scheduleReconnect called _scheduleReconnect(), which
+      // double-incremented retryCount and exhausted the retry budget
+      // prematurely (e.g. 3 retries became ~1-2 actual attempts).
+      const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 5, 5] });
+      const errors = attachErrorCollector(manager);
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      // Drop the established connection — triggers first reconnect schedule
+      lastSocket().simulateClose(1006, "Network error");
+
+      // Advance past first retry delay — a new socket is created
+      await vi.advanceTimersByTimeAsync(10);
+      const sock2 = lastSocket();
+
+      // Simulate a realistic failure: error fires first, then close follows.
+      sock2.simulateError(new Error("ECONNREFUSED"));
+      sock2.simulateClose(1006, "Connection failed");
+
+      // Advance past second retry delay — another socket should be created
+      // because we've only used 2 retries (not 3 from double-counting).
+      await vi.advanceTimersByTimeAsync(10);
+      const sock3 = lastSocket();
+      expect(sock3).not.toBe(sock2);
+
+      // Third attempt also fails with error+close
+      sock3.simulateError(new Error("ECONNREFUSED"));
+      sock3.simulateClose(1006, "Connection failed");
+
+      // Advance past third retry delay — one more attempt (retry 3 of 3)
+      await vi.advanceTimersByTimeAsync(10);
+      const sock4 = lastSocket();
+      expect(sock4).not.toBe(sock3);
+
+      // Fourth socket also fails — now retries should be exhausted (3/3)
+      sock4.simulateError(new Error("ECONNREFUSED"));
+      sock4.simulateClose(1006, "Connection failed");
+      await vi.advanceTimersByTimeAsync(10);
+
+      const maxRetryError = errors.find((e) => e.message.includes("max reconnect retries"));
+      expect(maxRetryError).toBeDefined();
+    });
+
     it("resets retry count after a successful reconnect", async () => {
       const manager = buildManager({ maxRetries: 3, backoffDelaysMs: [5, 10, 20] });
       const p = manager.connect("sk-test");
@@ -535,11 +578,7 @@ describe("OpenAIWebSocketManager", () => {
 
   describe("warmUp()", () => {
     it("sends a response.create event with generate: false", async () => {
-      const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
+      const { manager, sock } = await createConnectedManager();
 
       manager.warmUp({ model: "gpt-5.2", instructions: "You are helpful." });
 
@@ -552,22 +591,16 @@ describe("OpenAIWebSocketManager", () => {
     });
 
     it("includes tools when provided", async () => {
-      const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
+      const { manager, sock } = await createConnectedManager();
 
       manager.warmUp({
         model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
   });
 
@@ -576,13 +609,8 @@ describe("OpenAIWebSocketManager", () => {
   describe("error handling", () => {
     it("emits error event on malformed JSON message", async () => {
       const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const sock = await connectManagerAndGetSocket(manager);
+      const errors = attachErrorCollector(manager);
 
       sock.emit("message", Buffer.from("not valid json{{{{"));
 
@@ -592,13 +620,8 @@ describe("OpenAIWebSocketManager", () => {
 
     it("emits error event when message has no type field", async () => {
       const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const sock = await connectManagerAndGetSocket(manager);
+      const errors = attachErrorCollector(manager);
 
       sock.emit("message", Buffer.from(JSON.stringify({ foo: "bar" })));
 
@@ -608,12 +631,8 @@ describe("OpenAIWebSocketManager", () => {
 
     it("emits error event on WebSocket socket error", async () => {
       const manager = buildManager({ maxRetries: 0 });
-      const p = manager.connect("sk-test").catch(() => {
-        /* ignore rejection */
-      });
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const p = connectIgnoringFailure(manager);
+      const errors = attachErrorCollector(manager);
 
       lastSocket().simulateError(new Error("SSL handshake failed"));
       await p;
@@ -623,12 +642,8 @@ describe("OpenAIWebSocketManager", () => {
 
     it("handles multiple successive socket errors without crashing", async () => {
       const manager = buildManager({ maxRetries: 0 });
-      const p = manager.connect("sk-test").catch(() => {
-        /* ignore rejection */
-      });
-
-      const errors: Error[] = [];
-      manager.on("error", (e) => errors.push(e));
+      const p = connectIgnoringFailure(manager);
+      const errors = attachErrorCollector(manager);
 
       // Fire two errors in quick succession — previously the second would
       // be unhandled because .once("error") removed the handler after #1.
@@ -646,11 +661,7 @@ describe("OpenAIWebSocketManager", () => {
 
   describe("full turn sequence", () => {
     it("tracks previous_response_id across turns and sends continuation correctly", async () => {
-      const manager = buildManager();
-      const p = manager.connect("sk-test");
-      const sock = lastSocket();
-      sock.simulateOpen();
-      await p;
+      const { manager, sock } = await createConnectedManager();
 
       const received: OpenAIWebSocketEvent[] = [];
       manager.onMessage((e) => received.push(e));

@@ -1,7 +1,12 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
+import {
+  AllowFromListSchema,
+  buildNestedDmConfigSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+} from "openclaw/plugin-sdk/compat";
+import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/matrix";
 import { z } from "zod";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
+import { buildSecretInputSchema } from "./secret-input.js";
 
 const matrixActionSchema = z
   .object({
@@ -13,14 +18,6 @@ const matrixActionSchema = z
   })
   .optional();
 
-const matrixDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    policy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-    allowFrom: z.array(allowFromEntry).optional(),
-  })
-  .optional();
-
 const matrixRoomSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -28,7 +25,7 @@ const matrixRoomSchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     autoReply: z.boolean().optional(),
-    users: z.array(allowFromEntry).optional(),
+    users: AllowFromListSchema,
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
   })
@@ -43,12 +40,12 @@ export const MatrixConfigSchema = z.object({
   homeserver: z.string().optional(),
   userId: z.string().optional(),
   accessToken: z.string().optional(),
-  password: z.string().optional(),
+  password: buildSecretInputSchema().optional(),
   deviceName: z.string().optional(),
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
-  groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
+  groupPolicy: GroupPolicySchema.optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
@@ -56,9 +53,9 @@ export const MatrixConfigSchema = z.object({
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
-  autoJoinAllowlist: z.array(allowFromEntry).optional(),
-  groupAllowFrom: z.array(allowFromEntry).optional(),
-  dm: matrixDmSchema,
+  autoJoinAllowlist: AllowFromListSchema,
+  groupAllowFrom: AllowFromListSchema,
+  dm: buildNestedDmConfigSchema(),
   groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,

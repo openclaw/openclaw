@@ -1,18 +1,157 @@
 import { html } from "lit";
 import {
-  listCoreToolSections,
-  PROFILE_OPTIONS as TOOL_PROFILE_OPTIONS,
-} from "../../../../src/agents/tool-catalog.js";
-import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+  ToolCatalogProfile,
+  ToolsCatalogResult,
+} from "../types.ts";
 
-export const TOOL_SECTIONS = listCoreToolSections();
+export type AgentToolEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source?: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles?: string[];
+};
 
-export const PROFILE_OPTIONS = TOOL_PROFILE_OPTIONS;
+export type AgentToolSection = {
+  id: string;
+  label: string;
+  source?: "core" | "plugin";
+  pluginId?: string;
+  tools: AgentToolEntry[];
+};
+
+export const FALLBACK_TOOL_SECTIONS: AgentToolSection[] = [
+  {
+    id: "fs",
+    label: "Files",
+    tools: [
+      { id: "read", label: "read", description: "Read file contents" },
+      { id: "write", label: "write", description: "Create or overwrite files" },
+      { id: "edit", label: "edit", description: "Make precise edits" },
+      { id: "apply_patch", label: "apply_patch", description: "Patch files (OpenAI)" },
+    ],
+  },
+  {
+    id: "runtime",
+    label: "Runtime",
+    tools: [
+      { id: "exec", label: "exec", description: "Run shell commands" },
+      { id: "process", label: "process", description: "Manage background processes" },
+    ],
+  },
+  {
+    id: "web",
+    label: "Web",
+    tools: [
+      { id: "web_search", label: "web_search", description: "Search the web" },
+      { id: "web_fetch", label: "web_fetch", description: "Fetch web content" },
+    ],
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    tools: [
+      { id: "memory_search", label: "memory_search", description: "Semantic search" },
+      { id: "memory_get", label: "memory_get", description: "Read memory files" },
+    ],
+  },
+  {
+    id: "sessions",
+    label: "Sessions",
+    tools: [
+      { id: "sessions_list", label: "sessions_list", description: "List sessions" },
+      { id: "sessions_history", label: "sessions_history", description: "Session history" },
+      { id: "sessions_send", label: "sessions_send", description: "Send to session" },
+      { id: "sessions_spawn", label: "sessions_spawn", description: "Spawn sub-agent" },
+      { id: "session_status", label: "session_status", description: "Session status" },
+    ],
+  },
+  {
+    id: "ui",
+    label: "UI",
+    tools: [
+      { id: "browser", label: "browser", description: "Control web browser" },
+      { id: "canvas", label: "canvas", description: "Control canvases" },
+    ],
+  },
+  {
+    id: "messaging",
+    label: "Messaging",
+    tools: [{ id: "message", label: "message", description: "Send messages" }],
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    tools: [
+      { id: "cron", label: "cron", description: "Schedule tasks" },
+      { id: "gateway", label: "gateway", description: "Gateway control" },
+    ],
+  },
+  {
+    id: "nodes",
+    label: "Nodes",
+    tools: [{ id: "nodes", label: "nodes", description: "Nodes + devices" }],
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    tools: [{ id: "agents_list", label: "agents_list", description: "List agents" }],
+  },
+  {
+    id: "media",
+    label: "Media",
+    tools: [{ id: "image", label: "image", description: "Image understanding" }],
+  },
+];
+
+export const PROFILE_OPTIONS = [
+  { id: "minimal", label: "Minimal" },
+  { id: "coding", label: "Coding" },
+  { id: "messaging", label: "Messaging" },
+  { id: "full", label: "Full" },
+] as const;
+
+export function resolveToolSections(
+  toolsCatalogResult: ToolsCatalogResult | null,
+): AgentToolSection[] {
+  if (toolsCatalogResult?.groups?.length) {
+    return toolsCatalogResult.groups.map((group) => ({
+      id: group.id,
+      label: group.label,
+      source: group.source,
+      pluginId: group.pluginId,
+      tools: group.tools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        description: tool.description,
+        source: tool.source,
+        pluginId: tool.pluginId,
+        optional: tool.optional,
+        defaultProfiles: [...tool.defaultProfiles],
+      })),
+    }));
+  }
+  return FALLBACK_TOOL_SECTIONS;
+}
+
+export function resolveToolProfileOptions(
+  toolsCatalogResult: ToolsCatalogResult | null,
+): readonly ToolCatalogProfile[] | typeof PROFILE_OPTIONS {
+  if (toolsCatalogResult?.profiles?.length) {
+    return toolsCatalogResult.profiles;
+  }
+  return PROFILE_OPTIONS;
+}
 
 type ToolPolicy = {
   allow?: string[];
@@ -53,6 +192,33 @@ export function normalizeAgentLabel(agent: {
   identity?: { name?: string };
 }) {
   return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
+}
+
+const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+
+export function resolveAgentAvatarUrl(
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const candidates = [
+    agentIdentity?.avatar?.trim(),
+    agent.identity?.avatarUrl?.trim(),
+    agent.identity?.avatar?.trim(),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (AVATAR_URL_RE.test(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function agentLogoUrl(basePath: string): string {
+  const base = basePath?.trim() ? basePath.replace(/\/$/, "") : "";
+  return base ? `${base}/favicon.svg` : "favicon.svg";
 }
 
 function isLikelyEmoji(value: string) {
@@ -106,6 +272,14 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }
 
+export function agentAvatarHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
+}
+
 export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
     return "-";
@@ -138,7 +312,7 @@ export type AgentContext = {
   workspace: string;
   model: string;
   identityName: string;
-  identityEmoji: string;
+  identityAvatar: string;
   skillsLabel: string;
   isDefault: boolean;
 };
@@ -164,14 +338,14 @@ export function buildAgentContext(
     agent.name?.trim() ||
     config.entry?.name ||
     agent.id;
-  const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
     identityName,
-    identityEmoji,
+    identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
@@ -288,6 +462,43 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
   }
 }
 
+export function sortLocaleStrings(values: Iterable<string>): string[] {
+  const sorted = Array.from(values);
+  const buffer = Array.from({ length: sorted.length }, () => "");
+
+  const merge = (left: number, middle: number, right: number): void => {
+    let i = left;
+    let j = middle;
+    let k = left;
+    while (i < middle && j < right) {
+      buffer[k++] = sorted[i].localeCompare(sorted[j]) <= 0 ? sorted[i++] : sorted[j++];
+    }
+    while (i < middle) {
+      buffer[k++] = sorted[i++];
+    }
+    while (j < right) {
+      buffer[k++] = sorted[j++];
+    }
+    for (let idx = left; idx < right; idx += 1) {
+      sorted[idx] = buffer[idx];
+    }
+  };
+
+  const sortRange = (left: number, right: number): void => {
+    if (right - left <= 1) {
+      return;
+    }
+
+    const middle = (left + right) >>> 1;
+    sortRange(left, middle);
+    sortRange(middle, right);
+    merge(left, middle, right);
+  };
+
+  sortRange(0, sorted.length);
+  return sorted;
+}
+
 export function resolveConfiguredCronModelSuggestions(
   configForm: Record<string, unknown> | null,
 ): string[] {
@@ -319,7 +530,7 @@ export function resolveConfiguredCronModelSuggestions(
       addModelConfigIds(out, (entry as Record<string, unknown>).model);
     }
   }
-  return [...out].toSorted((a, b) => a.localeCompare(b));
+  return sortLocaleStrings(out);
 }
 
 export function parseFallbackList(value: string): string[] {

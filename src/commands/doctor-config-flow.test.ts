@@ -107,6 +107,40 @@ describe("doctor config flow", () => {
     ).toBe(false);
   });
 
+  it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes("mutable allowlist") && line.includes("channels.zalouser.groups: Ops Room"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn on mutable Zalouser group entries when dangerous name matching is enabled", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        zalouser: {
+          dangerouslyAllowNameMatching: true,
+          groups: {
+            "Ops Room": { allow: true },
+          },
+        },
+      },
+    });
+
+    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+  });
+
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
@@ -247,6 +281,54 @@ describe("doctor config flow", () => {
       expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
       expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not crash when Telegram allowFrom repair sees unavailable SecretRef-backed credentials", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const result = await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              allowFrom: ["@testuser"],
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const cfg = result.cfg as {
+        channels?: {
+          telegram?: {
+            allowFrom?: string[];
+            accounts?: Record<string, { allowFrom?: string[] }>;
+          };
+        };
+      };
+      const retainedAllowFrom =
+        cfg.channels?.telegram?.accounts?.default?.allowFrom ?? cfg.channels?.telegram?.allowFrom;
+      expect(retainedAllowFrom).toEqual(["@testuser"]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(
+        noteSpy.mock.calls.some((call) =>
+          String(call[0]).includes(
+            "configured Telegram bot credentials are unavailable in this command path",
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      noteSpy.mockRestore();
       vi.unstubAllGlobals();
     }
   });
@@ -598,6 +680,67 @@ describe("doctor config flow", () => {
     });
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
+  });
+
+  it("migrates top-level heartbeat into agents.defaults.heartbeat on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        heartbeat: {
+          model: "anthropic/claude-3-5-haiku-20241022",
+          every: "30m",
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      heartbeat?: unknown;
+      agents?: {
+        defaults?: {
+          heartbeat?: {
+            model?: string;
+            every?: string;
+          };
+        };
+      };
+    };
+    expect(cfg.heartbeat).toBeUndefined();
+    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
+      model: "anthropic/claude-3-5-haiku-20241022",
+      every: "30m",
+    });
+  });
+
+  it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        heartbeat: {
+          showOk: true,
+          showAlerts: false,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      heartbeat?: unknown;
+      channels?: {
+        defaults?: {
+          heartbeat?: {
+            showOk?: boolean;
+            showAlerts?: boolean;
+            useIndicator?: boolean;
+          };
+        };
+      };
+    };
+    expect(cfg.heartbeat).toBeUndefined();
+    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
+      showOk: true,
+      showAlerts: false,
+    });
   });
 
   it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {

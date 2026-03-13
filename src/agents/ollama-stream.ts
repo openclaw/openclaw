@@ -6,15 +6,34 @@ import type {
   TextContent,
   ToolCall,
   Tool,
-  Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import {
+  buildAssistantMessage as buildStreamAssistantMessage,
+  buildStreamErrorAssistantMessage,
+  buildUsageWithNoCost,
+} from "./stream-message-shared.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim();
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim();
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
+}
 
 // ── Ollama /api/chat request types ──────────────────────────────────────────
 
@@ -182,6 +201,7 @@ interface OllamaChatResponse {
   message: {
     role: "assistant";
     content: string;
+    thinking?: string;
     reasoning?: string;
     tool_calls?: OllamaToolCall[];
   };
@@ -320,10 +340,10 @@ export function buildAssistantMessage(
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
-  // Qwen 3 (and potentially other reasoning models) may return their final
-  // answer in a `reasoning` field with an empty `content`. Fall back to
-  // `reasoning` so the response isn't silently dropped.
-  const text = response.message.content || response.message.reasoning || "";
+  // Ollama-native reasoning models may emit their answer in `thinking` or
+  // `reasoning` with an empty `content`. Fall back so replies are not dropped.
+  const text =
+    response.message.content || response.message.thinking || response.message.reasoning || "";
   if (text) {
     content.push({ type: "text", text });
   }
@@ -343,25 +363,15 @@ export function buildAssistantMessage(
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
-  const usage: Usage = {
-    input: response.prompt_eval_count ?? 0,
-    output: response.eval_count ?? 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: (response.prompt_eval_count ?? 0) + (response.eval_count ?? 0),
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-
-  return {
-    role: "assistant",
+  return buildStreamAssistantMessage({
+    model: modelInfo,
     content,
     stopReason,
-    api: modelInfo.api,
-    provider: modelInfo.provider,
-    model: modelInfo.id,
-    usage,
-    timestamp: Date.now(),
-  };
+    usage: buildUsageWithNoCost({
+      input: response.prompt_eval_count ?? 0,
+      output: response.eval_count ?? 0,
+    }),
+  });
 }
 
 // ── NDJSON streaming parser ─────────────────────────────────────────────────
@@ -412,7 +422,19 @@ function resolveOllamaChatUrl(baseUrl: string): string {
   return `${apiBase}/api/chat`;
 }
 
-export function createOllamaStreamFn(baseUrl: string): StreamFn {
+function resolveOllamaModelHeaders(model: {
+  headers?: unknown;
+}): Record<string, string> | undefined {
+  if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
+    return undefined;
+  }
+  return model.headers as Record<string, string>;
+}
+
+export function createOllamaStreamFn(
+  baseUrl: string,
+  defaultHeaders?: Record<string, string>,
+): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
 
   return (model, context, options) => {
@@ -447,9 +469,13 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
+          ...defaultHeaders,
           ...options?.headers,
         };
-        if (options?.apiKey) {
+        if (
+          options?.apiKey &&
+          (!headers.Authorization || !isNonSecretApiKeyMarker(options.apiKey))
+        ) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
@@ -471,15 +497,20 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
 
         const reader = response.body.getReader();
         let accumulatedContent = "";
+        let fallbackContent = "";
+        let sawContent = false;
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
         for await (const chunk of parseNdjsonStream(reader)) {
           if (chunk.message?.content) {
+            sawContent = true;
             accumulatedContent += chunk.message.content;
-          } else if (chunk.message?.reasoning) {
-            // Qwen 3 reasoning mode: content may be empty, output in reasoning
-            accumulatedContent += chunk.message.reasoning;
+          } else if (!sawContent && chunk.message?.thinking) {
+            fallbackContent += chunk.message.thinking;
+          } else if (!sawContent && chunk.message?.reasoning) {
+            // Backward compatibility for older/native variants that still use reasoning.
+            fallbackContent += chunk.message.reasoning;
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -498,7 +529,7 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           throw new Error("Ollama API stream ended without a final response");
         }
 
-        finalResponse.message.content = accumulatedContent;
+        finalResponse.message.content = accumulatedContent || fallbackContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
@@ -535,4 +566,18 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
     queueMicrotask(() => void run());
     return stream;
   };
+}
+
+export function createConfiguredOllamaStreamFn(params: {
+  model: { baseUrl?: string; headers?: unknown };
+  providerBaseUrl?: string;
+}): StreamFn {
+  const modelBaseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
+  return createOllamaStreamFn(
+    resolveOllamaBaseUrlForRun({
+      modelBaseUrl,
+      providerBaseUrl: params.providerBaseUrl,
+    }),
+    resolveOllamaModelHeaders(params.model),
+  );
 }

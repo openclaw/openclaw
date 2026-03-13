@@ -1,6 +1,7 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -29,37 +30,71 @@ type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("./pi-model-discovery.js");
+const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 
 const CODEX_PROVIDER = "openai-codex";
+const OPENAI_PROVIDER = "openai";
+const OPENAI_GPT54_MODEL_ID = "gpt-5.4";
+const OPENAI_GPT54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const OPENAI_CODEX_GPT54_MODEL_ID = "gpt-5.4";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
+type SyntheticCatalogFallback = {
+  provider: string;
+  id: string;
+  templateIds: readonly string[];
+};
 
-  const baseModel = models.find(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
-  );
-  if (!baseModel) {
-    return;
-  }
-
-  models.push({
-    ...baseModel,
+const SYNTHETIC_CATALOG_FALLBACKS: readonly SyntheticCatalogFallback[] = [
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_MODEL_ID,
+    templateIds: ["gpt-5.2"],
+  },
+  {
+    provider: OPENAI_PROVIDER,
+    id: OPENAI_GPT54_PRO_MODEL_ID,
+    templateIds: ["gpt-5.2-pro", "gpt-5.2"],
+  },
+  {
+    provider: CODEX_PROVIDER,
+    id: OPENAI_CODEX_GPT54_MODEL_ID,
+    templateIds: ["gpt-5.3-codex", "gpt-5.2-codex"],
+  },
+  {
+    provider: CODEX_PROVIDER,
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
+    templateIds: [OPENAI_CODEX_GPT53_MODEL_ID],
+  },
+] as const;
+
+function applySyntheticCatalogFallbacks(models: ModelCatalogEntry[]): void {
+  const findCatalogEntry = (provider: string, id: string) =>
+    models.find(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id.toLowerCase() === id.toLowerCase(),
+    );
+
+  for (const fallback of SYNTHETIC_CATALOG_FALLBACKS) {
+    if (findCatalogEntry(fallback.provider, fallback.id)) {
+      continue;
+    }
+    const template = fallback.templateIds
+      .map((templateId) => findCatalogEntry(fallback.provider, templateId))
+      .find((entry) => entry !== undefined);
+    if (!template) {
+      continue;
+    }
+    models.push({
+      ...template,
+      id: fallback.id,
+      name: fallback.id,
+    });
+  }
 }
 
 function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
@@ -208,6 +243,9 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
+          continue;
+        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -218,7 +256,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      applySyntheticCatalogFallbacks(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

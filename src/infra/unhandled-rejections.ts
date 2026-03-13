@@ -1,5 +1,10 @@
 import process from "node:process";
-import { extractErrorCode, formatUncaughtError } from "./errors.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatUncaughtError,
+  readErrorName,
+} from "./errors.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
@@ -33,6 +38,9 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  "EPROTO",
+  "ERR_SSL_WRONG_VERSION_NUMBER",
+  "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
 ]);
 
 const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
@@ -44,7 +52,7 @@ const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
 ]);
 
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
-  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
 
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
@@ -53,21 +61,29 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
+  "upstream connect error",
+  "disconnect/reset before headers",
+  "tlsv1 alert",
+  "ssl routines",
+  "packet length too long",
+  "write eproto",
 ];
+
+function isWrappedFetchFailedMessage(message: string): boolean {
+  if (message === "fetch failed") {
+    return true;
+  }
+
+  // Keep wrapped variants (for example "...: fetch failed") while avoiding broad
+  // matches like "Web fetch failed (404): ..." that are not transport failures.
+  return /:\s*fetch failed$/.test(message);
+}
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
   }
   return (err as { cause?: unknown }).cause;
-}
-
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  const name = (err as { name?: unknown }).name;
-  return typeof name === "string" ? name : "";
 }
 
 function extractErrorCodeOrErrno(err: unknown): string | undefined {
@@ -94,44 +110,6 @@ function extractErrorCodeWithCause(err: unknown): string | undefined {
     return direct;
   }
   return extractErrorCode(getErrorCause(err));
-}
-
-function collectErrorCandidates(err: unknown): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-
-    const maybeNested: Array<unknown> = [
-      (current as { cause?: unknown }).cause,
-      (current as { reason?: unknown }).reason,
-      (current as { original?: unknown }).original,
-      (current as { error?: unknown }).error,
-      (current as { data?: unknown }).data,
-    ];
-    const errors = (current as { errors?: unknown }).errors;
-    if (Array.isArray(errors)) {
-      maybeNested.push(...errors);
-    }
-    for (const nested of maybeNested) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-  }
-
-  return candidates;
 }
 
 /**
@@ -172,18 +150,26 @@ export function isTransientNetworkError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  for (const candidate of collectErrorCandidates(err)) {
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;
     }
 
-    const name = getErrorName(candidate);
+    const name = readErrorName(candidate);
     if (name && TRANSIENT_NETWORK_ERROR_NAMES.has(name)) {
-      return true;
-    }
-
-    if (candidate instanceof TypeError && candidate.message === "fetch failed") {
       return true;
     }
 
@@ -198,7 +184,7 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
       return true;
     }
-    if (message === "fetch failed") {
+    if (isWrappedFetchFailedMessage(message)) {
       return true;
     }
     if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {

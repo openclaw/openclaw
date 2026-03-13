@@ -3,24 +3,31 @@ import type {
   ChannelOnboardingDmPolicy,
   OpenClawConfig,
   WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/zalouser";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
-  promptAccountId,
+  patchScopedAccountConfig,
   promptChannelAccessConfig,
-} from "openclaw/plugin-sdk";
+  resolveAccountIdForConfigure,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "openclaw/plugin-sdk/zalouser";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
   checkZcaAuthenticated,
 } from "./accounts.js";
-import type { ZcaFriend, ZcaGroup } from "./types.js";
-import { runZca, runZcaInteractive, checkZcaInstalled, parseJsonOutput } from "./zca.js";
+import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import {
+  logoutZaloProfile,
+  resolveZaloAllowFromEntries,
+  resolveZaloGroupsByEntries,
+  startZaloQrLogin,
+  waitForZaloQrLogin,
+} from "./zalo-js.js";
 
 const channel = "zalouser" as const;
 
@@ -30,56 +37,24 @@ function setZalouserAccountScopedConfig(
   defaultPatch: Record<string, unknown>,
   accountPatch: Record<string, unknown> = defaultPatch,
 ): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        zalouser: {
-          ...cfg.channels?.zalouser,
-          enabled: true,
-          ...defaultPatch,
-        },
-      },
-    } as OpenClawConfig;
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.zalouser?.accounts,
-          [accountId]: {
-            ...cfg.channels?.zalouser?.accounts?.[accountId],
-            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
-            ...accountPatch,
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return patchScopedAccountConfig({
+    cfg,
+    channelKey: channel,
+    accountId,
+    patch: defaultPatch,
+    accountPatch,
+  }) as OpenClawConfig;
 }
 
 function setZalouserDmPolicy(
   cfg: OpenClawConfig,
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
-  const allowFrom =
-    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      zalouser: {
-        ...cfg.channels?.zalouser,
-        dmPolicy,
-        ...(allowFrom ? { allowFrom } : {}),
-      },
-    },
-  } as OpenClawConfig;
+  return setTopLevelChannelDmPolicyWithAllowFrom({
+    cfg,
+    channel: "zalouser",
+    dmPolicy,
+  }) as OpenClawConfig;
 }
 
 async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
@@ -87,9 +62,7 @@ async function noteZalouserHelp(prompter: WizardPrompter): Promise<void> {
     [
       "Zalo Personal Account login via QR code.",
       "",
-      "Prerequisites:",
-      "1) Install zca-cli",
-      "2) You'll scan a QR code with your Zalo app",
+      "This plugin uses zca-js directly (no external CLI dependency).",
       "",
       "Docs: https://docs.openclaw.ai/channels/zalouser",
     ].join("\n"),
@@ -111,58 +84,40 @@ async function promptZalouserAllowFrom(params: {
       .map((entry) => entry.trim())
       .filter(Boolean);
 
-  const resolveUserId = async (input: string): Promise<string | null> => {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (/^\d+$/.test(trimmed)) {
-      return trimmed;
-    }
-    const ok = await checkZcaInstalled();
-    if (!ok) {
-      return null;
-    }
-    const result = await runZca(["friend", "find", trimmed], {
-      profile: resolved.profile,
-      timeout: 15000,
-    });
-    if (!result.ok) {
-      return null;
-    }
-    const parsed = parseJsonOutput<ZcaFriend[]>(result.stdout);
-    const rows = Array.isArray(parsed) ? parsed : [];
-    const match = rows[0];
-    if (!match?.userId) {
-      return null;
-    }
-    if (rows.length > 1) {
-      await prompter.note(
-        `Multiple matches for "${trimmed}", using ${match.displayName ?? match.userId}.`,
-        "Zalo Personal allowlist",
-      );
-    }
-    return String(match.userId);
-  };
-
   while (true) {
     const entry = await prompter.text({
-      message: "Zalouser allowFrom (username or user id)",
+      message: "Zalouser allowFrom (name or user id)",
       placeholder: "Alice, 123456789",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
     const parts = parseInput(String(entry));
-    const results = await Promise.all(parts.map((part) => resolveUserId(part)));
-    const unresolved = parts.filter((_, idx) => !results[idx]);
+    const resolvedEntries = await resolveZaloAllowFromEntries({
+      profile: resolved.profile,
+      entries: parts,
+    });
+
+    const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
     if (unresolved.length > 0) {
       await prompter.note(
-        `Could not resolve: ${unresolved.join(", ")}. Use numeric user ids or ensure zca is available.`,
+        `Could not resolve: ${unresolved.join(", ")}. Use numeric user ids or exact friend names.`,
         "Zalo Personal allowlist",
       );
       continue;
     }
-    const unique = mergeAllowFromEntries(existingAllowFrom, results.filter(Boolean) as string[]);
+
+    const resolvedIds = resolvedEntries
+      .filter((item) => item.resolved && item.id)
+      .map((item) => item.id as string);
+    const unique = mergeAllowFromEntries(existingAllowFrom, resolvedIds);
+
+    const notes = resolvedEntries
+      .filter((item) => item.note)
+      .map((item) => `${item.input} -> ${item.id} (${item.note})`);
+    if (notes.length > 0) {
+      await prompter.note(notes.join("\n"), "Zalo Personal allowlist");
+    }
+
     return setZalouserAccountScopedConfig(cfg, accountId, {
       dmPolicy: "allowlist",
       allowFrom: unique,
@@ -191,49 +146,6 @@ function setZalouserGroupAllowlist(
   });
 }
 
-async function resolveZalouserGroups(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  entries: string[];
-}): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
-  const account = resolveZalouserAccountSync({ cfg: params.cfg, accountId: params.accountId });
-  const result = await runZca(["group", "list", "-j"], {
-    profile: account.profile,
-    timeout: 15000,
-  });
-  if (!result.ok) {
-    throw new Error(result.stderr || "Failed to list groups");
-  }
-  const groups = (parseJsonOutput<ZcaGroup[]>(result.stdout) ?? []).filter((group) =>
-    Boolean(group.groupId),
-  );
-  const byName = new Map<string, ZcaGroup[]>();
-  for (const group of groups) {
-    const name = group.name?.trim().toLowerCase();
-    if (!name) {
-      continue;
-    }
-    const list = byName.get(name) ?? [];
-    list.push(group);
-    byName.set(name, list);
-  }
-
-  return params.entries.map((input) => {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      return { input, resolved: false };
-    }
-    if (/^\d+$/.test(trimmed)) {
-      return { input, resolved: true, id: trimmed };
-    }
-    const matches = byName.get(trimmed.toLowerCase()) ?? [];
-    const match = matches[0];
-    return match?.groupId
-      ? { input, resolved: true, id: String(match.groupId) }
-      : { input, resolved: false };
-  });
-}
-
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Zalo Personal",
   channel,
@@ -247,7 +159,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
         : resolveDefaultZalouserAccountId(cfg);
     return promptZalouserAllowFrom({
-      cfg: cfg,
+      cfg,
       prompter,
       accountId: id,
     });
@@ -261,7 +173,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     const ids = listZalouserAccountIds(cfg);
     let configured = false;
     for (const accountId of ids) {
-      const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
+      const account = resolveZalouserAccountSync({ cfg, accountId });
       const isAuth = await checkZcaAuthenticated(account.profile);
       if (isAuth) {
         configured = true;
@@ -283,35 +195,16 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     shouldPromptAccountIds,
     forceAllowFrom,
   }) => {
-    // Check zca is installed
-    const zcaInstalled = await checkZcaInstalled();
-    if (!zcaInstalled) {
-      await prompter.note(
-        [
-          "The `zca` binary was not found in PATH.",
-          "",
-          "Install zca-cli, then re-run onboarding:",
-          "Docs: https://docs.openclaw.ai/channels/zalouser",
-        ].join("\n"),
-        "Missing Dependency",
-      );
-      return { cfg, accountId: DEFAULT_ACCOUNT_ID };
-    }
-
-    const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg);
-    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
-
-    if (shouldPromptAccountIds && !zalouserOverride) {
-      accountId = await promptAccountId({
-        cfg: cfg,
-        prompter,
-        label: "Zalo Personal",
-        currentId: accountId,
-        listAccountIds: listZalouserAccountIds,
-        defaultAccountId,
-      });
-    }
+    const accountId = await resolveAccountIdForConfigure({
+      cfg,
+      prompter,
+      label: "Zalo Personal",
+      accountOverride: accountOverrides.zalouser,
+      shouldPromptAccountIds,
+      listAccountIds: listZalouserAccountIds,
+      defaultAccountId,
+    });
 
     let next = cfg;
     const account = resolveZalouserAccountSync({ cfg: next, accountId });
@@ -326,23 +219,32 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
       });
 
       if (wantsLogin) {
-        await prompter.note(
-          "A QR code will appear in your terminal.\nScan it with your Zalo app to login.",
-          "QR Login",
-        );
-
-        // Run interactive login
-        const result = await runZcaInteractive(["auth", "login"], {
-          profile: account.profile,
-        });
-
-        if (!result.ok) {
-          await prompter.note(`Login failed: ${result.stderr || "Unknown error"}`, "Error");
-        } else {
-          const isNowAuth = await checkZcaAuthenticated(account.profile);
-          if (isNowAuth) {
-            await prompter.note("Login successful!", "Success");
+        const start = await startZaloQrLogin({ profile: account.profile, timeoutMs: 35_000 });
+        if (start.qrDataUrl) {
+          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+          await prompter.note(
+            [
+              start.message,
+              qrPath
+                ? `QR image saved to: ${qrPath}`
+                : "Could not write QR image file; use gateway web login UI instead.",
+              "Scan + approve on phone, then continue.",
+            ].join("\n"),
+            "QR Login",
+          );
+          const scanned = await prompter.confirm({
+            message: "Did you scan and approve the QR on your phone?",
+            initialValue: true,
+          });
+          if (scanned) {
+            const waited = await waitForZaloQrLogin({
+              profile: account.profile,
+              timeoutMs: 120_000,
+            });
+            await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
           }
+        } else {
+          await prompter.note(start.message, "Login pending");
         }
       }
     } else {
@@ -351,12 +253,26 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keepSession) {
-        await runZcaInteractive(["auth", "logout"], { profile: account.profile });
-        await runZcaInteractive(["auth", "login"], { profile: account.profile });
+        await logoutZaloProfile(account.profile);
+        const start = await startZaloQrLogin({
+          profile: account.profile,
+          force: true,
+          timeoutMs: 35_000,
+        });
+        if (start.qrDataUrl) {
+          const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
+          await prompter.note(
+            [start.message, qrPath ? `QR image saved to: ${qrPath}` : undefined]
+              .filter(Boolean)
+              .join("\n"),
+            "QR Login",
+          );
+          const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 120_000 });
+          await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
+        }
       }
     }
 
-    // Enable the channel
     next = setZalouserAccountScopedConfig(
       next,
       accountId,
@@ -372,14 +288,16 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
       });
     }
 
+    const updatedAccount = resolveZalouserAccountSync({ cfg: next, accountId });
     const accessConfig = await promptChannelAccessConfig({
       prompter,
       label: "Zalo groups",
-      currentPolicy: account.config.groupPolicy ?? "allowlist",
-      currentEntries: Object.keys(account.config.groups ?? {}),
+      currentPolicy: updatedAccount.config.groupPolicy ?? "allowlist",
+      currentEntries: Object.keys(updatedAccount.config.groups ?? {}),
       placeholder: "Family, Work, 123456789",
-      updatePrompt: Boolean(account.config.groups),
+      updatePrompt: Boolean(updatedAccount.config.groups),
     });
+
     if (accessConfig) {
       if (accessConfig.policy !== "allowlist") {
         next = setZalouserGroupPolicy(next, accountId, accessConfig.policy);
@@ -387,9 +305,8 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
         let keys = accessConfig.entries;
         if (accessConfig.entries.length > 0) {
           try {
-            const resolved = await resolveZalouserGroups({
-              cfg: next,
-              accountId,
+            const resolved = await resolveZaloGroupsByEntries({
+              profile: updatedAccount.profile,
               entries: accessConfig.entries,
             });
             const resolvedIds = resolved

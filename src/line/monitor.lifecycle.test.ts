@@ -88,7 +88,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     const task = monitorLineProvider({
       channelAccessToken: "token",
-      channelSecret: "secret",
+      channelSecret: "secret", // pragma: allowlist secret
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       abortSignal: abort.signal,
@@ -98,6 +98,9 @@ describe("monitorLineProvider lifecycle", () => {
     });
 
     await vi.waitFor(() => expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1));
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({ auth: "plugin" }),
+    );
     expect(resolved).toBe(false);
 
     abort.abort();
@@ -112,7 +115,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     await monitorLineProvider({
       channelAccessToken: "token",
-      channelSecret: "secret",
+      channelSecret: "secret", // pragma: allowlist secret
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       abortSignal: abort.signal,
@@ -126,7 +129,7 @@ describe("monitorLineProvider lifecycle", () => {
 
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
-      channelSecret: "secret",
+      channelSecret: "secret", // pragma: allowlist secret
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
     });

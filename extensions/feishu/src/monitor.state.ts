@@ -4,27 +4,104 @@ import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   type RuntimeEnv,
-  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
-  WEBHOOK_RATE_LIMIT_DEFAULTS,
-} from "openclaw/plugin-sdk";
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
+  WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
+} from "openclaw/plugin-sdk/feishu";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
+export const botNames = new Map<string, string>();
 
 export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
+type WebhookRateLimitDefaults = {
+  windowMs: number;
+  maxRequests: number;
+  maxTrackedKeys: number;
+};
+
+type WebhookAnomalyDefaults = {
+  maxTrackedKeys: number;
+  ttlMs: number;
+  logEvery: number;
+};
+
+const FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS: WebhookRateLimitDefaults = {
+  windowMs: 60_000,
+  maxRequests: 120,
+  maxTrackedKeys: 4_096,
+};
+
+const FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS: WebhookAnomalyDefaults = {
+  maxTrackedKeys: 4_096,
+  ttlMs: 6 * 60 * 60_000,
+  logEvery: 25,
+};
+
+function coercePositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : fallback;
+}
+
+export function resolveFeishuWebhookRateLimitDefaultsForTest(
+  defaults: unknown,
+): WebhookRateLimitDefaults {
+  const resolved = defaults as Partial<WebhookRateLimitDefaults> | null | undefined;
+  return {
+    windowMs: coercePositiveInt(
+      resolved?.windowMs,
+      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.windowMs,
+    ),
+    maxRequests: coercePositiveInt(
+      resolved?.maxRequests,
+      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.maxRequests,
+    ),
+    maxTrackedKeys: coercePositiveInt(
+      resolved?.maxTrackedKeys,
+      FEISHU_WEBHOOK_RATE_LIMIT_FALLBACK_DEFAULTS.maxTrackedKeys,
+    ),
+  };
+}
+
+export function resolveFeishuWebhookAnomalyDefaultsForTest(
+  defaults: unknown,
+): WebhookAnomalyDefaults {
+  const resolved = defaults as Partial<WebhookAnomalyDefaults> | null | undefined;
+  return {
+    maxTrackedKeys: coercePositiveInt(
+      resolved?.maxTrackedKeys,
+      FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.maxTrackedKeys,
+    ),
+    ttlMs: coercePositiveInt(resolved?.ttlMs, FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.ttlMs),
+    logEvery: coercePositiveInt(
+      resolved?.logEvery,
+      FEISHU_WEBHOOK_ANOMALY_FALLBACK_DEFAULTS.logEvery,
+    ),
+  };
+}
+
+const feishuWebhookRateLimitDefaults = resolveFeishuWebhookRateLimitDefaultsForTest(
+  WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
+);
+const feishuWebhookAnomalyDefaults = resolveFeishuWebhookAnomalyDefaultsForTest(
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
+);
+
 export const feishuWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  windowMs: feishuWebhookRateLimitDefaults.windowMs,
+  maxRequests: feishuWebhookRateLimitDefaults.maxRequests,
+  maxTrackedKeys: feishuWebhookRateLimitDefaults.maxTrackedKeys,
 });
 
 const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
-  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
-  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
-  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
+  maxTrackedKeys: feishuWebhookAnomalyDefaults.maxTrackedKeys,
+  ttlMs: feishuWebhookAnomalyDefaults.ttlMs,
+  logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
 export function clearFeishuWebhookRateLimitStateForTest(): void {
@@ -64,6 +141,7 @@ export function stopFeishuMonitorState(accountId?: string): void {
       httpServers.delete(accountId);
     }
     botOpenIds.delete(accountId);
+    botNames.delete(accountId);
     return;
   }
 
@@ -73,4 +151,5 @@ export function stopFeishuMonitorState(accountId?: string): void {
   }
   httpServers.clear();
   botOpenIds.clear();
+  botNames.clear();
 }
