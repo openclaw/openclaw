@@ -36,6 +36,8 @@ export function resolveSessionContextUsageTokens(
 ) {
   const total = row?.totalTokens;
   if (typeof total === "number" && Number.isFinite(total) && row?.totalTokensFresh !== false) {
+    // Legacy rows may omit totalTokensFresh; still prefer totalTokens as the best
+    // available proxy for current context usage over accumulated inputTokens.
     return total;
   }
   const input = row?.inputTokens;
