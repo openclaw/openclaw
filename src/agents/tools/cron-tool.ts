@@ -249,7 +249,8 @@ PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
+  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout>, "dedupContext": <optional-bool> }
+  - dedupContext: when true, injects previous delivery outputs into the agent prompt so it can avoid repeating itself. Use for recurring content tasks (e.g. daily briefings, summaries) where variety matters. Default: false.
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
