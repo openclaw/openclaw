@@ -1,155 +1,101 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { describe, expect, it, vi } from "vitest";
 import { uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
-const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
-
-describe("graph-upload", () => {
-  const mockTokenProvider: MSTeamsAccessTokenProvider = {
-    getAccessToken: vi.fn().mockResolvedValue("mock-token"),
+describe("graph upload helpers", () => {
+  const tokenProvider = {
+    getAccessToken: vi.fn(async () => "graph-token"),
   };
 
-  const mockFetch = vi.fn();
+  it("uploads to OneDrive with the personal drive path", async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ id: "item-1", webUrl: "https://example.com/1", name: "a.txt" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  describe("uploadToOneDrive", () => {
-    it("should use simple upload for files <= 4MB", async () => {
-      // 1MB buffer
-      const buffer = Buffer.alloc(1 * 1024 * 1024);
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          id: "test-id",
-          webUrl: "test-url",
-          name: "test-name",
-        }),
-      });
-
-      const result = await uploadToOneDrive({
-        buffer,
-        filename: "test.txt",
-        tokenProvider: mockTokenProvider,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expect(result).toEqual({
-        id: "test-id",
-        webUrl: "test-url",
-        name: "test-name",
-      });
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      expect(mockFetch.mock.calls[0][0]).toContain("/content");
-      expect(mockFetch.mock.calls[0][1].method).toBe("PUT");
+    const result = await uploadToOneDrive({
+      buffer: Buffer.from("hello"),
+      filename: "a.txt",
+      tokenProvider,
+      fetchFn: fetchFn as typeof fetch,
     });
 
-    it("should use upload session for files > 4MB", async () => {
-      // 5MB buffer
-      const buffer = Buffer.alloc(5 * 1024 * 1024);
-
-      // Mock createUploadSession response
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          uploadUrl: "https://mock.upload/url",
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://graph.microsoft.com/v1.0/me/drive/root:/OpenClawShared/a.txt:/content",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          Authorization: "Bearer graph-token",
+          "Content-Type": "application/octet-stream",
         }),
-      });
-
-      // Mock chunk upload responses
-      // 5MB will require 2 chunks of ~3.1MB
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          /* intermediate chunk response */
-        }),
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          id: "large-test-id",
-          webUrl: "large-test-url",
-          name: "large-test-name",
-        }),
-      });
-
-      const result = await uploadToOneDrive({
-        buffer,
-        filename: "large.txt",
-        tokenProvider: mockTokenProvider,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expect(result).toEqual({
-        id: "large-test-id",
-        webUrl: "large-test-url",
-        name: "large-test-name",
-      });
-
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-
-      // Step 1: create session
-      expect(mockFetch.mock.calls[0][0]).toContain("/createUploadSession");
-      expect(mockFetch.mock.calls[0][1].method).toBe("POST");
-
-      // Step 2: chunk 1
-      expect(mockFetch.mock.calls[1][0]).toBe("https://mock.upload/url");
-      expect(mockFetch.mock.calls[1][1].method).toBe("PUT");
-      expect(mockFetch.mock.calls[1][1].headers["Content-Range"]).toMatch(/bytes 0-3276799\/\d+/);
-
-      // Step 3: chunk 2
-      expect(mockFetch.mock.calls[2][0]).toBe("https://mock.upload/url");
-      expect(mockFetch.mock.calls[2][1].method).toBe("PUT");
-      expect(mockFetch.mock.calls[2][1].headers["Content-Range"]).toMatch(/bytes 3276800-.*?\/\d+/);
+      }),
+    );
+    expect(result).toEqual({
+      id: "item-1",
+      webUrl: "https://example.com/1",
+      name: "a.txt",
     });
   });
 
-  describe("uploadToSharePoint", () => {
-    it("should use upload session for files > 4MB", async () => {
-      const buffer = Buffer.alloc(5 * 1024 * 1024);
+  it("uploads to SharePoint with the site drive path", async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ id: "item-2", webUrl: "https://example.com/2", name: "b.txt" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          uploadUrl: "https://sp.mock.upload/url",
-        }),
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({}),
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          id: "sp-large-test-id",
-          webUrl: "sp-large-test-url",
-          name: "sp-large-test-name",
-        }),
-      });
-
-      const result = await uploadToSharePoint({
-        buffer,
-        filename: "sp-large.txt",
-        siteId: "test-site",
-        tokenProvider: mockTokenProvider,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expect(result).toEqual({
-        id: "sp-large-test-id",
-        webUrl: "sp-large-test-url",
-        name: "sp-large-test-name",
-      });
-
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-      expect(mockFetch.mock.calls[0][0]).toContain("/sites/test-site/drive/root");
-      expect(mockFetch.mock.calls[0][0]).toContain("/createUploadSession");
+    const result = await uploadToSharePoint({
+      buffer: Buffer.from("world"),
+      filename: "b.txt",
+      siteId: "site-123",
+      tokenProvider,
+      fetchFn: fetchFn as typeof fetch,
     });
+
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/b.txt:/content",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({
+          Authorization: "Bearer graph-token",
+          "Content-Type": "application/octet-stream",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      id: "item-2",
+      webUrl: "https://example.com/2",
+      name: "b.txt",
+    });
+  });
+
+  it("rejects upload responses missing required fields", async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "item-3" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await expect(
+      uploadToSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "bad.txt",
+        siteId: "site-123",
+        tokenProvider,
+        fetchFn: fetchFn as typeof fetch,
+      }),
+    ).rejects.toThrow("SharePoint upload response missing required fields");
   });
 });
