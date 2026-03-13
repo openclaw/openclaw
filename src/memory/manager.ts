@@ -43,10 +43,16 @@ const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
-  const managers = Array.from(INDEX_CACHE.values());
+  const pendingManagers = await Promise.allSettled(Array.from(INDEX_CACHE_PENDING.values()));
+  const managers = new Set<MemoryIndexManager>(INDEX_CACHE.values());
+  for (const result of pendingManagers) {
+    if (result.status === "fulfilled") {
+      managers.add(result.value);
+    }
+  }
   INDEX_CACHE.clear();
   INDEX_CACHE_PENDING.clear();
-  await Promise.allSettled(managers.map(async (manager) => await manager.close()));
+  await Promise.allSettled(Array.from(managers, async (manager) => await manager.close()));
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
