@@ -21,35 +21,40 @@ export async function POST(req: Request) {
 
   let customerId = subscription?.stripeCustomerId;
 
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      email: session.user.email!,
-      name: session.user.name ?? undefined,
-      metadata: { userId: session.user.id },
-    });
-    customerId = customer.id;
+  try {
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: session.user.email!,
+        name: session.user.name ?? undefined,
+        metadata: { userId: session.user.id },
+      });
+      customerId = customer.id;
 
-    await prisma.subscription.upsert({
-      where: { userId: session.user.id },
-      create: { userId: session.user.id, stripeCustomerId: customerId },
-      update: { stripeCustomerId: customerId },
-    });
-  }
+      await prisma.subscription.upsert({
+        where: { userId: session.user.id },
+        create: { userId: session.user.id, stripeCustomerId: customerId },
+        update: { stripeCustomerId: customerId },
+      });
+    }
 
-  const origin = req.headers.get("origin") ?? "http://localhost:3000";
+    const origin = req.headers.get("origin") ?? "http://localhost:3000";
 
-  const checkoutSession = await stripe.checkout.sessions.create({
-    customer: customerId,
-    mode: "subscription",
-    payment_method_types: ["card"],
-    line_items: [{ price: interval === "yearly" ? PLANS[plan].yearlyPriceId : PLANS[plan].priceId, quantity: 1 }],
-    success_url: `${origin}/onboarding?upgraded=true`,
-    cancel_url: `${origin}/pricing`,
-    metadata: { userId: session.user.id, plan },
-    subscription_data: {
+    const checkoutSession = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: interval === "yearly" ? PLANS[plan].yearlyPriceId : PLANS[plan].priceId, quantity: 1 }],
+      success_url: `${origin}/onboarding?upgraded=true`,
+      cancel_url: `${origin}/pricing`,
       metadata: { userId: session.user.id, plan },
-    },
-  });
+      subscription_data: {
+        metadata: { userId: session.user.id, plan },
+      },
+    });
 
-  return NextResponse.json({ url: checkoutSession.url });
+    return NextResponse.json({ url: checkoutSession.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err);
+    return NextResponse.json({ error: "Failed to create checkout session" }, { status: 500 });
+  }
 }
