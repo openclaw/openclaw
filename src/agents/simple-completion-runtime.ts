@@ -122,13 +122,20 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  const auth = await getApiKeyForModel({
-    model: resolved.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: params.profileId,
-    preferredProfile: params.preferredProfile,
-  });
+  let auth: ResolvedProviderAuth;
+  try {
+    auth = await getApiKeyForModel({
+      model: resolved.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      preferredProfile: params.preferredProfile,
+    });
+  } catch (err) {
+    return {
+      error: `Auth lookup failed for provider "${resolved.model.provider}": ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
   const rawApiKey = auth.apiKey?.trim();
   if (
     !rawApiKey &&
