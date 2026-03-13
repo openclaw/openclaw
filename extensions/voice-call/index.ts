@@ -49,6 +49,16 @@ const voiceCallConfigSchema = {
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
     "twilio.accountSid": { label: "Twilio Account SID" },
     "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
+    "twilio.region": {
+      label: "Twilio Region",
+      help: "Processing region: ie1 (Ireland) or au1 (Australia). Omit for US1 (default). Requires region-specific auth credentials.",
+      advanced: true,
+    },
+    "twilio.edge": {
+      label: "Twilio Edge Location",
+      help: "Edge location (e.g. dublin, sydney, ashburn). Auto-inferred from region if omitted.",
+      advanced: true,
+    },
     "outbound.defaultMode": { label: "Default Call Mode" },
     "outbound.notifyHangupDelaySec": {
       label: "Notify Hangup Delay (sec)",

@@ -103,6 +103,8 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
         {
           accountSid: config.twilio?.accountSid,
           authToken: config.twilio?.authToken,
+          region: config.twilio?.region,
+          edge: config.twilio?.edge,
         },
         {
           allowNgrokFreeTierLoopbackBypass,
