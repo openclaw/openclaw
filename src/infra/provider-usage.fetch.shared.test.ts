@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
+  parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 
 describe("provider usage fetch shared helpers", () => {
@@ -12,6 +13,14 @@ describe("provider usage fetch shared helpers", () => {
       windows: [],
       error: "API error",
     });
+  });
+
+  it.each([
+    { value: 12, expected: 12 },
+    { value: "12.5", expected: 12.5 },
+    { value: "not-a-number", expected: undefined },
+  ])("parses finite numbers for %j", ({ value, expected }) => {
+    expect(parseFiniteNumber(value)).toBe(expected);
   });
 
   it("maps configured status codes to token expired", () => {
@@ -34,5 +43,15 @@ describe("provider usage fetch shared helpers", () => {
     });
 
     expect(snapshot.error).toBe("HTTP 403: missing scope");
+  });
+
+  it("omits empty HTTP error message suffixes", () => {
+    const snapshot = buildUsageHttpErrorSnapshot({
+      provider: "anthropic",
+      status: 429,
+      message: "   ",
+    });
+
+    expect(snapshot.error).toBe("HTTP 429");
   });
 });
