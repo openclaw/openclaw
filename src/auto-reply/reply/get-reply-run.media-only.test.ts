@@ -186,6 +186,42 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
   });
 
+  it("preserves transcribed audio text in queued followups", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "[Audio transcript]\nvoice transcript",
+          RawBody: "<media:audio>",
+          CommandBody: "[Audio transcript]\nvoice transcript",
+          Transcript: "voice transcript",
+          MediaPath: "/tmp/input.ogg",
+          MediaType: "audio/ogg",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-100123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "[Audio transcript]\nvoice transcript",
+          BodyStripped: "[Audio transcript]\nvoice transcript",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.ogg",
+          MediaType: "audio/ogg",
+          Provider: "telegram",
+          ChatType: "group",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-100123",
+        },
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("voice transcript");
+    expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({

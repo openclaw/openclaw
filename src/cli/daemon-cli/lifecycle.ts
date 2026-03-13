@@ -204,12 +204,24 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const gatewayPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
-  return await runServiceStop({
+  let stopHandledByUnmanagedFallback = false;
+  await runServiceStop({
     serviceNoun: "Gateway",
     service,
     opts,
-    onNotLoaded: async () => stopGatewayWithoutServiceManager(gatewayPort),
+    onNotLoaded: async () => {
+      const handled = await stopGatewayWithoutServiceManager(gatewayPort);
+      if (handled) {
+        stopHandledByUnmanagedFallback = true;
+      }
+      return handled;
+    },
   });
+  if (process.platform === "win32" && !stopHandledByUnmanagedFallback) {
+    // schtasks can report the task as stopped while the previously launched
+    // gateway process is still listening. Clean up any lingering listener.
+    await stopGatewayWithoutServiceManager(gatewayPort);
+  }
 }
 
 /**

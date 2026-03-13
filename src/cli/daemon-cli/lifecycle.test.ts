@@ -263,6 +263,25 @@ describe("runDaemonRestart health checks", () => {
     expect(killSpy).toHaveBeenCalledWith(4300, "SIGTERM");
   });
 
+  it("signals a lingering gateway listener after a managed Windows stop", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    findGatewayPidsOnPortSync.mockReturnValue([4200]);
+    mockSpawnSync.mockReturnValue({
+      error: null,
+      status: 0,
+      stdout:
+        'CommandLine="C:\\\\Program Files\\\\OpenClaw\\\\openclaw.exe" gateway --port 18789\r\n',
+      stderr: "",
+    });
+    runServiceStop.mockResolvedValue(undefined);
+
+    await runDaemonStop({ json: true });
+
+    expect(findGatewayPidsOnPortSync).toHaveBeenCalledWith(18789);
+    expect(killSpy).toHaveBeenCalledWith(4200, "SIGTERM");
+  });
+
   it("signals a single unmanaged gateway process on restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);

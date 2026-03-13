@@ -246,7 +246,11 @@ function buildOllamaModelsConfig(
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ) {
   return modelNames.map((name) =>
-    buildOllamaModelDefinition(name, discoveredModelsByName?.get(name)?.contextWindow),
+    buildOllamaModelDefinition(
+      name,
+      discoveredModelsByName?.get(name)?.contextWindow,
+      discoveredModelsByName?.get(name)?.input,
+    ),
   );
 }
 
