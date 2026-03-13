@@ -448,6 +448,55 @@ describe("sendMessageMatrix media", () => {
     expect(sendMessage.mock.calls[2]?.[0]).toBe(recoveredRoom);
   });
 
+  it("keeps the refreshed DM cache when a retry already sent content before failing", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const refreshedRoom = "!fresh:example.org";
+    const directContent: Record<string, string[] | undefined> = {
+      [userId]: [staleRoom, refreshedRoom],
+    };
+    const joinedRooms = [staleRoom, refreshedRoom];
+    const membersByRoom: Record<string, string[]> = {
+      [staleRoom]: ["@bot:example.org", userId],
+      [refreshedRoom]: ["@bot:example.org", userId],
+    };
+    const roomStateEvents: Record<string, Record<string, unknown>> = {
+      [`${staleRoom}|m.room.member|${userId}`]: {},
+      [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+      [`${staleRoom}|m.room.name|`]: { name: "Old named room" },
+      [`${refreshedRoom}|m.room.member|${userId}`]: { is_direct: true },
+      [`${refreshedRoom}|m.room.member|@bot:example.org`]: {},
+    };
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(makeMatrixSendError("stale room send failed", 404, "M_NOT_FOUND"))
+      .mockResolvedValueOnce("evt1")
+      .mockRejectedValueOnce(new Error("later chunk failed"))
+      .mockResolvedValueOnce("evt2");
+    const { client } = makeUserTargetClient({
+      directContent,
+      joinedRooms,
+      membersByRoom,
+      roomStateEvents,
+      sendMessage,
+    });
+
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = () => ["hello", "again"];
+
+    await expect(sendMessageMatrix(userId, "hello again", { client })).rejects.toThrow(
+      "later chunk failed",
+    );
+
+    directContent[userId] = [staleRoom];
+    joinedRooms.splice(0, joinedRooms.length, staleRoom);
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = (text: string) => (text ? [text] : []);
+
+    const retried = await sendMessageMatrix(userId, "hello", { client });
+
+    expect(retried.roomId).toBe(refreshedRoom);
+    expect(sendMessage.mock.calls[3]?.[0]).toBe(refreshedRoom);
+  });
+
   afterEach(() => {
     runtimeStub.channel.text.chunkMarkdownTextWithMode = (text: string) => (text ? [text] : []);
   });
