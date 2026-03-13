@@ -203,7 +203,7 @@ describe("createDiscordGatewayPlugin", () => {
       status: 503,
       text: async () =>
         "upstream connect error or disconnect/reset before headers. reset reason: overflow",
-    } as Response);
+    } as unknown as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
@@ -224,7 +224,7 @@ describe("createDiscordGatewayPlugin", () => {
       ok: false,
       status: 502,
       text: async () => "<html><body>Bad Gateway</body></html>",
-    } as Response);
+    } as unknown as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
@@ -236,7 +236,7 @@ describe("createDiscordGatewayPlugin", () => {
           registerClient: (client: { options: { token: string } }) => Promise<void>;
         }
       ).registerClient({ options: { token: "token-502" } }),
-    ).rejects.toThrow(/Failed to get gateway information from Discord/);
+    ).rejects.toThrow(/Discord API \/gateway\/bot failed \(502\)/);
   });
 
   it("handles text() rejection gracefully on error responses", async () => {
@@ -247,7 +247,7 @@ describe("createDiscordGatewayPlugin", () => {
       text: async () => {
         throw new Error("body stream already consumed");
       },
-    } as Response);
+    } as unknown as Response);
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
