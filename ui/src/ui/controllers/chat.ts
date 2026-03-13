@@ -78,12 +78,32 @@ export async function loadChatHistory(state: ChatState) {
       limit: 200,
     });
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let hasTimedOut = false;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(
-        () => reject(new Error("chat.history request timed out after 10000ms")),
-        10000,
-      );
+      timeoutId = setTimeout(() => {
+        hasTimedOut = true;
+        reject(new Error("chat.history request timed out after 10000ms"));
+      }, 10000);
     });
+
+    // Auto-apply late successfully resolved history to recover from transient timeouts
+    void requestPromise
+      .then((res) => {
+        if (hasTimedOut) {
+          state.lastError = null;
+          const messages = Array.isArray(res.messages) ? res.messages : [];
+          state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+          state.chatThinkingLevel = res.thinkingLevel ?? null;
+          maybeResetToolStream(state);
+          state.chatStream = null;
+          state.chatStreamStartedAt = null;
+          if (typeof (state as unknown as Record<string, Function>).requestUpdate === "function") {
+            (state as unknown as { requestUpdate: () => void }).requestUpdate();
+          }
+        }
+      })
+      .catch(() => {});
+
     const res = await Promise.race([requestPromise, timeoutPromise]).finally(() => {
       clearTimeout(timeoutId);
     });
