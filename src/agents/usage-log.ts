@@ -50,11 +50,15 @@ export async function recordTokenUsage(params: {
   };
 }) {
   const usage = params.usage;
-  if (!usage) return;
+  if (!usage) {
+    return;
+  }
   const total =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  if (!total || total <= 0) return;
+  if (!total || total <= 0) {
+    return;
+  }
 
   const memoryDir = path.join(params.workspaceDir, "memory");
   const file = path.join(memoryDir, "token-usage.json");
@@ -65,10 +69,12 @@ export async function recordTokenUsage(params: {
     taskId: params.runId,
     label: params.label,
     tokensUsed: Math.trunc(total),
-    ...(usage.input  != null && usage.input  > 0 && { inputTokens:      Math.trunc(usage.input) }),
-    ...(usage.output != null && usage.output > 0 && { outputTokens:     Math.trunc(usage.output) }),
-    ...(usage.cacheRead  != null && usage.cacheRead  > 0 && { cacheReadTokens:  Math.trunc(usage.cacheRead) }),
-    ...(usage.cacheWrite != null && usage.cacheWrite > 0 && { cacheWriteTokens: Math.trunc(usage.cacheWrite) }),
+    ...(usage.input != null && usage.input > 0 && { inputTokens: Math.trunc(usage.input) }),
+    ...(usage.output != null && usage.output > 0 && { outputTokens: Math.trunc(usage.output) }),
+    ...(usage.cacheRead != null &&
+      usage.cacheRead > 0 && { cacheReadTokens: Math.trunc(usage.cacheRead) }),
+    ...(usage.cacheWrite != null &&
+      usage.cacheWrite > 0 && { cacheWriteTokens: Math.trunc(usage.cacheWrite) }),
     model: params.model,
     provider: params.provider,
     runId: params.runId,
