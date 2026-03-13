@@ -27,6 +27,42 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
+/**
+ * Heuristic to detect vision-capable models based on their model ID.
+ * OpenRouter models often follow naming patterns that indicate vision support.
+ */
+function isLikelyVisionModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  // Common vision model patterns:
+  // - Models with "vision", "vl", or "visual" in the name
+  // - Claude 3+ models (claude-3-*, claude-opus-4-*, claude-sonnet-4-*) except claude-2
+  // - GPT-4 vision variants (gpt-4-vision, gpt-4o, gpt-4-turbo)
+  // - Gemini models (gemini-1.5-*, gemini-2-*, gemini-pro-vision)
+  // - Llama vision models (llava, llama-3.2-*-vision)
+  // - Qwen vision models (qwen-vl, qwen2-vl)
+  // - Pixtral models
+  const visionPatterns = [
+    /vision/,
+    /\bvl\b/, // "vl" as a separate segment (e.g., qwen-vl, qwen2-vl-72b, MiniMax-VL-01)
+    /visual/,
+    /claude-3/,
+    /claude-opus-4/,
+    /claude-sonnet-4/,
+    /claude-haiku-4/,
+    /gpt-4o/,
+    /gpt-4-turbo/,
+    /gpt-4-vision/,
+    /gemini-1\.5/,
+    /gemini-2/,
+    /gemini-pro-vision/,
+    /gemini-flash/,
+    /llava/,
+    /llama-3\.2.*vision/,
+    /pixtral/,
+  ];
+  return visionPatterns.some((pattern) => pattern.test(lower));
+}
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -206,7 +242,19 @@ export function resolveModelWithRegistry(params: {
 
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
+  // Note: configured models with provider-level `api` return early via inlineMatch,
+  // so we rely on heuristic detection for vision support here, unless explicitly configured.
   if (normalizedProvider === "openrouter") {
+    // Honor explicitly configured input from providerConfig.models before applying heuristic.
+    const configuredOpenRouterModel = providerConfig?.models?.find(
+      (candidate) => candidate.id === modelId,
+    );
+    const resolvedInput: Array<"text" | "image"> = configuredOpenRouterModel?.input
+      ? configuredOpenRouterModel.input.filter((item) => item === "text" || item === "image")
+      : isLikelyVisionModel(modelId)
+        ? ["text", "image"]
+        : ["text"];
+
     return normalizeResolvedModel({
       provider,
       model: {
@@ -215,16 +263,18 @@ export function resolveModelWithRegistry(params: {
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
+        reasoning: configuredOpenRouterModel?.reasoning ?? false,
+        input: resolvedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        contextWindow: configuredOpenRouterModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
+        maxTokens: configuredOpenRouterModel?.maxTokens ?? 8192,
       } as Model<Api>,
     });
   }
 
+  // Fallback for non-OpenRouter providers with custom providerConfig or mock models.
+  // OpenRouter returns early above using isLikelyVisionModel heuristic.
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
