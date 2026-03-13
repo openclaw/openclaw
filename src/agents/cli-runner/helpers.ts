@@ -116,15 +116,38 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
 }
 
 function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
-  const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const input = pick("input_tokens") ?? pick("inputTokens");
-  const output = pick("output_tokens") ?? pick("outputTokens");
-  const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
-  const total = pick("total_tokens") ?? pick("total");
-  if (!input && !output && !cacheRead && !cacheWrite && !total) {
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const val = raw[key];
+      if (typeof val === "number" && val > 0) {
+        return val;
+      }
+    }
+    for (const key of keys) {
+      const val = raw[key];
+      if (typeof val === "number") {
+        return val;
+      }
+    }
+    return undefined;
+  };
+  const input = pick("input_tokens", "inputTokens", "prompt_tokens", "promptTokens");
+  const output = pick("output_tokens", "outputTokens", "completion_tokens", "completionTokens");
+  const cacheRead = pick(
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheRead",
+    "cached_tokens",
+  );
+  const cacheWrite = pick("cache_write_input_tokens", "cacheWrite");
+  const total = pick("total_tokens", "total");
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined &&
+    total === undefined
+  ) {
     return undefined;
   }
   return { input, output, cacheRead, cacheWrite, total };
