@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_MANIFEST_BYTES = 1 * 1024 * 1024;
 
 export type BackupManifestAsset = {
   kind: string;
@@ -201,12 +202,43 @@ async function extractManifest(params: {
 
       manifestContentPromise = new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let settled = false;
+        const fail = (err: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(err);
+          entry.removeAllListeners("data");
+          entry.resume();
+        };
+
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          if (settled) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buffer.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            fail(new Error(`Backup manifest exceeds maximum size of ${MAX_MANIFEST_BYTES} bytes.`));
+            return;
+          }
+          chunks.push(buffer);
         });
-        entry.on("error", reject);
+        entry.on("error", (err) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(err);
+        });
         entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(Buffer.concat(chunks, totalBytes).toString("utf8"));
         });
       });
     },
