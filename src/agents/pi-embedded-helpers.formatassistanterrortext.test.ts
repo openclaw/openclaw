@@ -185,4 +185,14 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(result).toContain("Tool call ID mismatch");
     expect(result).toContain("session state is corrupted");
   });
+
+  it("handles unexpected tool_use_id in tool_result blocks", () => {
+    const msg = {
+      stopReason: "error",
+      errorMessage: "unexpected tool_use_id found in tool_result blocks",
+    } as AssistantMessage;
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Tool call ID mismatch");
+    expect(result).toContain("/reset");
+  });
 });

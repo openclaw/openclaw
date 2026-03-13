@@ -902,8 +902,11 @@ export function isToolUseIdMismatchError(raw: string): boolean {
   if (!raw) return false;
   const lower = raw.toLowerCase();
   return (
-    lower.includes("tool_use_id") &&
-    (lower.includes("does not match") || lower.includes("mismatch"))
+    (lower.includes("tool_use_id") &&
+      (lower.includes("does not match") ||
+        lower.includes("mismatch") ||
+        lower.includes("unexpected"))) ||
+    lower.includes("unexpected tool_use_id found in tool_result")
   );
 }
 
