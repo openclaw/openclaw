@@ -311,7 +311,7 @@ describe("session cost usage", () => {
       const sessions = await discoverAllSessions({
         startMs: new Date("2026-03-13T00:00:00.000Z").getTime(),
       });
-      const ids = sessions.map((session) => session.sessionId).sort();
+      const ids = sessions.map((session) => session.sessionId).toSorted();
       expect(ids).toEqual(["foo.jsonl.bar", "sess-active", "sess-deleted", "sess-reset"]);
       const reset = sessions.find((session) => session.sessionId === "sess-reset");
       const deleted = sessions.find((session) => session.sessionId === "sess-deleted");
