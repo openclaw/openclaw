@@ -242,7 +242,10 @@ export function resolveModelWithRegistry(params: {
         provider,
         baseUrl: providerConfig?.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
+        input:
+          Array.isArray(configuredModel?.input) && configuredModel.input.length > 0
+            ? configuredModel.input.filter((item) => item === "text" || item === "image")
+            : (["text"] as Array<"text" | "image">),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??

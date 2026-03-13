@@ -217,7 +217,12 @@ async function runImagePrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = resolveModelFromRegistry({
+        modelRegistry,
+        provider,
+        modelId,
+        cfg: effectiveCfg,
+      });
       if (!model.input?.includes("image")) {
         throw new Error(`Model does not support images: ${provider}/${modelId}`);
       }

@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getDefaultLocalRoots } from "../../web/media.js";
+import { resolveModelWithRegistry } from "../pi-embedded-runner/model.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 
@@ -86,8 +87,14 @@ export function resolveModelFromRegistry(params: {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
   modelId: string;
+  cfg?: OpenClawConfig;
 }): Model<Api> {
-  const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
+  const model = resolveModelWithRegistry({
+    provider: params.provider,
+    modelId: params.modelId,
+    modelRegistry: params.modelRegistry as never,
+    cfg: params.cfg,
+  });
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
   }
