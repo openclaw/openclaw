@@ -5,6 +5,7 @@ describe("shared/assistant-identity-values", () => {
   it("returns undefined for missing or blank values", () => {
     expect(coerceIdentityValue(undefined, 10)).toBeUndefined();
     expect(coerceIdentityValue("   ", 10)).toBeUndefined();
+    expect(coerceIdentityValue(42 as unknown as string, 10)).toBeUndefined();
   });
 
   it("trims values and preserves strings within the limit", () => {
@@ -13,5 +14,9 @@ describe("shared/assistant-identity-values", () => {
 
   it("truncates overlong trimmed values at the exact limit", () => {
     expect(coerceIdentityValue("  OpenClaw Assistant  ", 8)).toBe("OpenClaw");
+  });
+
+  it("returns an empty string when truncating to a zero-length limit", () => {
+    expect(coerceIdentityValue("  OpenClaw  ", 0)).toBe("");
   });
 });
