@@ -12,6 +12,7 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
 } from "./agent-scope.js";
+import { ANTHROPIC_MODEL_ALIASES } from "./anthropic-model-aliases.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -29,13 +30,6 @@ export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
-};
-
-const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4.5": "claude-opus-4-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4.5": "claude-sonnet-4-5",
 };
 
 function normalizeAliasKey(value: string): string {
