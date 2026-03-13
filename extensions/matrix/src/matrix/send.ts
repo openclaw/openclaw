@@ -140,7 +140,9 @@ async function withResolvedRoomRetry<T>(params: {
     } catch (retryErr) {
       const retryAttemptError = asResolvedRoomAttemptError(retryErr);
       const resolvedRetryError = retryAttemptError?.cause ?? retryErr;
-      clearDirectRoomCacheForTarget(client, to);
+      if (retryAttemptError?.sentAnyContent !== true) {
+        clearDirectRoomCacheForTarget(client, to);
+      }
       const LogService = getMatrixLogService();
       LogService.warn(
         "MatrixSend",
