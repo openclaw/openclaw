@@ -56,7 +56,7 @@ function findGatewayEntrypoint(programArguments?: string[]): string | null {
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
-async function normalizeExecutablePath(value: string): Promise<string> {
+async function normalizePathForComparison(value: string): Promise<string> {
   const resolvedPath = path.resolve(value);
   try {
     return await fs.realpath(resolvedPath);
@@ -277,10 +277,10 @@ export async function maybeRepairGatewayServiceConfig(
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
   const normalizedExpectedEntrypoint = expectedEntrypoint
-    ? await normalizeExecutablePath(expectedEntrypoint)
+    ? await normalizePathForComparison(expectedEntrypoint)
     : null;
   const normalizedCurrentEntrypoint = currentEntrypoint
-    ? await normalizeExecutablePath(currentEntrypoint)
+    ? await normalizePathForComparison(currentEntrypoint)
     : null;
   if (
     normalizedExpectedEntrypoint &&
@@ -301,7 +301,11 @@ export async function maybeRepairGatewayServiceConfig(
     return home || os.homedir();
   });
   const cliStateDir = resolveStateDir(process.env, os.homedir);
-  if (path.resolve(serviceStateDir) !== path.resolve(cliStateDir)) {
+  const [normalizedServiceStateDir, normalizedCliStateDir] = await Promise.all([
+    normalizePathForComparison(serviceStateDir),
+    normalizePathForComparison(cliStateDir),
+  ]);
+  if (normalizedServiceStateDir !== normalizedCliStateDir) {
     audit.issues.push({
       code: "gateway-state-dir-mismatch",
       message: "Gateway service state dir does not match the current CLI environment.",

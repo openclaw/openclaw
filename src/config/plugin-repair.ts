@@ -57,8 +57,19 @@ function resolveLoadPathPluginId(loadPath: string): string | null {
   if (manifest.ok) {
     return manifest.manifest.id;
   }
-  const base = path.basename(loadPath).trim();
-  return base || null;
+  return null;
+}
+
+function findBundledLoadPathPluginId(
+  loadPath: string,
+  bundled: ReadonlyMap<string, { localPath: string }>,
+): string | null {
+  for (const [pluginId, bundledInfo] of bundled.entries()) {
+    if (pathsEqual(loadPath, bundledInfo.localPath)) {
+      return pluginId;
+    }
+  }
+  return null;
 }
 
 function isRedundantBundledChannelEnable(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -121,17 +132,15 @@ export function repairPluginConfigNoise(cfg: OpenClawConfig): PluginRepairResult
   });
 
   const filteredLoadPaths = loadPaths.filter((loadPath) => {
+    const bundledPluginId = findBundledLoadPathPluginId(loadPath, bundled);
+    if (bundledPluginId) {
+      changes.push(`- Removed plugins.load.paths override for bundled plugin "${bundledPluginId}"`);
+      return false;
+    }
+
     const pluginId = resolveLoadPathPluginId(loadPath);
     if (pluginId && LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       changes.push(`- Removed plugins.load.paths entry for removed plugin "${pluginId}"`);
-      return false;
-    }
-    if (!pluginId) {
-      return true;
-    }
-    const bundledInfo = bundled.get(pluginId);
-    if (bundledInfo && pathsEqual(loadPath, bundledInfo.localPath)) {
-      changes.push(`- Removed plugins.load.paths override for bundled plugin "${pluginId}"`);
       return false;
     }
     return true;
@@ -184,7 +193,9 @@ export function repairPluginConfigNoise(cfg: OpenClawConfig): PluginRepairResult
     ...(typeof plugins.enabled === "boolean" ? { enabled: plugins.enabled } : {}),
     ...(filteredAllow.length > 0 ? { allow: filteredAllow } : {}),
     ...(filteredDeny.length > 0 ? { deny: filteredDeny } : {}),
-    ...(filteredLoadPaths.length > 0 ? { load: { paths: filteredLoadPaths } } : {}),
+    ...(filteredLoadPaths.length > 0
+      ? { load: { ...plugins.load, paths: filteredLoadPaths } }
+      : {}),
     ...(slots ? { slots } : {}),
     ...(Object.keys(entries).length > 0 ? { entries } : {}),
     ...(Object.keys(installs).length > 0 ? { installs } : {}),

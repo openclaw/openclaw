@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createConfigIO,
@@ -138,6 +139,15 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
+async function normalizePathForComparison(value: string): Promise<string> {
+  const resolvedPath = path.resolve(value);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
@@ -183,6 +193,17 @@ async function loadDaemonConfigContext(
     ...(daemonSnapshot?.issues?.length ? { issues: daemonSnapshot.issues } : {}),
     controlUi: daemonCfg.gateway?.controlUi,
   };
+  const [
+    normalizedCliConfigPath,
+    normalizedDaemonConfigPath,
+    normalizedCliStateDir,
+    normalizedDaemonStateDir,
+  ] = await Promise.all([
+    normalizePathForComparison(cliConfigSummary.path),
+    normalizePathForComparison(daemonConfigSummary.path),
+    normalizePathForComparison(cliConfigSummary.stateDir),
+    normalizePathForComparison(daemonConfigSummary.stateDir),
+  ]);
 
   return {
     mergedDaemonEnv,
@@ -190,9 +211,8 @@ async function loadDaemonConfigContext(
     daemonCfg,
     cliConfigSummary,
     daemonConfigSummary,
-    configMismatch: cliConfigSummary.path !== daemonConfigSummary.path,
-    stateDirMismatch:
-      path.resolve(cliConfigSummary.stateDir) !== path.resolve(daemonConfigSummary.stateDir),
+    configMismatch: normalizedCliConfigPath !== normalizedDaemonConfigPath,
+    stateDirMismatch: normalizedCliStateDir !== normalizedDaemonStateDir,
     daemonUsesTestStateDir:
       detectOpenClawTestStateDir(daemonConfigSummary.stateDir, {
         homedir: mergedDaemonEnv.HOME?.trim() || process.env.HOME,

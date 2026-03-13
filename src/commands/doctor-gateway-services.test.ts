@@ -526,6 +526,51 @@ describe("maybeRepairGatewayServiceConfig", () => {
       },
     );
   });
+
+  it("does not flag state-dir mismatch when service and CLI paths share a realpath", async () => {
+    await withEnvAsync(
+      {
+        HOME: "/Users/tester",
+        OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw/openclaw.json",
+      },
+      async () => {
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            HOME: "/Users/tester",
+            OPENCLAW_STATE_DIR: "/Users/tester/.openclaw-symlink",
+            OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw-symlink/openclaw.json",
+          },
+        });
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: true,
+          issues: [],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          workingDirectory: "/tmp",
+          environment: {},
+        });
+        mocks.install.mockResolvedValue(undefined);
+        fsMocks.realpath.mockImplementation(async (value: string) => {
+          if (value === "/Users/tester/.openclaw-symlink") {
+            return "/Users/tester/.openclaw";
+          }
+          return value;
+        });
+
+        await runRepair({ gateway: {} });
+
+        const configNotes = mocks.note.mock.calls
+          .filter((call) => call[1] === "Gateway service config")
+          .map((call) => String(call[0]))
+          .join("\n");
+        expect(configNotes).not.toContain("state dir does not match");
+        expect(mocks.install).not.toHaveBeenCalled();
+      },
+    );
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {
