@@ -19,6 +19,7 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 
 // Size-capped to prevent unbounded growth (#4948)
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
+const MAX_DIRECT_ROOM_CACHE_ORDER_SIZE = MAX_DIRECT_ROOM_CACHE_SIZE * 2;
 type DirectRoomCacheEntry = {
   roomId: string;
   evicted: boolean;
@@ -31,6 +32,30 @@ const directRoomCacheOrder: Array<{
   entry: DirectRoomCacheEntry;
 }> = [];
 let directRoomCacheSize = 0;
+let directRoomCacheEvictedCount = 0;
+
+function markDirectRoomCacheEntryEvicted(entry: DirectRoomCacheEntry): void {
+  if (entry.evicted) {
+    return;
+  }
+  entry.evicted = true;
+  directRoomCacheEvictedCount += 1;
+}
+
+function maybeCompactDirectRoomCacheOrder(): void {
+  if (directRoomCacheEvictedCount === 0) {
+    return;
+  }
+  if (
+    directRoomCacheOrder.length <= MAX_DIRECT_ROOM_CACHE_ORDER_SIZE &&
+    directRoomCacheEvictedCount <= MAX_DIRECT_ROOM_CACHE_SIZE
+  ) {
+    return;
+  }
+  const compacted = directRoomCacheOrder.filter((slot) => !slot.entry.evicted);
+  directRoomCacheOrder.splice(0, directRoomCacheOrder.length, ...compacted);
+  directRoomCacheEvictedCount = 0;
+}
 
 function getDirectRoomCacheForClient(client: MatrixClient): Map<string, DirectRoomCacheEntry> {
   const existing = directRoomCache.get(client);
@@ -53,16 +78,17 @@ function clearDirectRoomCacheEntry(client: MatrixClient, userId: string): void {
   if (!clientCache || !existing) {
     return;
   }
-  existing.evicted = true;
+  markDirectRoomCacheEntryEvicted(existing);
   clientCache.delete(userId);
   directRoomCacheSize -= 1;
+  maybeCompactDirectRoomCacheOrder();
 }
 
 function setDirectRoomCached(client: MatrixClient, userId: string, roomId: string): void {
   const clientCache = getDirectRoomCacheForClient(client);
   const previous = clientCache.get(userId);
   if (previous) {
-    previous.evicted = true;
+    markDirectRoomCacheEntryEvicted(previous);
     directRoomCacheSize -= 1;
   }
 
@@ -73,13 +99,19 @@ function setDirectRoomCached(client: MatrixClient, userId: string, roomId: strin
 
   while (directRoomCacheSize > MAX_DIRECT_ROOM_CACHE_SIZE) {
     const oldest = directRoomCacheOrder.shift();
-    if (!oldest || oldest.entry.evicted) {
+    if (!oldest) {
+      continue;
+    }
+    if (oldest.entry.evicted) {
+      directRoomCacheEvictedCount -= 1;
       continue;
     }
     oldest.entry.evicted = true;
     oldest.clientCache.delete(oldest.userId);
     directRoomCacheSize -= 1;
   }
+
+  maybeCompactDirectRoomCacheOrder();
 }
 
 function normalizeRoomIdList(input: unknown): string[] {
@@ -387,3 +419,17 @@ export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Pr
   }
   return target;
 }
+
+type TargetsTestHooks = {
+  getDirectRoomCacheOrderLength(): number;
+  getMaxDirectRoomCacheOrderSize(): number;
+};
+
+(
+  globalThis as typeof globalThis & {
+    __openclawMatrixTargetsTestHooks__?: TargetsTestHooks;
+  }
+).__openclawMatrixTargetsTestHooks__ = {
+  getDirectRoomCacheOrderLength: () => directRoomCacheOrder.length,
+  getMaxDirectRoomCacheOrderSize: () => MAX_DIRECT_ROOM_CACHE_ORDER_SIZE,
+};
