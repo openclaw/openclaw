@@ -110,10 +110,10 @@ complementary coverage:
 | Wikipedia     | general  | reference     | High-signal for research     |
 | StackOverflow | it, q&a  | reference     | Essential for coding tasks   |
 
-These numbers come from testing against a live SearXNG instance (CT 210,
-`192.168.1.210:8080`) with 85 engines enabled — only 3 engines returned
-results for a general query, confirming that a focused allowlist loses
-nothing while reducing attack surface.
+These numbers come from testing against a live SearXNG instance with 85
+engines enabled — only 3 engines returned results for a general query,
+confirming that a focused allowlist loses nothing while reducing attack
+surface.
 
 To add engines, uncomment sections in `settings.yml`:
 
