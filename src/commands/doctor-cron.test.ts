@@ -27,44 +27,55 @@ function makePrompter(confirmResult = true) {
   };
 }
 
+function createCronConfig(storePath: string): OpenClawConfig {
+  return {
+    cron: {
+      store: storePath,
+      webhook: "https://example.invalid/cron-finished",
+    },
+  };
+}
+
+function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
+  return {
+    jobId: "legacy-job",
+    name: "Legacy job",
+    notify: true,
+    createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+    updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+    schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+    payload: {
+      kind: "systemEvent",
+      text: "Morning brief",
+    },
+    state: {},
+    ...overrides,
+  };
+}
+
+async function writeCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify(
+      {
+        version: 1,
+        jobs,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
 describe("maybeRepairLegacyCronStore", () => {
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              jobId: "legacy-job",
-              name: "Legacy job",
-              notify: true,
-              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
-              payload: {
-                kind: "systemEvent",
-                text: "Morning brief",
-              },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStore(storePath, [createLegacyCronJob()]);
 
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    const cfg: OpenClawConfig = {
-      cron: {
-        store: storePath,
-        webhook: "https://example.invalid/cron-finished",
-      },
-    };
+    const cfg = createCronConfig(storePath);
 
     await maybeRepairLegacyCronStore({
       cfg,
@@ -158,44 +169,13 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("does not auto-repair in non-interactive mode without explicit repair approval", async () => {
     const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              jobId: "legacy-job",
-              name: "Legacy job",
-              notify: true,
-              createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-              updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-              schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
-              payload: {
-                kind: "systemEvent",
-                text: "Morning brief",
-              },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeCronStore(storePath, [createLegacyCronJob()]);
 
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     const prompter = makePrompter(false);
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: { nonInteractive: true },
       prompter,
     });
