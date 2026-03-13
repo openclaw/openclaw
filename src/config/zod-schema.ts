@@ -91,7 +91,7 @@ const McpServerEntrySchema = z
   .object({
     command: z.string().min(1),
     args: z.array(z.string().min(1)).optional(),
-    description: z.string().optional(),
+    description: z.string().min(1).optional(),
   })
   .strict();
 

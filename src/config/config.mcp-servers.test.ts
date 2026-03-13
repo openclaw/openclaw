@@ -167,6 +167,27 @@ describe("mcp servers config schema", () => {
     ).toBe(true);
   });
 
+  it("rejects an empty string description", () => {
+    const res = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad_desc: {
+            command: "/usr/bin/thing",
+            description: "",
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (res.success) {
+      return;
+    }
+
+    const paths = res.error.issues.map((i) => i.path.join("."));
+    expect(paths.some((p) => p.includes("description"))).toBe(true);
+  });
+
   it("rejects empty strings in the args array", () => {
     const res = OpenClawSchema.safeParse({
       mcp: {

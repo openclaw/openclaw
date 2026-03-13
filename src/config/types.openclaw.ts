@@ -37,15 +37,9 @@ export type McpServerEntryConfig = {
   description?: string;
 };
 
-/**
- * Server names must match /^[a-zA-Z0-9_-]+$/ to be safely embedded
- * in mcp__<name>__<tool> tool definitions later.
- */
-export type McpServerName = string & { readonly __brand: "McpServerName" };
-
 export type McpConfig = {
   /** MCP servers keyed by a user-defined server name (must match /^[a-zA-Z0-9_-]+$/). */
-  servers?: Record<McpServerName, McpServerEntryConfig>;
+  servers?: Record<string, McpServerEntryConfig>;
 };
 
 export type OpenClawConfig = {
