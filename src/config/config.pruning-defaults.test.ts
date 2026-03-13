@@ -73,6 +73,33 @@ describe("config pruning defaults", () => {
     });
   });
 
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-20250514" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+      expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
+      expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
+      expect(
+        cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params
+          ?.cacheRetention,
+      ).toBe("short");
+    });
+  });
+
   it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
     await withTempHome(async (home) => {
       await writeConfigForTest(home, {
