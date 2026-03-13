@@ -143,6 +143,7 @@ function createGatewayPlugin(params: {
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: HttpsProxyAgent<string>;
+  runtime?: RuntimeEnv;
 }): GatewayPlugin {
   class SafeGatewayPlugin extends GatewayPlugin {
     constructor() {
@@ -151,11 +152,23 @@ function createGatewayPlugin(params: {
 
     override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
       if (!this.gatewayInfo) {
-        this.gatewayInfo = await fetchDiscordGatewayInfo({
-          token: client.options.token,
-          fetchImpl: params.fetchImpl,
-          fetchInit: params.fetchInit,
-        });
+        try {
+          this.gatewayInfo = await fetchDiscordGatewayInfo({
+            token: client.options.token,
+            fetchImpl: params.fetchImpl,
+            fetchInit: params.fetchInit,
+          });
+        } catch (error) {
+          // Carbon's Client calls registerClient without awaiting, so any
+          // thrown error becomes an unhandled rejection that crashes the
+          // gateway. Log and bail — the health monitor will reconnect later.
+          params.runtime?.error?.(
+            danger(
+              `discord: failed to fetch gateway info: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
+          return;
+        }
       }
       return super.registerClient(client);
     }
@@ -187,6 +200,7 @@ export function createDiscordGatewayPlugin(params: {
     return createGatewayPlugin({
       options,
       fetchImpl: (input, init) => fetch(input, init as RequestInit),
+      runtime: params.runtime,
     });
   }
 
@@ -201,12 +215,14 @@ export function createDiscordGatewayPlugin(params: {
       fetchImpl: (input, init) => undiciFetch(input, init),
       fetchInit: { dispatcher: fetchAgent },
       wsAgent,
+      runtime: params.runtime,
     });
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
     return createGatewayPlugin({
       options,
       fetchImpl: (input, init) => fetch(input, init as RequestInit),
+      runtime: params.runtime,
     });
   }
 }
