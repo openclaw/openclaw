@@ -72,4 +72,11 @@ export type BrowserConfig = {
    * the relay must be reachable from a different network namespace.
    */
   relayBindHost?: string;
+  /** Session persistence settings — periodic cookie snapshots to survive restarts. */
+  sessionPersistence?: {
+    /** Enable periodic cookie save/restore. Default: true */
+    enabled?: boolean;
+    /** Interval between periodic saves in ms. Default: 60000 */
+    intervalMs?: number;
+  };
 };

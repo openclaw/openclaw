@@ -17,6 +17,8 @@ export type ProfileRuntimeState = {
     previousProfile: ResolvedBrowserProfile;
     reason: string;
   } | null;
+  /** Cleanup function for periodic session persistence save timer. */
+  stopPeriodicSave?: (() => void) | null;
 };
 
 export type BrowserServerState = {
