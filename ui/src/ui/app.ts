@@ -158,11 +158,15 @@ export class OpenClawApp extends LitElement {
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatModelOverrides: Record<string, string | null> = {};
+  @state() chatModelsLoading = false;
+  @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatAttachmentReadsPending = 0;
   @state() chatBufferedAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
 
@@ -543,6 +547,7 @@ export class OpenClawApp extends LitElement {
 
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
+    this.navDrawerOpen = false;
   }
 
   setTheme(next: ThemeName, context?: Parameters<typeof setThemeInternal>[2]) {

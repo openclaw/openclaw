@@ -1159,7 +1159,7 @@ export function renderChat(props: ChatProps) {
         props.showNewMessages
           ? html`
             <button
-              class="agent-chat__scroll-pill"
+              class="chat-new-messages"
               type="button"
               @click=${props.onScrollToBottom}
             >

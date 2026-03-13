@@ -8,7 +8,7 @@ function resolveDirectoryLimit(limit?: number | null): number | undefined {
   return typeof limit === "number" && limit > 0 ? limit : undefined;
 }
 
-function applyDirectoryQueryAndLimit(
+export function applyDirectoryQueryAndLimit(
   ids: string[],
   params: { query?: string | null; limit?: number | null },
 ): string[] {
@@ -18,7 +18,7 @@ function applyDirectoryQueryAndLimit(
   return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
 }
 
-function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
+export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
   return ids.map((id) => ({ kind, id }) as const);
 }
 

@@ -6,9 +6,11 @@ import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import type { ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -29,6 +31,10 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  chatModelOverrides: Record<string, string | null>;
+  chatModelsLoading: boolean;
+  chatModelCatalog: ModelCatalogEntry[];
+  updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
@@ -336,10 +342,18 @@ async function dispatchSlashCommand(
     return;
   }
 
-  const result = await executeSlashCommand(host.client, host.sessionKey, name, args);
+  const targetSessionKey = host.sessionKey;
+  const result = await executeSlashCommand(host.client, targetSessionKey, name, args);
 
   if (result.content) {
     injectCommandResult(host, result.content);
+  }
+
+  if (result.sessionPatch && "model" in result.sessionPatch) {
+    host.chatModelOverrides = {
+      ...host.chatModelOverrides,
+      [targetSessionKey]: result.sessionPatch.model ?? null,
+    };
   }
 
   if (result.action === "refresh") {
@@ -382,13 +396,28 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     loadSessions(host as unknown as OpenClawApp, {
       activeMinutes: 0,
       limit: 0,
-      includeGlobal: false,
-      includeUnknown: false,
+      includeGlobal: true,
+      includeUnknown: true,
     }),
     refreshChatAvatar(host),
+    refreshChatModels(host),
   ]);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  }
+}
+
+async function refreshChatModels(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    host.chatModelsLoading = false;
+    host.chatModelCatalog = [];
+    return;
+  }
+  host.chatModelsLoading = true;
+  try {
+    host.chatModelCatalog = await loadModels(host.client);
+  } finally {
+    host.chatModelsLoading = false;
   }
 }
 

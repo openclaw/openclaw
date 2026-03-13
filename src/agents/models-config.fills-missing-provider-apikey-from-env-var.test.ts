@@ -113,6 +113,92 @@ function createMoonshotConfig(overrides: {
   };
 }
 
+function createOpenAiConfigWithResolvedApiKey(mergeMode = false): OpenClawConfig {
+  return {
+    models: {
+      ...(mergeMode ? { mode: "merge" as const } : {}),
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+          api: "openai-completions",
+          models: [
+            {
+              id: "gpt-4.1",
+              name: "GPT-4.1",
+              input: ["text"],
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 16384,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+async function expectOpenAiEnvMarkerApiKey(options?: { seedMergedProvider?: boolean }) {
+  await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
+    await withTempHome(async () => {
+      if (options?.seedMergedProvider) {
+        await writeAgentModelsJson({
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
+            },
+          },
+        });
+      }
+
+      await ensureOpenClawModelsJson(
+        createOpenAiConfigWithResolvedApiKey(options?.seedMergedProvider),
+      );
+      const result = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    });
+  });
+}
+
+async function expectMoonshotTokenLimits(params: {
+  contextWindow: number;
+  maxTokens: number;
+  expectedContextWindow: number;
+  expectedMaxTokens: number;
+}) {
+  await withTempHome(async () => {
+    await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
+      await ensureOpenClawModelsJson(
+        createMoonshotConfig({
+          contextWindow: params.contextWindow,
+          maxTokens: params.maxTokens,
+        }),
+      );
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<
+          string,
+          {
+            models?: Array<{
+              id: string;
+              contextWindow?: number;
+              maxTokens?: number;
+            }>;
+          }
+        >;
+      }>();
+      const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+      expect(kimi?.contextWindow).toBe(params.expectedContextWindow);
+      expect(kimi?.maxTokens).toBe(params.expectedMaxTokens);
+    });
+  });
+}
+
 describe("models-config", () => {
   it("keeps anthropic api defaults when model entries omit api", async () => {
     await withTempHome(async () => {
@@ -444,131 +530,28 @@ describe("models-config", () => {
   });
 
   it("does not persist resolved env var value as plaintext in models.json", async () => {
-    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
-      await withTempHome(async () => {
-        const cfg: OpenClawConfig = {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; already resolved by loadConfig
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "gpt-4.1",
-                    name: "GPT-4.1",
-                    input: ["text"],
-                    reasoning: false,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 16384,
-                  },
-                ],
-              },
-            },
-          },
-        };
-        await ensureOpenClawModelsJson(cfg);
-        const result = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string }>;
-        }>();
-        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY");
-      });
-    });
+    await expectOpenAiEnvMarkerApiKey();
   });
 
   it("replaces stale merged apiKey when config key normalizes to a known env marker", async () => {
-    await withEnvVar("OPENAI_API_KEY", "sk-plaintext-should-not-appear", async () => {
-      await withTempHome(async () => {
-        await writeAgentModelsJson({
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "STALE_AGENT_KEY", // pragma: allowlist secret
-              api: "openai-completions",
-              models: [{ id: "gpt-4.1", name: "GPT-4.1", input: ["text"] }],
-            },
-          },
-        });
-        const cfg: OpenClawConfig = {
-          models: {
-            mode: "merge",
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: "sk-plaintext-should-not-appear", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "gpt-4.1",
-                    name: "GPT-4.1",
-                    input: ["text"],
-                    reasoning: false,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 16384,
-                  },
-                ],
-              },
-            },
-          },
-        };
-        await ensureOpenClawModelsJson(cfg);
-        const result = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string }>;
-        }>();
-        expect(result.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
-      });
-    });
+    await expectOpenAiEnvMarkerApiKey({ seedMergedProvider: true });
   });
 
   it("preserves explicit larger token limits when they exceed implicit catalog defaults", async () => {
-    await withTempHome(async () => {
-      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 350000, maxTokens: 16384 });
-
-        await ensureOpenClawModelsJson(cfg);
-        const parsed = await readGeneratedModelsJson<{
-          providers: Record<
-            string,
-            {
-              models?: Array<{
-                id: string;
-                contextWindow?: number;
-                maxTokens?: number;
-              }>;
-            }
-          >;
-        }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.contextWindow).toBe(350000);
-        expect(kimi?.maxTokens).toBe(16384);
-      });
+    await expectMoonshotTokenLimits({
+      contextWindow: 350000,
+      maxTokens: 16384,
+      expectedContextWindow: 350000,
+      expectedMaxTokens: 16384,
     });
   });
 
   it("falls back to implicit token limits when explicit values are invalid", async () => {
-    await withTempHome(async () => {
-      await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
-        const cfg = createMoonshotConfig({ contextWindow: 0, maxTokens: -1 });
-
-        await ensureOpenClawModelsJson(cfg);
-        const parsed = await readGeneratedModelsJson<{
-          providers: Record<
-            string,
-            {
-              models?: Array<{
-                id: string;
-                contextWindow?: number;
-                maxTokens?: number;
-              }>;
-            }
-          >;
-        }>();
-        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.contextWindow).toBe(256000);
-        expect(kimi?.maxTokens).toBe(8192);
-      });
+    await expectMoonshotTokenLimits({
+      contextWindow: 0,
+      maxTokens: -1,
+      expectedContextWindow: 256000,
+      expectedMaxTokens: 8192,
     });
   });
 });

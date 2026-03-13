@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
 import {
   formatDurationCompact,
@@ -7,6 +7,12 @@ import {
   formatDurationSeconds,
 } from "./format-duration.js";
 import { formatTimeAgo, formatRelativeTimestamp } from "./format-relative.js";
+
+const invalidDurationInputs = [null, undefined, -100] as const;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("format-duration", () => {
   describe("formatDurationCompact", () => {
@@ -55,7 +61,7 @@ describe("format-duration", () => {
 
   describe("formatDurationHuman", () => {
     it("returns fallback for invalid duration input", () => {
-      for (const value of [null, undefined, -100]) {
+      for (const value of invalidDurationInputs) {
         expect(formatDurationHuman(value)).toBe("n/a");
       }
       expect(formatDurationHuman(null, "unknown")).toBe("unknown");
@@ -106,6 +112,12 @@ describe("format-duration", () => {
     it("supports seconds unit", () => {
       expect(formatDurationSeconds(2000, { unit: "seconds" })).toBe("2 seconds");
     });
+
+    it("clamps negative values and rejects non-finite input", () => {
+      expect(formatDurationSeconds(-1500, { decimals: 1 })).toBe("0s");
+      expect(formatDurationSeconds(NaN)).toBe("unknown");
+      expect(formatDurationSeconds(Infinity)).toBe("unknown");
+    });
   });
 });
 
@@ -152,13 +164,52 @@ describe("format-datetime", () => {
       const result = formatZonedTimestamp(date, options);
       expect(result).toMatch(expected);
     });
+
+    it("returns undefined when required Intl parts are missing", () => {
+      function MissingPartsDateTimeFormat() {
+        return {
+          formatToParts: () => [
+            { type: "month", value: "01" },
+            { type: "day", value: "15" },
+            { type: "hour", value: "14" },
+            { type: "minute", value: "30" },
+          ],
+        } as Intl.DateTimeFormat;
+      }
+
+      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+        MissingPartsDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
+      );
+
+      expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
+        undefined,
+      );
+    });
+
+    it("returns undefined when Intl formatting throws", () => {
+      function ThrowingDateTimeFormat() {
+        return {
+          formatToParts: () => {
+            throw new Error("boom");
+          },
+        } as unknown as Intl.DateTimeFormat;
+      }
+
+      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+        ThrowingDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
+      );
+
+      expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
+        undefined,
+      );
+    });
   });
 });
 
 describe("format-relative", () => {
   describe("formatTimeAgo", () => {
     it("returns fallback for invalid elapsed input", () => {
-      for (const value of [null, undefined, -100]) {
+      for (const value of invalidDurationInputs) {
         expect(formatTimeAgo(value)).toBe("unknown");
       }
       expect(formatTimeAgo(null, { fallback: "n/a" })).toBe("n/a");
@@ -188,6 +239,15 @@ describe("format-relative", () => {
   });
 
   describe("formatRelativeTimestamp", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-02-10T12:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("returns fallback for invalid timestamp input", () => {
       for (const value of [null, undefined]) {
         expect(formatRelativeTimestamp(value)).toBe("n/a");
@@ -197,21 +257,48 @@ describe("format-relative", () => {
 
     it.each([
       { offsetMs: -10000, expected: "just now" },
+      { offsetMs: -30000, expected: "just now" },
       { offsetMs: -300000, expected: "5m ago" },
       { offsetMs: -7200000, expected: "2h ago" },
+      { offsetMs: -(47 * 3600000), expected: "47h ago" },
+      { offsetMs: -(48 * 3600000), expected: "2d ago" },
       { offsetMs: 30000, expected: "in <1m" },
       { offsetMs: 300000, expected: "in 5m" },
       { offsetMs: 7200000, expected: "in 2h" },
     ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
-      const now = Date.now();
-      expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
+      expect(formatRelativeTimestamp(Date.now() + offsetMs)).toBe(expected);
     });
 
-    it("falls back to date for old timestamps when enabled", () => {
-      const oldDate = Date.now() - 30 * 24 * 3600000; // 30 days ago
-      const result = formatRelativeTimestamp(oldDate, { dateFallback: true });
-      // Should be a short date like "Jan 9" not "30d ago"
-      expect(result).toMatch(/[A-Z][a-z]{2} \d{1,2}/);
+    it.each([
+      {
+        name: "keeps 7-day-old timestamps relative",
+        offsetMs: -7 * 24 * 3600000,
+        options: { dateFallback: true, timezone: "UTC" },
+        expected: "7d ago",
+      },
+      {
+        name: "falls back to a short date once the timestamp is older than 7 days",
+        offsetMs: -8 * 24 * 3600000,
+        options: { dateFallback: true, timezone: "UTC" },
+        expected: "Feb 2",
+      },
+      {
+        name: "keeps relative output when date fallback is disabled",
+        offsetMs: -8 * 24 * 3600000,
+        options: { timezone: "UTC" },
+        expected: "8d ago",
+      },
+    ])("$name", ({ offsetMs, options, expected }) => {
+      expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
+    });
+
+    it("falls back to relative days when date formatting throws", () => {
+      expect(
+        formatRelativeTimestamp(Date.now() - 8 * 24 * 3600000, {
+          dateFallback: true,
+          timezone: "Invalid/Timezone",
+        }),
+      ).toBe("8d ago");
     });
   });
 });

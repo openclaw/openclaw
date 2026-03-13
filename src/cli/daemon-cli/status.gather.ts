@@ -258,17 +258,21 @@ export async function gatherDaemonStatus(
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
-  const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
-    service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
+  const command = await service.readCommand(process.env).catch(() => null);
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
+  const [loaded, runtime] = await Promise.all([
+    service.isLoaded({ env: serviceEnv }).catch(() => false),
+    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
   const configAudit = await auditGatewayServiceConfig({
     env: process.env,
     command,
   });
-
-  const serviceEnv = command?.environment ?? undefined;
   const {
     mergedDaemonEnv,
     cliCfg,
@@ -276,7 +280,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(serviceEnv);
+  } = await loadDaemonConfigContext(command?.environment);
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
