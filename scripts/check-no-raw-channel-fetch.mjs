@@ -20,7 +20,7 @@ const sourceRoots = [
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  "extensions/bluebubbles/src/types.ts:133",
+  "extensions/bluebubbles/src/types.ts:131",
   "extensions/feishu/src/streaming-card.ts:31",
   "extensions/feishu/src/streaming-card.ts:101",
   "extensions/feishu/src/streaming-card.ts:143",
@@ -33,7 +33,7 @@ const allowedRawFetchCallsites = new Set([
   "extensions/googlechat/src/api.ts:22",
   "extensions/googlechat/src/api.ts:43",
   "extensions/googlechat/src/api.ts:63",
-  "extensions/googlechat/src/api.ts:188",
+  "extensions/googlechat/src/api.ts:184",
   "extensions/googlechat/src/auth.ts:82",
   "extensions/matrix/src/directory-live.ts:41",
   "extensions/matrix/src/matrix/client/config.ts:171",
@@ -56,7 +56,7 @@ const allowedRawFetchCallsites = new Set([
   "extensions/voice-call/src/providers/twilio/api.ts:23",
   "src/channels/telegram/api.ts:8",
   "src/discord/send.outbound.ts:347",
-  "src/discord/voice-message.ts:264",
+  "src/discord/voice-message.ts:267",
   "src/discord/voice-message.ts:308",
   "src/slack/monitor/media.ts:64",
   "src/slack/monitor/media.ts:68",
