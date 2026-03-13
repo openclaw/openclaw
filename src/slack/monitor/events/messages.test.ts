@@ -17,7 +17,6 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
 }));
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
-type AppMentionHandler = MessageHandler;
 type RegisteredEventName = "message" | "app_mention";
 
 type MessageCase = {
