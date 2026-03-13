@@ -24,6 +24,31 @@ export async function writeJsonAtomic(
   });
 }
 
+const RENAME_MAX_RETRIES = 3;
+const RENAME_BASE_DELAY_MS = 50;
+
+async function renameWithRetry(src: string, dest: string): Promise<void> {
+  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.rename(src, dest);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
+      // Windows doesn't reliably support atomic replace via rename when dest exists.
+      if (code === "EPERM" || code === "EEXIST") {
+        await fs.copyFile(src, dest);
+        await fs.unlink(src).catch(() => {});
+        return;
+      }
+      throw err;
+    }
+  }
+}
+
 export async function writeTextAtomic(
   filePath: string,
   content: string,
@@ -45,7 +70,7 @@ export async function writeTextAtomic(
     } catch {
       // best-effort; ignore on platforms without chmod
     }
-    await fs.rename(tmp, filePath);
+    await renameWithRetry(tmp, filePath);
     try {
       await fs.chmod(filePath, mode);
     } catch {
