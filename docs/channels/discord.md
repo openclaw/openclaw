@@ -773,6 +773,14 @@ Default slash command settings:
     - `messages.ackReaction`
     - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
 
+    Timing:
+
+    - `channels.discord.accounts.<accountId>.ackReactionTiming`
+    - `channels.discord.ackReactionTiming`
+    - default: `"received"`
+
+    Set timing to `"run-start"` to defer the reaction until the agent emits real run activity instead of reacting immediately on receipt.
+
     Notes:
 
     - Discord accepts unicode emoji or custom emoji names.
