@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AgentIdentityResult } from "../types.ts";
 import {
   agentLogoUrl,
   resolveConfiguredCronModelSuggestions,
@@ -116,12 +117,14 @@ describe("resolveAgentAvatarUrl", () => {
   it("prefers a runtime avatar URL over non-URL identity avatars", () => {
     expect(
       resolveAgentAvatarUrl(
-        { identity: { avatar: "A", avatarUrl: "/avatar/main" } },
+        { identity: { avatar: "A", avatarUrl: "/avatar/main" } } as unknown as {
+          identity: { avatar: string; avatarUrl: string };
+        },
         {
           agentId: "main",
           avatar: "A",
           name: "Main",
-        },
+        } as unknown as AgentIdentityResult,
       ),
     ).toBe("/avatar/main");
   });
