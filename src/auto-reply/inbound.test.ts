@@ -415,6 +415,24 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
   });
 
+  it("catch-all pattern matches empty text for media-only messages", () => {
+    const regexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    // A photo-only message in a Telegram group has no caption text.
+    // With mentionPatterns: [".*"], the bot should still respond.
+    expect(matchesMentionPatterns("", regexes)).toBe(true);
+    expect(matchesMentionPatterns("hello", regexes)).toBe(true);
+  });
+
+  it("specific pattern does not match empty text", () => {
+    const regexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
+    });
+    expect(matchesMentionPatterns("", regexes)).toBe(false);
+    expect(matchesMentionPatterns("hey bot", regexes)).toBe(true);
+  });
+
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {

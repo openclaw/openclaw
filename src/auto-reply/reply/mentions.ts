@@ -90,9 +90,9 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
     return false;
   }
   const cleaned = normalizeMentionText(text ?? "");
-  if (!cleaned) {
-    return false;
-  }
+  // Allow regex patterns to decide whether empty text matches.
+  // Catch-all patterns like ".*" should match media-only messages
+  // that have no caption text (e.g. photos in Telegram groups).
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
@@ -119,9 +119,6 @@ export function matchesMentionWithExplicit(params: {
 
   if (hasAnyMention && explicitAvailable) {
     return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
-  }
-  if (!textToCheck) {
-    return explicit;
   }
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
