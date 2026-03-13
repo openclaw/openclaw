@@ -1474,35 +1474,36 @@ export function renderApp(state: AppViewState) {
             })}
             </div>
 
-            ${
-              state.showClawComputer
-                ? html`
-                    <resizable-divider
-                      mode="pixels"
-                      side="right"
-                      orientation="vertical"
-                      .initialWidth=${state.clawComputerWidth}
-                      .minWidth=${300}
-                      .maxWidth=${3000}
-                      @resize=${(e: CustomEvent) => {
-                        if (e.detail.width !== undefined) {
-                          state.setClawComputerWidth(e.detail.width);
-                        }
-                      }}
-                    ></resizable-divider>
-                    <div class="claw-computer-panel" style="width: ${state.clawComputerWidth}px;">
-                      <div class="claw-computer-header">
-                        <span>🖥️ 远程桌面</span>
-                        <button class="claw-computer-close" @click=${() => state.toggleClawComputer()}>×</button>
-                      </div>
-                      <claw-computer-panel
-                        .vncUrl=${state.settings.vncWsUrl}
-                        .password=${state.settings.vncPassword}
-                      ></claw-computer-panel>
-                    </div>
-                  `
-                : nothing
-            }
+            <resizable-divider
+              mode="pixels"
+              side="right"
+              orientation="vertical"
+              .initialWidth=${state.clawComputerWidth}
+              .minWidth=${300}
+              .maxWidth=${3000}
+              @resize=${(e: CustomEvent) => {
+                if (e.detail.width !== undefined) {
+                  state.setClawComputerWidth(e.detail.width);
+                }
+              }}
+              style=${state.showClawComputer ? "" : "display: none;"}
+            ></resizable-divider>
+            <div 
+              class="claw-computer-panel" 
+              style="
+                width: ${state.clawComputerWidth}px;
+                margin-right: ${state.showClawComputer ? 0 : -state.clawComputerWidth}px;
+                opacity: ${state.showClawComputer ? 1 : 0};
+                transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                overflow: hidden;
+                flex-shrink: 0;
+              "
+            >
+              <claw-computer-panel
+                .vncUrl=${state.settings.vncWsUrl}
+                .password=${state.settings.vncPassword}
+              ></claw-computer-panel>
+            </div>
           </div>
         `
             : nothing
