@@ -22,6 +22,16 @@ import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
+/** Mux-proxied WebClients registered at startup for outbound sends when no
+ *  explicit token is available (mux mode), keyed by account ID. */
+const _muxClients = new Map<string, WebClient>();
+
+/** Register a mux-proxied app.client so sendMessageSlack can fall back to it.
+ *  When multiple accounts use mux mode, each registers its own client. */
+export function setMuxProxyClient(client: WebClient, accountId = "default"): void {
+  _muxClients.set(accountId, client);
+}
+
 const SLACK_TEXT_LIMIT = 4000;
 const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
@@ -140,23 +150,12 @@ function resolveToken(params: {
   accountId: string;
   fallbackToken?: string;
   fallbackSource?: SlackTokenSource;
-}) {
+}): string | undefined {
   const explicit = resolveSlackBotToken(params.explicit);
   if (explicit) {
     return explicit;
   }
-  const fallback = resolveSlackBotToken(params.fallbackToken);
-  if (!fallback) {
-    logVerbose(
-      `slack send: missing bot token for account=${params.accountId} explicit=${Boolean(
-        params.explicit,
-      )} source=${params.fallbackSource ?? "unknown"}`,
-    );
-    throw new Error(
-      `Slack bot token missing for account "${params.accountId}" (set channels.slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
-    );
-  }
-  return fallback;
+  return resolveSlackBotToken(params.fallbackToken);
 }
 
 function parseRecipient(raw: string): SlackRecipient {
@@ -274,7 +273,16 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWebClient(token);
+  const client =
+    opts.client ??
+    (token
+      ? createSlackWebClient(token)
+      : (_muxClients.get(account.accountId) ?? _muxClients.get("default") ?? null));
+  if (!client) {
+    throw new Error(
+      `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
+    );
+  }
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient);
   if (blocks) {

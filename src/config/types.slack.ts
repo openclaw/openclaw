@@ -79,11 +79,22 @@ export type SlackThreadConfig = {
   initialHistoryLimit?: number;
 };
 
+export type SlackMuxConfig = {
+  /** WebSocket URL of the mux service. */
+  url?: string;
+  /** MCP server URL for OAuth token cache lookup. */
+  mcpServerUrl?: string;
+  /** Explicit auth token for the mux connection. */
+  token?: string;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Slack connection mode (socket|http). Default: socket. */
-  mode?: "socket" | "http";
+  /** Slack connection mode (socket|http|mux). Default: socket. */
+  mode?: "socket" | "http" | "mux";
+  /** Mux receiver configuration (required when mode is "mux"). */
+  mux?: SlackMuxConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
