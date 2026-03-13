@@ -263,6 +263,8 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    memory_search: "Search memory files for relevant context",
+    memory_get: "Retrieve specific memory file contents",
   };
 
   const toolOrder = [
@@ -287,9 +289,12 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "sessions_spawn",
     "subagents",
     "session_status",
     "image",
+    "memory_search",
+    "memory_get",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
