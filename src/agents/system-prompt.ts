@@ -683,17 +683,6 @@ export function buildAgentSystemPrompt(params: {
     }
   }
 
-  // workspaceNotes: project-specific notes from the user's workspace config.
-  // Injected here (after all workspace files, before per-session dynamic fields) so that
-  // changes to project notes only invalidate the tail — not the stable workspace file prefix.
-  if (workspaceNotes.length > 0) {
-    lines.push("## Project Notes", "");
-    for (const note of workspaceNotes) {
-      lines.push(note);
-    }
-    lines.push("");
-  }
-
   // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
   const dynamicLine = buildRuntimeDynamicLine(
     runtimeInfo,
@@ -771,9 +760,23 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
+  // workspaceNotes: project-specific notes injected second-to-last (after per-conversation
+  // context, before MEMORY.md). This maximises the stable prefix for both:
+  //   1. Per-conversation changes (channel/group-chat): workspaceNotes is in stable prefix
+  //   2. workspaceNotes changes (sprint update): everything before workspaceNotes is stable
+  // Placing workspaceNotes here ensures SOUL.md, AGENTS.md, group-chat context, and all
+  // per-session config remain KV-cached when only project notes change.
+  if (workspaceNotes.length > 0) {
+    lines.push("## Project Notes", "");
+    for (const note of workspaceNotes) {
+      lines.push(note);
+    }
+    lines.push("");
+  }
+
   // Memory files (MEMORY.md / memory.md) are injected LAST — after all per-conversation
-  // dynamic context (group chat, reactions, reasoning). This maximises the stable prefix
-  // for the most common change pattern: daily notes update while session config stays constant.
+  // dynamic context and workspaceNotes. This maximises the stable prefix for the most
+  // common change pattern: daily notes update while session config stays constant.
   // When only MEMORY.md changes between sessions, everything above this point is KV-cached.
   for (const file of memoryContextFiles) {
     lines.push(`## ${file.path}`, "", file.content, "");
