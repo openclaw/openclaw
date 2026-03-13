@@ -164,4 +164,22 @@ describe("createHostWorkspaceWriteTool append mode", () => {
     expect(JSON.stringify(result)).toContain("append must be a boolean");
     expect(await fs.readFile(filePath, "utf-8")).toBe("original\n");
   });
+
+  it("rejects append=true in sandbox mode instead of overwriting", async () => {
+    const tool = createSandboxedWriteTool({
+      root: tmpDir,
+      bridge: createHostSandboxFsBridge(tmpDir),
+    });
+    const filePath = path.join(tmpDir, "sandbox-append.txt");
+    await fs.writeFile(filePath, "original\n", "utf-8");
+
+    const result = await tool.execute(
+      "call1",
+      { path: "sandbox-append.txt", content: "appended?\n", append: true },
+      undefined as never,
+    );
+
+    expect(JSON.stringify(result)).toContain("append mode is not supported in sandboxed sessions");
+    expect(await fs.readFile(filePath, "utf-8")).toBe("original\n");
+  });
 });

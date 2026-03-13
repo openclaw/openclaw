@@ -181,9 +181,11 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-const MODEL_SPECIAL_TOKEN_RE = /(?:#\+){2,}#?|\bassistant\s+to\s*=\s*\w+/gi;
-const MODEL_SPECIAL_MARKER_LINE_RE = /^\s*(?:(?:#\+){2,}#?|\bassistant\s+to\s*=\s*\w+)\s*$/i;
+const MODEL_SPECIAL_TOKEN_RE = /(?:#\+|\+#){2,}[+#]?|\bassistant\s+to\s*=\s*\w+/gi;
+const MODEL_SPECIAL_TOKEN_PRESENCE_RE = /(?:#\+|\+#){2,}[+#]?|\bassistant\s+to\s*=\s*\w+/i;
+const MODEL_SPECIAL_MARKER_LINE_RE = /^\s*(?:(?:#\+|\+#){2,}[+#]?|\bassistant\s+to\s*=\s*\w+)\s*$/i;
 const MODEL_SPECIAL_ROLE_LABEL_LINE_RE = /^\s*(?:user|system|assistant)\s*:\s*$/i;
+const MODEL_PROTOCOL_ONLY_REMAINDER_RE = /^NO_REPLY$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -401,23 +403,85 @@ function stripSpecialMarkupFromText(text: string): string {
   }
   const withoutFinalTags = text.replace(FINAL_TAG_RE, "");
   const originalLines = withoutFinalTags.split(/\r?\n/);
-  const withoutLeakedRoleLabels = originalLines
-    .filter((line, index, lines) => {
-      if (!MODEL_SPECIAL_ROLE_LABEL_LINE_RE.test(line)) {
-        return true;
+  const findPreviousNonEmptyIndex = (index: number, lines: readonly string[]): number | null => {
+    for (let candidate = index - 1; candidate >= 0; candidate -= 1) {
+      if (lines[candidate]?.trim().length) {
+        return candidate;
       }
-      const previousNonEmpty = lines
-        .slice(0, index)
-        .toReversed()
-        .find((entry) => entry.trim().length > 0);
-      const nextNonEmpty = lines.slice(index + 1).find((entry) => entry.trim().length > 0);
-      return !(
-        MODEL_SPECIAL_MARKER_LINE_RE.test(previousNonEmpty ?? "") ||
-        MODEL_SPECIAL_MARKER_LINE_RE.test(nextNonEmpty ?? "")
-      );
+    }
+    return null;
+  };
+  const findNextNonEmptyIndex = (index: number, lines: readonly string[]): number | null => {
+    for (let candidate = index + 1; candidate < lines.length; candidate += 1) {
+      if (lines[candidate]?.trim().length) {
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const isLeakedSpecialMarkerContextLine = (
+    line: string,
+    index: number,
+    lines: readonly string[],
+  ): boolean => {
+    if (!line) {
+      return false;
+    }
+    if (!MODEL_SPECIAL_TOKEN_PRESENCE_RE.test(line)) {
+      return false;
+    }
+    const remainder = line.replace(MODEL_SPECIAL_TOKEN_RE, "").trim();
+    if (remainder.length > 0) {
+      return MODEL_PROTOCOL_ONLY_REMAINDER_RE.test(remainder);
+    }
+    const previousNonEmptyIndex = findPreviousNonEmptyIndex(index, lines);
+    const nextNonEmptyIndex = findNextNonEmptyIndex(index, lines);
+    const previousNonEmpty = previousNonEmptyIndex === null ? "" : lines[previousNonEmptyIndex];
+    const nextNonEmpty = nextNonEmptyIndex === null ? "" : lines[nextNonEmptyIndex];
+    return (
+      MODEL_SPECIAL_ROLE_LABEL_LINE_RE.test(previousNonEmpty) ||
+      MODEL_SPECIAL_ROLE_LABEL_LINE_RE.test(nextNonEmpty) ||
+      MODEL_SPECIAL_MARKER_LINE_RE.test(previousNonEmpty) ||
+      MODEL_SPECIAL_MARKER_LINE_RE.test(nextNonEmpty)
+    );
+  };
+
+  const stripLeakedSpecialMarkerTokens = (
+    line: string,
+    index: number,
+    lines: readonly string[],
+  ): string => {
+    if (!isLeakedSpecialMarkerContextLine(line, index, lines)) {
+      return line;
+    }
+    return line.replace(MODEL_SPECIAL_TOKEN_RE, "");
+  };
+
+  const withoutLeakedRoleLabels = originalLines
+    .map((line, index, lines) => {
+      if (!MODEL_SPECIAL_ROLE_LABEL_LINE_RE.test(line)) {
+        return stripLeakedSpecialMarkerTokens(line, index, lines);
+      }
+      const previousNonEmptyIndex = findPreviousNonEmptyIndex(index, lines);
+      const nextNonEmptyIndex = findNextNonEmptyIndex(index, lines);
+      const hasAdjacentLeakedMarker =
+        (previousNonEmptyIndex !== null &&
+          isLeakedSpecialMarkerContextLine(
+            lines[previousNonEmptyIndex],
+            previousNonEmptyIndex,
+            lines,
+          )) ||
+        (nextNonEmptyIndex !== null &&
+          isLeakedSpecialMarkerContextLine(lines[nextNonEmptyIndex], nextNonEmptyIndex, lines));
+      if (hasAdjacentLeakedMarker) {
+        return null;
+      }
+      return stripLeakedSpecialMarkerTokens(line, index, lines);
     })
+    .filter((line): line is string => line !== null)
     .join("\n");
-  return withoutLeakedRoleLabels.replace(MODEL_SPECIAL_TOKEN_RE, "");
+  return withoutLeakedRoleLabels;
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {

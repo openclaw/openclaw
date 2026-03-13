@@ -30,4 +30,19 @@ describe("sanitizeUserFacingText special markup stripping", () => {
     expect(result).toContain("assistant:");
     expect(result).toContain("say: hello");
   });
+
+  it("preserves inline assistant to markers in normal content", () => {
+    const result = sanitizeUserFacingText(
+      "Transcript snippet: the literal marker assistant to=final leaked into a debug log.",
+    );
+    expect(result).toContain("assistant to=final");
+  });
+
+  it("preserves standalone protocol-marker examples in normal content", () => {
+    const result = sanitizeUserFacingText(
+      "Literal marker example:\nassistant to=final\n\nKeep this line too.",
+    );
+    expect(result).toContain("assistant to=final");
+    expect(result).toContain("Keep this line too.");
+  });
 });
