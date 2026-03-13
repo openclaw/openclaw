@@ -1,5 +1,9 @@
 import path from "node:path";
-import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  GUARDED_FETCH_MODE,
+  type GuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -35,6 +39,10 @@ type FetchMediaOptions = {
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  /** Whether to pin DNS to the resolved IP to prevent DNS rebinding. Defaults to true. */
+  pinDns?: boolean;
+  /** Guarded fetch mode. Defaults to "strict". */
+  mode?: GuardedFetchMode;
 };
 
 function stripQuotes(value: string): string {
@@ -92,22 +100,24 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     readIdleTimeoutMs,
     ssrfPolicy,
     lookupFn,
+    pinDns,
+    mode,
   } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
   try {
-    const result = await fetchWithSsrFGuard(
-      withStrictGuardedFetchMode({
-        url,
-        fetchImpl,
-        init: requestInit,
-        maxRedirects,
-        policy: ssrfPolicy,
-        lookupFn,
-      }),
-    );
+    const result = await fetchWithSsrFGuard({
+      url,
+      fetchImpl,
+      init: requestInit,
+      maxRedirects,
+      policy: ssrfPolicy,
+      lookupFn,
+      pinDns,
+      mode: mode ?? GUARDED_FETCH_MODE.STRICT,
+    });
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
