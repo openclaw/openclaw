@@ -85,7 +85,7 @@ describe("buildChromeDevToolsMcpPreset", () => {
     });
     expect(result).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect"],
     });
   });
 
@@ -221,7 +221,7 @@ describe("createAcpxRuntimeService", () => {
     const passedConfig = runtimeFactory.mock.calls[0]![0].pluginConfig;
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect"],
     });
   });
 
@@ -238,7 +238,7 @@ describe("createAcpxRuntimeService", () => {
     const passedConfig = runtimeFactory.mock.calls[0]![0].pluginConfig;
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual({
       command: "npx",
-      args: ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--slim"],
+      args: ["-y", "chrome-devtools-mcp@0.20.0", "--autoConnect", "--slim"],
     });
   });
 
@@ -270,6 +270,36 @@ describe("createAcpxRuntimeService", () => {
 
     const passedConfig = runtimeFactory.mock.calls[0]![0].pluginConfig;
     expect(passedConfig.mcpServers["chrome-devtools"]).toEqual(userDefined);
+  });
+
+  it("does not leak injected preset into subsequent restarts when disabled", async () => {
+    const { runtime } = createRuntimeStub(true);
+    const runtimeFactory = vi.fn(() => runtime);
+    const userMcpServers = { canva: { command: "npx", args: ["canva-mcp"] } };
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+      pluginConfig: { mcpServers: userMcpServers },
+    });
+
+    // First start: browser.mcp enabled → preset injected.
+    const enabledCtx = createServiceContext({
+      config: { browser: { mcp: { enabled: true } } },
+    });
+    await service.start(enabledCtx);
+    expect(
+      runtimeFactory.mock.calls[0]![0].pluginConfig.mcpServers["chrome-devtools"],
+    ).toBeDefined();
+
+    await service.stop?.(enabledCtx);
+
+    // Second start: browser.mcp disabled → preset must NOT be present.
+    const disabledCtx = createServiceContext({ config: {} });
+    await service.start(disabledCtx);
+    expect(
+      runtimeFactory.mock.calls[1]![0].pluginConfig.mcpServers["chrome-devtools"],
+    ).toBeUndefined();
+    // Original user servers must still be intact.
+    expect(runtimeFactory.mock.calls[1]![0].pluginConfig.mcpServers["canva"]).toBeDefined();
   });
 
   it("does not block startup while acpx ensure runs", async () => {

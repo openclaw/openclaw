@@ -14,7 +14,8 @@ import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 
 const CHROME_DEVTOOLS_MCP_SERVER_NAME = "chrome-devtools";
-const CHROME_DEVTOOLS_MCP_PACKAGE = "chrome-devtools-mcp@latest";
+const CHROME_DEVTOOLS_MCP_PINNED_VERSION = "0.20.0";
+const CHROME_DEVTOOLS_MCP_PACKAGE = `chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_PINNED_VERSION}`;
 
 /**
  * Build the chrome-devtools-mcp server config from core browser.mcp settings.
@@ -80,18 +81,25 @@ export function createAcpxRuntimeService(
   return {
     id: "acpx-runtime",
     async start(ctx: OpenClawPluginServiceContext): Promise<void> {
-      const pluginConfig = resolveAcpxPluginConfig({
+      let pluginConfig = resolveAcpxPluginConfig({
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
 
       // Inject chrome-devtools-mcp preset when browser.mcp is enabled in core config.
+      // Use a fresh object to avoid mutating the shared mcpServers reference across restarts.
       const chromePreset = buildChromeDevToolsMcpPreset({
         browserMcp: ctx.config.browser?.mcp,
         existingMcpServers: pluginConfig.mcpServers,
       });
       if (chromePreset) {
-        pluginConfig.mcpServers[CHROME_DEVTOOLS_MCP_SERVER_NAME] = chromePreset;
+        pluginConfig = {
+          ...pluginConfig,
+          mcpServers: {
+            ...pluginConfig.mcpServers,
+            [CHROME_DEVTOOLS_MCP_SERVER_NAME]: chromePreset,
+          },
+        };
         ctx.logger.info("chrome-devtools-mcp preset injected from browser.mcp config");
       }
 
