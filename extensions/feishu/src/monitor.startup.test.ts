@@ -4,7 +4,7 @@ import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const feishuClientMockModule = vi.hoisted(() => ({
-  createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
+  createFeishuWSClient: vi.fn(() => ({ start: vi.fn(), close: vi.fn() })),
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
 const feishuRuntimeMockModule = vi.hoisted(() => ({
