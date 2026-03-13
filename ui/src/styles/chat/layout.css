@@ -322,6 +322,42 @@
   box-sizing: border-box;
 }
 
+/* "New messages" scroll-to-bottom pill */
+.agent-chat__scroll-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  margin: 0 auto 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+  z-index: 5;
+}
+
+.agent-chat__scroll-pill:hover {
+  background: var(--card-hover, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.agent-chat__scroll-pill svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
 .agent-chat__input {
   position: relative;
   display: flex;
