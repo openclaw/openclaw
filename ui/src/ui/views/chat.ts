@@ -264,14 +264,14 @@ function renderContextNotice(
     return nothing;
   }
   const pct = Math.min(Math.round(ratio * 100), 100);
-  // Lerp from amber (#d97706) at 85% to red (#dc2626) at 95%+
+  // Lerp from amber (#d97706) at 85% to red (#ff0000) at 95%+
   const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  // RGB: amber(217,119,6) → red(220,38,38)
-  const r = Math.round(217 + (220 - 217) * t);
-  const g = Math.round(119 + (38 - 119) * t);
-  const b = Math.round(6 + (38 - 6) * t);
+  // RGB: amber(217,119,6) → red(255,0,0)
+  const r = Math.round(217 + (255 - 217) * t);
+  const g = Math.round(119 + (0 - 119) * t);
+  const b = Math.round(6 + (0 - 6) * t);
   const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
+  const bgOpacity = 0.25 + 0.25 * t;
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
   return html`
     <div class="context-notice-wrapper">

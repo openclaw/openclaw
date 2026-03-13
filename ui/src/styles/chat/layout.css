@@ -934,9 +934,10 @@
   position: absolute;
   inset: 0;
   display: flex;
-  justify-content: flex-start;
+  justify-content: flex-end;
   align-items: flex-start;
   pointer-events: none;
+  z-index: 5;
 }
 
 .context-notice {
@@ -944,6 +945,7 @@
   align-items: center;
   gap: 0.75rem;
   width: min(90%, 320px);
+  margin: 10px;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   background-color: var(--ctx-bg);
