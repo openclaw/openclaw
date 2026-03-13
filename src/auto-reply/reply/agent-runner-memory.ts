@@ -27,8 +27,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
@@ -482,18 +481,13 @@ export async function runMemoryFlushIfNeeded(params: {
       ...resolveModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
-        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
+        const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
           provider,
-        });
-        const runBaseParams = buildEmbeddedRunBaseParams({
-          run: params.followupRun.run,
-          provider,
           model,
           runId: flushRunId,
-          authProfile,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
         const result = await runEmbeddedPiAgent({

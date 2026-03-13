@@ -1,22 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDiscordMessageHandler,
+  preflightDiscordMessageMock,
+  processDiscordMessageMock,
+} from "./message-handler.module-test-helpers.js";
+import {
   DEFAULT_DISCORD_BOT_USER_ID,
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
-
-const preflightDiscordMessageMock = vi.hoisted(() => vi.fn());
-const processDiscordMessageMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./message-handler.preflight.js", () => ({
-  preflightDiscordMessage: preflightDiscordMessageMock,
-}));
-
-vi.mock("./message-handler.process.js", () => ({
-  processDiscordMessage: processDiscordMessageMock,
-}));
-
-const { createDiscordMessageHandler } = await import("./message-handler.js");
 
 function createMessageData(authorId: string, channelId = "ch-1") {
   return {

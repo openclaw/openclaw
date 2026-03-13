@@ -263,6 +263,31 @@ export function buildEmbeddedRunContexts(params: {
   };
 }
 
+export function buildEmbeddedRunExecutionParams(params: {
+  run: FollowupRun["run"];
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+  provider: string;
+  model: string;
+  runId: string;
+  allowTransientCooldownProbe?: boolean;
+}) {
+  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const runBaseParams = buildEmbeddedRunBaseParams({
+    run: params.run,
+    provider: params.provider,
+    model: params.model,
+    runId: params.runId,
+    authProfile,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+  });
+  return {
+    embeddedContext,
+    senderContext,
+    runBaseParams,
+  };
+}
+
 export function resolveProviderScopedAuthProfile(params: {
   provider: string;
   primaryProvider: string;
