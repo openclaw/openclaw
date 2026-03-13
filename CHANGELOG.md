@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway**: fix circular dependency crash when Anthropic models configured, preventing "Cannot access ANTHROPIC_MODEL_ALIASES before initialization" error. (#44724)
 - macOS/LaunchAgent install: tighten LaunchAgent directory and plist permissions during install so launchd bootstrap does not fail when the target home path or generated plist inherited group/world-writable modes.
 
 ## 2026.3.8
