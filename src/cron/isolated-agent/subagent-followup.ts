@@ -166,7 +166,7 @@ export async function waitForDescendantSubagentSummary(params: {
   // CRON_SUBAGENT_FINAL_REPLY_GRACE_MS) to capture that synthesis.
   const gracePeriodDeadline = Math.min(Date.now() + CRON_SUBAGENT_FINAL_REPLY_GRACE_MS, deadline);
 
-  while (Date.now() < gracePeriodDeadline) {
+  const resolveUsableLatestReply = async () => {
     const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
       latest &&
@@ -175,16 +175,20 @@ export async function waitForDescendantSubagentSummary(params: {
     ) {
       return latest;
     }
+    return undefined;
+  };
+
+  while (Date.now() < gracePeriodDeadline) {
+    const latest = await resolveUsableLatestReply();
+    if (latest) {
+      return latest;
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, CRON_SUBAGENT_GRACE_POLL_MS));
   }
 
   // Final read after grace period expires.
-  const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
-  if (
-    latest &&
-    latest.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase() &&
-    (latest !== initialReply || !isLikelyInterimCronMessage(latest))
-  ) {
+  const latest = await resolveUsableLatestReply();
+  if (latest) {
     return latest;
   }
 
