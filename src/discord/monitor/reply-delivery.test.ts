@@ -354,6 +354,77 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
   });
 
+  it("retries bot send on network TypeError then succeeds", async () => {
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries bot send on ECONNRESET then succeeds", async () => {
+    const networkErr = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    sendMessageDiscordMock
+      .mockRejectedValueOnce(networkErr)
+      .mockResolvedValueOnce({ messageId: "msg-1", channelId: "channel-1" });
+
+    await deliverDiscordReply({
+      replies: [{ text: "retry me" }],
+      target: "channel:123",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 401 auth error", async () => {
+    const authErr = Object.assign(new Error("unauthorized"), { status: 401 });
+    sendMessageDiscordMock.mockRejectedValueOnce(authErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("unauthorized");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on 400 validation error", async () => {
+    const validationErr = Object.assign(new Error("bad request"), { status: 400 });
+    sendMessageDiscordMock.mockRejectedValueOnce(validationErr);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "fail" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("bad request");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry on 4xx client errors", async () => {
     const clientErr = Object.assign(new Error("bad request"), { status: 400 });
     sendMessageDiscordMock.mockRejectedValueOnce(clientErr);
@@ -370,6 +441,23 @@ describe("deliverDiscordReply", () => {
     ).rejects.toThrow("bad request");
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("exhausts retries on persistent network failure", async () => {
+    sendMessageDiscordMock.mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "persistent failure" }],
+        target: "channel:123",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(3);
   });
 
   it("throws after exhausting retry attempts", async () => {

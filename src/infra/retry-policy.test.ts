@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTelegramRetryRunner } from "./retry-policy.js";
+import { createDiscordRetryRunner, createTelegramRetryRunner } from "./retry-policy.js";
+
+describe("createDiscordRetryRunner", () => {
+  it("retries network errors", async () => {
+    const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    await expect(runner(fn, "discord send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("createTelegramRetryRunner", () => {
   describe("strictShouldRetry", () => {

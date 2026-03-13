@@ -20,6 +20,13 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 };
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const DISCORD_NETWORK_ERROR_RE = /fetch failed|network/i;
+const DISCORD_RETRYABLE_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
 const log = createSubsystemLogger("retry-policy");
 
 function resolveTelegramShouldRetry(params: {
@@ -58,6 +65,16 @@ function getTelegramRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
+export function isRetryableDiscordNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  if (typeof (err as { code?: unknown }).code === "string") {
+    return DISCORD_RETRYABLE_ERROR_CODES.has((err as { code: string }).code);
+  }
+  return err instanceof TypeError && DISCORD_NETWORK_ERROR_RE.test(err.message);
+}
+
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
@@ -71,7 +88,7 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError,
+      shouldRetry: (err) => err instanceof RateLimitError || isRetryableDiscordNetworkError(err),
       retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
       onRetry: params.verbose
         ? (info) => {
