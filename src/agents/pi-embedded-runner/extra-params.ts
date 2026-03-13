@@ -6,10 +6,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
@@ -445,6 +447,12 @@ export function applyExtraParamsToAgent(
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
     agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
+  }
+
+  const anthropicServiceTier = resolveAnthropicServiceTier(merged);
+  if (anthropicServiceTier) {
+    log.debug(`applying Anthropic service_tier=${anthropicServiceTier} for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicServiceTierWrapper(agent.streamFn, anthropicServiceTier);
   }
 
   const openAIFastMode = resolveOpenAIFastMode(merged);

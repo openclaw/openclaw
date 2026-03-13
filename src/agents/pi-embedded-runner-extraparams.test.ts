@@ -1734,6 +1734,63 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
+  it("injects configured Anthropic service_tier into direct Anthropic payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
+  it("lets explicit Anthropic service_tier override fast mode defaults", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: {
+                  fastMode: true,
+                  serviceTier: "standard_only",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
+  });
+
   it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",

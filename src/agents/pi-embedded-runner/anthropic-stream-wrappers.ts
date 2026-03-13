@@ -75,6 +75,17 @@ function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier
   return enabled ? "auto" : "standard_only";
 }
 
+function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "standard_only") {
+    return normalized;
+  }
+  return undefined;
+}
+
 function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   api?: unknown;
   provider?: unknown;
@@ -350,10 +361,45 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
+export function createAnthropicServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  serviceTier: AnthropicServiceTier,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (
+      model.api !== "anthropic-messages" ||
+      model.provider !== "anthropic" ||
+      !isAnthropicPublicApiBaseUrl(model.baseUrl) ||
+      isAnthropicOAuthApiKey(options?.apiKey)
+    ) {
+      return underlying(model, context, options);
+    }
+
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.service_tier === undefined) {
+        payloadObj.service_tier = serviceTier;
+      }
+    });
+  };
+}
+
 export function resolveAnthropicFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   return resolveFastModeParam(extraParams);
+}
+
+export function resolveAnthropicServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+): AnthropicServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  const normalized = normalizeAnthropicServiceTier(raw);
+  if (raw !== undefined && normalized === undefined) {
+    const rawSummary = typeof raw === "string" ? raw : typeof raw;
+    log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
+  }
+  return normalized;
 }
 
 export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
