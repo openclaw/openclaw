@@ -1828,6 +1828,9 @@ Settings can be defined globally in `tools.loopDetection` and overridden per-age
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         userAgent: "custom-ua",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false, // set true for TUN/proxy fake-IP
+        },
       },
     },
   },

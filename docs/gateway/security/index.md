@@ -297,6 +297,7 @@ schema:
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
 - `gateway.controlUi.dangerouslyDisableDeviceAuth`
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
+- `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 - `channels.discord.dangerouslyAllowNameMatching`
 - `channels.discord.accounts.<accountId>.dangerouslyAllowNameMatching`
 - `channels.slack.dangerouslyAllowNameMatching`

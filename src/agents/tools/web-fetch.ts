@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -87,6 +87,33 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
     return undefined;
   }
   return fetch as WebFetchConfig;
+}
+
+function resolveFetchSsrFPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  const policy = fetch && "ssrfPolicy" in fetch ? fetch.ssrfPolicy : undefined;
+  if (!policy || typeof policy !== "object") {
+    return undefined;
+  }
+  const out: SsrFPolicy = {};
+  if (policy.dangerouslyAllowPrivateNetwork === true) {
+    out.dangerouslyAllowPrivateNetwork = true;
+  }
+  if (policy.allowPrivateNetwork === true) {
+    out.allowPrivateNetwork = true;
+  }
+  if (policy.allowRfc2544BenchmarkRange === true) {
+    out.allowRfc2544BenchmarkRange = true;
+  }
+  if (Array.isArray(policy.allowedHostnames) && policy.allowedHostnames.length > 0) {
+    out.allowedHostnames = policy.allowedHostnames;
+  }
+  if (Array.isArray(policy.hostnameAllowlist) && policy.hostnameAllowlist.length > 0) {
+    out.hostnameAllowlist = policy.hostnameAllowlist;
+  }
+  if (Object.keys(out).length === 0) {
+    return undefined;
+  }
+  return out;
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -452,6 +479,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -533,6 +561,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -771,6 +800,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy: resolveFetchSsrFPolicy(fetch),
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,
