@@ -51,8 +51,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
   const apiKeyStorageOptions = requestedSecretInputMode
-    ? { secretInputMode: requestedSecretInputMode }
-    : undefined;
+    ? { secretInputMode: requestedSecretInputMode, syncSiblingAgents: true }
+    : { syncSiblingAgents: true };
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {
