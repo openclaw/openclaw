@@ -2182,4 +2182,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
+
+  it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onCompactionStart?.();
+      await replyOptions?.onCompactionEnd?.();
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);
+    expect(statusReactionController.setCompacting.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionController.cancelPending.mock.invocationCallOrder[0],
+    );
+    expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionController.setThinking.mock.invocationCallOrder[1],
+    );
+  });
 });

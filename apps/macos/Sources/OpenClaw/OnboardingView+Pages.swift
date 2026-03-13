@@ -507,6 +507,8 @@ extension OnboardingView {
             ("exclamationmark.triangle.fill", .orange)
         case .gatewayTokenNotConfigured:
             ("wrench.and.screwdriver.fill", .orange)
+        case .setupCodeExpired:
+            ("qrcode.viewfinder", .orange)
         case .passwordRequired:
             ("lock.slash.fill", .orange)
         case .pairingRequired:
