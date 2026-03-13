@@ -68,19 +68,35 @@ function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): Scri
   };
 }
 
-function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.binName}-bin-`));
-  const binDir = path.join(tmp, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
+function writeFakeRuntimeBin(binDir: string, binName: string) {
   const runtimePath =
-    process.platform === "win32"
-      ? path.join(binDir, `${params.binName}.cmd`)
-      : path.join(binDir, params.binName);
+    process.platform === "win32" ? path.join(binDir, `${binName}.cmd`) : path.join(binDir, binName);
   const runtimeBody =
     process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
   fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
   if (process.platform !== "win32") {
     fs.chmodSync(runtimePath, 0o755);
+  }
+}
+
+function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
+  return withFakeRuntimeBins({
+    binNames: [params.binName],
+    tmpPrefix: `openclaw-${params.binName}-bin-`,
+    run: params.run,
+  });
+}
+
+function withFakeRuntimeBins<T>(params: {
+  binNames: string[];
+  tmpPrefix?: string;
+  run: () => T;
+}): T {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix ?? "openclaw-runtime-bins-"));
+  const binDir = path.join(tmp, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  for (const binName of params.binNames) {
+    writeFakeRuntimeBin(binDir, binName);
   }
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
@@ -96,32 +112,44 @@ function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   }
 }
 
-function withFakeRuntimeBins<T>(params: { binNames: string[]; run: () => T }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-bins-"));
-  const binDir = path.join(tmp, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  for (const binName of params.binNames) {
-    const runtimePath =
-      process.platform === "win32"
-        ? path.join(binDir, `${binName}.cmd`)
-        : path.join(binDir, binName);
-    const runtimeBody =
-      process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
-    fs.writeFileSync(runtimePath, runtimeBody, { mode: 0o755 });
-    if (process.platform !== "win32") {
-      fs.chmodSync(runtimePath, 0o755);
-    }
+function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({
+    command: fixture.command,
+    cwd,
+  });
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) {
+    throw new Error("unreachable");
   }
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  expect(prepared.plan.mutableFileOperand).toEqual({
+    argvIndex: fixture.expectedArgvIndex,
+    path: fs.realpathSync(fixture.scriptPath),
+    sha256: expect.any(String),
+  });
+}
+
+function writeScriptOperandFixture(fixture: ScriptOperandFixture) {
+  fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+  if (process.platform !== "win32") {
+    fs.chmodSync(fixture.scriptPath, 0o755);
+  }
+}
+
+function withScriptOperandPlanFixture<T>(
+  params: {
+    tmpPrefix: string;
+    fixture?: RuntimeFixture;
+    afterWrite?: (fixture: ScriptOperandFixture, tmp: string) => void;
+  },
+  run: (fixture: ScriptOperandFixture, tmp: string) => T,
+) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  const fixture = createScriptOperandFixture(tmp, params.fixture);
+  writeScriptOperandFixture(fixture);
+  params.afterWrite?.(fixture, tmp);
   try {
-    return params.run();
+    return run(fixture, tmp);
   } finally {
-    if (oldPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = oldPath;
-    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -432,61 +460,37 @@ describe("hardenApprovedExecutionPaths", () => {
       withFakeRuntimeBins({
         binNames,
         run: () => {
-          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
-          const fixture = createScriptOperandFixture(tmp, runtimeCase);
-          fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-          const executablePath = fixture.command[0];
-          if (executablePath?.endsWith("pnpm.js")) {
-            const shimPath = path.join(tmp, "pnpm.js");
-            fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
-            fs.chmodSync(shimPath, 0o755);
-          }
-          try {
-            const prepared = buildSystemRunApprovalPlan({
-              command: fixture.command,
-              cwd: tmp,
-            });
-            expect(prepared.ok).toBe(true);
-            if (!prepared.ok) {
-              throw new Error("unreachable");
-            }
-            expect(prepared.plan.mutableFileOperand).toEqual({
-              argvIndex: fixture.expectedArgvIndex,
-              path: fs.realpathSync(fixture.scriptPath),
-              sha256: expect.any(String),
-            });
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          }
+          withScriptOperandPlanFixture(
+            {
+              tmpPrefix: "openclaw-approval-script-plan-",
+              fixture: runtimeCase,
+              afterWrite: (fixture, tmp) => {
+                const executablePath = fixture.command[0];
+                if (executablePath?.endsWith("pnpm.js")) {
+                  const shimPath = path.join(tmp, "pnpm.js");
+                  fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
+                  fs.chmodSync(shimPath, 0o755);
+                }
+              },
+            },
+            (fixture, tmp) => {
+              expectMutableFileOperandApprovalPlan(fixture, tmp);
+            },
+          );
         },
       });
     });
   }
 
   it("captures mutable shell script operands in approval plans", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-script-plan-"));
-    const fixture = createScriptOperandFixture(tmp);
-    fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
-    if (process.platform !== "win32") {
-      fs.chmodSync(fixture.scriptPath, 0o755);
-    }
-    try {
-      const prepared = buildSystemRunApprovalPlan({
-        command: fixture.command,
-        cwd: tmp,
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error("unreachable");
-      }
-      expect(prepared.plan.mutableFileOperand).toEqual({
-        argvIndex: fixture.expectedArgvIndex,
-        path: fs.realpathSync(fixture.scriptPath),
-        sha256: expect.any(String),
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    withScriptOperandPlanFixture(
+      {
+        tmpPrefix: "openclaw-approval-script-plan-",
+      },
+      (fixture, tmp) => {
+        expectMutableFileOperandApprovalPlan(fixture, tmp);
+      },
+    );
   });
 
   it("rejects bun package script names that do not bind a concrete file", () => {
