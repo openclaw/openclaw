@@ -62,8 +62,8 @@ export class OpenAIRealtimeSTTProvider {
     }
     this.apiKey = config.apiKey;
     this.model = config.model || "gpt-4o-transcribe";
-    this.silenceDurationMs = config.silenceDurationMs || 800;
-    this.vadThreshold = config.vadThreshold || 0.5;
+    this.silenceDurationMs = config.silenceDurationMs ?? 800;
+    this.vadThreshold = config.vadThreshold ?? 0.5;
   }
 
   /**

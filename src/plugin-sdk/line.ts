@@ -14,13 +14,17 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 
-export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export {
+  buildComputedAccountStatusSnapshot,
+  buildTokenChannelStatusSummary,
+} from "./status-helpers.js";
 
 export { LineConfigSchema } from "../line/config-schema.js";
 export type { LineChannelData, LineConfig, ResolvedLineAccount } from "../line/types.js";

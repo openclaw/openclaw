@@ -19,6 +19,9 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     expect(unit).toContain("KillMode=control-group");
+    expect(unit).toContain("TimeoutStopSec=30");
+    expect(unit).toContain("TimeoutStartSec=30");
+    expect(unit).toContain("SuccessExitStatus=0 143");
   });
 
   it("rejects environment values with line breaks", () => {

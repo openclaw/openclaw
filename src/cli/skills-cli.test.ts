@@ -148,6 +148,18 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
+
+    it("normalizes text-presentation emoji selectors in info output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "info-emoji",
+          emoji: "🎛\uFE0E",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "info-emoji", {});
+      expect(output).toContain("🎛️");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -169,6 +181,22 @@ describe("skills-cli", () => {
       expect(output).toContain("not-ready");
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
+    });
+
+    it("normalizes text-presentation emoji selectors in check output", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "ready-emoji", emoji: "🎛\uFE0E", eligible: true }),
+        createMockSkill({
+          name: "missing-emoji",
+          emoji: "🎙\uFE0E",
+          eligible: false,
+          missing: { bins: ["ffmpeg"], anyBins: [], env: [], config: [], os: [] },
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("🎛️ ready-emoji");
+      expect(output).toContain("🎙️ missing-emoji");
     });
   });
 
@@ -214,6 +242,47 @@ describe("skills-cli", () => {
     ])("outputs JSON with --json flag for $formatter", ({ output, assert }) => {
       const parsed = JSON.parse(output) as Record<string, unknown>;
       assert(parsed);
+    });
+
+    it("sanitizes ANSI and C1 controls in skills list JSON output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "json-skill",
+          emoji: "\u001b[31m📧\u001b[0m\u009f",
+          description: "desc\u0093\u001b[2J\u001b[33m colored\u001b[0m",
+        }),
+      ]);
+
+      const output = formatSkillsList(report, { json: true });
+      const parsed = JSON.parse(output) as {
+        skills: Array<{ emoji: string; description: string }>;
+      };
+
+      expect(parsed.skills[0]?.emoji).toBe("📧");
+      expect(parsed.skills[0]?.description).toBe("desc colored");
+      expect(output).not.toContain("\\u001b");
+    });
+
+    it("sanitizes skills info JSON output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "info-json",
+          emoji: "\u001b[31m🎙\u001b[0m\u009f",
+          description: "hi\u0091",
+          homepage: "https://example.com/\u0092docs",
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "info-json", { json: true });
+      const parsed = JSON.parse(output) as {
+        emoji: string;
+        description: string;
+        homepage: string;
+      };
+
+      expect(parsed.emoji).toBe("🎙");
+      expect(parsed.description).toBe("hi");
+      expect(parsed.homepage).toBe("https://example.com/docs");
     });
   });
 });

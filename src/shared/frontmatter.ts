@@ -137,3 +137,18 @@ export function parseOpenClawManifestInstallBase(
   }
   return spec;
 }
+
+export function applyOpenClawManifestInstallCommonFields<
+  T extends { id?: string; label?: string; bins?: string[] },
+>(spec: T, parsed: Pick<ParsedOpenClawManifestInstallBase, "id" | "label" | "bins">): T {
+  if (parsed.id) {
+    spec.id = parsed.id;
+  }
+  if (parsed.label) {
+    spec.label = parsed.label;
+  }
+  if (parsed.bins) {
+    spec.bins = parsed.bins;
+  }
+  return spec;
+}

@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { OutboundMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -17,13 +18,6 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
-
-type DeliveryMirrorPayload = {
-  sessionKey: string;
-  agentId?: string;
-  text?: string;
-  mediaUrls?: string[];
-};
 
 type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
@@ -40,7 +34,7 @@ type QueuedDeliveryPayload = {
   bestEffort?: boolean;
   gifPlayback?: boolean;
   silent?: boolean;
-  mirror?: DeliveryMirrorPayload;
+  mirror?: OutboundMirror;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -65,6 +59,34 @@ function resolveQueueDir(stateDir?: string): string {
 
 function resolveFailedDir(stateDir?: string): string {
   return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
+}
+
+function resolveQueueEntryPaths(
+  id: string,
+  stateDir?: string,
+): {
+  jsonPath: string;
+  deliveredPath: string;
+} {
+  const queueDir = resolveQueueDir(stateDir);
+  return {
+    jsonPath: path.join(queueDir, `${id}.json`),
+    deliveredPath: path.join(queueDir, `${id}.delivered`),
+  };
+}
+
+function getErrnoCode(err: unknown): string | null {
+  return err && typeof err === "object" && "code" in err
+    ? String((err as { code?: unknown }).code)
+    : null;
+}
+
+async function unlinkBestEffort(filePath: string): Promise<void> {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch {
+    // Best-effort cleanup.
+  }
 }
 
 /** Ensure the queue directory (and failed/ subdirectory) exist. */
@@ -107,21 +129,32 @@ export async function enqueueDelivery(
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue. */
+/** Remove a successfully delivered entry from the queue.
+ *
+ * Uses a two-phase approach so that a crash between delivery and cleanup
+ * does not cause the message to be replayed on the next recovery scan:
+ *   Phase 1: atomic rename  {id}.json → {id}.delivered
+ *   Phase 2: unlink the .delivered marker
+ * If the process dies between phase 1 and phase 2 the marker is cleaned up
+ * by {@link loadPendingDeliveries} on the next startup without re-sending.
+ */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
   try {
-    await fs.promises.unlink(filePath);
+    // Phase 1: atomic rename marks the delivery as complete.
+    await fs.promises.rename(jsonPath, deliveredPath);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
-    if (code !== "ENOENT") {
-      throw err;
+    const code = getErrnoCode(err);
+    if (code === "ENOENT") {
+      // .json already gone — may have been renamed by a previous ack attempt.
+      // Try to clean up a leftover .delivered marker if present.
+      await unlinkBestEffort(deliveredPath);
+      return;
     }
-    // Already removed — no-op.
+    throw err;
   }
+  // Phase 2: remove the marker file.
+  await unlinkBestEffort(deliveredPath);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
@@ -147,15 +180,21 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   try {
     files = await fs.promises.readdir(queueDir);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
+    const code = getErrnoCode(err);
     if (code === "ENOENT") {
       return [];
     }
     throw err;
   }
+  // Clean up .delivered markers left by ackDelivery if the process crashed
+  // between the rename and the unlink.
+  for (const file of files) {
+    if (!file.endsWith(".delivered")) {
+      continue;
+    }
+    await unlinkBestEffort(path.join(queueDir, file));
+  }
+
   const entries: QueuedDelivery[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) {

@@ -1,5 +1,7 @@
 import type { BaseProbeResult } from "../channels/plugins/types.js";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -17,15 +19,90 @@ export type TelegramProbe = BaseProbeResult & {
   webhook?: { url?: string | null; hasCustomCert?: boolean | null };
 };
 
+export type TelegramProbeOptions = {
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+  accountId?: string;
+};
+
+const probeFetcherCache = new Map<string, typeof fetch>();
+const MAX_PROBE_FETCHER_CACHE_SIZE = 64;
+
+export function resetTelegramProbeFetcherCacheForTests(): void {
+  probeFetcherCache.clear();
+}
+
+function resolveProbeOptions(
+  proxyOrOptions?: string | TelegramProbeOptions,
+): TelegramProbeOptions | undefined {
+  if (!proxyOrOptions) {
+    return undefined;
+  }
+  if (typeof proxyOrOptions === "string") {
+    return { proxyUrl: proxyOrOptions };
+  }
+  return proxyOrOptions;
+}
+
+function shouldUseProbeFetcherCache(): boolean {
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+}
+
+function buildProbeFetcherCacheKey(token: string, options?: TelegramProbeOptions): string {
+  const cacheIdentity = options?.accountId?.trim() || token;
+  const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
+  const proxyKey = options?.proxyUrl?.trim() ?? "";
+  const autoSelectFamily = options?.network?.autoSelectFamily;
+  const autoSelectFamilyKey =
+    typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
+  const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
+  return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}`;
+}
+
+function setCachedProbeFetcher(cacheKey: string, fetcher: typeof fetch): typeof fetch {
+  probeFetcherCache.set(cacheKey, fetcher);
+  if (probeFetcherCache.size > MAX_PROBE_FETCHER_CACHE_SIZE) {
+    const oldestKey = probeFetcherCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      probeFetcherCache.delete(oldestKey);
+    }
+  }
+  return fetcher;
+}
+
+function resolveProbeFetcher(token: string, options?: TelegramProbeOptions): typeof fetch {
+  const cacheEnabled = shouldUseProbeFetcherCache();
+  const cacheKey = cacheEnabled ? buildProbeFetcherCacheKey(token, options) : null;
+  if (cacheKey) {
+    const cachedFetcher = probeFetcherCache.get(cacheKey);
+    if (cachedFetcher) {
+      return cachedFetcher;
+    }
+  }
+
+  const proxyUrl = options?.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  const resolved = resolveTelegramFetch(proxyFetch, { network: options?.network });
+
+  if (cacheKey) {
+    return setCachedProbeFetcher(cacheKey, resolved);
+  }
+  return resolved;
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
-  proxyUrl?: string,
+  proxyOrOptions?: string | TelegramProbeOptions,
 ): Promise<TelegramProbe> {
   const started = Date.now();
-  const fetcher = proxyUrl ? makeProxyFetch(proxyUrl) : fetch;
+  const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
+  const deadlineMs = started + timeoutBudgetMs;
+  const options = resolveProbeOptions(proxyOrOptions);
+  const fetcher = resolveProbeFetcher(token, options);
   const base = `${TELEGRAM_API_BASE}/bot${token}`;
-  const retryDelayMs = Math.max(50, Math.min(1000, timeoutMs));
+  const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
+  const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
 
   const result: TelegramProbe = {
     ok: false,
@@ -40,19 +117,35 @@ export async function probeTelegram(
 
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
+      const remainingBudgetMs = resolveRemainingBudgetMs();
+      if (remainingBudgetMs <= 0) {
+        break;
+      }
       try {
-        meRes = await fetchWithTimeout(`${base}/getMe`, {}, timeoutMs, fetcher);
+        meRes = await fetchWithTimeout(
+          `${base}/getMe`,
+          {},
+          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          fetcher,
+        );
         break;
       } catch (err) {
         fetchError = err;
         if (i < 2) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          const remainingAfterAttemptMs = resolveRemainingBudgetMs();
+          if (remainingAfterAttemptMs <= 0) {
+            break;
+          }
+          const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
+          if (delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
         }
       }
     }
 
     if (!meRes) {
-      throw fetchError;
+      throw fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`);
     }
 
     const meJson = (await meRes.json()) as {
@@ -89,16 +182,24 @@ export async function probeTelegram(
 
     // Try to fetch webhook info, but don't fail health if it errors.
     try {
-      const webhookRes = await fetchWithTimeout(`${base}/getWebhookInfo`, {}, timeoutMs, fetcher);
-      const webhookJson = (await webhookRes.json()) as {
-        ok?: boolean;
-        result?: { url?: string; has_custom_certificate?: boolean };
-      };
-      if (webhookRes.ok && webhookJson?.ok) {
-        result.webhook = {
-          url: webhookJson.result?.url ?? null,
-          hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+      const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
+      if (webhookRemainingBudgetMs > 0) {
+        const webhookRes = await fetchWithTimeout(
+          `${base}/getWebhookInfo`,
+          {},
+          Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
+          fetcher,
+        );
+        const webhookJson = (await webhookRes.json()) as {
+          ok?: boolean;
+          result?: { url?: string; has_custom_certificate?: boolean };
         };
+        if (webhookRes.ok && webhookJson?.ok) {
+          result.webhook = {
+            url: webhookJson.result?.url ?? null,
+            hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+          };
+        }
       }
     } catch {
       // ignore webhook errors for probe
