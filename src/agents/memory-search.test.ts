@@ -200,7 +200,39 @@ describe("memory search config", () => {
     expect(resolved?.sync.sessions).toEqual({
       deltaBytes: 100000,
       deltaMessages: 50,
+      postCompactionForce: true,
     });
+  });
+
+  it("preserves sync.sessions.postCompactionForce overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            sync: {
+              sessions: {
+                postCompactionForce: true,
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              sync: {
+                sessions: {
+                  postCompactionForce: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.sync.sessions.postCompactionForce).toBe(false);
   });
 
   it("merges remote defaults with agent overrides", () => {
