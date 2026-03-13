@@ -15,8 +15,8 @@ export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
 
-  constructor(code: MediaFetchErrorCode, message: string) {
-    super(message);
+  constructor(code: MediaFetchErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.code = code;
     this.name = "MediaFetchError";
   }
@@ -115,7 +115,9 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     finalUrl = result.finalUrl;
     release = result.release;
   } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
+    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`, {
+      cause: err,
+    });
   }
 
   try {
