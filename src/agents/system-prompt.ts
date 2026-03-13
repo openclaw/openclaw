@@ -749,10 +749,12 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Voice (TTS)", ttsHint, "");
   }
 
-  // ## Reactions and ## Reasoning Format are per-channel/per-session config — they do NOT
-  // change per-conversation (different group chat, same channel+reasoning). Placing them
-  // BEFORE extraSystemPrompt keeps them in the stable KV-cache prefix when only the group
-  // chat context changes, improving per-conversation cache hit rate.
+  // ## Reactions, ## Reasoning Format, and ## Tool Manifest are per-channel/per-session/
+  // per-deployment config — they do NOT change per-conversation (different group chat,
+  // same channel+reasoning+plugins). Placing them BEFORE extraSystemPrompt keeps them in
+  // the stable KV-cache prefix when only the group chat context changes.
+  // Tool Manifest changes RARELY (plugin install) vs GroupChat changes EVERY SESSION.
+  // Gain: ~2,000 chars added to per-conv stable prefix; cost: ~230 chars less for toolNames.
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -780,6 +782,13 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
+  // Tool Manifest: BEFORE GroupChat — plugin set changes RARELY (far less often than
+  // per-conversation group chat switches). Being here keeps ~2,000 chars of tool listing
+  // in the stable prefix for every conversation switch.
+  if (toolLines.length > 0) {
+    lines.push("## Tool Manifest", toolLines.join("\n"), "");
+  }
+
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
@@ -789,21 +798,13 @@ export function buildAgentSystemPrompt(params: {
 
   // ── Post-conversation dynamic tail ────────────────────────────────────────────
   // Sections ordered by change frequency (least frequent = FIRST). Deployment config
-  // was moved BEFORE the runtime dynamic line (above) to restore per-conversation stable prefix.
-  // Remaining ordering:
-  //   1. Tool Manifest — plugin installs, RARELY (for most users: never)
-  //   2. Model Aliases — QUARTERLY changes (user updates model preferences)
-  //   3. Skills (mandatory) — MONTHLY changes (user installs new skills)
-  //   4. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
-  //   5. MEMORY.md — DAILY changes (daily notes update)
+  // is before the runtime dynamic line. Tool Manifest is before GroupChat. Remaining:
+  //   1. Model Aliases — QUARTERLY changes (user updates model preferences)
+  //   2. Skills (mandatory) — MONTHLY changes (user installs new skills)
+  //   3. Project Notes (workspaceNotes) — WEEKLY changes (sprint updates)
+  //   4. MEMORY.md — DAILY changes (daily notes update)
 
-  // 1. Tool Manifest: after deployment config (before runtime line), before model aliases.
-  // Plugin installs are rare (many users never install plugins).
-  if (toolLines.length > 0) {
-    lines.push("## Tool Manifest", toolLines.join("\n"), "");
-  }
-
-  // 3. Model aliases: quarterly changes (model preference updates).
+  // 1. Model aliases: quarterly changes (model preference updates).
   if (!isMinimal && params.modelAliasLines && params.modelAliasLines.length > 0) {
     lines.push(
       "## Model Aliases",
@@ -813,7 +814,7 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  // 4. Skills: monthly changes (skill installations from Clawhub).
+  // 2. Skills: monthly changes (skill installations from Clawhub).
   // Included in ALL prompt modes (cron/subagent sessions need skills too).
   if (skillsSection.length > 0) {
     lines.push(...skillsSection);
