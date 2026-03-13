@@ -85,6 +85,14 @@ describe("CWE-78: Command Injection in link-understanding", () => {
     }
   });
 
+  it("should reject URLs with && command chaining", async () => {
+    const maliciousUrl = "https://example.com/?a=1&&id";
+    const result = await runLinkUnderstanding(createTestConfig(maliciousUrl));
+
+    expect(exec.runExec).not.toHaveBeenCalled();
+    expect(result.urls).toEqual([]);
+  });
+
   it("should still accept normal valid URLs", async () => {
     const validUrls = [
       "https://example.com/page",
@@ -92,6 +100,8 @@ describe("CWE-78: Command Injection in link-understanding", () => {
       "https://example.com/page?q=test&foo=bar",
       "https://example.com/path/to/resource",
       "https://example.com/page#anchor",
+      "https://graph.microsoft.com/v1.0/users?$filter=displayName",
+      "https://example.com/odata?$select=name&$top=10",
     ];
 
     for (const validUrl of validUrls) {

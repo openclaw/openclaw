@@ -23,8 +23,9 @@ function containsShellMetacharacters(url: string): boolean {
     /\$\(/, // Command substitution $(...)
     /`/, // Backtick command substitution
     /\${/, // Variable expansion ${...}
-    /\$[a-zA-Z_0-9]/, // Bare variable expansion $VAR
-    /[;|><]/, // Shell operators (& excluded: legitimate query separator)
+    /(?<![?&=])\$[a-zA-Z_0-9]/, // Bare variable expansion $VAR (allow OData query params like ?$filter)
+    /&&/, // Shell command chaining
+    /[;|><]/, // Shell operators (single & excluded: legitimate query separator)
   ];
 
   return dangerousPatterns.some((pattern) => pattern.test(url));
