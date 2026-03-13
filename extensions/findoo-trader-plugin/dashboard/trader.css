@@ -9,7 +9,7 @@
 .domain-bar{position:fixed;top:calc(2px + var(--top-h));left:0;right:0;height:36px;z-index:99;display:flex;align-items:center;gap:1px;padding:0 16px;background:var(--bg-raised);border-bottom:1px solid var(--border)}
 .domain-tab{padding:4px 14px;border-radius:var(--r-sm);font-size:11px;font-weight:600;color:var(--text-dim);cursor:pointer;transition:all .2s;text-decoration:none;font-family:var(--sans)}
 .domain-tab:hover{color:var(--text);background:var(--card)}
-.domain-tab--active{color:var(--text-hi);background:var(--card);border:1px solid var(--border-hi)}
+.domain-tab--active{color:var(--text-hi);background:var(--card);border:1px solid var(--border-hi);box-shadow:inset 0 -2px 0 var(--info)}
 
 /* Layout offset for domain bar */
 .layout--trader{top:calc(2px + var(--top-h) + 36px)}

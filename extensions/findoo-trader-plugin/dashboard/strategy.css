@@ -6,7 +6,7 @@
 .soul::before{background:radial-gradient(circle,rgba(168,85,247,0.045) 0%,transparent 70%)}
 
 /* Filter chips */
-.filter-chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 4px}
+.filter-chips{display:flex;gap:6px;flex-wrap:wrap;padding:2px 4px 8px}
 .chip{padding:4px 10px;border-radius:100px;font-size:10px;font-weight:600;background:var(--soul-surface);color:var(--text-dim);border:1px solid var(--border);cursor:pointer;transition:all .2s}
 .chip:hover{border-color:var(--border-hi);color:var(--text)}
 .chip--active{background:var(--purple-dim);color:var(--purple);border-color:rgba(168,85,247,0.2)}
@@ -38,7 +38,7 @@
 .srow__fitness-fill{height:100%;border-radius:2px;transition:width .3s}
 .srow__val{font-family:var(--mono);font-size:10px;min-width:55px;text-align:right}
 .srow__actions{display:flex;gap:3px}
-.srow__btn{width:22px;height:22px;border:none;border-radius:4px;font-size:11px;cursor:pointer;background:var(--soul-surface);color:var(--text-dim);transition:all .15s;display:flex;align-items:center;justify-content:center}
+.srow__btn{width:26px;height:26px;border:none;border-radius:4px;font-size:11px;cursor:pointer;background:var(--soul-surface);color:var(--text-dim);transition:all .15s;display:flex;align-items:center;justify-content:center}
 .srow__btn:hover{background:var(--soul-surface-hi);color:var(--text)}
 .srow__btn--promote:hover{color:var(--gain)}
 .srow__btn--kill:hover{color:var(--loss)}

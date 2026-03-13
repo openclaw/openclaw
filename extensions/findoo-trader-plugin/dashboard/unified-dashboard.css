@@ -57,8 +57,8 @@
   /* text hierarchy */
   --text: #c8cad0;
   --text-hi: #eaedf3;
-  --text-dim: #5c6070;
-  --text-muted: #3a3e4c;
+  --text-dim: #6e7280;
+  --text-muted: #4b5060;
 
   /* typography */
   --sans: 'IBM Plex Sans', system-ui, sans-serif;
@@ -91,7 +91,7 @@ body {
   font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
@@ -359,10 +359,10 @@ body::after {
 /* feed card content */
 .fc__head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px }
 .fc__icon { font-size: 13px; line-height: 1 }
-.fc__type { font-size: 11px; font-weight: 600; flex: 1 }
+.fc__type { font-size: 11px; font-weight: 600; flex: 1; color: var(--text-hi) }
 .fc__time { font-family: var(--mono); font-size: 10px; color: var(--text-muted) }
-.fc__title { font-size: 12px; font-weight: 500; color: var(--text-hi); line-height: 1.4; margin-bottom: 4px }
-.fc__detail { font-size: 11px; color: var(--text-dim); line-height: 1.4 }
+.fc__title { font-size: 12px; font-weight: 600; color: var(--text-hi); line-height: 1.45; margin-bottom: 4px }
+.fc__detail { font-size: 11px; color: var(--text-dim); line-height: 1.45 }
 .fc__metrics { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px }
 .fm {
   display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px;
@@ -414,14 +414,15 @@ body::after {
 
 /* metric cards */
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px }
+@media (max-width: 1280px) and (min-width: 1025px) { .metrics { grid-template-columns: repeat(2, 1fr) } }
 .metric-card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--r);
   padding: 12px 14px; transition: border-color .2s;
 }
 .metric-card:hover { border-color: var(--border-hi) }
-.metric-card__label { font-size: 10px; color: var(--text-dim); font-weight: 500; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px }
-.metric-card__value { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--text-hi); text-shadow: 0 0 14px rgba(255, 255, 255, 0.03) }
-.metric-card__sub { font-family: var(--mono); font-size: 11px; margin-top: 2px }
+.metric-card__label { font-size: 10px; color: var(--text-dim); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .6px }
+.metric-card__value { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--text-hi); text-shadow: 0 0 14px rgba(255, 255, 255, 0.03); letter-spacing: -.3px }
+.metric-card__sub { font-family: var(--mono); font-size: 11px; margin-top: 4px }
 .metric-card__sub--g { color: var(--gain); text-shadow: 0 0 6px var(--gain-glow) }
 .metric-card__sub--r { color: var(--loss) }
 
@@ -463,10 +464,10 @@ body::after {
 /* ── 12. TABLES ── */
 table { border-collapse: collapse; width: 100% }
 th {
-  font-size: 9px; color: var(--text-muted); font-weight: 600; text-transform: uppercase;
-  letter-spacing: .5px; padding: 4px 6px; text-align: left; white-space: nowrap;
+  font-size: 10px; color: var(--text-dim); font-weight: 600; text-transform: uppercase;
+  letter-spacing: .5px; padding: 6px 8px; text-align: left; white-space: nowrap;
 }
-td { font-size: 11px; padding: 5px 6px; white-space: nowrap; border-top: 1px solid var(--border) }
+td { font-size: 11px; padding: 6px 8px; white-space: nowrap; border-top: 1px solid var(--border) }
 td.num { font-family: var(--mono); font-variant-numeric: tabular-nums }
 
 /* tag badges */
@@ -489,12 +490,12 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums }
 
 /* fin-table (production data table) */
 .fin-table { width: 100%; font-size: 10px; border-collapse: collapse }
-.fin-table th { font-size: 8px; padding: 4px 5px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); font-weight: 600; cursor: pointer; user-select: none }
+.fin-table th { font-size: 10px; padding: 6px 6px; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); font-weight: 600; cursor: pointer; user-select: none }
 .fin-table th:hover { color: var(--text) }
 .fin-table th.sorted { color: var(--info) }
 .fin-table th.sorted::after { content: ' \25BE'; font-size: 7px }
 .fin-table th.right, .fin-table td.right { text-align: right }
-.fin-table td { padding: 5px 5px; border-bottom: 1px solid rgba(30, 34, 48, 0.5); font-family: var(--mono); font-size: 10px }
+.fin-table td { padding: 6px 6px; border-bottom: 1px solid rgba(30, 34, 48, 0.5); font-family: var(--mono); font-size: 11px }
 .fin-table tr { transition: background 0.1s }
 .fin-table tbody tr:hover { background: var(--card-hover) }
 
