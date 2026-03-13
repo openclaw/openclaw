@@ -540,6 +540,7 @@ describe("loadOpenClawPlugins", () => {
       env: {
         ...process.env,
         HOME: homeA,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
       },
@@ -549,6 +550,7 @@ describe("loadOpenClawPlugins", () => {
       env: {
         ...process.env,
         HOME: homeB,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
       },
@@ -679,6 +681,7 @@ describe("loadOpenClawPlugins", () => {
       env: {
         ...process.env,
         HOME: homeDir,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: override,
       },
       config: {
@@ -1814,6 +1817,7 @@ describe("loadOpenClawPlugins", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
       encoding: "utf-8",
