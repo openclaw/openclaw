@@ -92,6 +92,33 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
+const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+
+async function installFakeWindowsCliPackage(params: {
+  rootDir: string;
+  packageName: "qmd" | "mcporter";
+}): Promise<string> {
+  const nodeModulesDir = path.join(params.rootDir, "node_modules");
+  const shimDir = path.join(nodeModulesDir, ".bin");
+  const packageDir = path.join(nodeModulesDir, params.packageName);
+  const scriptPath = path.join(packageDir, "dist", "cli.js");
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.mkdir(shimDir, { recursive: true });
+  await fs.writeFile(path.join(shimDir, `${params.packageName}.cmd`), "@echo off\r\n", "utf8");
+  await fs.writeFile(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: params.packageName,
+      version: "0.0.0",
+      bin: { [params.packageName]: "dist/cli.js" },
+    }),
+    "utf8",
+  );
+  await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+  return shimDir;
+}
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -140,6 +167,20 @@ describe("QmdMemoryManager", () => {
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    if (process.platform === "win32") {
+      const qmdShimDir = await installFakeWindowsCliPackage({
+        rootDir: path.join(tmpRoot, "fake-qmd-cli"),
+        packageName: "qmd",
+      });
+      const mcporterShimDir = await installFakeWindowsCliPackage({
+        rootDir: path.join(tmpRoot, "fake-mcporter-cli"),
+        packageName: "mcporter",
+      });
+      const nextPath = [qmdShimDir, mcporterShimDir, originalPath].filter(Boolean).join(";");
+      process.env.PATH = nextPath;
+      process.env.PATHEXT = ".CMD;.EXE";
+      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = nextPath;
+    }
     cfg = {
       agents: {
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -158,6 +199,21 @@ describe("QmdMemoryManager", () => {
   afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalPathExt === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathExt;
+    }
+    if (originalWindowsPath === undefined) {
+      delete (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+    } else {
+      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
+    }
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
   });
