@@ -142,6 +142,7 @@ const baseParams = () => ({
   textLimit: 4000,
   ackReactionScope: "group-mentions",
   typingReaction: "",
+  assistantStatus: "is typing...",
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
