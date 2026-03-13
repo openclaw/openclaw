@@ -905,6 +905,45 @@ describe("chat input history navigation", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("drops stale history mode before handling arrow keys after external draft replacement", () => {
+    const host = createChatHistoryState({
+      chatMessage: "draft",
+      chatMessages: [textMessage("user", "older"), textMessage("user", "newer")],
+    });
+
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatInputHistoryIndex).toBe(0);
+    expect(host.chatMessage).toBe("newer");
+
+    host.chatMessage = "/focus ";
+
+    expect(
+      handleChatInputHistoryKey(host, {
+        key: "ArrowDown",
+        selectionStart: 7,
+        selectionEnd: 7,
+        valueLength: 7,
+        altKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        isComposing: false,
+        keyCode: 40,
+      }),
+    ).toMatchObject({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:arrowdown-editing-mode",
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+    });
+    expect(host.chatInputHistoryIndex).toBe(-1);
+    expect(host.chatInputHistoryItems).toBeNull();
+    expect(host.chatDraftBeforeHistory).toBeNull();
+    expect(host.chatMessage).toBe("/focus ");
+  });
+
   it("records locally handled slash commands for subsequent ArrowUp recall", async () => {
     const onSlashAction = vi.fn();
     const now = vi.spyOn(Date, "now").mockReturnValue(3_000);
