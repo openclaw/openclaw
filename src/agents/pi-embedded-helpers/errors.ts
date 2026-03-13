@@ -673,7 +673,12 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -702,6 +707,13 @@ export function formatAssistantErrorText(
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
+    );
+  }
+
+  if (isToolUseIdMismatchError(raw)) {
+    return (
+      "Tool call ID mismatch - session state is corrupted. " +
+      "Use /reset (or /new) to start a fresh session and try again."
     );
   }
 
@@ -831,6 +843,22 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
+
+export function isToolUseIdMismatchError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    (lower.includes("tool_use_id") &&
+      (lower.includes("does not match") ||
+        lower.includes("mismatch") ||
+        lower.includes("unexpected") ||
+        lower.includes("found without"))) ||
+    lower.includes("unexpected tool_use_id found in tool_result") ||
+    lower.includes("tool_use ids found without tool_result")
+  );
+}
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
