@@ -66,6 +66,11 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
+  pushSessionCoalesceEntry,
+  drainSessionCoalesceEntries,
+  mergeCoalescedEntries,
+} from "./session-coalesce.js";
+import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
@@ -272,8 +277,48 @@ export async function runEmbeddedPiAgent(
       : "markdown");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
-  return enqueueSession(() =>
-    enqueueGlobal(async () => {
+  // Session-level coalescing (Layer 2): push prompt into shared buffer before
+  // entering the session lane. When the task acquires the lane it drains all
+  // accumulated entries, merging them into a single LLM call.
+  const coalesceKey = params.sessionKey?.trim() || params.sessionId;
+  const coalesceToken = isProbeSession
+    ? undefined
+    : pushSessionCoalesceEntry(coalesceKey, {
+        prompt: params.prompt,
+        images: params.images,
+      });
+
+  return enqueueSession(() => {
+    // --- Drain coalesce buffer (inside session lane, before global lane) ---
+    if (coalesceToken != null) {
+      const drained = drainSessionCoalesceEntries(coalesceKey);
+      if (drained.length === 0) {
+        // Our entry was already consumed by a previous task's drain — no-op.
+        log.info(
+          `[session-coalesce] entry consumed by prior drain, skipping: session=${redactRunIdentifier(params.sessionId)}`,
+        );
+        return Promise.resolve<EmbeddedPiRunResult>({
+          meta: {
+            durationMs: 0,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: params.provider ?? DEFAULT_PROVIDER,
+              model: params.model ?? DEFAULT_MODEL,
+            },
+          },
+        });
+      }
+      if (drained.length > 1) {
+        const merged = mergeCoalescedEntries(drained);
+        log.info(
+          `[session-coalesce] merged ${drained.length} entries for session=${redactRunIdentifier(params.sessionId)}`,
+        );
+        params = { ...params, prompt: merged.prompt, images: merged.images };
+      }
+      // drained.length === 1 → our own entry, proceed normally.
+    }
+
+    return enqueueGlobal(async () => {
       const started = Date.now();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -1602,6 +1647,6 @@ export async function runEmbeddedPiAgent(
         stopCopilotRefreshTimer();
         process.chdir(prevCwd);
       }
-    }),
-  );
+    });
+  });
 }
