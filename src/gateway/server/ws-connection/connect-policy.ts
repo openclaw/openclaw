@@ -40,6 +40,9 @@ export function shouldSkipControlUiPairing(
   if (trustedProxyAuthOk) {
     return true;
   }
+  // dangerouslyDisableDeviceAuth is the break-glass path for Control UI
+  // operators. Keep pairing aligned with the missing-device bypass, including
+  // open-auth deployments where there is no shared token/password to prove.
   return role === "operator" && policy.allowBypass;
 }
 

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { GatewayRequestError } from "../gateway.ts";
+import {
+  handleChatEvent,
+  loadChatHistory,
+  sendChatMessage,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -533,6 +540,36 @@ describe("loadChatHistory", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("sendChatMessage", () => {
+  it("formats structured non-auth connect failures for chat send", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: "CONTROL_UI_ORIGIN_NOT_ALLOWED" },
+      }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "hello");
+
+    expect(result).toBeNull();
+    expect(state.lastError).toContain("origin not allowed");
+    expect(state.chatMessages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("origin not allowed"),
+        },
+      ],
+    });
   });
 });
 
