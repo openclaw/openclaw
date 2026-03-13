@@ -22,6 +22,7 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   deleteAccountFromConfigSection,
+  clearAccountEntryFields,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
@@ -52,6 +53,7 @@ export {
   parseTelegramThreadId,
 } from "../telegram/outbound-params.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
