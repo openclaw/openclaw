@@ -57,6 +57,11 @@ interface WsSession {
   manager: OpenAIWebSocketManager;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /**
+   * Response id from the last completed stream turn that can be used for a
+   * true incremental tool-result continuation on this session.
+   */
+  continuationResponseId: string | null;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
@@ -620,6 +625,7 @@ export function createOpenAIWebSocketStreamFn(
         session = {
           manager,
           lastContextLength: 0,
+          continuationResponseId: null,
           everConnected: false,
           warmUpAttempted: false,
           broken: false,
@@ -659,7 +665,7 @@ export function createOpenAIWebSocketStreamFn(
         }
         log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
         // Clean up stale session to prevent next turn from using stale
-        // previousResponseId / lastContextLength after a mid-request drop.
+        // continuationResponseId / lastContextLength after a mid-request drop.
         try {
           session.manager.close();
         } catch {
@@ -717,26 +723,30 @@ export function createOpenAIWebSocketStreamFn(
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
-      const prevResponseId = session.manager.previousResponseId;
+      const continuationParentId = session.continuationResponseId;
       let inputItems: InputItem[];
+      let requestPreviousResponseId: string | undefined;
 
-      if (prevResponseId && session.lastContextLength > 0) {
+      if (continuationParentId && session.lastContextLength > 0) {
         // Subsequent turn: only send new messages (tool results) since last call
         const newMessages = context.messages.slice(session.lastContextLength);
         // Filter to only tool results — the assistant message is already in server context
         const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
         if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
+          // If we can't do a true incremental continuation, resend full context
+          // and deliberately omit previous_response_id to avoid resuming the
+          // wrong server-side branch.
           log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
+            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
           );
           inputItems = buildFullInput(context, model);
         } else {
           inputItems = convertMessagesToInputItems(toolResults, model);
+          requestPreviousResponseId = continuationParentId;
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} items) previous_response_id=${continuationParentId}`,
+          );
         }
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
-        );
       } else {
         // First turn: send full context
         inputItems = buildFullInput(context, model);
@@ -794,7 +804,7 @@ export function createOpenAIWebSocketStreamFn(
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
-        ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
+        ...(requestPreviousResponseId ? { previous_response_id: requestPreviousResponseId } : {}),
         ...extraParams,
       };
       const nextPayload = options?.onPayload?.(payload, model);
@@ -812,7 +822,7 @@ export function createOpenAIWebSocketStreamFn(
           `[ws-stream] send failed for session=${sessionId}; falling back to HTTP. error=${String(sendErr)}`,
         );
         // Fully reset session state so the next WS turn doesn't use stale
-        // previous_response_id or lastContextLength from before the failure.
+        // continuationResponseId or lastContextLength from before the failure.
         try {
           session.manager.close();
         } catch {
@@ -864,8 +874,10 @@ export function createOpenAIWebSocketStreamFn(
         const unsubscribe = session.manager.onMessage((event) => {
           if (event.type === "response.completed") {
             cleanup();
-            // Update session state
+            // Update session state for the next turn using the completion tied
+            // to this stream request, not the manager-global last completion.
             session.lastContextLength = capturedContextLength;
+            session.continuationResponseId = toNonEmptyString(event.response?.id);
             // Build and emit the assistant message
             const assistantMsg = buildAssistantMessageFromResponse(event.response, {
               api: model.api,

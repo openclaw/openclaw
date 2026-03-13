@@ -113,6 +113,14 @@ const { MockManager } = vi.hoisted(() => {
 
     // Test helper: simulate a server event
     simulateEvent(event: unknown): void {
+      const maybeEvent = event as { type?: string; response?: { id?: unknown } } | null;
+      if (
+        maybeEvent?.type === "response.completed" &&
+        typeof maybeEvent.response?.id === "string" &&
+        maybeEvent.response.id.length > 0
+      ) {
+        this._previousResponseId = maybeEvent.response.id;
+      }
       for (const fn of this._listeners) {
         fn(event);
       }
@@ -735,7 +743,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-fallback");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
+    releaseWsSession("sess-full-resend");
     releaseWsSession("sess-phase");
+    releaseWsSession("sess-stale-parent");
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
@@ -988,7 +998,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     // Server responds with a tool call
     const turn1Response = makeResponseObject("resp_turn1", undefined, "exec");
-    manager.setPreviousResponseId("resp_turn1");
     manager.simulateEvent({ type: "response.completed", response: turn1Response });
     await done1;
 
@@ -1033,6 +1042,134 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const inputTypes = (sent2.input ?? []).map((i) => i.type);
     expect(inputTypes.every((t) => t === "function_call_output")).toBe(true);
     expect(inputTypes).toHaveLength(1);
+  });
+
+  it("omits previous_response_id when falling back to a full-context resend", async () => {
+    const sessionId = "sess-full-resend";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "You are helpful.",
+        messages: [userMsg("Hello")] as Parameters<typeof convertMessagesToInputItems>[0],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn1", "First reply"),
+    });
+    await done1;
+
+    expect(manager.previousResponseId).toBe("resp_turn1");
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "You are helpful.",
+        messages: [userMsg("Hello"), userMsg("Actually, summarize this instead")] as Parameters<
+          typeof convertMessagesToInputItems
+        >[0],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    const done2 = (async () => {
+      for await (const _ of await resolveStream(stream2)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2", "Second reply"),
+    });
+    await done2;
+
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<{ type: string; role?: string }>;
+    };
+    expect(sent2.previous_response_id).toBeUndefined();
+    expect(
+      (sent2.input ?? []).some((item) => item.type === "message" && item.role === "user"),
+    ).toBe(true);
+  });
+
+  it("ignores a stale manager completion when choosing the continuation parent", async () => {
+    const sessionId = "sess-stale-parent";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "You are helpful.",
+        messages: [userMsg("Run ls")] as Parameters<typeof convertMessagesToInputItems>[0],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn1", undefined, "exec"),
+    });
+    await done1;
+
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_stale", "stale branch"),
+    });
+    expect(manager.previousResponseId).toBe("resp_stale");
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "You are helpful.",
+        messages: [
+          userMsg("Run ls"),
+          assistantMsg([], [{ id: "call_1", name: "exec", args: { cmd: "ls" } }]),
+          toolResultMsg("call_1", "file.txt"),
+        ] as Parameters<typeof convertMessagesToInputItems>[0],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    const done2 = (async () => {
+      for await (const _ of await resolveStream(stream2)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2", "Here are the files."),
+    });
+    await done2;
+
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+    };
+    expect(sent2.previous_response_id).toBe("resp_turn1");
   });
 
   it("sends instructions (system prompt) in each request", async () => {
