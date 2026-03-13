@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  role          String    @default("user") // user | admin
+  onboardingCompleted Boolean @default(false)
+  // BYOK keys per provider — null = use platform key (requires paid plan)
+  anthropicApiKey String?  @db.Text
+  openaiApiKey    String?  @db.Text
+  geminiApiKey    String?  @db.Text
+  // Which model the user has chosen (e.g. "claude-sonnet-4-6", "gpt-4o")
+  preferredModel  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  subscription Subscription?
+  channels     UserChannel[]
+  messages     Message[]
+  usageRecords UsageRecord[]
+}
+
+model UserChannel {
+  id        String   @id @default(cuid())
+  userId    String
+  channel   String   // telegram, whatsapp, discord, slack, signal, imessage, teams, matrix, zalo, voice
+  token     String?  @db.Text
+  notes     String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Tracks token usage for non-Claude models billed via Stripe metered billing
+model UsageRecord {
+  id           String   @id @default(cuid())
+  userId       String
+  channel      String
+  model        String
+  provider     String   // anthropic | openai | google
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float    // provider cost in USD
+  billedUsd    Float    // what we charge (costUsd × (1 + markup))
+  reportedStripe Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Stores per-user, per-channel conversation history for Claude context
+model Message {
+  id        String   @id @default(cuid())
+  userId    String
+  channel   String
+  role      String   // user | assistant
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  stripePriceId        String?
+  stripeCurrentPeriodEnd DateTime?
+  status               String    @default("inactive") // active, inactive, canceled, past_due, trialing
+  plan                 String    @default("free") // free, starter, growth, pro
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,34 @@
+{
+  "name": "openclaw-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@auth/prisma-adapter": "^2.9.1",
+    "@google/generative-ai": "^0.24.1",
+    "@prisma/client": "^6.4.0",
+    "bcryptjs": "^2.4.3",
+    "next": "^15.2.3",
+    "next-auth": "^5.0.0-beta.25",
+    "openai": "^6.27.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "stripe": "^17.7.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "prisma": "^6.4.0",
+    "typescript": "^5.0.0"
+  }
+}

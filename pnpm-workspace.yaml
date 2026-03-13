@@ -1,6 +1,7 @@
 packages:
   - .
   - ui
+  - apps/web
   - packages/*
   - extensions/*
 

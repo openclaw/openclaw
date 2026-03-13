@@ -1,0 +1,31 @@
+# Fly.io config for the OpenClaw web app (Next.js).
+# Deploy from apps/web/: fly deploy --config apps/web/fly.toml
+
+app = 'openclaw-cxbo-g'
+primary_region = 'iad'
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # Runs prisma migrate deploy before traffic is shifted to the new release.
+  # This applies any pending DB migrations (including the role column) automatically.
+  release_command = "npx prisma migrate deploy"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
