@@ -81,13 +81,13 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,
+      recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       contextWindowTokens: contextWindowInfo.tokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       identifierInstructions: compactionCfg?.identifierInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
-      recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
     });
     factories.push(compactionSafeguardExtension);
   }

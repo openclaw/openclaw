@@ -43,6 +43,14 @@ const SessionsSpawnToolSchema = Type.Object({
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
 
+  // External channel notification on completion.
+  notifyChannel: Type.Optional(
+    Type.String({ description: "Channel to notify on completion (e.g., 'discord', 'telegram')" }),
+  ),
+  notifyTarget: Type.Optional(
+    Type.String({ description: "Target channel/chat ID for completion notification" }),
+  ),
+
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
   attachments: Type.Optional(
@@ -118,6 +126,8 @@ export function createSessionsSpawnTool(
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const notifyChannel = readStringParam(params, "notifyChannel");
+      const notifyTarget = readStringParam(params, "notifyTarget");
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
             name: string;
@@ -147,6 +157,13 @@ export function createSessionsSpawnTool(
             status: "error",
             error:
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
+          });
+        }
+        if (notifyChannel || notifyTarget) {
+          return jsonResult({
+            status: "error",
+            error:
+              "notifyChannel/notifyTarget are currently unsupported for runtime=acp; use runtime=subagent or remove notification parameters",
           });
         }
         const result = await spawnAcpDirect(
@@ -186,6 +203,8 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          notifyChannel,
+          notifyTarget,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
