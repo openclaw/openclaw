@@ -1,7 +1,6 @@
 name: Workflow Sanity
 
 on:
-  pull_request:
   push:
     branches: [main]
 
