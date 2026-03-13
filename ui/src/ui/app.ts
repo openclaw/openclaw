@@ -984,6 +984,10 @@ export class OpenClawApp extends LitElement {
       this.lastError = String(err);
     } finally {
       this.webPushLoading = false;
+      // Always refresh permission state — catches denied prompts too.
+      if ("Notification" in window) {
+        this.webPushPermission = Notification.permission;
+      }
     }
   }
 
