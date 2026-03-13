@@ -4,6 +4,7 @@ import {
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
 } from "./gateway-control-ui-origins.js";
+import { resolveLegacyLocalOnboardingToolsProfile } from "./legacy-local-tools-profile.js";
 import {
   ensureAgentEntry,
   ensureRecord,
@@ -97,6 +98,25 @@ function mergeLegacyIntoDefaults(params: {
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
+  {
+    id: "tools.profile.messaging->coding.local-onboarding",
+    describe: "Restore coding tools.profile for legacy local onboarding installs",
+    apply: (raw, changes) => {
+      const tools = getRecord(raw.tools);
+      if (!tools || tools.profile !== "messaging") {
+        return;
+      }
+      const resolvedProfile = resolveLegacyLocalOnboardingToolsProfile(raw, tools.profile);
+      if (resolvedProfile !== "coding") {
+        return;
+      }
+      tools.profile = "coding";
+      raw.tools = tools;
+      changes.push(
+        'Updated tools.profile "messaging" → "coding" for legacy local onboarding installs.',
+      );
+    },
+  },
   {
     // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
     // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated

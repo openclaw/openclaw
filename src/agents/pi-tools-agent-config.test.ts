@@ -315,6 +315,54 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toEqual(["session_status"]);
   });
 
+  it("restores exec for legacy local onboarding messaging profiles", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-profile-"));
+    const outputPath = path.join(workspaceDir, "legacy-local-profile.txt");
+    try {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "local",
+        },
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+        tools: {
+          profile: "messaging",
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        agentDir: "/tmp/agent-legacy-profile",
+      });
+
+      const toolNames = tools.map((tool) => tool.name);
+      expect(toolNames).toContain("exec");
+
+      const execTool = tools.find((tool) => tool.name === "exec");
+      expect(execTool).toBeDefined();
+
+      const result = await execTool!.execute("call-legacy-local-profile", {
+        command: `printf legacy-local-profile > ${JSON.stringify(outputPath)}`,
+        timeout: 5,
+      });
+
+      const details = result?.details as { status?: string } | undefined;
+      expect(details?.status).toBe("completed");
+      expect(await fs.readFile(outputPath, "utf8")).toBe("legacy-local-profile");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("should allow different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {

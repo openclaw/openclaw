@@ -236,6 +236,49 @@ describe("legacy migrate heartbeat config", () => {
   });
 });
 
+describe("legacy migrate local onboarding tools.profile", () => {
+  it('rewrites legacy local tools.profile "messaging" to "coding"', () => {
+    const res = migrateLegacyConfig({
+      gateway: {
+        mode: "local",
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+      tools: {
+        profile: "messaging",
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Updated tools.profile "messaging" → "coding" for legacy local onboarding installs.',
+    );
+    expect(res.config?.tools?.profile).toBe("coding");
+  });
+
+  it("does not rewrite explicit messaging tool configs", () => {
+    const res = migrateLegacyConfig({
+      gateway: {
+        mode: "local",
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["web_search"],
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
     const res = migrateLegacyConfig({

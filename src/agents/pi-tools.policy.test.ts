@@ -218,6 +218,43 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it("treats legacy local onboarding messaging profile as coding", () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+      tools: {
+        profile: "messaging",
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profile).toBe("coding");
+  });
+
+  it("keeps explicit messaging profiles when other tool policy is configured", () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+      },
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["web_search"],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profile).toBe("messaging");
+  });
+
   it("implicitly re-exposes exec and process when tools.exec is configured", () => {
     const cfg = {
       tools: {
