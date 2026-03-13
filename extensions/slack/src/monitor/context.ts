@@ -127,6 +127,12 @@ export function createSlackMonitorContext(params: {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
+  // Mutable live bindings: in mux mode auth.test runs after context creation,
+  // so these values are patched post-construction.  Closures that reference them
+  // (shouldDropMismatchedSlackEvent, sessionKeyFn) read the live variables.
+  let liveTeamId = params.teamId;
+  let liveApiAppId = params.apiAppId;
+
   const channelCache = new Map<
     string,
     {
@@ -183,7 +189,7 @@ export function createSlackMonitorContext(params: {
           cfg: params.cfg,
           channel: "slack",
           accountId: params.accountId,
-          teamId: params.teamId,
+          teamId: liveTeamId,
           peer: { kind: peerKind, id: peerId },
         });
         return route.sessionKey;
@@ -375,28 +381,28 @@ export function createSlackMonitorContext(params: {
           ? raw.team.id
           : "";
 
-    if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
+    if (liveApiAppId && incomingApiAppId && incomingApiAppId !== liveApiAppId) {
       logVerbose(
-        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${params.apiAppId})`,
+        `slack: drop event with api_app_id=${incomingApiAppId} (expected ${liveApiAppId})`,
       );
       return true;
     }
-    if (params.teamId && incomingTeamId && incomingTeamId !== params.teamId) {
-      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${params.teamId})`);
+    if (liveTeamId && incomingTeamId && incomingTeamId !== liveTeamId) {
+      logVerbose(`slack: drop event with team_id=${incomingTeamId} (expected ${liveTeamId})`);
       return true;
     }
     return false;
   };
 
-  return {
+  const ctx: SlackMonitorContext = {
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
-    teamId: params.teamId,
-    apiAppId: params.apiAppId,
+    teamId: liveTeamId,
+    apiAppId: liveApiAppId,
     historyLimit: params.historyLimit,
     channelHistories,
     sessionScope: params.sessionScope,
@@ -432,4 +438,26 @@ export function createSlackMonitorContext(params: {
     resolveUserName,
     setSlackThreadStatus,
   };
+
+  // Make teamId and apiAppId settable so that provider.ts can patch them
+  // after deferred auth.test in mux mode.  The live bindings ensure closures
+  // (shouldDropMismatchedSlackEvent, sessionKeyFn) see the updated values.
+  Object.defineProperty(ctx, "teamId", {
+    get: () => liveTeamId,
+    set: (v: string) => {
+      liveTeamId = v;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(ctx, "apiAppId", {
+    get: () => liveApiAppId,
+    set: (v: string) => {
+      liveApiAppId = v;
+    },
+    enumerable: true,
+    configurable: true,
+  });
+
+  return ctx;
 }
