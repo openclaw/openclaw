@@ -92,6 +92,20 @@ type MaterializedChatMedia = {
   mediaTypes: string[];
 };
 
+function sanitizeChatSendMediaRunId(runId: string): string {
+  const trimmed = String(runId ?? "").trim();
+  if (!trimmed) {
+    return "chat-send";
+  }
+  let base = path.posix.basename(trimmed);
+  base = path.win32.basename(base);
+  base = base.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!base) {
+    return "chat-send";
+  }
+  return base.slice(0, 120);
+}
+
 async function materializeParsedChatImages(
   images: ChatImageContent[],
   runId: string,
@@ -102,9 +116,10 @@ async function materializeParsedChatImages(
   const mediaDir = await fsp.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "chat-send-"));
   const mediaPaths: string[] = [];
   const mediaTypes: string[] = [];
+  const safeRunId = sanitizeChatSendMediaRunId(runId);
   for (const [index, image] of images.entries()) {
     const ext = extensionForMime(image.mimeType) ?? ".bin";
-    const filePath = path.join(mediaDir, `${runId}-${index + 1}${ext}`);
+    const filePath = path.join(mediaDir, `${safeRunId}-${index + 1}${ext}`);
     await fsp.writeFile(filePath, Buffer.from(image.data, "base64"), { mode: 0o600 });
     mediaPaths.push(filePath);
     mediaTypes.push(image.mimeType);
@@ -993,6 +1008,18 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const cleanupMaterializedMedia = async (): Promise<void> => {
+      if (!materializedMedia) {
+        return;
+      }
+      const mediaDir = materializedMedia.mediaDir;
+      materializedMedia = null;
+      try {
+        await fsp.rm(mediaDir, { recursive: true, force: true });
+      } catch (err) {
+        context.logGateway.warn(`chat.send temp media cleanup failed: ${formatForLog(err)}`);
+      }
+    };
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
@@ -1010,6 +1037,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       chatType: entry?.chatType,
     });
     if (sendPolicy === "deny") {
+      await cleanupMaterializedMedia();
       respond(
         false,
         undefined,
@@ -1019,6 +1047,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
+      await cleanupMaterializedMedia();
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
@@ -1032,6 +1061,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const cached = context.dedupe.get(`chat:${clientRunId}`);
     if (cached) {
+      await cleanupMaterializedMedia();
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
       });
@@ -1040,6 +1070,7 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
+      await cleanupMaterializedMedia();
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
         cached: true,
         runId: clientRunId,
@@ -1257,8 +1288,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
+          void cleanupMaterializedMedia();
         });
     } catch (err) {
+      await cleanupMaterializedMedia();
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,

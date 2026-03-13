@@ -6,6 +6,15 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+
+const preferredTmpDirMock = vi.hoisted(() => ({
+  value: process.env.TMPDIR || process.env.TEMP || process.env.TMP || "/tmp",
+}));
+
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: () => preferredTmpDirMock.value,
+}));
+
 import {
   connectOk,
   getReplyFromConfig,
@@ -205,8 +214,15 @@ describe("gateway server chat", () => {
   test("handles chat send and history flows", async () => {
     const tempDirs: string[] = [];
     let webchatWs: WebSocket | undefined;
+    const previousPreferredTmpDir = preferredTmpDirMock.value;
 
     try {
+      const materializedTmpRoot = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-chat-send-media-"),
+      );
+      tempDirs.push(materializedTmpRoot);
+      preferredTmpDirMock.value = materializedTmpRoot;
+
       webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
@@ -286,11 +302,21 @@ describe("gateway server chat", () => {
         sessionKey: "discord:group:dev",
         message: "hello",
         idempotencyKey: "idem-1",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "blocked.png",
+            content:
+              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          },
+        ],
       });
       expect(blockedRes.ok).toBe(false);
       expect((blockedRes.error as { message?: string } | undefined)?.message ?? "").toMatch(
         /send blocked/i,
       );
+      expect(await fs.readdir(materializedTmpRoot)).toEqual([]);
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -372,7 +398,7 @@ describe("gateway server chat", () => {
           params: {
             sessionKey: "main",
             message: "",
-            idempotencyKey: "idem-img-only",
+            idempotencyKey: "../../escaped-image",
             attachments: [
               {
                 type: "image",
@@ -398,6 +424,7 @@ describe("gateway server chat", () => {
         | undefined;
       expect(imageOnlyCtx?.MediaPath).toBeTypeOf("string");
       expect(imageOnlyCtx?.MediaPath?.length ?? 0).toBeGreaterThan(0);
+      expect(path.dirname(imageOnlyCtx?.MediaPath as string)).toBe(imageOnlyCtx?.MediaDir);
       expect(imageOnlyCtx?.MediaPaths).toEqual([imageOnlyCtx?.MediaPath]);
       expect(imageOnlyCtx?.MediaType).toBe("image/png");
       expect(imageOnlyCtx?.MediaTypes).toEqual(["image/png"]);
@@ -438,6 +465,7 @@ describe("gateway server chat", () => {
       expect(defaultMsgs.length).toBe(200);
       expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m100");
     } finally {
+      preferredTmpDirMock.value = previousPreferredTmpDir;
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
