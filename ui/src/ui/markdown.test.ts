@@ -137,7 +137,6 @@ describe("toSanitizedMarkdownHtml", () => {
       parseSpy.mockRestore();
     });
 
-
     it("still parses normal markdown with short lines", () => {
       const md = "Hello **world**\n\nThis is a paragraph.";
       const html = toSanitizedMarkdownHtml(md);
