@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import time
-from typing import Optional, Callable, List
+from typing import Callable, List, Optional
 
 logger = logging.getLogger('AliyunASR')
 

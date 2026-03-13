@@ -6,7 +6,7 @@ Sherpa-ONNX 语音识别引擎
 """
 import logging
 import threading
-from typing import Optional, Callable, List
+from typing import Callable, List, Optional
 
 logger = logging.getLogger('SherpaONNXASR')
 
@@ -89,8 +89,8 @@ class SherpaONNXASREngine:
         Returns:
             热词文件路径
         """
-        import tempfile
         import os
+        import tempfile
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             for word in self.hotwords:

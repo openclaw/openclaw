@@ -5,16 +5,17 @@ TTS Handler - 处理文本转语音，支持多设备隔离
 """
 
 import logging
-import threading
 import queue
-from typing import Optional, Callable, Tuple
 import re
+import threading
+from typing import Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 try:
-    from gtts import gTTS
     import io
+
+    from gtts import gTTS
     has_tts = True
 except ImportError:
     has_tts = False

@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Optional, List
+from typing import List, Optional
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
