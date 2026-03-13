@@ -2252,7 +2252,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
     const result = await manager.readFile({ relPath: "qmd/workspace-main/slugified-note.md" });
     expect(result).toEqual({
-      text: "hello from qmd get",
+      text: "hello from qmd get\n",
       path: "qmd/workspace-main/slugified-note.md",
     });
     await manager.close();

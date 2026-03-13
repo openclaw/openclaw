@@ -895,7 +895,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (statResult.missing) {
       // Fall back to `qmd get` which can resolve slugified paths.
       if (relPath.startsWith("qmd/")) {
-        const qmdFile = relPath.replace("qmd/", "qmd://");
+        const qmdFile = relPath.replace(/^qmd\//, "qmd://");
         const qmdText = await this.getQmdFile(qmdFile);
         if (qmdText !== null) {
           if (params.from !== undefined || params.lines !== undefined) {
@@ -1784,8 +1784,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       const result = await this.runQmd(["get", file], {
         timeoutMs: this.qmd.limits.timeoutMs,
       });
-      const text = result.stdout?.trim();
-      return text || null;
+      return result.stdout ?? null;
     } catch {
       return null;
     }
