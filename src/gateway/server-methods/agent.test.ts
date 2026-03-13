@@ -522,6 +522,7 @@ describe("gateway agent handler", () => {
   it("rejects deliver=true when backend callers use the inter_session sentinel", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
+    const context = makeContext();
     const selectionSpy = vi.spyOn(channelSelection, "resolveMessageChannelSelection");
     selectionSpy.mockResolvedValue({
       channel: "telegram",
@@ -540,6 +541,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "inter-session-backend-deliver-1",
+        context,
         client: {
           connect: {
             role: "operator",
@@ -566,6 +568,11 @@ describe("gateway agent handler", () => {
       code: "INVALID_REQUEST",
       message: expect.stringContaining("inter_session"),
     });
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).not.toHaveBeenCalledWith(
+      "test-inter-session-backend-deliver",
+      expect.anything(),
+    );
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
