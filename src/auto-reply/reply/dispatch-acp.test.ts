@@ -527,6 +527,85 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("maps ACP tool events to start, update, and result phases", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "tool_call",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          title: "Check network",
+          text: "Check network (in_progress)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "running",
+          title: "Check network",
+          text: "Check network (running)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          title: "Check network",
+          text: "Check network (completed)",
+        });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-tool-phases",
+    });
+
+    const toolEvents = agentEventMocks.emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event?.runId === "run-acp-tool-phases" && event?.stream === "tool");
+
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "start",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "in_progress",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "update",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "running",
+          tag: "tool_call_update",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-tool-phases",
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "result",
+          name: "Check network",
+          toolCallId: "tool-1",
+          status: "completed",
+          tag: "tool_call_update",
+          source: "acp",
+        }),
+      }),
+    ]);
+  });
+
   it("bridges output deltas with explicit or missing stream and ignores non-output deltas", async () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockImplementationOnce(

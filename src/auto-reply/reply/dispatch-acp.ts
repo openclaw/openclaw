@@ -256,9 +256,9 @@ function emitAcpRuntimeAgentEvent(params: {
     const phase =
       normalizedStatus && ACP_TERMINAL_TOOL_STATUSES.has(normalizedStatus)
         ? "result"
-        : event.tag === "tool_call"
-          ? "start"
-          : "update";
+        : event.tag === "tool_call_update"
+          ? "update"
+          : "start";
     emitAgentEvent({
       runId: params.runId,
       sessionKey: params.sessionKey,
