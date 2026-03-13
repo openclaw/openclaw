@@ -98,4 +98,27 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("strips Windows-style path segments from content-disposition filenames", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = async () =>
+      new Response(makeStream([new TextEncoder().encode("ok")]), {
+        status: 200,
+        headers: {
+          "content-disposition": 'attachment; filename="..\\\\secret.txt"',
+          "content-type": "text/plain",
+        },
+      });
+
+    const result = await fetchRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn,
+      maxBytes: 1024,
+    });
+
+    expect(result.fileName).toBe("secret.txt");
+  });
 });

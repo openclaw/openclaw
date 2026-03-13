@@ -42,6 +42,10 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function safeBaseName(value: string): string {
+  return path.win32.basename(path.posix.basename(value));
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
@@ -51,14 +55,14 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
     try {
-      return path.basename(decodeURIComponent(encoded));
+      return safeBaseName(decodeURIComponent(encoded));
     } catch {
-      return path.basename(encoded);
+      return safeBaseName(encoded);
     }
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
-    return path.basename(stripQuotes(match[1].trim()));
+    return safeBaseName(stripQuotes(match[1].trim()));
   }
   return undefined;
 }
@@ -172,7 +176,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     let fileNameFromUrl: string | undefined;
     try {
       const parsed = new URL(finalUrl);
-      const base = path.basename(parsed.pathname);
+      const base = safeBaseName(parsed.pathname);
       fileNameFromUrl = base || undefined;
     } catch {
       // ignore parse errors; leave undefined
@@ -180,7 +184,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
 
     const headerFileName = parseContentDispositionFileName(res.headers.get("content-disposition"));
     let fileName =
-      headerFileName || fileNameFromUrl || (filePathHint ? path.basename(filePathHint) : undefined);
+      headerFileName || fileNameFromUrl || (filePathHint ? safeBaseName(filePathHint) : undefined);
 
     const filePathForMime =
       headerFileName && path.extname(headerFileName) ? headerFileName : (filePathHint ?? finalUrl);
