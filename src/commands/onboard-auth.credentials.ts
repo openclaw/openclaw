@@ -338,6 +338,7 @@ export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
+export const FEATHERLESS_DEFAULT_MODEL_REF = "featherless/MiniMaxAI/MiniMax-M2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
@@ -467,6 +468,18 @@ export async function setTogetherApiKey(
   upsertAuthProfile({
     profileId: "together:default",
     credential: buildApiKeyCredential("together", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setFeatherlessApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  upsertAuthProfile({
+    profileId: "featherless:default",
+    credential: buildApiKeyCredential("featherless", key, undefined, options),
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }

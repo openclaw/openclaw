@@ -46,6 +46,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   synthetic: "synthetic-api-key",
   venice: "venice-api-key",
   together: "together-api-key",
+  featherless: "featherless-api-key",
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",

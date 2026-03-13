@@ -22,6 +22,7 @@ export type BuiltInAuthChoice =
   | "synthetic-api-key"
   | "venice-api-key"
   | "together-api-key"
+  | "featherless-api-key"
   | "huggingface-api-key"
   | "codex-cli"
   | "apiKey"
@@ -74,6 +75,7 @@ export type BuiltInAuthChoiceGroupId =
   | "mistral"
   | "qwen"
   | "together"
+  | "featherless"
   | "huggingface"
   | "qianfan"
   | "modelstudio"
@@ -132,6 +134,7 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   togetherApiKey?: string;
+  featherlessApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
   opencodeGoApiKey?: string;

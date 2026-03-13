@@ -158,6 +158,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "featherless",
+    label: "Featherless AI",
+    hint: "25,000+ open-source models (flat-rate)",
+    choices: ["featherless-api-key"],
+  },
+  {
     value: "huggingface",
     label: "Hugging Face",
     hint: "Inference API (HF token)",

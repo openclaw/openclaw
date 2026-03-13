@@ -13,6 +13,11 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
 import {
+  FEATHERLESS_BASE_URL,
+  FEATHERLESS_MODEL_CATALOG,
+  buildFeatherlessModelDefinition,
+} from "./featherless-models.js";
+import {
   buildHuggingfaceProvider,
   buildKilocodeProviderWithDiscovery,
   buildVeniceProvider,
@@ -585,6 +590,14 @@ export function normalizeProviders(params: {
   });
 }
 
+function buildFeatherlessProvider(): ProviderConfig {
+  return {
+    baseUrl: FEATHERLESS_BASE_URL,
+    api: "openai-completions",
+    models: FEATHERLESS_MODEL_CATALOG.map(buildFeatherlessModelDefinition),
+  };
+}
+
 type ImplicitProviderParams = {
   agentDir: string;
   config?: OpenClawConfig;
@@ -698,6 +711,7 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
     ...(await buildVercelAiGatewayProvider()),
     apiKey,
   })),
+  withApiKey("featherless", async ({ apiKey }) => ({ ...buildFeatherlessProvider(), apiKey })),
   withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
   withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
