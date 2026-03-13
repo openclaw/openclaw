@@ -367,7 +367,14 @@ export function triggerOpenClawRestart(): RestartAttempt {
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
   });
-  if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+  // bootstrap exits 37 ("Operation already in progress") when the service is
+  // already loaded — this is harmless and means the plist is still registered.
+  // Treat it the same as exit 0 so we proceed to the kickstart retry.
+  const LAUNCHCTL_ALREADY_LOADED = 37;
+  if (
+    boot.error ||
+    (boot.status !== 0 && boot.status !== LAUNCHCTL_ALREADY_LOADED && boot.status !== null)
+  ) {
     return {
       ok: false,
       method: "launchctl",
@@ -375,7 +382,11 @@ export function triggerOpenClawRestart(): RestartAttempt {
       tried,
     };
   }
-  const retryArgs = ["kickstart", "-k", target];
+  // After bootstrap the service is freshly registered and launchd may already
+  // be starting it (KeepAlive: true).  Use plain kickstart (no -k) so we don't
+  // kill a service that is still initialising — that can cause launchd to
+  // deregister the agent entirely, which is the original bug.
+  const retryArgs = ["kickstart", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);
   const retry = spawnSync("launchctl", retryArgs, {
     encoding: "utf8",
