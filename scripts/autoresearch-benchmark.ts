@@ -2,13 +2,18 @@
  * Autoresearch benchmark: measures stable prefix of the OpenClaw system prompt.
  * Run with: bun scripts/autoresearch-benchmark.ts
  *
- * stable_chars = chars before the FIRST injected workspace file header
- *   (i.e. the `## /path/to/workspace/FILE.md` line).
- * That is the real Anthropic KV-cache boundary: everything before it is identical
- * across sessions; everything from the first file header onward changes as users
- * edit their workspace.
+ * Models real production usage: a group-chat session (WhatsApp/Telegram/Discord)
+ * where the agent has a group-chat context string. This is the most common
+ * OpenClaw deployment. The group-chat context (extraSystemPrompt) changes
+ * per conversation, so it must come AFTER workspace files to avoid breaking
+ * the Anthropic KV-cache prefix.
  *
- * Outputs METRIC lines for pi-autoresearch to capture.
+ * stable_chars = chars before the first "most-dynamic" section.
+ * Priority (most → least dynamic):
+ *   1. ## Group Chat Context  — changes per conversation
+ *   2. MEMORY.md header        — changes daily when present
+ *   3. AGENTS.md header        — changes when guidelines update
+ *   4. First workspace file    — fallback
  */
 
 import os from "node:os";
@@ -51,6 +56,15 @@ const toolNames = [
   "memory_get",
 ];
 
+// ── Group chat context (models real production usage) ────────────────────────
+// This changes per conversation (different channel, different members joining).
+// In production this is the most common scenario for OpenClaw deployments.
+const GROUP_CHAT_EXTRA_PROMPT =
+  "Channel: #family-chat (WhatsApp)\n" +
+  "Members: Alice (+1-555-0101), Bob (+1-555-0102), Carol (+1-555-0103)\n" +
+  "You were added by Alice. Respond to all members equally.\n" +
+  "Current conversation has 847 messages in history.";
+
 // Load real workspace bootstrap files
 const rawFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
 const contextFiles = buildBootstrapContextFiles(rawFiles, {
@@ -58,7 +72,7 @@ const contextFiles = buildBootstrapContextFiles(rawFiles, {
   totalMaxChars: 150_000,
 });
 
-// Build the system prompt with representative parameters
+// Build the system prompt with representative parameters (group chat scenario)
 const prompt = buildAgentSystemPrompt({
   workspaceDir,
   toolNames,
@@ -73,13 +87,15 @@ const prompt = buildAgentSystemPrompt({
     "- gpt: gpt-4o (OpenAI)",
   ],
   contextFiles,
+  extraSystemPrompt: GROUP_CHAT_EXTRA_PROMPT,
+  reactionGuidance: { level: "minimal", channel: "WhatsApp" },
   runtimeInfo: {
     host: "benchmark-host",
     os: "darwin",
     arch: "arm64",
     node: "22.0.0",
     model: "claude-sonnet-4-5",
-    channel: "imessage",
+    channel: "whatsapp",
     capabilities: ["reactions"],
   },
   acpEnabled: true,
@@ -89,69 +105,44 @@ const prompt = buildAgentSystemPrompt({
 const totalChars = prompt.length;
 
 // ── Dynamic boundary detection ──────────────────────────────────────────────
-//
-// AGENTS.md is the most frequently-edited workspace file (session protocol,
-// workspace guidelines). We inject it LAST among workspace files so that
-// SOUL.md, USER.md, IDENTITY.md, TOOLS.md etc. remain in the Anthropic
-// KV-cached prefix even when AGENTS.md changes between sessions.
-//
-// stable_chars = chars before the AGENTS.md header (primary boundary).
-// Fallback: first workspace file header if AGENTS.md not present.
+// We find the EARLIEST "most-dynamic" section and use it as the stable boundary.
+// Everything before it remains in the Anthropic KV-cache prefix cross-session.
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// ── Workspace file boundary detection ──────────────────────────────────────
-//
-// Files are ordered from most-stable (SOUL.md) to most-dynamic (MEMORY.md).
-// We find the first "most-dynamic" file that actually appears in the prompt
-// and use that as the stable-prefix boundary.
-//
-// Priority (most dynamic first):
-//   1. MEMORY.md  — changes daily when present
-//   2. AGENTS.md  — changes when workspace protocol/guidelines update
-//   3. First workspace file header  — fallback when neither is present
-
-const memoryMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/(MEMORY|memory)\\.md$`, "m");
-const agentsMdPattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m");
-const firstFilePattern = new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m");
-
-const memoryMdMatch = memoryMdPattern.exec(prompt);
-const agentsMdMatch = agentsMdPattern.exec(prompt);
-const firstFileMatch = firstFilePattern.exec(prompt);
-
-// ── Legacy guards (timestamps etc.) ──
-const legacyPatterns: { label: string; pattern: RegExp }[] = [
+// Ordered: most-dynamic first
+const boundaryPatterns: Array<{ label: string; pattern: RegExp }> = [
+  // Group Chat Context: changes per conversation (most dynamic)
+  { label: "group-chat-context", pattern: /^## Group Chat Context$/m },
+  // Subagent Context: same as Group Chat Context but for subagent mode
+  { label: "subagent-context", pattern: /^## Subagent Context$/m },
+  // MEMORY.md: changes daily when present
+  {
+    label: "memory-md-header",
+    pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/(MEMORY|memory)\\.md$`, "m"),
+  },
+  // AGENTS.md: changes when workspace protocol/guidelines update
+  {
+    label: "agents-md-header",
+    pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/AGENTS\\.md$`, "m"),
+  },
+  // Fallback: first injected workspace file
+  {
+    label: "workspace-file-header",
+    pattern: new RegExp(`^## ${escapeRegExp(workspaceDir)}/`, "m"),
+  },
+  // Legacy guards
   { label: "iso-timestamp", pattern: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/ },
   { label: "current-date-header", pattern: /## Current Date & Time/ },
   { label: "current-time", pattern: /Current time:/ },
 ];
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Use the most-dynamic workspace file as the boundary.
-// Everything before it remains in the stable KV-cache prefix.
 let stableChars = totalChars;
 let hitLabel = "none";
 
-if (memoryMdMatch) {
-  // MEMORY.md changes daily — everything before it (including AGENTS.md) stays cached
-  stableChars = memoryMdMatch.index;
-  hitLabel = "memory-md-header";
-} else if (agentsMdMatch) {
-  // AGENTS.md is the most frequently updated standard file
-  stableChars = agentsMdMatch.index;
-  hitLabel = "agents-md-header";
-} else if (firstFileMatch) {
-  stableChars = firstFileMatch.index;
-  hitLabel = "workspace-file-header-fallback";
-}
-
-// Apply legacy guards (timestamps etc.) — these can only LOWER the stable prefix
-for (const { label, pattern } of legacyPatterns) {
+for (const { label, pattern } of boundaryPatterns) {
   const match = pattern.exec(prompt);
   if (match && match.index < stableChars) {
     stableChars = match.index;
