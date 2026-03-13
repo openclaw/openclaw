@@ -21,79 +21,102 @@ export function enforceAIPolicy({
   isLegalThreat,
   isHostile,
   isMedia,
-  requestedInfo
+  requestedInfo,
 }) {
   // 1. Attorney / Collections Accounts
-  if (['Attorney', 'Collections'].includes(accountStatus) &&
-      ['balance','payment status','payment history','ledger','payoff amount','collections status'].includes(requestType)) {
+  if (
+    ["Attorney", "Collections"].includes(accountStatus) &&
+    [
+      "balance",
+      "payment status",
+      "payment history",
+      "ledger",
+      "payoff amount",
+      "collections status",
+    ].includes(requestType)
+  ) {
     return {
       allowed: false,
-      response: "Because this account has been referred to collections or legal counsel, we’re unable to provide financial details through this system. Please contact property management or the association’s attorney for assistance.",
-      escalate: false
+      response:
+        "Because this account has been referred to collections or legal counsel, we’re unable to provide financial details through this system. Please contact property management or the association’s attorney for assistance.",
+      escalate: false,
     };
   }
   // 2. Financial Privacy Protection
   if (isFinancial && (!isVerified || !isOwnerOrAuthorized)) {
     return {
       allowed: false,
-      response: "For privacy reasons, we can only provide account details to verified owners or authorized contacts. Please contact property management for assistance.",
-      escalate: false
+      response:
+        "For privacy reasons, we can only provide account details to verified owners or authorized contacts. Please contact property management for assistance.",
+      escalate: false,
     };
   }
   // 3. Legal Advice Restrictions
   if (isLegal) {
     return {
       allowed: false,
-      response: "Questions involving legal interpretation should be directed to property management or the association’s legal counsel.",
-      escalate: false
+      response:
+        "Questions involving legal interpretation should be directed to property management or the association’s legal counsel.",
+      escalate: false,
     };
   }
   // 4. Governing Document Interpretation
-  if (requestType === 'governing_document_interpretation') {
+  if (requestType === "governing_document_interpretation") {
     return {
       allowed: false,
-      response: "I can quote governing documents and provide section references, but cannot interpret or make enforcement judgments.",
-      escalate: false
+      response:
+        "I can quote governing documents and provide section references, but cannot interpret or make enforcement judgments.",
+      escalate: false,
     };
   }
   // 5. Maintenance Requests
-  if (requestType === 'maintenance_diagnosis' || requestType === 'maintenance_approval') {
+  if (requestType === "maintenance_diagnosis" || requestType === "maintenance_approval") {
     return {
       allowed: false,
-      response: "I can help you submit a maintenance request or provide portal instructions, but cannot diagnose problems or authorize repairs.",
-      escalate: false
+      response:
+        "I can help you submit a maintenance request or provide portal instructions, but cannot diagnose problems or authorize repairs.",
+      escalate: false,
     };
   }
   // 6. Emergency Situations
   if (isEmergency) {
     return {
       allowed: false,
-      response: "If this is an emergency, please contact emergency services or the association’s emergency maintenance line immediately.",
-      escalate: true
+      response:
+        "If this is an emergency, please contact emergency services or the association’s emergency maintenance line immediately.",
+      escalate: true,
     };
   }
   // 7. Payment Processing
-  if (isPayment && requestedInfo === 'collect_payment_info') {
+  if (isPayment && requestedInfo === "collect_payment_info") {
     return {
       allowed: false,
-      response: "I cannot accept payment information. Please use the payment portal or mailing instructions provided.",
-      escalate: false
+      response:
+        "I cannot accept payment information. Please use the payment portal or mailing instructions provided.",
+      escalate: false,
     };
   }
   // 8. Violation Notices
-  if (isViolation && (requestType === 'issue_violation' || requestType === 'determine_guilt' || requestType === 'issue_fine')) {
+  if (
+    isViolation &&
+    (requestType === "issue_violation" ||
+      requestType === "determine_guilt" ||
+      requestType === "issue_fine")
+  ) {
     return {
       allowed: false,
-      response: "I can explain violation processes and appeal instructions, but cannot issue notices, determine guilt, or override enforcement decisions.",
-      escalate: false
+      response:
+        "I can explain violation processes and appeal instructions, but cannot issue notices, determine guilt, or override enforcement decisions.",
+      escalate: false,
     };
   }
   // 9. Board Communication
-  if (isBoard && (requestType === 'announce_board_ruling' || requestType === 'speak_for_board')) {
+  if (isBoard && (requestType === "announce_board_ruling" || requestType === "speak_for_board")) {
     return {
       allowed: false,
-      response: "I can provide meeting dates, document access, and contact instructions, but cannot announce board rulings or speak on behalf of board members.",
-      escalate: false
+      response:
+        "I can provide meeting dates, document access, and contact instructions, but cannot announce board rulings or speak on behalf of board members.",
+      escalate: false,
     };
   }
   // 10. Confidential Information Protection
@@ -101,15 +124,21 @@ export function enforceAIPolicy({
     return {
       allowed: false,
       response: "I cannot disclose confidential or personal information.",
-      escalate: true
+      escalate: true,
     };
   }
   // 11. Escalation to Staff
-  if (isLegalThreat || isHostile || !isVerified || requestType === 'dispute' || requestType === 'exception') {
+  if (
+    isLegalThreat ||
+    isHostile ||
+    !isVerified ||
+    requestType === "dispute" ||
+    requestType === "exception"
+  ) {
     return {
       allowed: false,
       response: "Your request will be escalated to property management for review.",
-      escalate: true
+      escalate: true,
     };
   }
   // 12. Sensitive Communication
@@ -117,15 +146,20 @@ export function enforceAIPolicy({
     return {
       allowed: false,
       response: "This conversation will be escalated to management for further review.",
-      escalate: true
+      escalate: true,
     };
   }
   // 13. Data Protection
-  if (requestedInfo && ['ssn','social security','bank account','credit card','driver license'].some(s => requestedInfo.toLowerCase().includes(s))) {
+  if (
+    requestedInfo &&
+    ["ssn", "social security", "bank account", "credit card", "driver license"].some((s) =>
+      requestedInfo.toLowerCase().includes(s),
+    )
+  ) {
     return {
       allowed: false,
       response: "I cannot store or display sensitive personal data.",
-      escalate: false
+      escalate: false,
     };
   }
   // 14. Logging and Transparency (handled by gateway logging)

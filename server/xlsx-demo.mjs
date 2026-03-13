@@ -1,8 +1,8 @@
+import path from "path";
 // Demo: Read Azure_Bay_Residences_Demo_Data_850_Units.xlsx and print first 5 rows
-import xlsx from 'xlsx';
-import path from 'path';
+import xlsx from "xlsx";
 
-const filePath = path.resolve('../Azure_Bay_Residences_Demo_Data_850_Units.xlsx');
+const filePath = path.resolve("../Azure_Bay_Residences_Demo_Data_850_Units.xlsx");
 const workbook = xlsx.readFile(filePath);
 const sheetName = workbook.SheetNames[0];
 const sheet = workbook.Sheets[sheetName];

@@ -155,7 +155,6 @@ Long options are validated fail-closed in safe-bin mode: unknown flags and ambig
 abbreviations are rejected.
 Denied flags by safe-bin profile:
 
-
 <!-- SAFE_BIN_DENIED_FLAGS:START -->
 
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`

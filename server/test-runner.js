@@ -21,7 +21,9 @@ const FILTER = args.find((a) => a.startsWith("--scenario="))?.split("=")[1];
 
 async function get(path) {
   const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) {return null;}
+  if (!res.ok) {
+    return null;
+  }
   return res.json();
 }
 
@@ -31,7 +33,9 @@ async function post(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {return null;}
+  if (!res.ok) {
+    return null;
+  }
   return res.json();
 }
 
@@ -75,15 +79,29 @@ async function resolveField(field, unit) {
     }
     case "Work Orders (lookup)": {
       const data = await get(`/api/az/work-orders?unit=${unit}`);
-      if (!data) {return null;}
+      if (!data) {
+        return null;
+      }
       const open = data.results?.filter((w) => w.Status !== "Closed") ?? [];
-      return { value: open.length > 0 ? `${open.length} open` : "none", source: "az/work-orders", detail: open };
+      return {
+        value: open.length > 0 ? `${open.length} open` : "none",
+        source: "az/work-orders",
+        detail: open,
+      };
     }
     case "Violations (lookup)": {
       const data = await get(`/api/az/violations/${unit}`);
-      if (!data) {return null;}
-      const open = data.violations?.filter((v) => v.Status === "Open" || v.Status === "Hearing Scheduled") ?? [];
-      return { value: open.length > 0 ? `${open.length} open` : "none", source: "az/violations", detail: open };
+      if (!data) {
+        return null;
+      }
+      const open =
+        data.violations?.filter((v) => v.Status === "Open" || v.Status === "Hearing Scheduled") ??
+        [];
+      return {
+        value: open.length > 0 ? `${open.length} open` : "none",
+        source: "az/violations",
+        detail: open,
+      };
     }
     default:
       return { value: `UNKNOWN_FIELD: ${field}`, source: "none" };
@@ -94,7 +112,9 @@ async function resolveField(field, unit) {
 
 async function resolveIdentity(phone, expectedUnit) {
   const result = await post("/api/az/identity/resolve", { phone });
-  if (!result) {return { ok: false, reason: "identity resolver returned null" };}
+  if (!result) {
+    return { ok: false, reason: "identity resolver returned null" };
+  }
 
   const { decision, subject_candidates, candidate_count } = result;
 
@@ -169,11 +189,15 @@ function generateAnswer(field, resolved, unit) {
         : `No boat slip is currently assigned to unit ${unit}. Contact the office to join the waitlist.`;
 
     case "Work Orders (lookup)":
-      if (v === "none" || v === "0 open") {return `No open work orders found for unit ${unit}.`;}
+      if (v === "none" || v === "0 open") {
+        return `No open work orders found for unit ${unit}.`;
+      }
       return `You have ${v} for unit ${unit}.`;
 
     case "Violations (lookup)":
-      if (v === "none") {return `No open violations on record for unit ${unit}.`;}
+      if (v === "none") {
+        return `No open violations on record for unit ${unit}.`;
+      }
       return `Unit ${unit} has ${v} that require attention.`;
 
     default:
@@ -188,8 +212,14 @@ const FAIL = "❌ FAIL";
 const WARN = "⚠️  WARN";
 
 async function runScenario(scenario) {
-  const { "Scenario ID": id, Channel: channel, "From (Phone)": phone, Unit: unit,
-          Message: message, "Expected Data (Field)": field } = scenario;
+  const {
+    "Scenario ID": id,
+    Channel: channel,
+    "From (Phone)": phone,
+    Unit: unit,
+    Message: message,
+    "Expected Data (Field)": field,
+  } = scenario;
 
   // Step 1: Identity resolution
   const identity = await resolveIdentity(phone, unit);
@@ -241,17 +271,17 @@ async function main() {
 
   let scenarios = Array.isArray(scenariosRes) ? scenariosRes : scenariosRes.scenarios;
   // Map scenarios to expected format if needed (robust)
-  if (scenarios.length && scenarios[0] && !('Scenario ID' in scenarios[0])) {
-    scenarios = scenarios.map(s => ({
-      'Scenario ID': s['Scenario ID'] ?? s.id ?? '',
-      'Channel': s['Channel'] ?? s.channel ?? '',
-      'From (Phone)': s['From (Phone)'] ?? s.phone ?? '',
-      'Unit': s['Unit'] ?? s.unit ?? '',
-      'Message': s['Message'] ?? s.question ?? '',
-      'Expected Data (Field)': s['Expected Data (Field)'] ?? s.field ?? '',
-      'Notes': s['Notes'] ?? s.notes ?? '',
-      'expected': s['expected'] ?? s.expected ?? '',
-      'meta': s['meta'] ?? s.meta ?? {},
+  if (scenarios.length && scenarios[0] && !("Scenario ID" in scenarios[0])) {
+    scenarios = scenarios.map((s) => ({
+      "Scenario ID": s["Scenario ID"] ?? s.id ?? "",
+      Channel: s["Channel"] ?? s.channel ?? "",
+      "From (Phone)": s["From (Phone)"] ?? s.phone ?? "",
+      Unit: s["Unit"] ?? s.unit ?? "",
+      Message: s["Message"] ?? s.question ?? "",
+      "Expected Data (Field)": s["Expected Data (Field)"] ?? s.field ?? "",
+      Notes: s["Notes"] ?? s.notes ?? "",
+      expected: s["expected"] ?? s.expected ?? "",
+      meta: s["meta"] ?? s.meta ?? {},
     }));
   }
   if (FILTER) {
@@ -269,7 +299,11 @@ async function main() {
     const result = await runScenario(scenario);
     results.push(result);
 
-    const line = `${result.status}  ${String(result.id ?? '').padEnd(8)} [${String(result.channel ?? '').padEnd(5)}] Unit ${String(result.unit ?? '').padEnd(5)}  ${String(result.message ?? '').substring(0, 42).padEnd(43)}`;
+    const line = `${result.status}  ${String(result.id ?? "").padEnd(8)} [${String(result.channel ?? "").padEnd(5)}] Unit ${String(result.unit ?? "").padEnd(5)}  ${String(
+      result.message ?? "",
+    )
+      .substring(0, 42)
+      .padEnd(43)}`;
     console.log(line);
     if (VERBOSE || result.status !== PASS) {
       console.log(`         → ${result.reason}`);
@@ -294,14 +328,18 @@ async function main() {
   const byField = {};
   results.forEach((r) => {
     byField[r.field] = byField[r.field] || { pass: 0, warn: 0, fail: 0 };
-    if (r.status === PASS) {byField[r.field].pass++;}
-    else if (r.status === WARN) {byField[r.field].warn++;}
-    else {byField[r.field].fail++;}
+    if (r.status === PASS) {
+      byField[r.field].pass++;
+    } else if (r.status === WARN) {
+      byField[r.field].warn++;
+    } else {
+      byField[r.field].fail++;
+    }
   });
 
   console.log("\nIntent breakdown:");
   Object.entries(byField)
-    .toSorted((a, b) => (b[1].pass + b[1].warn) - (a[1].pass + a[1].warn))
+    .toSorted((a, b) => b[1].pass + b[1].warn - (a[1].pass + a[1].warn))
     .forEach(([field, counts]) => {
       const total = counts.pass + counts.warn + counts.fail;
       const bar = `${"█".repeat(counts.pass)}${"░".repeat(counts.warn)}${"✗".repeat(counts.fail)}`;
@@ -312,9 +350,13 @@ async function main() {
   const byChannel = {};
   results.forEach((r) => {
     byChannel[r.channel] = byChannel[r.channel] || { pass: 0, warn: 0, fail: 0 };
-    if (r.status === PASS) {byChannel[r.channel].pass++;}
-    else if (r.status === WARN) {byChannel[r.channel].warn++;}
-    else {byChannel[r.channel].fail++;}
+    if (r.status === PASS) {
+      byChannel[r.channel].pass++;
+    } else if (r.status === WARN) {
+      byChannel[r.channel].warn++;
+    } else {
+      byChannel[r.channel].fail++;
+    }
   });
 
   console.log("\nChannel breakdown:");
@@ -324,9 +366,11 @@ async function main() {
 
   if (fail > 0) {
     console.log("\nFailed scenarios:");
-    results.filter((r) => r.status === FAIL).forEach((r) => {
-      console.log(`  ${r.id} — ${r.reason}`);
-    });
+    results
+      .filter((r) => r.status === FAIL)
+      .forEach((r) => {
+        console.log(`  ${r.id} — ${r.reason}`);
+      });
   }
 
   console.log("");

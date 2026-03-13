@@ -8,12 +8,16 @@ import {
 } from "./appfolio-adapter.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { executeLane, type LaneExecutorDeps } from "./lane-executors.js";
-import { composeTriageResponse } from "./response-compose.js";
 import { sendInvalidRequest, sendJson } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { getHeader } from "./http-utils.js";
-import { selectLaneFromScores, type TriagePolicyDecision, type TriageRequestContext } from "./triage-router.js";
+import { executeLane, type LaneExecutorDeps } from "./lane-executors.js";
+import { composeTriageResponse } from "./response-compose.js";
+import {
+  selectLaneFromScores,
+  type TriagePolicyDecision,
+  type TriageRequestContext,
+} from "./triage-router.js";
 
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_TRIAGE_VERSION = "triage-v1";
@@ -121,11 +125,16 @@ function resolveIdentityConfidence(candidates: SubjectCandidate[]): number {
     return 0.35;
   }
   const rank = { high: 0.95, medium: 0.75, low: 0.55 } as const;
-  const best = Math.max(...candidates.map((candidate) => rank[candidate.identityConfidence] ?? 0.35));
+  const best = Math.max(
+    ...candidates.map((candidate) => rank[candidate.identityConfidence] ?? 0.35),
+  );
   return Number.isFinite(best) ? best : 0.35;
 }
 
-function resolveIdentityScopedUnitId(candidates: SubjectCandidate[], explicitUnitId?: string): string | undefined {
+function resolveIdentityScopedUnitId(
+  candidates: SubjectCandidate[],
+  explicitUnitId?: string,
+): string | undefined {
   if (explicitUnitId?.trim()) {
     return explicitUnitId.trim();
   }
@@ -177,8 +186,7 @@ export async function handleTriageHttpRequest(
     return true;
   }
 
-  const requestId =
-    (typeof body.requestId === "string" && body.requestId.trim()) || randomUUID();
+  const requestId = (typeof body.requestId === "string" && body.requestId.trim()) || randomUUID();
   const channel =
     typeof body.channel === "string" && body.channel.trim() ? body.channel.trim() : "email";
   const channelIdentity =
@@ -204,7 +212,10 @@ export async function handleTriageHttpRequest(
       ? executionHintRaw
       : "api+light-llm";
 
-  const isFinancial = parseBool(body.isFinancial, parseBool(getHeader(req, "x-openclaw-is-financial"), false));
+  const isFinancial = parseBool(
+    body.isFinancial,
+    parseBool(getHeader(req, "x-openclaw-is-financial"), false),
+  );
   const hasRequiredEntities = parseBool(body.hasRequiredEntities, false);
   const isEmergency = parseBool(body.isEmergency, false);
   const confidence = asRecord(body.confidence);
@@ -292,7 +303,11 @@ export async function handleTriageHttpRequest(
         traceId: randomUUID(),
       },
     });
-    sendJson(res, policy.decision === "deny" ? 403 : policy.decision === "stepup" ? 401 : 200, response);
+    sendJson(
+      res,
+      policy.decision === "deny" ? 403 : policy.decision === "stepup" ? 401 : 200,
+      response,
+    );
     return true;
   }
 

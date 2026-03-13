@@ -159,7 +159,10 @@ function scoreLane(params: {
   };
 }
 
-export function scoreTriageLanes(ctx: TriageRequestContext, latencyBudgetMs: number): TriageLaneScore[] {
+export function scoreTriageLanes(
+  ctx: TriageRequestContext,
+  latencyBudgetMs: number,
+): TriageLaneScore[] {
   const scores = [
     scoreLane({ lane: "api_only", ctx, latencyBudgetMs }),
     scoreLane({ lane: "low_llm", ctx, latencyBudgetMs }),

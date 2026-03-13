@@ -64,9 +64,9 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import type { LaneExecutorDeps } from "./lane-executors.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
-import { handleTriageHttpRequest } from "./triage-http.js";
 import {
   authorizeCanvasRequest,
   enforcePluginRouteGatewayAuth,
@@ -81,7 +81,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
-import type { LaneExecutorDeps } from "./lane-executors.js";
+import { handleTriageHttpRequest } from "./triage-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 

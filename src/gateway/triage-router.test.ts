@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { scoreTriageLanes, selectLaneFromScores, type TriageRequestContext } from "./triage-router.js";
+import {
+  scoreTriageLanes,
+  selectLaneFromScores,
+  type TriageRequestContext,
+} from "./triage-router.js";
 
 function buildBaseContext(): TriageRequestContext {
   return {

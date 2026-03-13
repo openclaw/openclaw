@@ -3,8 +3,11 @@
  * Assumes the phone number is the first non-empty line, formatted as a sequence of digits (optionally with +, -, spaces).
  * Returns { phoneNumber, restOfMessage }
  */
-export function extractPhoneNumberFromTelegram(text: string): { phoneNumber: string | null, restOfMessage: string } {
-  const lines = text.split(/\r?\n/).map(line => line.trim());
+export function extractPhoneNumberFromTelegram(text: string): {
+  phoneNumber: string | null;
+  restOfMessage: string;
+} {
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
   let phoneNumber: string | null = null;
   let firstNonEmptyIdx = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -18,6 +21,11 @@ export function extractPhoneNumberFromTelegram(text: string): { phoneNumber: str
     }
   }
   const restOfMessage =
-    firstNonEmptyIdx >= 0 ? lines.slice(firstNonEmptyIdx + 1).join("\n").trim() : text;
+    firstNonEmptyIdx >= 0
+      ? lines
+          .slice(firstNonEmptyIdx + 1)
+          .join("\n")
+          .trim()
+      : text;
   return { phoneNumber, restOfMessage };
 }

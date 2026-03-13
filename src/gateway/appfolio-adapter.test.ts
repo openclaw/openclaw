@@ -81,7 +81,9 @@ describe("appfolio-adapter", () => {
         args: { includeAging: true },
       });
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
     }
   });
 
@@ -103,7 +105,9 @@ describe("appfolio-adapter", () => {
       expect(result.errorCode).toBe("api_http_503");
       expect(result.retriable).toBe(true);
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
     }
   });
 

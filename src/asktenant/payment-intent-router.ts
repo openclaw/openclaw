@@ -105,7 +105,6 @@ export function routeTopPaymentIntent(userQuery: string): IntentRoutingResult | 
   return null;
 }
 
-
 /**
  * Example usage:
  *

@@ -1,8 +1,8 @@
-import type { AddressInfo } from "node:net";
 import type { Server as HttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { createGatewayHttpServer } from "./server-http.js";
 import type { LaneExecutorDeps } from "./lane-executors.js";
+import { createGatewayHttpServer } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const AUTH_NONE = {
@@ -18,7 +18,9 @@ async function listen(server: HttpServer): Promise<number> {
 }
 
 async function closeServer(server: HttpServer): Promise<void> {
-  await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  await new Promise<void>((resolve, reject) =>
+    server.close((err) => (err ? reject(err) : resolve())),
+  );
 }
 
 describe("POST /api/triage canary", () => {
