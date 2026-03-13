@@ -20,6 +20,13 @@ export type TruthfulEarlyStatusRecommendation = {
   reason: string;
 };
 
+export type TruthfulEarlyStatusActivation = {
+  shouldEmit: boolean;
+  reason: string;
+  decision: TruthfulEarlyStatusDecision;
+  recommendation: TruthfulEarlyStatusRecommendation;
+};
+
 export function decideTruthfulEarlyStatus(params: {
   queueMode: QueueMode;
   isActive: boolean;
@@ -114,4 +121,55 @@ export function recommendTruthfulEarlyStatusFromLatency(params: {
         reason: "end_to_end_is_high_without_a_specific_actionable_bottleneck",
       };
   }
+}
+
+export function evaluateTruthfulEarlyStatusActivation(params: {
+  queueMode: QueueMode;
+  isActive: boolean;
+  isHeartbeat: boolean;
+  isExternallyRoutable: boolean;
+  isStreaming: boolean;
+  dominantSegments?: Array<{
+    segment: TruthfulEarlyStatusLatencySegment;
+    count: number;
+  }>;
+}): TruthfulEarlyStatusActivation {
+  const decision = decideTruthfulEarlyStatus(params);
+  const recommendation = recommendTruthfulEarlyStatusFromLatency({
+    dominantSegments: params.dominantSegments,
+  });
+
+  if (!decision.shouldEmit) {
+    return {
+      shouldEmit: false,
+      reason: decision.reason,
+      decision,
+      recommendation,
+    };
+  }
+
+  if (params.queueMode === "interrupt") {
+    return {
+      shouldEmit: true,
+      reason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
+      decision,
+      recommendation,
+    };
+  }
+
+  if (recommendation.level === "prioritize") {
+    return {
+      shouldEmit: true,
+      reason: "latency_pattern_indicates_a_truthful_status_would_reduce_visible_silence",
+      decision,
+      recommendation,
+    };
+  }
+
+  return {
+    shouldEmit: false,
+    reason: `latency_priority_${recommendation.level}`,
+    decision,
+    recommendation,
+  };
 }

@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { getRecentDiagnosticLatencySummary } from "../../logging/diagnostic.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -56,7 +57,7 @@ import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { emitSupervisorStatusForActiveRun } from "./supervisor/status-runtime.js";
-import { decideTruthfulEarlyStatus } from "./supervisor/truthful-status-policy.js";
+import { evaluateTruthfulEarlyStatusActivation } from "./supervisor/truthful-status-policy.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -218,7 +219,8 @@ export async function runReplyAgent(params: {
     if (!opts?.onStatusReply || !isActive || isHeartbeat) {
       return;
     }
-    const truthfulStatusDecision = decideTruthfulEarlyStatus({
+    const latencySummary = getRecentDiagnosticLatencySummary();
+    const truthfulStatusDecision = evaluateTruthfulEarlyStatusActivation({
       queueMode: resolvedQueue.mode,
       isActive,
       isHeartbeat,
@@ -229,6 +231,7 @@ export async function runReplyAgent(params: {
         }),
       ),
       isStreaming,
+      dominantSegments: latencySummary?.dominant,
     });
     if (!truthfulStatusDecision.shouldEmit) {
       return;

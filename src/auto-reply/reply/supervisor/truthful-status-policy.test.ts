@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decideTruthfulEarlyStatus,
+  evaluateTruthfulEarlyStatusActivation,
   recommendTruthfulEarlyStatusFromLatency,
 } from "./truthful-status-policy.js";
 
@@ -116,6 +117,57 @@ describe("decideTruthfulEarlyStatus", () => {
     ).toEqual({
       level: "observe",
       reason: "latency_is_dominant_before_visible_feedback_is_semantically_decidable",
+    });
+  });
+
+  it("activates steer only when latency signals a first-visible silence problem", () => {
+    expect(
+      evaluateTruthfulEarlyStatusActivation({
+        queueMode: "steer",
+        isActive: true,
+        isHeartbeat: false,
+        isExternallyRoutable: true,
+        isStreaming: true,
+        dominantSegments: [{ segment: "runToFirstVisible", count: 2 }],
+      }),
+    ).toMatchObject({
+      shouldEmit: true,
+      reason: "latency_pattern_indicates_a_truthful_status_would_reduce_visible_silence",
+      recommendation: {
+        level: "prioritize",
+      },
+    });
+
+    expect(
+      evaluateTruthfulEarlyStatusActivation({
+        queueMode: "steer",
+        isActive: true,
+        isHeartbeat: false,
+        isExternallyRoutable: true,
+        isStreaming: true,
+        dominantSegments: [{ segment: "runToFirstEvent", count: 2 }],
+      }),
+    ).toMatchObject({
+      shouldEmit: false,
+      reason: "latency_priority_observe",
+      recommendation: {
+        level: "observe",
+      },
+    });
+  });
+
+  it("keeps interrupt visible even without a dominant latency signal", () => {
+    expect(
+      evaluateTruthfulEarlyStatusActivation({
+        queueMode: "interrupt",
+        isActive: true,
+        isHeartbeat: false,
+        isExternallyRoutable: true,
+        isStreaming: true,
+      }),
+    ).toMatchObject({
+      shouldEmit: true,
+      reason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
     });
   });
 });
