@@ -218,17 +218,17 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.maxResults": "Web Search Max Results",
   "tools.web.search.timeoutSeconds": "Web Search Timeout (sec)",
   "tools.web.search.cacheTtlMinutes": "Web Search Cache TTL (min)",
-  "tools.web.search.brave.mode": "Brave Search Mode",
+  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
+  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
+  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.search.gemini.apiKey": "Gemini Search API Key", // pragma: allowlist secret
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
+  "tools.web.search.brave.mode": "Brave Search Mode",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
-  "tools.web.search.perplexity.apiKey": "Perplexity API Key", // pragma: allowlist secret
-  "tools.web.search.perplexity.baseUrl": "Perplexity Base URL",
-  "tools.web.search.perplexity.model": "Perplexity Model",
   "tools.web.fetch.enabled": "Enable Web Fetch Tool",
   "tools.web.fetch.maxChars": "Web Fetch Max Chars",
   "tools.web.fetch.maxCharsCap": "Web Fetch Hard Max Chars",
@@ -458,6 +458,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "agents.defaults.cliBackends": "CLI Backends",
+  "agents.defaults.executionHealth": "Execution Health",
+  "agents.defaults.executionHealth.enabled": "Enable Execution Health",
+  "agents.defaults.executionHealth.fileBurstThreshold": "File Burst Threshold",
+  "agents.defaults.executionHealth.fileBurstWindowMs": "File Burst Window (ms)",
+  "agents.defaults.executionHealth.toolRepeatThreshold": "Tool Repeat Threshold",
+  "agents.defaults.executionHealth.toolRepeatWindowMs": "Tool Repeat Window (ms)",
+  "agents.defaults.executionHealth.noEffectLoopThreshold": "No-Effect Loop Threshold",
+  "agents.defaults.executionHealth.errorCascadeThreshold": "Error Cascade Threshold",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",

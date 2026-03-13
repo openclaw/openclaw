@@ -661,13 +661,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider":
-    'Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). Auto-detected from available API keys if omitted.',
+    'Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
-  "tools.web.search.maxResults": "Number of results to return (1-10).",
+  "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
-  "tools.web.search.brave.mode":
-    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.search.gemini.apiKey":
     "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',
@@ -684,6 +682,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
   "tools.web.search.perplexity.model":
     'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
+  "tools.web.search.brave.mode":
+    'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
@@ -1013,6 +1013,22 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.executionHealth":
+    "Passive execution health monitoring that detects agent death spirals (file bursts, tool loops, no-effect turns, error cascades) and surfaces them as session warnings.",
+  "agents.defaults.executionHealth.enabled":
+    "Master toggle for execution health monitoring (default: true). Disable to suppress all health signals.",
+  "agents.defaults.executionHealth.fileBurstThreshold":
+    "Number of file writes in a single evaluation window before a file-burst warning fires (default: 10).",
+  "agents.defaults.executionHealth.fileBurstWindowMs":
+    "Window in milliseconds for file burst detection (default: 600000 / 10 minutes).",
+  "agents.defaults.executionHealth.toolRepeatThreshold":
+    "Number of identical tool+args calls before a tool-repeat warning fires (default: 5).",
+  "agents.defaults.executionHealth.toolRepeatWindowMs":
+    "Window in milliseconds for tool repeat detection (default: 300000 / 5 minutes).",
+  "agents.defaults.executionHealth.noEffectLoopThreshold":
+    "Consecutive turns without a real side-effect (commit, push, send) before a no-effect-loop warning fires (default: 10).",
+  "agents.defaults.executionHealth.errorCascadeThreshold":
+    "Consecutive tool errors before an error-cascade warning fires (default: 3).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":

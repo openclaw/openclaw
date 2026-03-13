@@ -1,3 +1,4 @@
+import type { ExecutionHealthConfig } from "../agents/execution-health.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type {
@@ -284,6 +285,8 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Passive execution health monitoring to detect agent death spirals. */
+  executionHealth?: ExecutionHealthConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

@@ -4,7 +4,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 export type ToolCallIdMode = "strict" | "strict9";
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall", "tool_use"]);
 
 export type ToolCallLike = {
   id: string;

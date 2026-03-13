@@ -27,6 +27,7 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -49,6 +50,7 @@ import {
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
+import { ExecutionHealthMonitor } from "../../execution-health.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -413,14 +415,12 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
       ...options,
       onPayload: (payload: unknown) => {
         if (!payload || typeof payload !== "object") {
-          return options?.onPayload?.(payload, model);
         }
         const payloadRecord = payload as Record<string, unknown>;
         if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
           payloadRecord.options = {};
         }
         (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        return options?.onPayload?.(payload, model);
       },
     });
 }
@@ -1379,6 +1379,10 @@ export async function runEmbeddedAttempt(
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
+  );
+
+  const executionHealthMonitor = new ExecutionHealthMonitor(
+    params.config?.agents?.defaults?.executionHealth,
   );
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -2658,6 +2662,22 @@ export async function runEmbeddedAttempt(
               }
             }
           }
+        }
+
+        // Evaluate execution health signals after each turn.
+        try {
+          const healthSignals = executionHealthMonitor.evaluate({
+            messages: messagesSnapshot,
+            prePromptMessageCount,
+          });
+          for (const signal of healthSignals) {
+            const safeRecommendation = sanitizeForLog(signal.recommendation);
+            log.warn(
+              `[execution-health] ${signal.type} (${signal.severity}): ${safeRecommendation}`,
+            );
+          }
+        } catch (healthErr) {
+          log.debug(`execution health evaluation failed: ${String(healthErr)}`);
         }
 
         cacheTrace?.recordStage("session:after", {
