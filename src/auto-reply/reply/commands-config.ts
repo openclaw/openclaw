@@ -1,4 +1,9 @@
-import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveConfigWriteTargetFromPath,
+} from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -17,7 +22,9 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
@@ -38,6 +45,12 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   if (unauthorized) {
     return unauthorized;
   }
+  const allowInternalReadOnlyShow =
+    configCommand.action === "show" && isInternalMessageChannel(params.command.channel);
+  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/config");
+  if (nonOwner) {
+    return nonOwner;
+  }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/config",
     configKey: "config",
@@ -52,6 +65,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     };
   }
 
+  let parsedWritePath: string[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
     const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
       label: "/config write",
@@ -61,21 +75,29 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     if (missingAdminScope) {
       return missingAdminScope;
     }
+    const parsedPath = parseConfigPath(configCommand.path);
+    if (!parsedPath.ok || !parsedPath.path) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
+      };
+    }
+    parsedWritePath = parsedPath.path;
     const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
-    const allowWrites = resolveChannelConfigWrites({
+    const writeAuth = authorizeConfigWrite({
       cfg: params.cfg,
-      channelId,
-      accountId: params.ctx.AccountId,
+      origin: { channelId, accountId: params.ctx.AccountId },
+      target: resolveConfigWriteTargetFromPath(parsedWritePath),
+      allowBypass: canBypassConfigWritePolicy({
+        channel: params.command.channel,
+        gatewayClientScopes: params.ctx.GatewayClientScopes,
+      }),
     });
-    if (!allowWrites) {
-      const channelLabel = channelId ?? "this channel";
-      const hint = channelId
-        ? `channels.${channelId}.configWrites=true`
-        : "channels.<channel>.configWrites=true";
+    if (!writeAuth.allowed) {
       return {
         shouldContinue: false,
         reply: {
-          text: `⚠️ Config writes are disabled for ${channelLabel}. Set ${hint} to enable.`,
+          text: formatConfigWriteDeniedMessage({ result: writeAuth, fallbackChannelId: channelId }),
         },
       };
     }
@@ -119,14 +141,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "unset") {
-    const parsedPath = parseConfigPath(configCommand.path);
-    if (!parsedPath.ok || !parsedPath.path) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
-      };
-    }
-    const removed = unsetConfigValueAtPath(parsedBase, parsedPath.path);
+    const removed = unsetConfigValueAtPath(parsedBase, parsedWritePath ?? []);
     if (!removed) {
       return {
         shouldContinue: false,
@@ -151,14 +166,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "set") {
-    const parsedPath = parseConfigPath(configCommand.path);
-    if (!parsedPath.ok || !parsedPath.path) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${parsedPath.error ?? "Invalid path."}` },
-      };
-    }
-    setConfigValueAtPath(parsedBase, parsedPath.path, configCommand.value);
+    setConfigValueAtPath(parsedBase, parsedWritePath ?? [], configCommand.value);
     const validated = validateConfigObjectWithPlugins(parsedBase);
     if (!validated.ok) {
       const issue = validated.issues[0];
@@ -196,6 +204,10 @@ export const handleDebugCommand: CommandHandler = async (params, allowTextComman
   const unauthorized = rejectUnauthorizedCommand(params, "/debug");
   if (unauthorized) {
     return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/debug");
+  if (nonOwner) {
+    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/debug",

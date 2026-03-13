@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="${OPENCLAW_IMAGE:-${CLAWDBOT_IMAGE:-openclaw:local}}"
+LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${CLAWDBOT_LIVE_IMAGE:-${IMAGE_NAME}-live}}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-${CLAWDBOT_CONFIG_DIR:-$HOME/.openclaw}}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-${CLAWDBOT_WORKSPACE_DIR:-$HOME/.openclaw/workspace}}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-${CLAWDBOT_PROFILE_FILE:-$HOME/.profile}}"
@@ -33,8 +34,8 @@ cd "$tmp_dir"
 pnpm test:live
 EOF
 
-echo "==> Build image: $IMAGE_NAME"
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
+docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
 
 echo "==> Run live model tests (profile keys)"
 docker run --rm -t \
@@ -52,5 +53,5 @@ docker run --rm -t \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
   "${PROFILE_MOUNT[@]}" \
-  "$IMAGE_NAME" \
+  "$LIVE_IMAGE_NAME" \
   -lc "$LIVE_TEST_CMD"

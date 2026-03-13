@@ -2,15 +2,31 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  clearPluginManifestRegistryCache,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+const previousUmask = process.umask(0o022);
+
+function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  fs.chmodSync(dir, 0o755);
+}
+
+function mkdirSafe(dir: string) {
+  fs.mkdirSync(dir, { recursive: true });
+  chmodSafeDir(dir);
+}
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `openclaw-manifest-registry-${randomUUID()}`);
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirSafe(dir);
   tempDirs.push(dir);
   return dir;
 }
@@ -116,6 +132,7 @@ function expectUnsafeWorkspaceManifestRejected(params: {
 }
 
 afterEach(() => {
+  clearPluginManifestRegistryCache();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) {
@@ -127,6 +144,10 @@ afterEach(() => {
       // ignore cleanup failures
     }
   }
+});
+
+afterAll(() => {
+  process.umask(previousUmask);
 });
 
 describe("loadPluginManifestRegistry", () => {
@@ -210,7 +231,7 @@ describe("loadPluginManifestRegistry", () => {
 
   it("prefers higher-precedence origins for the same physical directory (config > workspace > global > bundled)", () => {
     const dir = makeTempDir();
-    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    mkdirSafe(path.join(dir, "sub"));
     const manifest = { id: "precedence-plugin", configSchema: { type: "object" } };
     writeManifest(dir, manifest);
 
@@ -263,5 +284,105 @@ describe("loadPluginManifestRegistry", () => {
     });
     expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
     expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
+  });
+
+  it("does not reuse cached bundled plugin roots across env changes", () => {
+    const bundledA = makeTempDir();
+    const bundledB = makeTempDir();
+    const matrixA = path.join(bundledA, "matrix");
+    const matrixB = path.join(bundledB, "matrix");
+    mkdirSafe(matrixA);
+    mkdirSafe(matrixB);
+    writeManifest(matrixA, {
+      id: "matrix",
+      name: "Matrix A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(matrixB, {
+      id: "matrix",
+      name: "Matrix B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(matrixA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(matrixB, "index.ts"), "export default {}", "utf-8");
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixB));
+  });
+
+  it("does not reuse cached load-path manifests across env home changes", () => {
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const demoA = path.join(homeA, "plugins", "demo");
+    const demoB = path.join(homeB, "plugins", "demo");
+    mkdirSafe(demoA);
+    mkdirSafe(demoB);
+    writeManifest(demoA, {
+      id: "demo",
+      name: "Demo A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(demoB, {
+      id: "demo",
+      name: "Demo B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(demoA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(demoB, "index.ts"), "export default {}", "utf-8");
+
+    const config = {
+      plugins: {
+        load: {
+          paths: ["~/plugins/demo"],
+        },
+      },
+    };
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeA,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeB,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoB));
   });
 });
