@@ -1261,7 +1261,6 @@ export async function handleFeishuMessage(params: {
     }
 
     // Fetch thread context for topic sessions — allows the AI to see bot replies in the thread
-    let threadStarterBody: string | undefined;
     let threadHistoryBody: string | undefined;
 
     const isTopicSessionForThread =
@@ -1270,22 +1269,17 @@ export async function handleFeishuMessage(params: {
         groupSession?.groupSessionScope === "group_topic_sender");
 
     if ((ctx.rootId || ctx.threadId) && isTopicSessionForThread) {
-      // 1. Fetch root message to get ThreadStarterBody and the Feishu thread_id (omt_xxx).
-      //    Reuse the already-fetched quoted message when rootId === parentId to avoid
-      //    a redundant API call.
-      //    Fall back to ctx.threadId from the inbound event when:
+      // 1. Resolve the Feishu thread_id (omt_xxx) needed for the thread history API.
+      //    Reuse the already-fetched quoted message threadId when rootId === parentId
+      //    to avoid a redundant API call.  Fall back to ctx.threadId when:
       //    - rootId is absent (thread_id-only events)
       //    - the root message API call fails or returns no thread_id
       let feishuThreadId: string | undefined = ctx.threadId;
       if (ctx.rootId) {
         if (ctx.rootId === ctx.parentId) {
-          // Reuse quoted message for both starter body and threadId.
-          threadStarterBody = quotedContent;
           feishuThreadId = quotedMsgThreadId ?? feishuThreadId;
         }
-        // Always fetch the root message when threadStarterBody is still empty
-        // (e.g. parentId != rootId) or when we still need a feishuThreadId.
-        if (!threadStarterBody || !feishuThreadId) {
+        if (!feishuThreadId) {
           try {
             const rootMsg = await getMessageFeishu({
               cfg,
@@ -1293,35 +1287,29 @@ export async function handleFeishuMessage(params: {
               accountId: account.accountId,
             });
             if (rootMsg) {
-              if (!threadStarterBody) {
-                threadStarterBody = rootMsg.content;
-              }
               feishuThreadId = rootMsg.threadId ?? feishuThreadId;
             }
           } catch (err) {
-            log(`feishu[${account.accountId}]: failed to fetch thread starter: ${String(err)}`);
+            log(
+              `feishu[${account.accountId}]: failed to fetch root message threadId: ${String(err)}`,
+            );
           }
         }
       }
       if (feishuThreadId) {
-        log(
-          `feishu[${account.accountId}]: fetched thread starter (threadId=${feishuThreadId}): ${threadStarterBody?.slice(0, 100)}`,
-        );
+        log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
       }
 
-      // 2. Fetch thread history (includes bot replies) using omt_xxx thread ID.
-      //    The root message is excluded (rootMessageId) since it's already provided
-      //    separately as ThreadStarterBody.
+      // 2. Fetch thread history (includes root + bot replies) using omt_xxx thread ID.
+      //    Root is included in history (not excluded) so the first turn gets a
+      //    complete context via ThreadHistoryBody.  On subsequent turns the session
+      //    already contains the prior context, so we skip injection entirely.
       if (feishuThreadId) {
         try {
           const threadMessages = await listFeishuThreadMessages({
             cfg,
             threadId: feishuThreadId,
             currentMessageId: ctx.messageId,
-            // Only exclude the root message when its content was successfully
-            // captured as ThreadStarterBody; otherwise keep it in history so the
-            // thread opener is not lost after a transient root-fetch failure.
-            rootMessageId: threadStarterBody ? ctx.rootId : undefined,
             limit: 20,
             accountId: account.accountId,
           });
@@ -1333,7 +1321,22 @@ export async function handleFeishuMessage(params: {
                 (msg) => msg.senderType === "app" || msg.senderId === ctx.senderOpenId,
               )
             : threadMessages;
-          if (relevantMessages.length > 0) {
+          // Skip thread history injection when the current user has already
+          // participated in this thread — the session will already contain the
+          // prior turns, so re-injecting would be redundant token waste.
+          // The root message is excluded from this check because posting the
+          // thread-starting message does not count as a prior session turn.
+          const hasPriorUserMessage = relevantMessages.some(
+            (msg) =>
+              msg.senderId === ctx.senderOpenId &&
+              msg.senderType !== "app" &&
+              msg.messageId !== ctx.rootId,
+          );
+          if (hasPriorUserMessage) {
+            log(
+              `feishu[${account.accountId}]: skipping thread context injection (session already has prior turns)`,
+            );
+          } else if (relevantMessages.length > 0) {
             const envelopeOpts = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
             const historyParts = relevantMessages.map((msg) => {
               const role = msg.senderType === "app" ? "assistant" : "user";
@@ -1437,7 +1440,7 @@ export async function handleFeishuMessage(params: {
         Surface: "feishu" as const,
         MessageSid: ctx.messageId,
         ReplyToBody: quotedContent ?? undefined,
-        ThreadStarterBody: threadStarterBody,
+        ThreadStarterBody: undefined,
         ThreadHistoryBody: threadHistoryBody,
         ThreadLabel:
           (ctx.rootId || ctx.threadId) && isTopicSessionForThread
