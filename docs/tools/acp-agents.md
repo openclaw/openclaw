@@ -574,11 +574,13 @@ per-session MCP server injection.
 
 Recommended flow:
 
-1. If you plan to use `--autoConnect`, enable Chrome remote debugging in Chrome
-   at `chrome://inspect/#remote-debugging`.
+1. If you plan to use `--autoConnect`, prepare Chrome for remote debugging on a
+   trusted machine and keep the debugging endpoint local-only.
 2. Install and enable the `acpx` plugin.
-3. Add `chrome-devtools-mcp` under `plugins.entries.acpx.config.mcpServers`.
-4. Run your ACP agent through OpenClaw as usual.
+3. Install `chrome-devtools-mcp` yourself and pin the exact version you want to
+   run.
+4. Add `chrome-devtools-mcp` under `plugins.entries.acpx.config.mcpServers`.
+5. Run your ACP agent through OpenClaw as usual.
 
 Example:
 
@@ -595,8 +597,8 @@ Example:
         "config": {
           "mcpServers": {
             "chrome-devtools": {
-              "command": "npx",
-              "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
+              "command": "chrome-devtools-mcp",
+              "args": ["--autoConnect"]
             }
           }
         }
@@ -609,11 +611,17 @@ Example:
 Notes:
 
 - Chrome DevTools MCP `--autoConnect` requires Chrome 144 or newer.
+- Install and pin `chrome-devtools-mcp` with your package manager first. Avoid
+  long-lived ACP configs that run `npx ...@latest`.
+- The example assumes `chrome-devtools-mcp` is already installed and available
+  on `PATH`.
 - If you prefer a manual CDP connection instead of `--autoConnect`, launch
-  Chrome with `--remote-debugging-port=<port>` and point the MCP server at that
-  browser with its `--browserUrl`/`--wsEndpoint` options instead.
-- `--autoConnect` can expose the current live Chrome session for the selected
-  browser profile, so prefer a dedicated Chrome profile for automation.
+  Chrome with `--remote-debugging-address=127.0.0.1` and
+  `--remote-debugging-port=<port>`, then point the MCP server at that browser
+  with its `--browserUrl`/`--wsEndpoint` options instead.
+- Chrome remote debugging exposes privileged control of the browser. Keep it
+  loopback-only, only enable it on trusted machines, and prefer a dedicated
+  Chrome profile for automation.
 - If you only need OpenClaw to control specific existing tabs, the built-in
   [Chrome extension relay](/tools/chrome-extension) is usually the simpler and
   narrower-scoped option.
