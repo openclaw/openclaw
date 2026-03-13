@@ -18,7 +18,10 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  isInternalMessageChannel,
+} from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
@@ -97,8 +100,15 @@ export async function deliverAgentCommandResult(params: {
   let deliveryChannel = deliveryPlan.resolvedChannel;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
   if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
+    const selectionFallbackChannel =
+      turnSourceChannel && isDeliverableMessageChannel(turnSourceChannel)
+        ? turnSourceChannel
+        : deliveryPlan.baseDelivery.lastChannel;
     try {
-      const selection = await resolveMessageChannelSelection({ cfg });
+      const selection = await resolveMessageChannelSelection({
+        cfg,
+        fallbackChannel: selectionFallbackChannel,
+      });
       deliveryChannel = selection.channel;
     } catch {
       // Keep the internal channel marker; error handling below reports the failure.
