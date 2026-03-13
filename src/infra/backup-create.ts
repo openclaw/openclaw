@@ -282,7 +282,12 @@ export async function createBackupArchive(
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
   const includeBrowser = onlyConfig ? true : (opts.includeBrowser ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, includeBrowser, onlyConfig, nowMs });
+  const plan = await resolveBackupPlanFromDisk({
+    includeWorkspace,
+    includeBrowser,
+    onlyConfig,
+    nowMs,
+  });
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,

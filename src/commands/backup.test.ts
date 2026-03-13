@@ -457,7 +457,10 @@ describe("backup commands", () => {
     expect(result.includeBrowser).toBe(false);
     expect(result.skipped).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ reason: "excluded", sourcePath: expect.stringContaining("browser") }),
+        expect.objectContaining({
+          reason: "excluded",
+          sourcePath: expect.stringContaining("browser"),
+        }),
       ]),
     );
   });
@@ -508,9 +511,7 @@ describe("backup commands", () => {
           "payload",
           encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
         );
-        expect(await fs.readFile(path.join(encodedStatePath, "state.txt"), "utf8")).toBe(
-          "state\n",
-        );
+        expect(await fs.readFile(path.join(encodedStatePath, "state.txt"), "utf8")).toBe("state\n");
 
         // browser directory should not exist in the archive
         const browserPath = path.join(encodedStatePath, "browser");
