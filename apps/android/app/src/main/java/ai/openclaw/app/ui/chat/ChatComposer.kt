@@ -26,7 +26,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -78,65 +77,15 @@ fun ChatComposer(
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Box(modifier = Modifier.weight(1f)) {
-        Surface(
-          onClick = { showThinkingMenu = true },
-          shape = RoundedCornerShape(14.dp),
-          color = mobileAccentSoft,
-          border = BorderStroke(1.dp, mobileBorderStrong),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Text(
-              text = "Thinking: ${thinkingLabel(thinkingLevel)}",
-              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileText,
-            )
-            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", tint = mobileTextSecondary)
-          }
-        }
-
-        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
-          ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-        }
-      }
-
-      SecondaryActionButton(
-        label = "Attach",
-        icon = Icons.Default.AttachFile,
-        enabled = true,
-        onClick = onPickImages,
-      )
-    }
-
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    HorizontalDivider(color = mobileBorder)
-
-    Text(
-      text = "MESSAGE",
-      style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp),
-      color = mobileTextSecondary,
-    )
-
     OutlinedTextField(
       value = input,
       onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth().height(92.dp),
-      placeholder = { Text("Type a message", style = mobileBodyStyle(), color = mobileTextTertiary) },
+      modifier = Modifier.fillMaxWidth(),
+      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
       minLines = 2,
       maxLines = 5,
       textStyle = mobileBodyStyle().copy(color = mobileText),
@@ -155,25 +104,61 @@ fun ChatComposer(
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        SecondaryActionButton(
-          label = "Refresh",
-          icon = Icons.Default.Refresh,
-          enabled = true,
-          compact = true,
-          onClick = onRefresh,
-        )
+      Box {
+        Surface(
+          onClick = { showThinkingMenu = true },
+          shape = RoundedCornerShape(14.dp),
+          color = Color.White,
+          border = BorderStroke(1.dp, mobileBorderStrong),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = thinkingLabel(thinkingLevel),
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = mobileTextSecondary,
+            )
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", modifier = Modifier.size(18.dp), tint = mobileTextTertiary)
+          }
+        }
 
-        SecondaryActionButton(
-          label = "Abort",
-          icon = Icons.Default.Stop,
-          enabled = pendingRunCount > 0,
-          compact = true,
-          onClick = onAbort,
-        )
+        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
+          ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+          ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+          ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+          ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+        }
       }
+
+      SecondaryActionButton(
+        label = "Attach",
+        icon = Icons.Default.AttachFile,
+        enabled = true,
+        compact = true,
+        onClick = onPickImages,
+      )
+
+      SecondaryActionButton(
+        label = "Refresh",
+        icon = Icons.Default.Refresh,
+        enabled = true,
+        compact = true,
+        onClick = onRefresh,
+      )
+
+      SecondaryActionButton(
+        label = "Abort",
+        icon = Icons.Default.Stop,
+        enabled = pendingRunCount > 0,
+        compact = true,
+        onClick = onAbort,
+      )
+
+      Spacer(modifier = Modifier.weight(1f))
 
       Button(
         onClick = {
@@ -182,8 +167,9 @@ fun ChatComposer(
           onSend(text)
         },
         enabled = canSend,
-        modifier = Modifier.weight(1f).height(48.dp),
+        modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp),
         colors =
           ButtonDefaults.buttonColors(
             containerColor = mobileAccent,
@@ -198,7 +184,7 @@ fun ChatComposer(
         } else {
           Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
         }
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
           text = "Send",
           style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
