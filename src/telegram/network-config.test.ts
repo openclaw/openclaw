@@ -187,7 +187,9 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
   }>)("$name", ({ env, network, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
-      network,
+      network: network as NonNullable<
+        Parameters<typeof resolveTelegramDnsResultOrderDecision>[0]
+      >["network"],
       nodeMajor,
     });
     expect(decision).toEqual(expected);
