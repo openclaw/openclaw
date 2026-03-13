@@ -315,7 +315,7 @@ clawdock-devices() {
   if [ $exit_status -ne 0 ]; then
     echo ""
     # Token mismatch is the common Docker onboarding failure, so show the one-step fix first.
-    if [[ "${output,,}" == *"token mismatch"* ]]; then
+    if printf "%s" "$output" | tr '[:upper:]' '[:lower:]' | grep -q "token mismatch"; then
       echo -e "${_CLR_CYAN}💡 If you see token mismatch errors above:${_CLR_RESET}"
       echo -e "   1. Run: $(_cmd clawdock-fix-token)"
       echo -e "   2. Retry: $(_cmd clawdock-devices)"
