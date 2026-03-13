@@ -27,8 +27,15 @@ async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
     const raw = await fs.readFile(file, "utf-8");
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as TokenUsageRecord[]) : [];
-  } catch {
-    return [];
+  } catch (err) {
+    // File does not exist yet — start with an empty array.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    // Any other error (malformed JSON, permission denied, partial write, …)
+    // must propagate so appendRecord aborts and the existing file is not
+    // silently overwritten with only the new entry.
+    throw err;
   }
 }
 

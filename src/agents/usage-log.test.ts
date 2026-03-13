@@ -120,6 +120,26 @@ describe("recordTokenUsage", () => {
     expect(records[0].outputTokens).toBe(50);
   });
 
+  it("does not overwrite a malformed token-usage.json — preserves corrupted file", async () => {
+    // Simulate an interrupted write that left partial JSON
+    await fs.mkdir(path.join(tmpDir, "memory"), { recursive: true });
+    await fs.writeFile(usageFile, '{"broken":true', "utf-8");
+
+    // recordTokenUsage must reject (caller is responsible for handling, e.g.
+    // attempt.ts uses .catch()) and must NOT overwrite the existing file.
+    await expect(
+      recordTokenUsage({
+        workspaceDir: tmpDir,
+        label: "llm_output",
+        usage: { input: 100, output: 50, total: 150 },
+      }),
+    ).rejects.toThrow(SyntaxError);
+
+    // File must still contain the original corrupted content, not a new array.
+    const content = await fs.readFile(usageFile, "utf-8");
+    expect(content).toBe('{"broken":true');
+  });
+
   it("serialises concurrent writes — no record is lost", async () => {
     const N = 20;
     await Promise.all(
