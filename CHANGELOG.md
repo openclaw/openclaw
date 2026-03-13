@@ -26,6 +26,9 @@ Docs: https://docs.openclaw.ai
 - Signal/config validation: add `channels.signal.groups` schema support so per-group `requireMention`, `tools`, and `toolsBySender` overrides no longer get rejected during config validation. (#27199) Thanks @unisone.
 - Config/discovery: accept `discovery.wideArea.domain` in strict config validation so unicast DNS-SD gateway configs no longer fail with an unrecognized-key error. (#35615) Thanks @ingyukoh.
 - Security/exec approvals: unwrap more `pnpm` runtime forms during approval binding, including `pnpm --reporter ... exec` and direct `pnpm node` file runs, with matching regression coverage and docs updates.
+
+- Security/exec approvals: fail closed for Perl `-M` and `-I` approval flows so preload and load-path module resolution stays outside approval-backed runtime execution unless the operator uses a broader explicit trust path.
+
 ## 2026.3.12
 
 ### Changes
