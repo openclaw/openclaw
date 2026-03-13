@@ -6,6 +6,7 @@ import {
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
   isIpInCidr,
+  isIpv4Address,
   isIpv6Address,
   isLegacyIpv4Literal,
   isLoopbackIpAddress,
@@ -13,6 +14,7 @@ import {
   isRfc1918Ipv4Address,
   normalizeIpAddress,
   parseCanonicalIpAddress,
+  parseLooseIpAddress,
 } from "./ip.js";
 
 describe("shared ip helpers", () => {
@@ -29,6 +31,8 @@ describe("shared ip helpers", () => {
     expect(isIpInCidr("10.43.0.59", "10.42.0.0/24")).toBe(false);
     expect(isIpInCidr("2001:db8::1234", "2001:db8::/32")).toBe(true);
     expect(isIpInCidr("2001:db9::1234", "2001:db8::/32")).toBe(false);
+    expect(isIpInCidr("::ffff:127.0.0.1", "127.0.0.1")).toBe(true);
+    expect(isIpInCidr("127.0.0.1", "::ffff:127.0.0.2")).toBe(false);
   });
 
   it("extracts embedded IPv4 for transition prefixes", () => {
@@ -66,6 +70,12 @@ describe("shared ip helpers", () => {
     expect(isLoopbackIpAddress("198.18.0.1")).toBe(false);
   });
 
+  it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {
+    expect(parseCanonicalIpAddress("0177.0.0.1")).toBeUndefined();
+    expect(parseLooseIpAddress("0177.0.0.1")?.toString()).toBe("127.0.0.1");
+    expect(parseLooseIpAddress("[::1]")?.toString()).toBe("::1");
+  });
+
   it("classifies RFC1918 and carrier-grade-nat IPv4 ranges", () => {
     expect(isRfc1918Ipv4Address("10.42.0.59")).toBe(true);
     expect(isRfc1918Ipv4Address("100.64.0.1")).toBe(false);
@@ -79,7 +89,7 @@ describe("shared ip helpers", () => {
 
     expect(loopback?.kind()).toBe("ipv4");
     expect(benchmark?.kind()).toBe("ipv4");
-    if (!loopback || loopback.kind() !== "ipv4" || !benchmark || benchmark.kind() !== "ipv4") {
+    if (!loopback || !isIpv4Address(loopback) || !benchmark || !isIpv4Address(benchmark)) {
       throw new Error("expected ipv4 fixtures");
     }
 

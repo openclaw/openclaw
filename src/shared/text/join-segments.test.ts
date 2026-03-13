@@ -13,6 +13,8 @@ describe("concatOptionalTextSegments", () => {
   it("falls back to whichever side is present and honors custom separators", () => {
     expect(concatOptionalTextSegments({ left: "A" })).toBe("A");
     expect(concatOptionalTextSegments({ right: "B" })).toBe("B");
+    expect(concatOptionalTextSegments({ left: "", right: "B" })).toBe("B");
+    expect(concatOptionalTextSegments({ left: "" })).toBe("");
     expect(concatOptionalTextSegments({ left: "A", right: "B", separator: " | " })).toBe("A | B");
   });
 });
@@ -35,5 +37,9 @@ describe("joinPresentTextSegments", () => {
     expect(joinPresentTextSegments(["A", "   ", "B"], { trim: true, separator: " | " })).toBe(
       "A | B",
     );
+  });
+
+  it("preserves segment whitespace when trim is disabled", () => {
+    expect(joinPresentTextSegments(["A", "  B  "], { separator: "|" })).toBe("A|  B  ");
   });
 });
