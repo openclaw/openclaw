@@ -6,13 +6,15 @@ export const OUTPUT_HISTORY_HEAD_TAIL_CHARS = 300;
 
 /** Truncate output text keeping the first and last N characters. */
 export function truncateOutputForHistory(text: string): string {
+  const sep = " … ";
   const limit = OUTPUT_HISTORY_HEAD_TAIL_CHARS * 2;
   if (text.length <= limit) {
     return text;
   }
-  const head = text.slice(0, OUTPUT_HISTORY_HEAD_TAIL_CHARS);
-  const tail = text.slice(-OUTPUT_HISTORY_HEAD_TAIL_CHARS);
-  return `${head} … ${tail}`;
+  const partLen = Math.floor((limit - sep.length) / 2);
+  const head = text.slice(0, partLen);
+  const tail = text.slice(-partLen);
+  return `${head}${sep}${tail}`;
 }
 
 export function buildOutputHistoryBlock(job: CronJob): string | undefined {

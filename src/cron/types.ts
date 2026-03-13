@@ -141,7 +141,7 @@ export type CronJobState = {
    * Only populated when `payload.outputHistory` is enabled.
    */
   recentOutputs?: Array<{
-    /** Delivered text, truncated to ~600 characters (first 300 + last 300). */
+    /** Delivered text, truncated to ≤600 characters (head + tail with separator). */
     text: string;
     /** Timestamp (ms since epoch) when the output was delivered. */
     timestamp: number;

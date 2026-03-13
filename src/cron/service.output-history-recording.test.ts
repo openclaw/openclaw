@@ -210,11 +210,11 @@ describe("CronService output history recording", () => {
       const jobs = await cron.list({ includeDisabled: true });
       const updated = jobs.find((j) => j.id === job.id);
       const stored = updated?.state.recentOutputs![0].text;
-      // Should contain head and tail with ellipsis separator
-      expect(stored).toContain("H".repeat(300));
-      expect(stored).toContain("T".repeat(300));
+      // Should contain head and tail with ellipsis separator, within the 600 char limit
+      expect(stored).toContain("H".repeat(298));
+      expect(stored).toContain("T".repeat(298));
       expect(stored).toContain("…");
-      expect(stored!.length).toBeLessThanOrEqual(603); // 300 + 3 + 300
+      expect(stored!.length).toBeLessThanOrEqual(600);
     } finally {
       cron.stop();
     }

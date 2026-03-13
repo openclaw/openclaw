@@ -104,14 +104,22 @@ describe("truncateOutputForHistory", () => {
     expect(truncateOutputForHistory(text)).toBe(text);
   });
 
-  it("truncates long text keeping head and tail", () => {
+  it("truncates long text keeping head and tail within limit", () => {
     const head = "H".repeat(400);
     const middle = "M".repeat(200);
     const tail = "T".repeat(400);
     const result = truncateOutputForHistory(`${head}${middle}${tail}`);
-    expect(result).toContain("H".repeat(300));
-    expect(result).toContain("T".repeat(300));
+    expect(result).toContain("H".repeat(298));
+    expect(result).toContain("T".repeat(298));
     expect(result).toContain("…");
-    expect(result.length).toBeLessThanOrEqual(603); // 300 + " … " + 300
+    // partLen = floor((600 - 3) / 2) = 298; total = 298 + " … " + 298 = 599
+    expect(result.length).toBeLessThanOrEqual(600);
+  });
+
+  it("does not expand text in the 601-602 char range", () => {
+    const text = "A".repeat(601);
+    const result = truncateOutputForHistory(text);
+    expect(result.length).toBeLessThanOrEqual(600);
+    expect(result).toContain("…");
   });
 });
