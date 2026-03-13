@@ -459,6 +459,24 @@ export async function restartLaunchAgent({
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (isCurrentProcessLaunchdServiceLabel(label)) {
+    // Trigger in-process restart (SIGUSR1) before scheduling handoff.
+    // This ensures the gateway gracefully restarts in-process, while the handoff
+    // script ensures a new instance starts after the current process exits.
+    try {
+      if (process.listenerCount("SIGUSR1") > 0) {
+        process.emit("SIGUSR1");
+      } else {
+        process.kill(process.pid, "SIGUSR1");
+      }
+    } catch (err: unknown) {
+      // If SIGUSR1 fails, log but continue with handoff as fallback.
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      try {
+        stdout.write(`${formatLine("Warning: SIGUSR1 restart failed, using handoff", errorMsg)}\n`);
+      } catch {
+        // Ignore stdout write errors.
+      }
+    }
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: "kickstart",
