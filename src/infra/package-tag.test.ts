@@ -12,6 +12,7 @@ describe("normalizePackageTagInput", () => {
   it("strips known package-name prefixes before returning the tag", () => {
     expect(normalizePackageTagInput("openclaw@beta", packageNames)).toBe("beta");
     expect(normalizePackageTagInput("@openclaw/plugin@2026.2.24", packageNames)).toBe("2026.2.24");
+    expect(normalizePackageTagInput("openclaw@   ", packageNames)).toBeNull();
   });
 
   it("returns trimmed raw values when no package prefix matches", () => {
