@@ -329,6 +329,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           logVerbose(
             `slack: preview final edit failed; falling back to standard send (${String(err)})`,
           );
+          // Clear the draft so flush() doesn't send a duplicate after deliverNormally.
+          await draftStream?.clear();
+          hasStreamedMessage = false;
         }
       } else if (previewStreamingEnabled && streamMode === "status_final" && hasStreamedMessage) {
         try {
@@ -348,6 +351,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       } else if (mediaCount > 0) {
         await draftStream?.clear();
         hasStreamedMessage = false;
+      } else if (previewStreamingEnabled) {
+        // Draft stream has pending text that hasn't been sent yet (fast LLM response).
+        // Stop it before delivering normally to prevent flush() from sending a duplicate.
+        draftStream?.stop();
       }
 
       await deliverNormally(payload);
@@ -362,6 +369,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     target: prepared.replyTarget,
     token: ctx.botToken,
     accountId: account.accountId,
+    identity: slackIdentity,
     maxChars: Math.min(ctx.textLimit, 4000),
     resolveThreadTs: () => {
       const ts = replyPlan.nextThreadTs();

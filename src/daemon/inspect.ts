@@ -31,13 +31,22 @@ export function renderGatewayServiceCleanupHints(
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
+      return [
+        `launchctl bootout gui/$UID/${label}`,
+        `rm ~/Library/LaunchAgents/${label}.plist`,
+        ``,
+        `One-liner (copy-paste):`,
+        `launchctl bootout gui/$UID/${label} && rm ~/Library/LaunchAgents/${label}.plist`,
+      ];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
       return [
         `systemctl --user disable --now ${unit}.service`,
         `rm ~/.config/systemd/user/${unit}.service`,
+        ``,
+        `One-liner (copy-paste):`,
+        `systemctl --user disable --now ${unit}.service && rm ~/.config/systemd/user/${unit}.service`,
       ];
     }
     case "win32": {
