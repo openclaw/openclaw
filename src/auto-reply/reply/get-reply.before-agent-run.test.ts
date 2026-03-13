@@ -236,4 +236,18 @@ describe("getReplyFromConfig before_agent_run hook", () => {
     expect(mocks.runPreparedReply).toHaveBeenCalledTimes(1);
     expect(mocks.typingCleanup).not.toHaveBeenCalled();
   });
+
+  it("passes heartbeat trigger context for heartbeat runs", async () => {
+    mocks.hasHooks.mockReturnValue(true);
+    mocks.runBeforeAgentRun.mockResolvedValue({ skip: false });
+
+    await getReplyFromConfig(buildCtx(), { isHeartbeat: true }, {});
+
+    expect(mocks.runBeforeAgentRun).toHaveBeenCalledWith(
+      { prompt: "hello team" },
+      expect.objectContaining({
+        trigger: "heartbeat",
+      }),
+    );
+  });
 });

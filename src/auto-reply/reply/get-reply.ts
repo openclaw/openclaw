@@ -12,6 +12,7 @@ import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -53,6 +54,13 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
+}
+
+function resolveBeforeAgentRunTrigger(opts?: GetReplyOptions): PluginHookAgentContext["trigger"] {
+  if (opts?.isHeartbeat) {
+    return "heartbeat";
+  }
+  return "user";
 }
 
 export async function getReplyFromConfig(
@@ -366,7 +374,7 @@ export async function getReplyFromConfig(
         sessionKey,
         sessionId,
         workspaceDir,
-        trigger: "user",
+        trigger: resolveBeforeAgentRunTrigger(opts),
         channelId:
           groupResolution?.channel ??
           sessionEntry.channel ??
