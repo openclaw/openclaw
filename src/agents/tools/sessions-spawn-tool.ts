@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { callGateway } from "../../gateway/call.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -6,6 +7,7 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import { resolveGatewayPeerOptions } from "./gateway-peer.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -63,6 +65,11 @@ const SessionsSpawnToolSchema = Type.Object({
       mountPath: Type.Optional(Type.String()),
     }),
   ),
+  gateway: Type.Optional(
+    Type.String({ description: "Named gateway peer (from gateway.peers config)" }),
+  ),
+  gatewayUrl: Type.Optional(Type.String({ description: "WebSocket URL of a remote gateway" })),
+  gatewayToken: Type.Optional(Type.String({ description: "Auth token for the remote gateway" })),
 });
 
 export function createSessionsSpawnTool(
@@ -93,6 +100,102 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
         );
       }
+
+      // ── Cross-gateway fast path ────────────────────────────────────
+      // When gateway / gatewayUrl is provided, forward the spawn request
+      // to the remote gateway via its `agent` method.
+      let peerOpts: Awaited<ReturnType<typeof resolveGatewayPeerOptions>>;
+      try {
+        peerOpts = await resolveGatewayPeerOptions(params);
+      } catch (err) {
+        return jsonResult({
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (peerOpts) {
+        const task = readStringParam(params, "task", { required: true });
+        const requestedAgentId = readStringParam(params, "agentId");
+        const label = typeof params.label === "string" ? params.label.trim() : "";
+
+        // Reject spawn parameters that cannot be forwarded to a remote gateway.
+        // The remote gateway owns session creation — these local-only params
+        // would be silently dropped, causing confusing behavior.
+        const UNSUPPORTED_REMOTE_PARAMS = [
+          "runtime",
+          "model",
+          "thinking",
+          "cwd",
+          "runTimeoutSeconds",
+          "timeoutSeconds",
+          "mode",
+          "cleanup",
+          "sandbox",
+          "streamTo",
+          "thread",
+          "attachments",
+          "attachAs",
+          "resumeSessionId",
+        ] as const;
+        const providedUnsupported = UNSUPPORTED_REMOTE_PARAMS.filter(
+          (key) => params[key] !== undefined && params[key] !== null,
+        );
+        if (providedUnsupported.length > 0) {
+          return jsonResult({
+            status: "error",
+            error:
+              `Cross-gateway spawn does not support: ${providedUnsupported.join(", ")}. ` +
+              `These parameters are local-only and cannot be forwarded to the remote gateway.`,
+            remote: true,
+          });
+        }
+
+        // Bypass resolveGatewayOptions — it only allows loopback/remote URLs.
+        // Peer URLs from config are pre-validated and passed directly.
+        const peerUrl = peerOpts.gatewayUrl;
+        const peerToken = peerOpts.gatewayToken;
+
+        // Spawn on the remote gateway by sending the task as an agent message.
+        // The remote gateway will create the session and run the agent.
+        const sessionKey = requestedAgentId ? `agent:${requestedAgentId}:main` : undefined;
+
+        try {
+          const response = await callGateway<{ runId?: string }>({
+            url: peerUrl,
+            token: peerToken,
+            method: "agent",
+            params: {
+              message: task,
+              ...(sessionKey ? { sessionKey } : {}),
+              ...(label ? { label } : {}),
+              deliver: false,
+              channel: "internal",
+              inputProvenance: {
+                kind: "inter_session",
+                sourceSessionKey: opts?.agentSessionKey,
+                sourceChannel: opts?.agentChannel,
+                sourceTool: "sessions_spawn",
+              },
+            },
+            timeoutMs: 15_000,
+          });
+          return jsonResult({
+            status: "accepted",
+            runId: response?.runId,
+            sessionKey,
+            remote: true,
+            label: label || undefined,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return jsonResult({
+            status: "error",
+            error: `Remote spawn failed: ${msg}`,
+            remote: true,
+          });
+        }
+      }
+
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";

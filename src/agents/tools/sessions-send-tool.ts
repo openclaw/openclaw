@@ -11,6 +11,7 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveGatewayPeerOptions } from "./gateway-peer.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -30,6 +31,11 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  gateway: Type.Optional(
+    Type.String({ description: "Named gateway peer (from gateway.peers config)" }),
+  ),
+  gatewayUrl: Type.Optional(Type.String({ description: "WebSocket URL of a remote gateway" })),
+  gatewayToken: Type.Optional(Type.String({ description: "Auth token for the remote gateway" })),
 });
 
 export function createSessionsSendTool(opts?: {
@@ -46,6 +52,190 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
+
+      // ── Cross-gateway fast path ────────────────────────────────────
+      // When gateway / gatewayUrl is provided, route the message to a
+      // remote gateway.  We skip local session resolution, visibility
+      // checks, and A2A flow — the remote gateway owns all of that.
+      let peerOpts: Awaited<ReturnType<typeof resolveGatewayPeerOptions>>;
+      try {
+        peerOpts = await resolveGatewayPeerOptions(params);
+      } catch (err) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (peerOpts) {
+        const sessionKeyParam = readStringParam(params, "sessionKey");
+        const labelParam = readStringParam(params, "label")?.trim() || undefined;
+        const labelAgentIdParam = readStringParam(params, "agentId")?.trim() || undefined;
+        if (!sessionKeyParam && !labelParam) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error:
+              "Cross-gateway sessions_send requires sessionKey or label to identify the remote session.",
+          });
+        }
+        const timeoutSeconds =
+          typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+            ? Math.max(0, Math.floor(params.timeoutSeconds))
+            : 30;
+        const timeoutMs = timeoutSeconds * 1000;
+        // Bypass resolveGatewayOptions — it only allows loopback/remote URLs.
+        // Peer URLs from config are pre-validated and passed directly.
+        const peerUrl = peerOpts.gatewayUrl;
+        const peerToken = peerOpts.gatewayToken;
+        const idempotencyKey = crypto.randomUUID();
+        let runId = idempotencyKey;
+
+        // If we only have a label, resolve it on the remote gateway first.
+        let resolvedKey = sessionKeyParam;
+        if (!resolvedKey && labelParam) {
+          try {
+            const resolved = await callGateway<{ key: string }>({
+              url: peerUrl,
+              token: peerToken,
+              method: "sessions.resolve",
+              params: {
+                label: labelParam,
+                ...(labelAgentIdParam ? { agentId: labelAgentIdParam } : {}),
+              },
+              timeoutMs: 10_000,
+            });
+            resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return jsonResult({
+              runId,
+              status: "error",
+              error: `Remote session resolve failed: ${msg}`,
+            });
+          }
+          if (!resolvedKey) {
+            return jsonResult({
+              runId,
+              status: "error",
+              error: `No session found on remote gateway with label: ${labelParam}`,
+            });
+          }
+        }
+
+        // Send the message to the remote gateway.
+        const sendParams = {
+          message,
+          sessionKey: resolvedKey,
+          idempotencyKey,
+          deliver: false,
+          channel: INTERNAL_MESSAGE_CHANNEL,
+          lane: AGENT_LANE_NESTED,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: opts?.agentSessionKey,
+            sourceChannel: opts?.agentChannel,
+            sourceTool: "sessions_send",
+          },
+        };
+
+        try {
+          const response = await callGateway<{ runId: string }>({
+            url: peerUrl,
+            token: peerToken,
+            method: "agent",
+            params: sendParams,
+            timeoutMs: 10_000,
+          });
+          if (typeof response?.runId === "string" && response.runId) {
+            runId = response.runId;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return jsonResult({ runId, status: "error", error: msg, sessionKey: resolvedKey });
+        }
+
+        if (timeoutSeconds === 0) {
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: resolvedKey,
+            remote: true,
+          });
+        }
+
+        // Wait for remote agent to finish.
+        let waitStatus: string | undefined;
+        let waitError: string | undefined;
+        try {
+          const wait = await callGateway<{ status?: string; error?: string }>({
+            url: peerUrl,
+            token: peerToken,
+            method: "agent.wait",
+            params: { runId, timeoutMs },
+            timeoutMs: timeoutMs + 2000,
+          });
+          waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
+          waitError = typeof wait?.error === "string" ? wait.error : undefined;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return jsonResult({
+            runId,
+            status: msg.includes("gateway timeout") ? "timeout" : "error",
+            error: msg,
+            sessionKey: resolvedKey,
+            remote: true,
+          });
+        }
+
+        if (waitStatus === "timeout") {
+          return jsonResult({
+            runId,
+            status: "timeout",
+            error: waitError,
+            sessionKey: resolvedKey,
+            remote: true,
+          });
+        }
+        if (waitStatus === "error") {
+          return jsonResult({
+            runId,
+            status: "error",
+            error: waitError ?? "agent error",
+            sessionKey: resolvedKey,
+            remote: true,
+          });
+        }
+
+        // Fetch the reply from the remote gateway.
+        let reply: string | undefined;
+        try {
+          const history = await callGateway<{ messages: Array<unknown> }>({
+            url: peerUrl,
+            token: peerToken,
+            method: "chat.history",
+            params: { sessionKey: resolvedKey, limit: 50 },
+            timeoutMs: 10_000,
+          });
+          const filtered = stripToolMessages(
+            Array.isArray(history?.messages) ? history.messages : [],
+          );
+          const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+          reply = last ? extractAssistantText(last) : undefined;
+        } catch {
+          // Non-fatal — we still have status ok from the wait.
+        }
+
+        return jsonResult({
+          runId,
+          status: "ok",
+          reply,
+          sessionKey: resolvedKey,
+          remote: true,
+        });
+      }
+
+      // ── Local gateway path (original logic) ───────────────────────
       const cfg = loadConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({

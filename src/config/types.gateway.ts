@@ -1,5 +1,12 @@
 import type { SecretInput } from "./types.secrets.js";
 
+export type GatewayPeerConfig = {
+  /** WebSocket URL of the peer gateway (ws:// or wss://). */
+  url: string;
+  /** Authentication token for the peer gateway. */
+  token?: SecretInput;
+};
+
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -412,6 +419,12 @@ export type GatewayConfig = {
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
+  /**
+   * Named peer gateways for cross-gateway messaging.
+   * Keys are peer names (e.g. "imac", "studio"), values contain url + optional token.
+   * Agents can reference peers by name via the `gateway` param on session tools.
+   */
+  peers?: Record<string, GatewayPeerConfig>;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for`
