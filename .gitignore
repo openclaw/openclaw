@@ -20,6 +20,7 @@ ui/playwright-report/
 ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
+.specstory/
 
 # Mise configuration files
 mise.toml
