@@ -14,39 +14,9 @@ import {
   applyCloudflareAiGatewayConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiConfigCn,
-  applyMinimaxConfig,
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  applyOpencodeGoConfig,
-  applyOpencodeZenConfig,
-  applyOpenrouterConfig,
-  applySyntheticConfig,
-  applyNexosConfig,
-  applyVeniceConfig,
-  applyTogetherConfig,
-  applyHuggingfaceConfig,
-  applyVercelAiGatewayConfig,
-  applyLitellmConfig,
-  applyMistralConfig,
-  applyXaiConfig,
-  applyXiaomiConfig,
   applyZaiConfig,
   setCloudflareAiGatewayConfig,
   setMinimaxApiKey,
-  setMoonshotApiKey,
-  setOpenaiApiKey,
-  setOpencodeGoApiKey,
-  setOpencodeZenApiKey,
-  setOpenrouterApiKey,
-  setSyntheticApiKey,
-  setVolcengineApiKey,
-  setXaiApiKey,
-  setNexosApiKey,
-  setVeniceApiKey,
-  setTogetherApiKey,
-  setHuggingfaceApiKey,
-  setVercelAiGatewayApiKey,
-  setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
@@ -407,123 +377,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     const isCn = authChoice === "minimax-cn-api";
     const profileId = isCn ? "minimax:cn" : "minimax:global";
     const resolved = await resolveApiKey({
-      provider: "kimi-coding",
-      cfg: baseConfig,
-      flagValue: opts.kimiCodeApiKey,
-      flagName: "--kimi-code-api-key",
-      envVar: "KIMI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setKimiCodingApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      mode: "api_key",
-    });
-    return applyKimiCodeConfig(nextConfig);
-  }
-
-  if (authChoice === "synthetic-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "synthetic",
-      cfg: baseConfig,
-      flagValue: opts.syntheticApiKey,
-      flagName: "--synthetic-api-key",
-      envVar: "SYNTHETIC_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setSyntheticApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "synthetic:default",
-      provider: "synthetic",
-      mode: "api_key",
-    });
-    return applySyntheticConfig(nextConfig);
-  }
-
-  if (authChoice === "nexos-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "nexos",
-      cfg: baseConfig,
-      flagValue: opts.nexosApiKey,
-      flagName: "--nexos-api-key",
-      envVar: "NEXOS_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setNexosApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "nexos:default",
-      provider: "nexos",
-      mode: "api_key",
-    });
-    return applyNexosConfig(nextConfig);
-  }
-
-  if (authChoice === "venice-api-key") {
-    const resolved = await resolveApiKey({
-      provider: "venice",
-      cfg: baseConfig,
-      flagValue: opts.veniceApiKey,
-      flagName: "--venice-api-key",
-      envVar: "VENICE_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setVeniceApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "venice:default",
-      provider: "venice",
-      mode: "api_key",
-    });
-    return applyVeniceConfig(nextConfig);
-  }
-
-  if (
-    authChoice === "minimax-cloud" ||
-    authChoice === "minimax-api" ||
-    authChoice === "minimax-api-key-cn" ||
-    authChoice === "minimax-api-lightning"
-  ) {
-    const isCn = authChoice === "minimax-api-key-cn";
-    const providerId = isCn ? "minimax-cn" : "minimax";
-    const profileId = `${providerId}:default`;
-    const resolved = await resolveApiKey({
-      provider: providerId,
+      provider: "minimax",
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
       flagName: "--minimax-api-key",
