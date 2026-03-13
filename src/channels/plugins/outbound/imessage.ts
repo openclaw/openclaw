@@ -6,7 +6,7 @@ import {
 } from "./direct-text-media.js";
 
 function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
-  return deps?.sendIMessage ?? sendMessageIMessage;
+  return (deps?.["imessage"] as typeof sendMessageIMessage | undefined) ?? sendMessageIMessage;
 }
 
 export const imessageOutbound = createDirectTextMediaOutbound({

@@ -6,7 +6,7 @@ import {
 } from "./direct-text-media.js";
 
 function resolveSignalSender(deps: OutboundSendDeps | undefined) {
-  return deps?.sendSignal ?? sendMessageSignal;
+  return (deps?.["signal"] as typeof sendMessageSignal | undefined) ?? sendMessageSignal;
 }
 
 export const signalOutbound = createDirectTextMediaOutbound({

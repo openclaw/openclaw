@@ -48,22 +48,7 @@ const [
 installProcessWarningFilter();
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
-  switch (id) {
-    case "discord":
-      return deps?.sendDiscord;
-    case "slack":
-      return deps?.sendSlack;
-    case "telegram":
-      return deps?.sendTelegram;
-    case "whatsapp":
-      return deps?.sendWhatsApp;
-    case "signal":
-      return deps?.sendSignal;
-    case "imessage":
-      return deps?.sendIMessage;
-    default:
-      return undefined;
-  }
+  return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
 
 const createStubOutbound = (

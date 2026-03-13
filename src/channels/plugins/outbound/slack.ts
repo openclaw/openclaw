@@ -56,12 +56,12 @@ async function sendSlackOutboundMessage(params: {
   mediaLocalRoots?: readonly string[];
   blocks?: NonNullable<Parameters<typeof sendMessageSlack>[2]>["blocks"];
   accountId?: string | null;
-  deps?: { sendSlack?: typeof sendMessageSlack } | null;
+  deps?: { [channelId: string]: unknown } | null;
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
 }) {
-  const send = params.deps?.sendSlack ?? sendMessageSlack;
+  const send = (params.deps?.["slack"] as typeof sendMessageSlack | undefined) ?? sendMessageSlack;
   // Use threadId fallback so routed tool notifications stay in the Slack thread.
   const threadTs =
     params.replyToId ?? (params.threadId != null ? String(params.threadId) : undefined);

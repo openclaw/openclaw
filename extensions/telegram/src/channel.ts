@@ -42,6 +42,10 @@ import {
 } from "openclaw/plugin-sdk/telegram";
 import { getTelegramRuntime } from "./runtime.js";
 
+type TelegramSendFn = ReturnType<
+  typeof getTelegramRuntime
+>["channel"]["telegram"]["sendMessageTelegram"];
+
 const meta = getChatChannelMeta("telegram");
 
 function findTelegramTokenOwnerAccountId(params: {
@@ -111,13 +115,15 @@ async function sendTelegramOutbound(params: {
   mediaUrl?: string | null;
   mediaLocalRoots?: readonly string[] | null;
   accountId?: string | null;
-  deps?: { sendTelegram?: TelegramSendFn };
+  deps?: { sendTelegram?: TelegramSendFn; [channelId: string]: unknown };
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
 }) {
   const send =
-    params.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+    (params.deps?.["telegram"] as TelegramSendFn | undefined) ??
+    params.deps?.sendTelegram ??
+    getTelegramRuntime().channel.telegram.sendMessageTelegram;
   return await send(
     params.to,
     params.text,

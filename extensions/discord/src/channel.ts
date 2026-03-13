@@ -39,6 +39,10 @@ import {
 } from "openclaw/plugin-sdk/discord";
 import { getDiscordRuntime } from "./runtime.js";
 
+type DiscordSendFn = ReturnType<
+  typeof getDiscordRuntime
+>["channel"]["discord"]["sendMessageDiscord"];
+
 const meta = getChatChannelMeta("discord");
 
 const discordMessageActions: ChannelMessageActionAdapter = {
@@ -300,7 +304,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
-      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send =
+        (deps?.["discord"] as DiscordSendFn | undefined) ??
+        getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         cfg,
@@ -321,7 +327,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       replyToId,
       silent,
     }) => {
-      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send =
+        (deps?.["discord"] as DiscordSendFn | undefined) ??
+        getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         cfg,

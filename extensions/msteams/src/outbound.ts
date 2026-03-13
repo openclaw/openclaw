@@ -10,13 +10,24 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   sendText: async ({ cfg, to, text, deps }) => {
-    const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+    type SendFn = (
+      to: string,
+      text: string,
+    ) => Promise<{ messageId: string; conversationId: string }>;
+    const send =
+      (deps?.["msteams"] as SendFn | undefined) ??
+      ((to, text) => sendMessageMSTeams({ cfg, to, text }));
     const result = await send(to, text);
     return { channel: "msteams", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
+    type SendFn = (
+      to: string,
+      text: string,
+      opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
+    ) => Promise<{ messageId: string; conversationId: string }>;
     const send =
-      deps?.sendMSTeams ??
+      (deps?.["msteams"] as SendFn | undefined) ??
       ((to, text, opts) =>
         sendMessageMSTeams({
           cfg,

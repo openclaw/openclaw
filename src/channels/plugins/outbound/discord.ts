@@ -100,7 +100,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         return { channel: "discord", ...webhookResult };
       }
     }
-    const send = deps?.sendDiscord ?? sendMessageDiscord;
+    const send = (deps?.["discord"] as typeof sendMessageDiscord | undefined) ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to, threadId });
     const result = await send(target, text, {
       verbose: false,
@@ -123,7 +123,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
     threadId,
     silent,
   }) => {
-    const send = deps?.sendDiscord ?? sendMessageDiscord;
+    const send = (deps?.["discord"] as typeof sendMessageDiscord | undefined) ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to, threadId });
     const result = await send(target, text, {
       verbose: false,

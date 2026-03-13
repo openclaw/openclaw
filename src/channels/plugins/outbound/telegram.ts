@@ -30,7 +30,8 @@ function resolveTelegramSendContext(params: {
     accountId?: string;
   };
 } {
-  const send = params.deps?.sendTelegram ?? sendMessageTelegram;
+  const send =
+    (params.deps?.["telegram"] as typeof sendMessageTelegram | undefined) ?? sendMessageTelegram;
   return {
     send,
     baseOpts: {

@@ -59,11 +59,12 @@ async function sendIMessageOutbound(params: {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   accountId?: string;
-  deps?: { sendIMessage?: IMessageSendFn };
+  deps?: { [channelId: string]: unknown };
   replyToId?: string;
 }) {
   const send =
-    params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    (params.deps?.["imessage"] as IMessageSendFn | undefined) ??
+    getIMessageRuntime().channel.imessage.sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
