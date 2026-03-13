@@ -188,7 +188,7 @@ describe("tts", () => {
   });
 
   describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
+    it("selects opus for telegram/whatsapp and mp3 for feishu/others", () => {
       const cases = [
         {
           channel: "telegram",
@@ -202,10 +202,10 @@ describe("tts", () => {
         {
           channel: "feishu",
           expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
+            openai: "mp3",
+            elevenlabs: "mp3_44100_128",
+            extension: ".mp3",
+            voiceCompatible: false,
           },
         },
         {
@@ -759,6 +759,30 @@ describe("tts", () => {
 
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("does not mark feishu TTS replies as voice-bubble audio", async () => {
+      await withMockedAutoTtsFetch(async () => {
+        const feishuResult = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world" },
+          cfg: baseCfg,
+          channel: "feishu",
+          kind: "final",
+          inboundAudio: true,
+        });
+        const telegramResult = await maybeApplyTtsToPayload({
+          payload: { text: "Hello world" },
+          cfg: baseCfg,
+          channel: "telegram",
+          kind: "final",
+          inboundAudio: true,
+        });
+
+        expect(feishuResult.mediaUrl).toBeDefined();
+        expect(feishuResult.audioAsVoice).not.toBe(true);
+        expect(telegramResult.mediaUrl).toBeDefined();
+        expect(telegramResult.audioAsVoice).toBe(true);
       });
     });
   });

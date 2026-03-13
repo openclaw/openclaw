@@ -90,7 +90,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
   });
 
-  it("falls back to plain text if local-image media send fails", async () => {
+  it("does not leak local image paths if auto-send fails", async () => {
     const { dir, file } = await createTmpImage();
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
     try {
@@ -105,8 +105,13 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       expect(sendMessageFeishuMock).toHaveBeenCalledWith(
         expect.objectContaining({
           to: "chat_1",
-          text: file,
+          text: "Image upload failed. Please try again.",
           accountId: "main",
+        }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining(file),
         }),
       );
     } finally {
@@ -329,6 +334,76 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+
+  it("does not leak local paths when media upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "/tmp/openclaw-voice.mp3",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "Media upload failed. Please try again.",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("/tmp/openclaw-voice.mp3"),
+      }),
+    );
+  });
+
+  it("does not leak file URLs when media upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "file:///tmp/openclaw-voice.mp3",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "Media upload failed. Please try again.",
+        accountId: "main",
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("file:///tmp/openclaw-voice.mp3"),
+      }),
+    );
+  });
+
+  it("keeps remote URL fallback when media upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "",
+      mediaUrl: "https://example.com/audio.mp3",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "📎 https://example.com/audio.mp3",
+        accountId: "main",
+      }),
+    );
   });
 
   it("uses threadId fallback as replyToMessageId on sendMedia", async () => {
