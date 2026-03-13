@@ -235,7 +235,7 @@ function createGoogleThinkingPayloadWrapper(
             thinkingLevel,
           });
         }
-        return onPayload?.(payload);
+        return onPayload?.(payload, model);
       },
     });
   };
@@ -268,7 +268,7 @@ function createZaiToolStreamWrapper(
           // Inject tool_stream: true for Z.AI API
           (payload as Record<string, unknown>).tool_stream = true;
         }
-        return originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };
@@ -315,7 +315,7 @@ function createParallelToolCallsWrapper(
         if (payload && typeof payload === "object") {
           (payload as Record<string, unknown>).parallel_tool_calls = enabled;
         }
-        return originalOnPayload?.(payload);
+        return originalOnPayload?.(payload, model);
       },
     });
   };
