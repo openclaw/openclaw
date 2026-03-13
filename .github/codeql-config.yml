@@ -1,0 +1,22 @@
+name: govdoss-codeql-security
+
+# GovDOSS™ / CMMC CodeQL config — scans security-critical paths with
+# elevated query coverage for the RBAC, account, auth, and audit modules.
+
+paths:
+  - src/gateway/access-control
+  - src/gateway/accounts
+  - src/gateway/auth
+  - src/logging/audit-logger.ts
+  - src/gateway/auth.ts
+  - src/security
+  - src
+
+paths-ignore:
+  - apps
+  - dist
+  - docs
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.test.ts"
+  - "**/*.e2e.test.ts"

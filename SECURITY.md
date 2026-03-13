@@ -290,3 +290,30 @@ Run locally:
 pip install detect-secrets==1.5.0
 detect-secrets scan --baseline .secrets.baseline
 ```
+
+## GovDOSS™ Security Controls (CMMC Level 2 Phase 1)
+
+The following controls are implemented under the GovDOSS™ framework:
+
+### CP-1 — Access Control (RBAC)
+
+Role hierarchy: `admin` > `operator` > `observer` > `guest`.
+All gateway operations are gated via `AccessController.assert(permission)`.
+Unknown roles fail to `guest` (least privilege). See [docs/security/rbac.md](docs/security/rbac.md).
+
+### CP-2 — Account Management
+
+Full account lifecycle (create, disable, enable, delete) with SOA⁴™ audit
+attribution on every mutation. See [docs/security/account-management.md](docs/security/account-management.md).
+
+### CP-7 — Authentication / Password Policy
+
+Passwords hashed with scrypt (N=65536, r=8, p=1). Complexity enforced at
+creation and change time. Password history (last 5) prevents reuse.
+See [docs/security/password-policy.md](docs/security/password-policy.md).
+
+### CP-11 — Audit Logging
+
+All security events recorded as structured, tamper-evident entries with SHA-256
+hash chaining. PII guard prevents accidental credential capture.
+See [docs/security/audit-logging.md](docs/security/audit-logging.md).
