@@ -23,6 +23,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
@@ -100,16 +101,12 @@ function resolveSessionKeyFromSessionId(params: {
     return null;
   }
   const { store } = loadCombinedSessionStoreForGateway(params.cfg);
-  const match = Object.entries(store).find(([key, entry]) => {
-    if (entry?.sessionId !== trimmed) {
-      return false;
-    }
-    if (!params.agentId) {
-      return true;
-    }
-    return resolveAgentIdFromSessionKey(key) === params.agentId;
-  });
-  return match?.[0] ?? null;
+  const matches = Object.entries(store).filter(
+    (entry): entry is [string, SessionEntry] =>
+      entry[1]?.sessionId === trimmed &&
+      (!params.agentId || resolveAgentIdFromSessionKey(entry[0]) === params.agentId),
+  );
+  return resolvePreferredSessionKeyForSessionIdMatches(matches, trimmed) ?? null;
 }
 
 async function resolveModelOverride(params: {
@@ -151,6 +148,7 @@ async function resolveModelOverride(params: {
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
+    agentId: params.agentId,
   });
 
   const resolved = resolveModelRefFromString({
