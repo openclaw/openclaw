@@ -249,6 +249,72 @@ function createSubscriptionMock() {
   };
 }
 
+function resetEmbeddedAttemptHarness(
+  params: {
+    includeSpawnSubagent?: boolean;
+    subscribeImpl?: () => ReturnType<typeof createSubscriptionMock>;
+    sessionMessages?: AgentMessage[];
+  } = {},
+) {
+  if (params.includeSpawnSubagent) {
+    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "run-child",
+    });
+  }
+  hoisted.createAgentSessionMock.mockReset();
+  hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
+    release: async () => {},
+  });
+  hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.branch.mockReset();
+  hoisted.sessionManager.resetLeaf.mockReset();
+  hoisted.sessionManager.buildSessionContext
+    .mockReset()
+    .mockReturnValue({ messages: params.sessionMessages ?? [] });
+  hoisted.sessionManager.appendCustomEntry.mockReset();
+  if (params.subscribeImpl) {
+    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(params.subscribeImpl);
+  }
+}
+
+async function cleanupTempPaths(tempPaths: string[]) {
+  while (tempPaths.length > 0) {
+    const target = tempPaths.pop();
+    if (target) {
+      await fs.rm(target, { recursive: true, force: true });
+    }
+  }
+}
+
+function createDefaultEmbeddedSession(): MutableSession {
+  const session: MutableSession = {
+    sessionId: "embedded-session",
+    messages: [],
+    isCompacting: false,
+    isStreaming: false,
+    agent: {
+      replaceMessages: (messages: unknown[]) => {
+        session.messages = [...messages];
+      },
+    },
+    prompt: async () => {
+      session.messages = [
+        ...session.messages,
+        { role: "assistant", content: "done", timestamp: 2 },
+      ];
+    },
+    abort: async () => {},
+    dispose: () => {},
+    steer: async () => {},
+  };
+
+  return session;
+}
+
 const testModel = {
   api: "openai-completions",
   provider: "openai",
@@ -269,32 +335,14 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
-    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:child",
-      runId: "run-child",
+    resetEmbeddedAttemptHarness({
+      includeSpawnSubagent: true,
+      subscribeImpl: createSubscriptionMock,
     });
-    hoisted.createAgentSessionMock.mockReset();
-    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-    hoisted.resolveSandboxContextMock.mockReset();
-    hoisted.subscribeEmbeddedPiSessionMock.mockReset().mockImplementation(createSubscriptionMock);
-    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
-      release: async () => {},
-    });
-    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
-    hoisted.sessionManager.branch.mockReset();
-    hoisted.sessionManager.resetLeaf.mockReset();
-    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages: [] });
-    hoisted.sessionManager.appendCustomEntry.mockReset();
   });
 
   afterEach(async () => {
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (target) {
-        await fs.rm(target, { recursive: true, force: true });
-      }
-    }
+    await cleanupTempPaths(tempPaths);
   });
 
   it("passes the real workspace to sessions_spawn when workspaceAccess is ro", async () => {
@@ -394,26 +442,11 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
-    hoisted.createAgentSessionMock.mockReset();
-    hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-    hoisted.resolveSandboxContextMock.mockReset();
-    hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
-      release: async () => {},
-    });
-    hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
-    hoisted.sessionManager.branch.mockReset();
-    hoisted.sessionManager.resetLeaf.mockReset();
-    hoisted.sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages: [] });
-    hoisted.sessionManager.appendCustomEntry.mockReset();
+    resetEmbeddedAttemptHarness();
   });
 
   afterEach(async () => {
-    while (tempPaths.length > 0) {
-      const target = tempPaths.pop();
-      if (target) {
-        await fs.rm(target, { recursive: true, force: true });
-      }
-    }
+    await cleanupTempPaths(tempPaths);
   });
 
   async function runAttemptWithCacheTtl(compactionCount: number) {
@@ -428,30 +461,9 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       getCompactionCount: () => compactionCount,
     }));
 
-    hoisted.createAgentSessionMock.mockImplementation(async () => {
-      const session: MutableSession = {
-        sessionId: "embedded-session",
-        messages: [],
-        isCompacting: false,
-        isStreaming: false,
-        agent: {
-          replaceMessages: (messages: unknown[]) => {
-            session.messages = [...messages];
-          },
-        },
-        prompt: async () => {
-          session.messages = [
-            ...session.messages,
-            { role: "assistant", content: "done", timestamp: 2 },
-          ];
-        },
-        abort: async () => {},
-        dispose: () => {},
-        steer: async () => {},
-      };
-
-      return { session };
-    });
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
 
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
@@ -591,30 +603,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .mockReset()
       .mockReturnValue({ messages: seedMessages });
 
-    hoisted.createAgentSessionMock.mockImplementation(async () => {
-      const session: MutableSession = {
-        sessionId: "embedded-session",
-        messages: [],
-        isCompacting: false,
-        isStreaming: false,
-        agent: {
-          replaceMessages: (messages: unknown[]) => {
-            session.messages = [...messages];
-          },
-        },
-        prompt: async () => {
-          session.messages = [
-            ...session.messages,
-            { role: "assistant", content: "done", timestamp: 2 },
-          ];
-        },
-        abort: async () => {},
-        dispose: () => {},
-        steer: async () => {},
-      };
-
-      return { session };
-    });
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
 
     return await runEmbeddedAttempt({
       sessionId: "embedded-session",
