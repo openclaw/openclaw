@@ -130,6 +130,40 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         `  Ensure your auth credentials are strong and not exposed.`,
         ...saferRemoteAccessLines,
       );
+
+      // TLS check for network-exposed gateways.
+      const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+      const tlsTerminatedUpstream = cfg.gateway?.tls?.terminatedUpstream === true;
+      if (!tlsEnabled && !tlsTerminatedUpstream && resolvedAuth.mode !== "trusted-proxy") {
+        warnings.push(
+          `- CRITICAL: Gateway is network-exposed without TLS.`,
+          `  Credentials and traffic are transmitted in plaintext.`,
+          `  Fix: ${formatCliCommand("openclaw config set gateway.tls.enabled true")}`,
+          `  Or if behind a reverse proxy: ${formatCliCommand("openclaw config set gateway.tls.terminatedUpstream true")}`,
+        );
+      }
+
+      // Password strength check.
+      if (resolvedAuth.mode === "password" && authPassword.length > 0 && authPassword.length < 12) {
+        warnings.push(
+          `- CRITICAL: Gateway password is only ${authPassword.length} characters (minimum 12 recommended for network exposure).`,
+          `  Fix: Set a stronger password via ${formatCliCommand("openclaw configure")}`,
+        );
+      }
+      if (resolvedAuth.mode === "token" && authToken.length > 0 && authToken.length < 32) {
+        warnings.push(
+          `- WARNING: Gateway token is only ${authToken.length} characters (minimum 32 recommended for network exposure).`,
+          `  Fix: Regenerate with ${formatCliCommand("openclaw doctor --fix")}`,
+        );
+      }
+
+      // Request rate limit check.
+      if (!cfg.gateway?.requestRateLimit) {
+        warnings.push(
+          `- WARNING: No per-IP request rate limiting configured for network-exposed gateway.`,
+          `  Fix: ${formatCliCommand("openclaw config set gateway.requestRateLimit.maxRequests 120")}`,
+        );
+      }
     }
   }
 

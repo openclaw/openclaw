@@ -15,6 +15,7 @@ import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
+import type { AuthAuditLogger } from "./auth-audit-log.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -52,11 +53,18 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
-import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import {
+  sendForbidden,
+  sendGatewayAuthFailure,
+  sendRequestRateLimited,
+  setDefaultSecurityHeaders,
+} from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { checkIpAccess } from "./ip-access-control.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import type { RequestRateLimiter } from "./request-rate-limit.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -729,6 +737,10 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional per-IP request rate limiter. */
+  requestRateLimiter?: RequestRateLimiter;
+  /** Optional auth audit logger. */
+  authAuditLogger?: AuthAuditLogger;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -748,6 +760,8 @@ export function createGatewayHttpServer(opts: {
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
+    requestRateLimiter,
+    authAuditLogger,
     getReadiness,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
@@ -772,6 +786,29 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+
+      // IP access control — checked before any routing.
+      const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      const ipCheck = checkIpAccess({
+        clientIp,
+        allowlist: configSnapshot.gateway?.ipAllowlist,
+        blocklist: configSnapshot.gateway?.ipBlocklist,
+      });
+      if (!ipCheck.allowed) {
+        authAuditLogger?.log({ event: "ip_blocked", clientIp: clientIp ?? undefined });
+        sendForbidden(res, "Access denied");
+        return;
+      }
+
+      // Per-IP request rate limiting — checked after IP access but before routing.
+      if (requestRateLimiter) {
+        const rlCheck = requestRateLimiter.check(clientIp);
+        if (!rlCheck.allowed) {
+          authAuditLogger?.log({ event: "rate_limited", clientIp: clientIp ?? undefined });
+          sendRequestRateLimited(res, rlCheck.retryAfterMs);
+          return;
+        }
+      }
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -946,6 +983,26 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // IP access control for WebSocket upgrades.
+      const upgradeConfig = loadConfig();
+      const upgradeTrustedProxies = upgradeConfig.gateway?.trustedProxies ?? [];
+      const upgradeAllowRealIp = upgradeConfig.gateway?.allowRealIpFallback === true;
+      const upgradeClientIp = resolveRequestClientIp(
+        req,
+        upgradeTrustedProxies,
+        upgradeAllowRealIp,
+      );
+      const wsIpCheck = checkIpAccess({
+        clientIp: upgradeClientIp,
+        allowlist: upgradeConfig.gateway?.ipAllowlist,
+        blocklist: upgradeConfig.gateway?.ipBlocklist,
+      });
+      if (!wsIpCheck.allowed) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });

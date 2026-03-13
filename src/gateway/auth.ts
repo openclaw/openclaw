@@ -205,6 +205,59 @@ async function resolveVerifiedTailscaleUser(params: {
   };
 }
 
+export type CredentialStrengthResult = {
+  ok: boolean;
+  warnings: string[];
+};
+
+/**
+ * Validate credential strength when the gateway is network-exposed.
+ * Returns warnings rather than hard-blocking so operators can still start.
+ */
+export function validateCredentialStrength(params: {
+  auth: ResolvedGatewayAuth;
+  isNetworkExposed: boolean;
+}): CredentialStrengthResult {
+  const { auth, isNetworkExposed } = params;
+  const warnings: string[] = [];
+
+  if (!isNetworkExposed) {
+    return { ok: true, warnings };
+  }
+
+  if (auth.mode === "token" && auth.token) {
+    if (auth.token.length < 32) {
+      warnings.push(
+        `gateway auth token is only ${auth.token.length} characters; ` +
+          "minimum 32 recommended for network-exposed gateways",
+      );
+    }
+  }
+
+  if (auth.mode === "password" && auth.password) {
+    if (auth.password.length < 12) {
+      warnings.push(
+        `gateway auth password is only ${auth.password.length} characters; ` +
+          "minimum 12 recommended for network-exposed gateways",
+      );
+    }
+    // Reject weak patterns: all digits, all lowercase, all uppercase.
+    if (/^\d+$/.test(auth.password)) {
+      warnings.push("gateway auth password contains only digits — use a mix of character types");
+    } else if (/^[a-z]+$/.test(auth.password)) {
+      warnings.push(
+        "gateway auth password contains only lowercase letters — use a mix of character types",
+      );
+    } else if (/^[A-Z]+$/.test(auth.password)) {
+      warnings.push(
+        "gateway auth password contains only uppercase letters — use a mix of character types",
+      );
+    }
+  }
+
+  return { ok: warnings.length === 0, warnings };
+}
+
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
   authOverride?: GatewayAuthConfig | null;

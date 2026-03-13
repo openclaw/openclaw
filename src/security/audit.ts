@@ -683,6 +683,79 @@ function collectGatewayConfigFindings(
     });
   }
 
+  // TLS enforcement check.
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  const tlsTerminatedUpstream = cfg.gateway?.tls?.terminatedUpstream === true;
+  if (
+    bind !== "loopback" &&
+    !tlsEnabled &&
+    !tlsTerminatedUpstream &&
+    auth.mode !== "trusted-proxy"
+  ) {
+    findings.push({
+      checkId: "gateway.no_tls_network_exposed",
+      severity: "critical",
+      title: "Gateway is network-exposed without TLS",
+      detail:
+        "gateway.bind is not loopback but TLS is not enabled and no upstream TLS termination is declared. " +
+        "Credentials and traffic are transmitted in plaintext.",
+      remediation:
+        "Set gateway.tls.enabled=true with cert/key paths, or set gateway.tls.terminatedUpstream=true " +
+        "if TLS is handled by a reverse proxy (nginx, Caddy, etc).",
+    });
+  }
+
+  // Password strength check (network-exposed).
+  if (bind !== "loopback" && auth.mode === "password" && hasPassword && auth.password) {
+    if (auth.password.length < 12) {
+      findings.push({
+        checkId: "gateway.password_too_short",
+        severity: "critical",
+        title: "Gateway password is too short for network exposure",
+        detail: `gateway auth password is only ${auth.password.length} characters; minimum 12 recommended for network-exposed gateways.`,
+        remediation:
+          "Set a stronger password with at least 12 characters and mixed character types.",
+      });
+    }
+    if (/^\d+$/.test(auth.password) || /^[a-zA-Z]+$/.test(auth.password)) {
+      findings.push({
+        checkId: "gateway.password_weak_pattern",
+        severity: "warn",
+        title: "Gateway password uses a weak character pattern",
+        detail:
+          "gateway auth password contains only digits or only letters — use a mix of character types for better security.",
+        remediation: "Use a password with a mix of uppercase, lowercase, digits, and symbols.",
+      });
+    }
+  }
+
+  // Request rate limiting check (network-exposed).
+  if (bind !== "loopback" && !cfg.gateway?.requestRateLimit) {
+    findings.push({
+      checkId: "gateway.no_request_rate_limit",
+      severity: "warn",
+      title: "No per-IP request rate limiting configured",
+      detail:
+        "gateway.bind is not loopback but no gateway.requestRateLimit is configured. " +
+        "Without request rate limiting, the gateway is more vulnerable to abuse.",
+      remediation: "Set gateway.requestRateLimit (e.g. { maxRequests: 120, windowMs: 60000 }).",
+    });
+  }
+
+  // Auto bind fallback warning.
+  if (bind === "auto") {
+    findings.push({
+      checkId: "gateway.auto_bind_fallback",
+      severity: "warn",
+      title: "Auto bind mode may fall back to 0.0.0.0",
+      detail:
+        'gateway.bind="auto" will fall back to 0.0.0.0 (all interfaces) if loopback binding fails, ' +
+        "potentially exposing the gateway to the network unexpectedly.",
+      remediation:
+        'Use gateway.bind="loopback" for local-only or gateway.bind="lan" with proper auth for network access.',
+    });
+  }
+
   return findings;
 }
 

@@ -6,12 +6,14 @@ import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { AuthAuditLogger } from "./auth-audit-log.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import type { RequestRateLimiter } from "./request-rate-limit.js";
 import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
@@ -55,6 +57,10 @@ export async function createGatewayRuntimeState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional per-IP request rate limiter. */
+  requestRateLimiter?: RequestRateLimiter;
+  /** Optional auth audit logger. */
+  authAuditLogger?: AuthAuditLogger;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
@@ -164,6 +170,8 @@ export async function createGatewayRuntimeState(params: {
       shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      requestRateLimiter: params.requestRateLimiter,
+      authAuditLogger: params.authAuditLogger,
       getReadiness: params.getReadiness,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
     });

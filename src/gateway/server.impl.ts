@@ -64,6 +64,7 @@ import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { createAuthAuditLogger } from "./auth-audit-log.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
@@ -74,6 +75,7 @@ import {
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
+import { createRequestRateLimiter } from "./request-rate-limit.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -515,10 +517,21 @@ export async function startGatewayServer(
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
+  // Log startup warnings from config resolution.
+  for (const warning of runtimeConfig.startupWarnings) {
+    log.warn(`⚠️  ${warning}`);
+  }
+
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
+
+  // Create per-IP request rate limiter.
+  const requestRateLimiter = createRequestRateLimiter(cfgAtStart.gateway?.requestRateLimit);
+
+  // Create auth audit logger.
+  const authAuditLogger = createAuthAuditLogger();
 
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
@@ -613,6 +626,8 @@ export async function startGatewayServer(
     strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,
+    requestRateLimiter,
+    authAuditLogger,
     gatewayTls,
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
@@ -1062,6 +1077,7 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
+      requestRateLimiter.dispose();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);

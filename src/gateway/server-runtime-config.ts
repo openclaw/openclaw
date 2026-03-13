@@ -8,6 +8,7 @@ import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
+  validateCredentialStrength,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -35,6 +36,8 @@ export type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
+  /** Non-fatal startup warnings (credential strength, TLS, etc). */
+  startupWarnings: string[];
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -50,13 +53,8 @@ export async function resolveGatewayRuntimeConfig(params: {
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
-  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
-  if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
-    throw new Error(
-      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
-    );
-  }
-  if (bindMode === "custom") {
+  // Validate custom bind params before resolving, so we give clear config errors.
+  if (bindMode === "custom" && !params.host) {
     const configuredCustomBindHost = customBindHost?.trim();
     if (!configuredCustomBindHost) {
       throw new Error("gateway.bind=custom requires gateway.customBindHost");
@@ -66,7 +64,16 @@ export async function resolveGatewayRuntimeConfig(params: {
         `gateway.bind=custom requires a valid IPv4 customBindHost (got ${configuredCustomBindHost})`,
       );
     }
-    if (bindHost !== configuredCustomBindHost) {
+  }
+  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
+    throw new Error(
+      `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+    );
+  }
+  if (bindMode === "custom") {
+    const configuredCustomBindHost = customBindHost?.trim();
+    if (configuredCustomBindHost && bindHost !== configuredCustomBindHost) {
       throw new Error(
         `gateway bind=custom requested ${configuredCustomBindHost} but resolved ${bindHost}; refusing fallback`,
       );
@@ -164,6 +171,36 @@ export async function resolveGatewayRuntimeConfig(params: {
     }
   }
 
+  // --- Startup warnings (non-fatal) ---
+  const startupWarnings: string[] = [];
+  const isNetworkExposed = !isLoopbackHost(bindHost);
+
+  // Credential strength check.
+  const credStrength = validateCredentialStrength({
+    auth: resolvedAuth,
+    isNetworkExposed,
+  });
+  for (const w of credStrength.warnings) {
+    startupWarnings.push(`CRITICAL: ${w}`);
+  }
+
+  // TLS enforcement check.
+  const tlsConfig = params.cfg.gateway?.tls;
+  const tlsEnabled = tlsConfig?.enabled === true;
+  const tlsTerminatedUpstream = tlsConfig?.terminatedUpstream === true;
+  if (isNetworkExposed && !tlsEnabled && !tlsTerminatedUpstream && authMode !== "trusted-proxy") {
+    startupWarnings.push(
+      "CRITICAL: gateway is network-exposed without TLS — set gateway.tls.enabled=true, " +
+        "gateway.tls.terminatedUpstream=true (if behind a reverse proxy), or use trusted-proxy auth mode",
+    );
+  }
+
+  // Auto-set HSTS header when TLS is enabled and no explicit config is provided.
+  let effectiveStrictTransportSecurity = strictTransportSecurityHeader;
+  if (tlsEnabled && !effectiveStrictTransportSecurity) {
+    effectiveStrictTransportSecurity = "max-age=31536000";
+  }
+
   return {
     bindHost,
     controlUiEnabled,
@@ -175,7 +212,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     openResponsesConfig: openResponsesConfig
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
       : undefined,
-    strictTransportSecurityHeader,
+    strictTransportSecurityHeader: effectiveStrictTransportSecurity,
     controlUiBasePath,
     controlUiRoot,
     resolvedAuth,
@@ -184,5 +221,6 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
     hooksConfig,
     canvasHostEnabled,
+    startupWarnings,
   };
 }

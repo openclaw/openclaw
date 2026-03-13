@@ -13,6 +13,8 @@ export type GatewayTlsConfig = {
   keyPath?: string;
   /** Optional PEM CA bundle for TLS clients (mTLS or custom roots). */
   caPath?: string;
+  /** Set to true when TLS is terminated by an upstream reverse proxy (e.g. nginx, Caddy). */
+  terminatedUpstream?: boolean;
 };
 
 export type WideAreaDiscoveryConfig = {
@@ -383,6 +385,15 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayRequestRateLimitConfig = {
+  /** Maximum requests per IP per window. @default 120 */
+  maxRequests?: number;
+  /** Window duration in milliseconds. @default 60000 (1 min) */
+  windowMs?: number;
+  /** Exempt loopback (localhost) addresses from request rate limiting. @default true */
+  exemptLoopback?: boolean;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -425,6 +436,18 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /**
+   * IP allowlist (CIDR or exact IPs). When non-empty, only listed IPs are permitted.
+   * Loopback addresses are always allowed regardless of this setting.
+   */
+  ipAllowlist?: string[];
+  /**
+   * IP blocklist (CIDR or exact IPs). Checked before the allowlist.
+   * Loopback addresses are never blocked.
+   */
+  ipBlocklist?: string[];
+  /** Per-IP request rate limiting configuration. */
+  requestRateLimit?: GatewayRequestRateLimitConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
