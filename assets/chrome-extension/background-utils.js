@@ -60,5 +60,9 @@ export function isLastRemainingTab(allTabs, tabIdToClose) {
   if (!Array.isArray(allTabs)) {
     return true;
   }
-  return allTabs.filter((tab) => tab && tab.id !== tabIdToClose).length === 0;
+  return (
+    allTabs.filter(
+      (tab) => tab && Number.isInteger(tab.id) && tab.id !== tabIdToClose,
+    ).length === 0
+  );
 }
