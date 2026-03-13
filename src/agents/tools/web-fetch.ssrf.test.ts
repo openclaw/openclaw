@@ -4,6 +4,7 @@ import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
 function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
   return {
@@ -39,6 +40,7 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawl?: { enabled?: boolean; apiKey?: string };
+  ssrfPolicy?: { dangerouslyAllowPrivateNetwork?: boolean };
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
@@ -48,6 +50,7 @@ async function createWebFetchToolForTest(params?: {
           fetch: {
             cacheTtlMinutes: 0,
             firecrawl: params?.firecrawl ?? { enabled: false },
+            ssrfPolicy: params?.ssrfPolicy,
           },
         },
       },
@@ -69,6 +72,9 @@ describe("web_fetch SSRF protection", () => {
   beforeEach(() => {
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, opts) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...opts, lookupFn: lookupMock }),
     );
   });
 
@@ -137,6 +143,21 @@ describe("web_fetch SSRF protection", () => {
     const tool = await createWebFetchToolForTest();
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+  });
+
+  it("allows private IP when ssrfPolicy.dangerouslyAllowPrivateNetwork is true (TUN mode)", async () => {
+    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
+
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = await createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://private.test/resource" });
     expect(result?.details).toMatchObject({
       status: 200,
       extractor: "raw",

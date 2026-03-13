@@ -524,6 +524,14 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy for web_fetch (default: strict; set dangerouslyAllowPrivateNetwork for TUN/proxy fake-IP). */
+      ssrfPolicy?: {
+        allowPrivateNetwork?: boolean;
+        dangerouslyAllowPrivateNetwork?: boolean;
+        allowRfc2544BenchmarkRange?: boolean;
+        allowedHostnames?: string[];
+        hostnameAllowlist?: string[];
+      };
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;

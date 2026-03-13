@@ -701,6 +701,16 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.ssrfPolicy":
+    "SSRF guardrail settings for web_fetch. Default is strict (blocks private/internal IPs). Set dangerouslyAllowPrivateNetwork for TUN/proxy fake-IP environments.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allow web_fetch to resolve/connect to private-network addresses (e.g. TUN fake-IP). Default false. Only enable when you trust your network (Clash TUN, etc.).",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Explicit hostname allowlist for web_fetch SSRF checks (exact-match).",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    "Hostname allowlist patterns for web_fetch (e.g. *.example.com).",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

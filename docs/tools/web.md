@@ -359,6 +359,9 @@ Fetch a URL and extract readable content.
           maxAgeMs: 86400000, // ms (1 day)
           timeoutSeconds: 60,
         },
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false, // set true for TUN/proxy fake-IP (e.g. Clash)
+        },
       },
     },
   },
@@ -378,7 +381,7 @@ Notes:
 - Firecrawl SecretRefs are resolved only when Firecrawl is active (`tools.web.fetch.enabled !== false` and `tools.web.fetch.firecrawl.enabled !== false`).
 - If Firecrawl is active and its SecretRef is unresolved with no `FIRECRAWL_API_KEY` fallback, startup/reload fails fast.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
-- `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
+- `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`). For TUN-mode proxies (e.g. Clash) that return fake-IP, set `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork: true`.
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
 - `web_fetch` caps the downloaded response body size to `tools.web.fetch.maxResponseBytes` before parsing; oversized responses are truncated and include a warning.
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
