@@ -172,7 +172,8 @@ function resolveEntrypointFromPackageJson(
   }
 
   const wrapperBase = path.basename(wrapperPath, path.extname(wrapperPath)).toLowerCase();
-  if (wrapperBase !== packageName.toLowerCase()) {
+  const packageBase = packageName.split("/").at(-1)?.toLowerCase() ?? packageName.toLowerCase();
+  if (wrapperBase !== packageBase) {
     return null;
   }
 
