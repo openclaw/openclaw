@@ -385,7 +385,7 @@ describe("buildAgentSystemPrompt", () => {
 
     for (const testCase of cases) {
       const prompt = buildAgentSystemPrompt(testCase.params);
-      expect(prompt, testCase.name).toContain("## Current Date & Time");
+      expect(prompt, testCase.name).toContain("## Time Zone");
       expect(prompt, testCase.name).toContain("Time zone: America/Chicago");
     }
   });
@@ -436,10 +436,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.indexOf("# Project Context")).toBeGreaterThan(-1);
-    expect(prompt.indexOf("## Current Date & Time")).toBeGreaterThan(
-      prompt.indexOf("# Project Context"),
-    );
-    expect(prompt.indexOf("## Runtime")).toBeGreaterThan(prompt.indexOf("## Current Date & Time"));
+    expect(prompt.indexOf("## Time Zone")).toBeGreaterThan(prompt.indexOf("# Project Context"));
+    expect(prompt.indexOf("## Runtime")).toBeGreaterThan(prompt.indexOf("## Time Zone"));
   });
 
   it("includes model alias guidance when aliases are provided", () => {
