@@ -97,6 +97,18 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createVoicePreConnectNetworkError() {
+  const err = new Error("connect ECONNREFUSED 149.154.167.220:443");
+  (err as NodeJS.ErrnoException).code = "ECONNREFUSED";
+  return err;
+}
+
+function createVoicePostSendTransportError() {
+  const err = new Error("read ECONNRESET");
+  (err as NodeJS.ErrnoException).code = "ECONNRESET";
+  return err;
+}
+
 function createThreadNotFoundError(operation = "sendMessage") {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
@@ -643,6 +655,7 @@ describe("deliverReplies", () => {
       expect.stringContaining("Hello there"),
       expect.any(Object),
     );
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
@@ -694,9 +707,126 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
   });
 
-  it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
+  it("voice fallback attaches inline keyboard only to first chunk when replyToMode is off", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 16,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "chunk-one\n\nchunk-two",
+          audioAsVoice: true,
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Ack", callback_data: "ack" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 12,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
+        },
+      }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
+  });
+
+  it("falls back to text when sendVoice fails with pre-connect network errors", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoicePreConnectNetworkError(),
+      sendMessageResult: {
+        message_id: 7,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello"),
+      expect.any(Object),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rethrows post-send transport errors from sendVoice without text fallback", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoicePostSendTransportError(),
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/note.ogg", text: "Hello", audioAsVoice: true }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("ECONNRESET");
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback to text when non-first media voice send fails with pre-connect errors", async () => {
     const runtime = createRuntime();
-    const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 30, chat: { id: "123" } });
+    const sendVoice = vi.fn().mockRejectedValue(createVoicePreConnectNetworkError());
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendPhoto, sendVoice, sendMessage });
+
+    mockMediaLoad("a.jpg", "image/jpeg", "img1");
+    mockMediaLoad("b.ogg", "audio/ogg", "voice2");
+
+    await expect(
+      deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.ogg"],
+            text: "first-caption-only",
+            audioAsVoice: true,
+          },
+        ],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rethrows non-network errors from sendVoice", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(new Error("400: Bad Request: invalid voice"));
     const sendMessage = vi.fn();
     const bot = createBot({ sendVoice, sendMessage });
 
@@ -708,10 +838,10 @@ describe("deliverReplies", () => {
         runtime,
         bot,
       }),
-    ).rejects.toThrow("Network error");
+    ).rejects.toThrow("invalid voice");
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
-    // Text fallback should NOT be attempted for other errors
+    // Text fallback should NOT be attempted for non-network errors.
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -854,5 +984,26 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("rethrows network/transport sendVoice errors when no text fallback is available", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoicePreConnectNetworkError(),
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/note.ogg", audioAsVoice: true }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 });

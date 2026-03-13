@@ -26,6 +26,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { isSafeToRetrySendError } from "../network-errors.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -201,6 +202,10 @@ function isCaptionTooLong(err: unknown): boolean {
   return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
+function isVoiceNetworkTransportError(err: unknown): boolean {
+  return isSafeToRetrySendError(err);
+}
+
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
@@ -215,26 +220,24 @@ async function sendTelegramVoiceFallbackText(opts: {
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = opts.chunkText(opts.text);
-  let appliedReplyTo = false;
+  let isFirstChunk = true;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     // Only apply reply reference, quote text, and buttons to the first chunk.
-    const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
+    const replyToForChunk = isFirstChunk ? opts.replyToId : undefined;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
+      replyQuoteText: isFirstChunk ? opts.replyQuoteText : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
+      replyMarkup: isFirstChunk ? opts.replyMarkup : undefined,
     });
     if (firstDeliveredMessageId == null) {
       firstDeliveredMessageId = messageId;
     }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
-    }
+    isFirstChunk = false;
   }
   return firstDeliveredMessageId;
 }
@@ -352,7 +355,8 @@ async function deliverMediaReply(params: {
             runtime: params.runtime,
             thread: params.thread,
             requestParams: mediaParams,
-            shouldLog: (err) => !isVoiceMessagesForbidden(err),
+            shouldLog: (err) =>
+              !isVoiceMessagesForbidden(err) && !isVoiceNetworkTransportError(err),
             send: (effectiveParams) =>
               params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
           });
@@ -369,6 +373,39 @@ async function deliverMediaReply(params: {
             logVerbose(
               "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
             );
+            const voiceFallbackReplyTo = resolveReplyToForSend({
+              replyToId: params.replyToId,
+              replyToMode: params.replyToMode,
+              progress: params.progress,
+            });
+            const fallbackMessageId = await sendTelegramVoiceFallbackText({
+              bot: params.bot,
+              chatId: params.chatId,
+              runtime: params.runtime,
+              text: fallbackText,
+              chunkText: params.chunkText,
+              replyToId: voiceFallbackReplyTo,
+              thread: params.thread,
+              linkPreview: params.linkPreview,
+              replyMarkup: params.replyMarkup,
+              replyQuoteText: params.replyQuoteText,
+            });
+            if (firstDeliveredMessageId == null) {
+              firstDeliveredMessageId = fallbackMessageId;
+            }
+            markReplyApplied(params.progress, voiceFallbackReplyTo);
+            markDelivered(params.progress);
+            continue;
+          }
+          if (isVoiceNetworkTransportError(voiceErr)) {
+            if (!isFirstMedia) {
+              throw voiceErr;
+            }
+            const fallbackText = params.reply.text;
+            if (!fallbackText || !fallbackText.trim()) {
+              throw voiceErr;
+            }
+            logVerbose("telegram sendVoice network/transport failure; falling back to text");
             const voiceFallbackReplyTo = resolveReplyToForSend({
               replyToId: params.replyToId,
               replyToMode: params.replyToMode,
