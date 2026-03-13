@@ -1,25 +1,32 @@
+// @ts-ignore - noVNC types are not available
+import RFB from "@novnc/novnc";
 // ui/src/ui/components/claw-computer-panel.ts
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { createRef, ref, Ref } from "lit/directives/ref.js";
 
+// Compatible with both .default and non-.default versions
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const RFBClass = (RFB as any).default || RFB;
+
+// RFB instance type definition
 interface RFBInstance {
   disconnect(): void;
   addEventListener(event: string, callback: (e?: unknown) => void): void;
   scaleViewport: boolean;
   clipViewport: boolean;
+  resizeSession: boolean;
   resize?(): void;
 }
 
 @customElement("claw-computer-panel")
 export class ClawComputerPanel extends LitElement {
-  @state() status = "🖥️ Claw Computer 未配置";
+  @state() status = "等待連接...";
   @state() isConnected = false;
   @state() isFitted = true;
   @state() password = "";
 
   private rfb: RFBInstance | null = null;
-  private RFBConstructor: unknown = null;
   private screenRef: Ref<HTMLDivElement> = createRef<HTMLDivElement>();
 
   static styles = css`
@@ -111,7 +118,10 @@ export class ClawComputerPanel extends LitElement {
   render() {
     return html`
       <div class="container">
-        <h2>Claw Computer - VNC 遠端畫面</h2>
+        <h2>noVNC - 自動調整版（穩定無錯誤）</h2>
+        <p style="text-align:center; color:#888;">
+          ws://localhost:8081（已轉發到你的 10.75.171.0:25900）
+        </p>
         <div class="controls">
           <label>VNC 密碼（如果有）:</label>
           <input type="password" placeholder="留空 = 無密碼"
@@ -135,58 +145,66 @@ export class ClawComputerPanel extends LitElement {
           </div>
         </div>
         <div class="screen-container">
-          <div ${ref(this.screenRef)} class="screen"></div>
+          <div ${ref(this.screenRef)} class="screen" style="display: ${this.isConnected ? "block" : "none"}"></div>
         </div>
       </div>
     `;
   }
 
-  private async loadRFB() {
-    if (this.RFBConstructor) {
-      return;
-    }
-    const module = await import("@novnc/novnc/lib/rfb.js");
-    this.RFBConstructor = (module as unknown as { default?: unknown }).default || module;
-  }
-
   private connect = async () => {
-    await this.loadRFB();
-
     const url = "ws://localhost:8081";
     if (this.rfb) {
       this.rfb.disconnect();
     }
 
     this.status = "正在連接...";
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    let screen = this.screenRef.value;
 
-    const screen = this.screenRef.value;
     if (!screen) {
+      // Fallback: try to find the element via shadowRoot if ref failed
+      screen = this.shadowRoot?.querySelector(".screen") as HTMLDivElement;
+    }
+
+    if (!screen) {
+      console.error("Screen element not found");
+      this.status = "初始化失败：找不到屏幕元素";
       return;
     }
 
-    const Constructor = this.RFBConstructor as new (
-      target: HTMLElement,
-      url: string,
-      options?: unknown,
-    ) => RFBInstance;
-    this.rfb = new Constructor(screen, url, {
-      credentials: { password: this.password || undefined },
-      resizeSession: true,
-      clipViewport: true,
-      scaleViewport: this.isFitted,
-    });
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const Constructor = RFBClass as new (
+        target: HTMLElement,
+        url: string,
+        options?: unknown,
+      ) => RFBInstance;
 
-    this.rfb.addEventListener("connect", () => {
-      this.isConnected = true;
-      this.status = "已連線成功 ✓（改變視窗大小會自動適配）";
-      setTimeout(() => this.rfb?.resize?.(), 100);
-    });
+      this.rfb = new Constructor(screen, url, {
+        credentials: { password: this.password || undefined },
+        resizeSession: true,
+        clipViewport: true,
+      });
 
-    this.rfb.addEventListener("disconnect", () => {
-      this.isConnected = false;
-      this.status = "連線中斷";
-      this.rfb = null;
-    });
+      if (this.rfb) {
+        this.rfb.scaleViewport = this.isFitted;
+      }
+
+      this.rfb?.addEventListener("connect", () => {
+        this.isConnected = true;
+        this.status = "已連線成功 ✓（改變視窗大小會自動適配）";
+        setTimeout(() => this.rfb?.resize?.(), 100);
+      });
+
+      this.rfb?.addEventListener("disconnect", () => {
+        this.isConnected = false;
+        this.status = "連線中斷";
+        this.rfb = null;
+      });
+    } catch (error) {
+      console.error("Failed to create RFB instance:", error);
+      this.status = `连接失败: ${error as string}`;
+    }
   };
 
   private disconnect = () => {
@@ -225,7 +243,6 @@ export class ClawComputerPanel extends LitElement {
 
   firstUpdated() {
     window.addEventListener("resize", this.handleResize);
-    void this.loadRFB();
   }
 
   disconnectedCallback() {
