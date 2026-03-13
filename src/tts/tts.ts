@@ -334,10 +334,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
  * Resolve TTS config for a specific agent by merging agent-level overrides
  * on top of the global config. Follows the same pattern as resolveHumanDelayConfig.
  */
-export function resolveTtsConfigForAgent(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): ResolvedTtsConfig {
+export function resolveTtsConfigForAgent(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
   const globalConfig = resolveTtsConfig(cfg);
   if (!agentId) {
     return globalConfig;
@@ -367,7 +364,8 @@ export function resolveTtsConfigForAgent(
       modelId: agentTts.elevenlabs?.modelId ?? globalConfig.elevenlabs.modelId,
       seed: agentTts.elevenlabs?.seed ?? globalConfig.elevenlabs.seed,
       applyTextNormalization:
-        agentTts.elevenlabs?.applyTextNormalization ?? globalConfig.elevenlabs.applyTextNormalization,
+        agentTts.elevenlabs?.applyTextNormalization ??
+        globalConfig.elevenlabs.applyTextNormalization,
       languageCode: agentTts.elevenlabs?.languageCode ?? globalConfig.elevenlabs.languageCode,
       voiceSettings: {
         stability:
@@ -456,7 +454,10 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: OpenClawConfig, agentId?: string): string | undefined {
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
   const config = resolveTtsConfigForAgent(cfg, agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
