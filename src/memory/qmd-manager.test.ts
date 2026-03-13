@@ -92,6 +92,9 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
+const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -100,7 +103,6 @@ describe("QmdMemoryManager", () => {
   let workspaceDir: string;
   let stateDir: string;
   let cfg: OpenClawConfig;
-  let previousWindowsPath: string | undefined;
   const agentId = "main";
 
   async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
@@ -141,6 +143,9 @@ describe("QmdMemoryManager", () => {
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    // Keep the default Windows path unresolved for most tests so spawn mocks can
+    // match the logical package command. Tests that verify wrapper resolution
+    // install explicit shim fixtures inline.
     cfg = {
       agents: {
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -154,43 +159,28 @@ describe("QmdMemoryManager", () => {
         },
       },
     } as OpenClawConfig;
-
-    if (process.platform === "win32") {
-      previousWindowsPath = process.env.PATH;
-      const nodeModulesDir = path.join(tmpRoot, "node_modules");
-      const shimDir = path.join(nodeModulesDir, ".bin");
-      const qmdScriptPath = path.join(nodeModulesDir, "qmd", "dist", "cli.js");
-      const mcporterScriptPath = path.join(nodeModulesDir, "mcporter", "dist", "cli.js");
-      await fs.mkdir(path.dirname(qmdScriptPath), { recursive: true });
-      await fs.mkdir(path.dirname(mcporterScriptPath), { recursive: true });
-      await fs.mkdir(shimDir, { recursive: true });
-      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
-      await fs.writeFile(
-        path.join(nodeModulesDir, "qmd", "package.json"),
-        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(nodeModulesDir, "mcporter", "package.json"),
-        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
-        "utf8",
-      );
-      await fs.writeFile(qmdScriptPath, "module.exports = {};\n", "utf8");
-      await fs.writeFile(mcporterScriptPath, "module.exports = {};\n", "utf8");
-      process.env.PATH = `${shimDir};${previousWindowsPath ?? ""}`;
-    }
   });
 
   afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalPathExt === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathExt;
+    }
+    if (originalWindowsPath === undefined) {
+      delete (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+    } else {
+      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
+    }
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
-    if (previousWindowsPath !== undefined) {
-      process.env.PATH = previousWindowsPath;
-      previousWindowsPath = undefined;
-    }
   });
 
   it("debounces back-to-back sync calls", async () => {
