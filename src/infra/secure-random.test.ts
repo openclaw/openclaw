@@ -40,4 +40,13 @@ describe("secure-random", () => {
     expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(18);
     expect(token18).toBe(Buffer.alloc(18, 0xab).toString("base64url"));
   });
+
+  it("supports zero-byte tokens without rewriting the requested size", () => {
+    cryptoMocks.randomBytes.mockClear();
+
+    const token = generateSecureToken(0);
+
+    expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(0);
+    expect(token).toBe("");
+  });
 });
