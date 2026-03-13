@@ -20,12 +20,13 @@ describe("ensureSkillsWatcher", () => {
 
     expect(watchMock).toHaveBeenCalledTimes(1);
     const firstCall = (
-      watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown }]>
+      watchMock.mock.calls as unknown as Array<[string[], { ignored?: unknown; depth?: number }]>
     )[0];
     const targets = firstCall?.[0] ?? [];
     const opts = firstCall?.[1] ?? {};
 
     expect(opts.ignored).toBe(mod.DEFAULT_SKILLS_WATCH_IGNORED);
+    expect(opts.depth).toBe(2);
     const posix = (p: string) => p.replaceAll("\\", "/");
     expect(targets).toEqual(
       expect.arrayContaining([
