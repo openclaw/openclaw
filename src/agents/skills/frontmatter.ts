@@ -153,14 +153,12 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     spec.url = downloadUrl;
   }
   if (typeof raw.archive === "string") {
-    // R7: rejeter les valeurs d'archive dangereuses pour éviter l'injection
-    // de flags tar (ex. --use-compress-program=cmd) ou de caractères shell.
+    // R7: allowlist stricte des formats d'archive autorisés — toute valeur hors liste est ignorée
+    // silencieusement pour éviter l'injection de flags tar (ex. --use-compress-program=cmd)
+    // ou de flags à un seul tiret (ex. -I cmd).
     const archiveVal = raw.archive.trim();
-    if (archiveVal.startsWith("--") || /[;&|`$<>()\n\r]/.test(archiveVal)) {
-      console.warn(
-        `[hardened] frontmatter: champ 'archive' rejeté — valeur dangereuse: "${archiveVal.slice(0, 60)}"`,
-      );
-    } else {
+    const ALLOWED_ARCHIVE_VALUES = ["zip", "tar.gz", "tar.bz2"];
+    if (!archiveVal.startsWith("-") && ALLOWED_ARCHIVE_VALUES.includes(archiveVal)) {
       spec.archive = archiveVal;
     }
   }
