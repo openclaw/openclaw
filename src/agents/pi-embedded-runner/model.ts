@@ -113,7 +113,6 @@ function isLikelyVisionModel(modelId: string): boolean {
     /gpt-4o/,
     /gpt-4-turbo/,
     /gpt-4-vision/,
-    /gpt-5/,
     /gemini-1\.5/,
     /gemini-2/,
     /gemini-pro-vision/,
@@ -504,8 +503,20 @@ function resolveConfiguredFallbackModel(params: {
   // should work without being pre-registered in the local catalog.
   // This fallback uses heuristics when the plugin-based capability lookup returns nothing.
   // Note: configured models with provider-level `api` return early via inlineMatch,
-  // so we rely on heuristic detection for vision support here.
+  // so we rely on heuristic detection for vision support here, unless explicitly configured.
   if (normalizedProvider === "openrouter") {
+    // Honor explicitly configured input from providerConfig.models before applying heuristic.
+    const configuredOpenRouterModel = providerConfig?.models?.find(
+      (candidate) => candidate.id === modelId,
+    );
+    const resolvedInput: Array<"text" | "image"> = configuredOpenRouterModel?.input
+      ? (configuredOpenRouterModel.input.filter(
+          (item) => item === "text" || item === "image",
+        ) as Array<"text" | "image">)
+      : isLikelyVisionModel(modelId)
+        ? ["text", "image"]
+        : ["text"];
+
     return normalizeResolvedModel({
       provider,
       cfg,
@@ -516,12 +527,12 @@ function resolveConfiguredFallbackModel(params: {
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: isLikelyVisionModel(modelId) ? ["text", "image"] : ["text"],
+        reasoning: configuredOpenRouterModel?.reasoning ?? false,
+        input: resolvedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        contextWindow: configuredOpenRouterModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
+        maxTokens: configuredOpenRouterModel?.maxTokens ?? 8192,
       } as Model<Api>,
       runtimeHooks,
     });
