@@ -1,7 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
@@ -17,13 +16,13 @@ import {
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
 import { buildExecApprovalPendingReplyPayload } from "./exec-approval-reply.js";
+import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
-import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
@@ -278,21 +277,9 @@ function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
-    return null;
-  }
-  const target = resolveSessionDeliveryTarget({
-    entry,
-    requestedChannel: "last",
+  const target = resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
     turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
     turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
