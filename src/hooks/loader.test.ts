@@ -362,13 +362,14 @@ describe("loader", () => {
 
       await expectNoCommandHookRegistration(cfg);
 
-      const messages = (error as ReturnType<typeof vi.fn>).mock.calls
-        .map((call) => String(call[0] ?? ""))
-        .join("\n");
-      const unstyledMessages = stripAnsi(messages);
-      expect(unstyledMessages).toContain("forged-log");
-      expect(unstyledMessages).not.toContain("\u001b[31m");
-      expect(unstyledMessages).not.toContain("\nforged-log");
+      const messages = stripAnsi(
+        (error as ReturnType<typeof vi.fn>).mock.calls
+          .map((call) => String(call[0] ?? ""))
+          .join("\n"),
+      );
+      expect(messages).toContain("forged-log");
+      expect(messages).not.toContain("\u001b[31m");
+      expect(messages).not.toContain("\nforged-log");
     });
   });
 });

@@ -16,9 +16,9 @@ function makeTempDir() {
 
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
-    ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
     CLAWDBOT_STATE_DIR: undefined,
+    OPENCLAW_HOME: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
 }
