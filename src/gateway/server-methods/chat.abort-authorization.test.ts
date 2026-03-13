@@ -6,6 +6,30 @@ import {
 } from "./chat.abort.test-helpers.js";
 import { chatHandlers } from "./chat.js";
 
+async function invokeSingleRunAbort({
+  context,
+  runId = "run-1",
+  connId,
+  deviceId,
+  scopes,
+}: {
+  context: ReturnType<typeof createChatAbortContext>;
+  runId?: string;
+  connId: string;
+  deviceId: string;
+  scopes: string[];
+}) {
+  return await invokeChatAbortHandler({
+    handler: chatHandlers["chat.abort"],
+    context,
+    request: { sessionKey: "main", runId },
+    client: {
+      connId,
+      connect: { device: { id: deviceId }, scopes },
+    },
+  });
+}
+
 describe("chat.abort authorization", () => {
   it("rejects explicit run aborts from other clients", async () => {
     const context = createChatAbortContext({
@@ -17,14 +41,11 @@ describe("chat.abort authorization", () => {
       ]),
     });
 
-    const respond = await invokeChatAbortHandler({
-      handler: chatHandlers["chat.abort"],
+    const respond = await invokeSingleRunAbort({
       context,
-      request: { sessionKey: "main", runId: "run-1" },
-      client: {
-        connId: "conn-other",
-        connect: { device: { id: "dev-other" }, scopes: ["operator.write"] },
-      },
+      connId: "conn-other",
+      deviceId: "dev-other",
+      scopes: ["operator.write"],
     });
 
     const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
@@ -92,14 +113,11 @@ describe("chat.abort authorization", () => {
       ]),
     });
 
-    const respond = await invokeChatAbortHandler({
-      handler: chatHandlers["chat.abort"],
+    const respond = await invokeSingleRunAbort({
       context,
-      request: { sessionKey: "main", runId: "run-1" },
-      client: {
-        connId: "conn-admin",
-        connect: { device: { id: "dev-admin" }, scopes: ["operator.admin"] },
-      },
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
     });
 
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];
