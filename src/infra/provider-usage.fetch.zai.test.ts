@@ -25,6 +25,20 @@ describe("fetchZaiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("falls back to a generic API error for blank unsuccessful messages", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: false,
+        code: 500,
+        msg: "   ",
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+    expect(result.error).toBe("API error");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("parses token and monthly windows with reset times", async () => {
     const tokenReset = "2026-01-08T00:00:00Z";
     const minuteReset = "2026-01-08T00:30:00Z";
@@ -80,6 +94,49 @@ describe("fetchZaiUsage", () => {
         label: "Monthly",
         usedPercent: 12.5,
         resetAt: new Date(monthlyReset).getTime(),
+      },
+    ]);
+  });
+
+  it("clamps invalid percentages and falls back to alternate plan fields", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: 200,
+        data: {
+          plan: "Pro",
+          limits: [
+            {
+              type: "TOKENS_LIMIT",
+              percentage: -5,
+              unit: 99,
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: 140,
+            },
+            {
+              type: "OTHER_LIMIT",
+              percentage: 50,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.plan).toBe("Pro");
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (Limit)",
+        usedPercent: 0,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 100,
+        resetAt: undefined,
       },
     ]);
   });
