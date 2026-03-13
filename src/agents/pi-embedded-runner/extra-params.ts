@@ -364,11 +364,12 @@ export function applyExtraParamsToAgent(
   }
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  if (provider === "anthropic") {
+    const betas = anthropicBetas ?? [];
+    if (betas.length) {
+      log.debug(`applying Anthropic beta header for ${provider}/${modelId}: ${betas.join(",")}`);
+    }
+    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, betas);
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
