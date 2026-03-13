@@ -33,6 +33,8 @@ type FetchMediaOptions = {
   maxRedirects?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
+  /** Skip DNS pinning when the provided fetch owns dispatcher/network policy. */
+  pinDns?: boolean;
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
@@ -91,6 +93,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     maxBytes,
     maxRedirects,
     readIdleTimeoutMs,
+    pinDns,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -106,6 +109,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        pinDns,
         policy: ssrfPolicy,
         lookupFn,
         dispatcherPolicy,
