@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { DisconnectReason } from "@whiskeysockets/baileys";
+import { getBaileys } from "./baileys.runtime.js";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
@@ -216,6 +216,7 @@ export async function startWebLoginWithQr(
 export async function waitForWebLogin(
   opts: { timeoutMs?: number; runtime?: RuntimeEnv; accountId?: string } = {},
 ): Promise<{ connected: boolean; message: string }> {
+  const { DisconnectReason } = await getBaileys();
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });

@@ -1,5 +1,5 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
-import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
+import { downloadMediaMessage, normalizeMessageContent } from "../baileys.runtime.js";
 import { logVerbose } from "../../globals.js";
 import type { createWaSocket } from "../session.js";
 

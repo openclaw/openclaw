@@ -1,13 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
+import type { makeWASocket } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
+import { getBaileys } from "./baileys.runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
@@ -92,6 +87,13 @@ export async function createWaSocket(
   verbose: boolean,
   opts: { authDir?: string; onQr?: (qr: string) => void } = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
+  const {
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    makeWASocket,
+    useMultiFileAuthState,
+  } = await getBaileys();
   const baseLogger = getChildLogger(
     { module: "baileys" },
     {
