@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkDepsStatus,
+  checkUpdateStatus,
   compareSemverStrings,
   fetchNpmLatestVersion,
   fetchNpmTagVersion,
@@ -154,5 +159,84 @@ describe("formatGitInstallLabel", () => {
         packageManager: "pnpm",
       }),
     ).toBeNull();
+  });
+});
+
+describe("checkDepsStatus", () => {
+  it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+
+    await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
+      manager: "unknown",
+      status: "unknown",
+      lockfilePath: null,
+      markerPath: null,
+      reason: "unknown package manager",
+    });
+
+    await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
+    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+      manager: "pnpm",
+      status: "missing",
+      reason: "node_modules marker missing",
+    });
+
+    const markerPath = path.join(base, "node_modules", ".modules.yaml");
+    await fs.mkdir(path.dirname(markerPath), { recursive: true });
+    await fs.writeFile(markerPath, "marker", "utf8");
+    const staleDate = new Date(Date.now() - 10_000);
+    const freshDate = new Date();
+    await fs.utimes(markerPath, staleDate, staleDate);
+    await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
+
+    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+      manager: "pnpm",
+      status: "stale",
+      reason: "lockfile newer than install marker",
+    });
+
+    const newerMarker = new Date(Date.now() + 2_000);
+    await fs.utimes(markerPath, newerMarker, newerMarker);
+    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
+      manager: "pnpm",
+      status: "ok",
+    });
+  });
+});
+
+describe("checkUpdateStatus", () => {
+  it("returns unknown install status when root is missing", async () => {
+    await expect(
+      checkUpdateStatus({ root: null, includeRegistry: false, timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      root: null,
+      installKind: "unknown",
+      packageManager: "unknown",
+      registry: undefined,
+    });
+  });
+
+  it("detects package installs for non-git roots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ packageManager: "npm@10.0.0" }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+    await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+
+    await expect(
+      checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
+    ).resolves.toMatchObject({
+      root,
+      installKind: "package",
+      packageManager: "npm",
+      git: undefined,
+      registry: undefined,
+      deps: {
+        manager: "npm",
+      },
+    });
   });
 });
