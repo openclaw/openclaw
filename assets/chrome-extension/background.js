@@ -349,9 +349,13 @@ async function rehydrateState() {
     for (const entry of entries) {
       const valid = await validateAttachedTab(entry.tabId)
       if (!valid) {
-        await detachTab(entry.tabId, 'rehydration_failed', 'Tab stale after restart')
+        await detachTab(entry.tabId, 'rehydration_failed', 'Tab stale after restart', { silent: true })
       }
     }
+
+    // Final industrial sync pass after all stale tabs are pruned
+    updateAllBadges()
+    void persistState()
 
     // Resume lost re-attachment loops directly to bypass transition guards
     for (const [tabId] of reattachingTabs) {
@@ -882,51 +886,63 @@ async function attachTab(tabId, opts = {}) {
   return { sessionId, targetId }
 }
 
-async function detachTab(tabId, reason, displayError) {
-  // 1. Atomic Snapshot: ensures idempotency by returning if identity is already gone.
+async function detachTab(tabId, reason, displayError, opts = {}) {
+  // 1. Atomic Snapshot: capture all inputs upfront before any Map mutation.
   const meta = tabs.get(tabId) || reattachingTabs.get(tabId)
-  const hasDanglingState = commandBuffers.has(tabId) || 
-                           tabAncestry.has(tabId) || 
-                           [...tabAncestry.values()].includes(tabId) ||
-                           [...childSessionToTab.values()].includes(tabId)
-  
-  if (!meta && !hasDanglingState && lockedTabId !== tabId) return
+  const ownedChildren = []
+  for (const [sid, tid] of childSessionToTab.entries()) {
+    if (tid === tabId) ownedChildren.push(sid)
+  }
+  const buffer = commandBuffers.get(tabId) || []
+  const isLockedOwner = (lockedTabId === tabId)
+  const hasAncestry = tabAncestry.has(tabId) || [...tabAncestry.values()].includes(tabId)
+
+  // Idempotency: skip if no state remains.
+  if (!meta && !hasAncestry && buffer.length === 0 && ownedChildren.length === 0 && !isLockedOwner) return
 
   const wasAttached = tabs.has(tabId)
   const sessionId = meta?.sessionId
   const targetId = meta?.targetId
 
-  // 2. Recursive Ancestry GC: Purge all direct and indirect descendants before clearing registries.
+  // 2. Map Erasure: Release local state immediately to prevent races.
+  tabs.delete(tabId)
+  reattachingTabs.delete(tabId)
+  commandBuffers.delete(tabId)
+  if (sessionId) tabBySession.delete(sessionId)
+  if (targetId) targetToTab.delete(targetId)
+  for (const sid of ownedChildren) childSessionToTab.delete(sid)
+
+  if (isLockedOwner) {
+    lockedTabId = null
+    relayIsLocked = false
+    if (!opts.silent) void setLockOnRelay(false).catch(() => {})
+  }
+
+  // 3. Recursive Ancestry GC
   const purgeAncestry = (id) => {
     for (const [cid, pid] of tabAncestry.entries()) {
       if (pid === id) {
         tabAncestry.delete(cid)
         purgeAncestry(cid)
       }
-      if (cid === id) {
-        tabAncestry.delete(cid)
-      }
+      if (cid === id) tabAncestry.delete(cid)
     }
   }
   purgeAncestry(tabId)
 
-  // 3. Child Session Termination: Send detach events for all related iframes.
-  for (const [childSessionId, parentTabId] of childSessionToTab.entries()) {
-    if (parentTabId === tabId) {
-      try {
-        sendToRelay({
-          method: 'forwardCDPEvent',
-          params: {
-            method: 'Target.detachedFromTarget',
-            params: { sessionId: childSessionId, reason: 'parent_detached' },
-          },
-        })
-      } catch {}
-      childSessionToTab.delete(childSessionId)
-    }
+  // 4. Identity Termination Broadcasts (using snapshots)
+  for (const sid of ownedChildren) {
+    try {
+      sendToRelay({
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: sid, reason: 'parent_detached' },
+        },
+      })
+    } catch {}
   }
 
-  // 4. Main Session Termination: Broadcast authoritative death event to relay.
   if (sessionId) {
     try {
       sendToRelay({
@@ -937,41 +953,24 @@ async function detachTab(tabId, reason, displayError) {
         },
       })
     } catch {}
-    tabBySession.delete(sessionId)
   }
 
-  // 5. Registry Erasure
-  if (targetId) targetToTab.delete(targetId)
-  tabs.delete(tabId)
-  reattachingTabs.delete(tabId)
-
-  // 6. Command Buffer Flushing: specific rejection reasons for the agent.
-  const buffer = commandBuffers.get(tabId)
-  if (buffer) {
-    commandBuffers.delete(tabId)
-    for (const cmd of buffer) {
-      if (cmd.reject) cmd.reject(new Error(displayError || 'Target detached'))
-    }
+  // 5. Buffer Rejection (using snapshot)
+  for (const cmd of buffer) {
+    if (cmd.reject) cmd.reject(new Error(displayError || 'Target detached'))
   }
 
-  // 7. Lock Recovery
-  if (lockedTabId === tabId) {
-    lockedTabId = null
-    relayIsLocked = false
-    void setLockOnRelay(false).catch(() => {})
-  }
-
-  // 8. CDP Cleanup: only detach if we were actually attached (avoids log noise for navigating tabs).
+  // 6. CDP Cleanup
   if (wasAttached) {
-    try {
-      await chrome.debugger.detach({ tabId })
-    } catch {}
+    try { await chrome.debugger.detach({ tabId }) } catch {}
   }
 
-  // 9. Industrial State Sync
-  await syncAllOverlays().catch(() => {})
-  updateAllBadges()
-  void persistState()
+  // 7. Industrial State Batching
+  if (!opts.silent) {
+    await syncAllOverlays().catch(() => {})
+    updateAllBadges()
+    void persistState()
+  }
 }
 
 
