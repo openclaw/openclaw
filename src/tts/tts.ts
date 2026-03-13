@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -329,6 +330,98 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   };
 }
 
+/**
+ * Resolve TTS config for a specific agent by merging agent-level overrides
+ * on top of the global config. Follows the same pattern as resolveHumanDelayConfig.
+ */
+export function resolveTtsConfigForAgent(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
+  const globalConfig = resolveTtsConfig(cfg);
+  if (!agentId) {
+    return globalConfig;
+  }
+  const agentTts = resolveAgentConfig(cfg, agentId)?.tts;
+  if (!agentTts) {
+    return globalConfig;
+  }
+  return {
+    auto:
+      normalizeTtsAutoMode(agentTts.auto) ??
+      (agentTts.enabled != null ? (agentTts.enabled ? "always" : "off") : undefined) ??
+      globalConfig.auto,
+    mode: agentTts.mode ?? globalConfig.mode,
+    provider: agentTts.provider ?? globalConfig.provider,
+    providerSource: agentTts.provider ? "config" : globalConfig.providerSource,
+    summaryModel: agentTts.summaryModel?.trim() || globalConfig.summaryModel,
+    modelOverrides: agentTts.modelOverrides
+      ? resolveModelOverridePolicy(agentTts.modelOverrides)
+      : globalConfig.modelOverrides,
+    elevenlabs: {
+      apiKey: agentTts.elevenlabs?.apiKey
+        ? normalizeResolvedSecretInputString({
+            value: agentTts.elevenlabs.apiKey,
+            path: `agents.list[${agentId}].tts.elevenlabs.apiKey`,
+          })
+        : globalConfig.elevenlabs.apiKey,
+      baseUrl: agentTts.elevenlabs?.baseUrl?.trim() || globalConfig.elevenlabs.baseUrl,
+      voiceId: agentTts.elevenlabs?.voiceId ?? globalConfig.elevenlabs.voiceId,
+      modelId: agentTts.elevenlabs?.modelId ?? globalConfig.elevenlabs.modelId,
+      seed: agentTts.elevenlabs?.seed ?? globalConfig.elevenlabs.seed,
+      applyTextNormalization:
+        agentTts.elevenlabs?.applyTextNormalization ??
+        globalConfig.elevenlabs.applyTextNormalization,
+      languageCode: agentTts.elevenlabs?.languageCode ?? globalConfig.elevenlabs.languageCode,
+      voiceSettings: {
+        stability:
+          agentTts.elevenlabs?.voiceSettings?.stability ??
+          globalConfig.elevenlabs.voiceSettings.stability,
+        similarityBoost:
+          agentTts.elevenlabs?.voiceSettings?.similarityBoost ??
+          globalConfig.elevenlabs.voiceSettings.similarityBoost,
+        style:
+          agentTts.elevenlabs?.voiceSettings?.style ?? globalConfig.elevenlabs.voiceSettings.style,
+        useSpeakerBoost:
+          agentTts.elevenlabs?.voiceSettings?.useSpeakerBoost ??
+          globalConfig.elevenlabs.voiceSettings.useSpeakerBoost,
+        speed:
+          agentTts.elevenlabs?.voiceSettings?.speed ?? globalConfig.elevenlabs.voiceSettings.speed,
+      },
+    },
+    openai: {
+      apiKey: agentTts.openai?.apiKey
+        ? normalizeResolvedSecretInputString({
+            value: agentTts.openai.apiKey,
+            path: `agents.list[${agentId}].tts.openai.apiKey`,
+          })
+        : globalConfig.openai.apiKey,
+      baseUrl: (agentTts.openai?.baseUrl?.trim() || globalConfig.openai.baseUrl).replace(
+        /\/+$/,
+        "",
+      ),
+      model: agentTts.openai?.model ?? globalConfig.openai.model,
+      voice: agentTts.openai?.voice ?? globalConfig.openai.voice,
+      speed: agentTts.openai?.speed ?? globalConfig.openai.speed,
+      instructions: agentTts.openai?.instructions?.trim() || globalConfig.openai.instructions,
+    },
+    edge: {
+      enabled: agentTts.edge?.enabled ?? globalConfig.edge.enabled,
+      voice: agentTts.edge?.voice?.trim() || globalConfig.edge.voice,
+      lang: agentTts.edge?.lang?.trim() || globalConfig.edge.lang,
+      outputFormat: agentTts.edge?.outputFormat?.trim() || globalConfig.edge.outputFormat,
+      outputFormatConfigured:
+        Boolean(agentTts.edge?.outputFormat?.trim()) || globalConfig.edge.outputFormatConfigured,
+      pitch: agentTts.edge?.pitch?.trim() || globalConfig.edge.pitch,
+      rate: agentTts.edge?.rate?.trim() || globalConfig.edge.rate,
+      volume: agentTts.edge?.volume?.trim() || globalConfig.edge.volume,
+      saveSubtitles: agentTts.edge?.saveSubtitles ?? globalConfig.edge.saveSubtitles,
+      proxy: agentTts.edge?.proxy?.trim() || globalConfig.edge.proxy,
+      timeoutMs: agentTts.edge?.timeoutMs ?? globalConfig.edge.timeoutMs,
+    },
+    prefsPath: agentTts.prefsPath ?? globalConfig.prefsPath,
+    maxTextLength: agentTts.maxTextLength ?? globalConfig.maxTextLength,
+    timeoutMs: agentTts.timeoutMs ?? globalConfig.timeoutMs,
+  };
+}
+
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) {
     return resolveUserPath(config.prefsPath.trim());
@@ -367,8 +460,11 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
-  const config = resolveTtsConfig(cfg);
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
+  const config = resolveTtsConfigForAgent(cfg, agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
   if (autoMode === "off") {
@@ -565,8 +661,10 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  /** Optional agent ID for per-agent voice overrides. */
+  agentId?: string;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfigForAgent(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
@@ -825,8 +923,10 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  /** Optional agent ID for per-agent voice overrides. */
+  agentId?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfigForAgent(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -928,6 +1028,7 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentId: params.agentId,
   });
 
   if (result.success && result.audioPath) {
@@ -976,4 +1077,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  resolveTtsConfigForAgent,
 };
