@@ -105,7 +105,14 @@ describe("shared/frontmatter", () => {
       bins: ["git", "git"],
     });
     expect(parseOpenClawManifestInstallBase({ kind: "bad" }, ["brew"])).toBeUndefined();
-    expect(applyOpenClawManifestInstallCommonFields({ extra: true }, parsed!)).toEqual({
+    expect(
+      applyOpenClawManifestInstallCommonFields<{
+        extra: boolean;
+        id?: string;
+        label?: string;
+        bins?: string[];
+      }>({ extra: true }, parsed!),
+    ).toEqual({
       extra: true,
       id: "brew.git",
       label: "Git",
