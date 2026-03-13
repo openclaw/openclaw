@@ -178,7 +178,7 @@ describe("resolveAgentRoute", () => {
     };
     const route = resolveDiscordGuildRoute(cfg);
     expect(route.agentId).toBe("chan");
-    expect(route.sessionKey).toBe("agent:chan:discord:channel:c1");
+    expect(route.sessionKey).toBe("agent:chan:discord:default:channel:c1");
     expect(route.matchedBy).toBe("binding.peer");
   });
 
@@ -190,7 +190,7 @@ describe("resolveAgentRoute", () => {
       accountId: "default",
       peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
     });
-    expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
+    expect(route.sessionKey).toBe("agent:main:discord:default:channel:1468834856187203680");
   });
 
   test("guild binding wins over account binding when peer not bound", () => {
