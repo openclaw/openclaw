@@ -703,6 +703,7 @@ export function formatAssistantErrorText(
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
     );
+  }
 
   if (isToolUseIdMismatchError(raw)) {
     return (
@@ -845,10 +846,6 @@ export function isMissingToolCallInputError(raw: string): boolean {
   return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
 }
 
-export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
-    return false;
-  }
 export function isToolUseIdMismatchError(raw: string): boolean {
   if (!raw) return false;
   const lower = raw.toLowerCase();
@@ -856,7 +853,12 @@ export function isToolUseIdMismatchError(raw: string): boolean {
     lower.includes("tool_use_id") &&
     (lower.includes("does not match") || lower.includes("mismatch"))
   );
+}
 
+export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
+  if (!msg || msg.stopReason !== "error") {
+    return false;
+  }
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
 
