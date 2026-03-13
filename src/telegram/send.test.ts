@@ -172,6 +172,18 @@ describe("buildInlineKeyboard", () => {
 });
 
 describe("sendMessageTelegram", () => {
+  it("suppresses NO_REPLY token without hitting the API", async () => {
+    const res = await sendMessageTelegram("123", "NO_REPLY", { token: "tok" });
+    expect(res).toEqual({ messageId: "suppressed", chatId: "" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const res = await sendMessageTelegram("123", "  NO_REPLY  \n", { token: "tok" });
+    expect(res).toEqual({ messageId: "suppressed", chatId: "" });
+    expect(botApi.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("sends typing to the resolved chat and topic", async () => {
     loadConfig.mockReturnValue({
       channels: {

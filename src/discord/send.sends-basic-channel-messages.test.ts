@@ -70,6 +70,38 @@ describe("sendMessageDiscord", () => {
     __resetDiscordDirectoryCacheForTest();
   });
 
+  it("suppresses NO_REPLY token without hitting the API", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const res = await sendMessageDiscord("channel:789", "NO_REPLY", {
+      rest,
+      token: "t",
+    });
+    expect(res).toEqual({ messageId: "suppressed", channelId: "" });
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const res = await sendMessageDiscord("channel:789", "  NO_REPLY  \n", {
+      rest,
+      token: "t",
+    });
+    expect(res).toEqual({ messageId: "suppressed", channelId: "" });
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress NO_REPLY when mediaUrl is present", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    const res = await sendMessageDiscord("channel:789", "NO_REPLY", {
+      rest,
+      token: "t",
+      mediaUrl: "https://example.com/image.png",
+    });
+    expect(res.messageId).not.toBe("suppressed");
+  });
+
   it("sends basic channel messages", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     // Channel type lookup returns a normal text channel (not a forum).

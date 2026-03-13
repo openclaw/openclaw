@@ -4,8 +4,10 @@ import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -134,6 +136,13 @@ export async function sendMessageDiscord(
   text: string,
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
+  // Suppress NO_REPLY and other silent tokens before hitting the Discord API (parity with Slack)
+  const trimmed = text?.trim() ?? "";
+  if (isSilentReplyText(trimmed) && !opts.mediaUrl) {
+    logVerbose("discord send: suppressed NO_REPLY token before API call");
+    return { messageId: "suppressed", channelId: "" };
+  }
+
   const cfg = opts.cfg ?? loadConfig();
   const accountInfo = resolveDiscordAccount({
     cfg,
