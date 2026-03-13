@@ -82,11 +82,21 @@ function* iterateErrorChain(error: unknown) {
   }
 }
 
-function isSessionKeyCompatibilityError(error: unknown): boolean {
-  const sessionKeyPattern = /\bsession\s*key\b|\bsessionKey\b/i;
-  const strictPattern =
-    /\bunrecognized\b|\bunknown\b|\bunexpected\b|\bextraneous\b|\badditional propert(?:y|ies)\b|\bnot allowed\b|\bstrict\b/i;
+const SESSION_KEY_UNKNOWN_FIELD_PATTERNS = [
+  /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionKey['"`]/i,
+  /\badditional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
+  /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionKey['"`]/i,
+  /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
+  /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionKey['"`]/i,
+  /['"`]sessionKey['"`].*\b(?:was|is)\s+not allowed\b/i,
+  /"code"\s*:\s*"unrecognized_keys"[^]*"sessionKey"/i,
+] as const;
 
+function isSessionKeyUnknownFieldValidationMessage(message: string): boolean {
+  return SESSION_KEY_UNKNOWN_FIELD_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function isSessionKeyCompatibilityError(error: unknown): boolean {
   for (const candidate of iterateErrorChain(error)) {
     if (Array.isArray(candidate)) {
       if (candidate.some((entry) => issueRejectsSessionKeyStrictly(entry))) {
@@ -96,7 +106,7 @@ function isSessionKeyCompatibilityError(error: unknown): boolean {
     }
 
     if (typeof candidate === "string") {
-      if (sessionKeyPattern.test(candidate) && strictPattern.test(candidate)) {
+      if (isSessionKeyUnknownFieldValidationMessage(candidate)) {
         return true;
       }
       continue;
@@ -128,8 +138,7 @@ function isSessionKeyCompatibilityError(error: unknown): boolean {
 
     if (
       typeof issueContainer.message === "string" &&
-      sessionKeyPattern.test(issueContainer.message) &&
-      strictPattern.test(issueContainer.message)
+      isSessionKeyUnknownFieldValidationMessage(issueContainer.message)
     ) {
       return true;
     }

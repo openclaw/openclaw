@@ -179,6 +179,7 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
     name: "SessionKey Runtime Error Engine",
   };
   assembleCalls = 0;
+  constructor(private readonly errorMessage = "sessionKey lookup failed") {}
 
   async ingest(_params: {
     sessionId: string;
@@ -196,7 +197,7 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
     tokenBudget?: number;
   }): Promise<AssembleResult> {
     this.assembleCalls += 1;
-    throw new Error("sessionKey lookup failed");
+    throw new Error(this.errorMessage);
   }
 
   async compact(_params: {
@@ -499,6 +500,25 @@ describe("Legacy sessionKey compatibility", () => {
         messages: [makeMockMessage()],
       }),
     ).rejects.toThrow("sessionKey lookup failed");
+    expect(runtimeErrorEngine.assembleCalls).toBe(1);
+  });
+
+  it("does not treat 'Unknown sessionKey' runtime failures as schema-compat errors", async () => {
+    const engineId = `sessionkey-unknown-runtime-${Date.now().toString(36)}`;
+    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(
+      'Unknown sessionKey "agent:main:missing"',
+    );
+    registerContextEngine(engineId, () => runtimeErrorEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await expect(
+      engine.assemble({
+        sessionId: "s1",
+        sessionKey: "agent:main:missing",
+        messages: [makeMockMessage()],
+      }),
+    ).rejects.toThrow('Unknown sessionKey "agent:main:missing"');
     expect(runtimeErrorEngine.assembleCalls).toBe(1);
   });
 });
