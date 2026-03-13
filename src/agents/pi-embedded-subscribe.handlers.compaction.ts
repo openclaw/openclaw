@@ -80,6 +80,12 @@ export function handleAutoCompactionEnd(
           {
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
+            summary:
+              evt.result && typeof evt.result === "object" && "summary" in evt.result
+                ? typeof evt.result.summary === "string"
+                  ? evt.result.summary
+                  : undefined
+                : undefined,
           },
           {},
         )

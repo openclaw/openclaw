@@ -652,6 +652,7 @@ export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  summary?: string;
   /** Path to the session JSONL transcript. All pre-compaction messages are
    *  preserved on disk, so plugins can read and process them asynchronously
    *  without blocking the compaction pipeline. */

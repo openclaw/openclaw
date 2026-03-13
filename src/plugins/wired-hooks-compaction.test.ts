@@ -110,10 +110,11 @@ describe("compaction hook wiring", () => {
       [unknown]
     >;
     const event = afterCalls[0]?.[0] as
-      | { messageCount?: number; compactedCount?: number }
+      | { messageCount?: number; compactedCount?: number; summary?: string }
       | undefined;
     expect(event?.messageCount).toBe(2);
     expect(event?.compactedCount).toBe(1);
+    expect(event?.summary).toBe("compacted");
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(emitAgentEvent).toHaveBeenCalledWith({

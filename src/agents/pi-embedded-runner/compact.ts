@@ -983,6 +983,7 @@ export async function compactEmbeddedPiSessionDirect(
                 messageCount: messageCountAfter,
                 tokenCount: tokensAfter,
                 compactedCount,
+                summary: typeof result.summary === "string" ? result.summary : undefined,
               },
               {
                 sessionId: params.sessionId,
@@ -1126,6 +1127,7 @@ export async function compactEmbeddedPiSession(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
+                summary: result.result?.summary,
                 sessionFile: params.sessionFile,
               },
               hookCtx,
