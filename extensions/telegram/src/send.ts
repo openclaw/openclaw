@@ -817,7 +817,7 @@ export async function sendMessageTelegram(
       );
 
     const mediaSender = (() => {
-      if (isGif) {
+      if (isGif && !opts.forceDocument) {
         return {
           label: "animation",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>
