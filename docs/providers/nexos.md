@@ -8,14 +8,17 @@ title: "Nexos AI"
 
 # Nexos AI
 
-Nexos AI is a unified AI gateway that provides OpenAI-compatible access to models from multiple providers (Anthropic, OpenAI, Google, xAI) through a single API endpoint. It includes workspace management, team-based API key governance, and model fallback configuration.
+Nexos AI is a unified AI gateway that provides OpenAI-compatible access to models from multiple providers (Anthropic, OpenAI, Google, xAI, Mistral, and more) through a single API endpoint. It includes workspace management, team-based API key governance, budgeting, model fallback configuration, and self-hosted open-source models.
 
 ## Why Nexos AI in OpenClaw
 
-- **Multi-provider gateway** — access Claude, GPT, Gemini, and Grok models through one API key.
+- **Multi-provider gateway** — access Claude, GPT, Gemini, Grok, Devstral, and 60+ other models through one API key.
 - **OpenAI-compatible** `/v1` endpoints — works with standard tooling.
 - **Team governance** — manage model access, API keys, and usage at the team level.
+- **Budgeting** — set spending limits per team, user, or API key to control AI costs.
 - **Model fallbacks** — configure automatic fallback chains when a model is unavailable.
+- **Self-hosted open-source models** — Nexos hosts popular open-source models (Gemma 3, Llama 4 Scout, GLM 5, and others) on their own infrastructure, no GPU management required.
+- **Dynamic model discovery** — OpenClaw automatically fetches the latest model catalog from the Nexos API at startup, so new models appear without config changes.
 
 ## Setup
 
@@ -65,14 +68,15 @@ openclaw agent --model "nexos/Claude Opus 4.6" --message "Hello, are you working
 After setup, pick a model based on your needs:
 
 - **Default model**: `nexos/Claude Opus 4.6` — strongest reasoning model available.
-- **Fast option**: `nexos/Gemini 3 Flash` — good balance of speed and capability.
+- **Fast option**: `nexos/Gemini 3 Flash Preview` — good balance of speed and capability.
 - **OpenAI**: `nexos/GPT 5.2` or `nexos/GPT 4.1` for GPT-family models.
+- **Coding**: `nexos/Devstral 2` — Mistral coding-focused model.
 
 Change your default model anytime:
 
 ```bash
 openclaw models set "nexos/Claude Opus 4.6"
-openclaw models set "nexos/Gemini 3 Flash"
+openclaw models set "nexos/Gemini 3 Flash Preview"
 ```
 
 List all available models:
@@ -83,18 +87,25 @@ openclaw models list | grep nexos
 
 ## Available Models
 
-| Model ID                               | Name              | Context | Features          |
-| -------------------------------------- | ----------------- | ------- | ----------------- |
-| `Claude Opus 4.6`                      | Claude Opus 4.6   | 1M      | Reasoning, vision |
-| `claude-opus-4-20250514`               | Claude Opus 4     | 200k    | Reasoning, vision |
-| `anthropic.claude-sonnet-4-5@20250929` | Claude Sonnet 4.5 | 200k    | Reasoning, vision |
-| `GPT 5.2`                              | GPT 5.2           | 256k    | Reasoning         |
-| `GPT 4.1`                              | GPT 4.1           | 1M      | General           |
-| `Gemini 3 Flash`                       | Gemini 3 Flash    | 1M      | Reasoning, vision |
-| `Grok 4`                               | Grok 4            | 256k    | Reasoning         |
+These are the default models in the static catalog. With dynamic discovery enabled (automatic when an API key is configured), OpenClaw fetches the full list of 60+ models from the Nexos API at startup.
+
+| Model ID                 | Name                   | Context | Features          |
+| ------------------------ | ---------------------- | ------- | ----------------- |
+| `Claude Opus 4.6`        | Claude Opus 4.6        | 200k    | Reasoning, vision |
+| `Claude Opus 4.5`        | Claude Opus 4.5        | 200k    | Reasoning, vision |
+| `Claude Sonnet 4.6`      | Claude Sonnet 4.6      | 200k    | Reasoning, vision |
+| `Claude Sonnet 4.5`      | Claude Sonnet 4.5      | 200k    | Reasoning, vision |
+| `Claude Haiku 4.5`       | Claude Haiku 4.5       | 200k    | Vision            |
+| `GPT 5.2`                | GPT 5.2                | 128k    | Reasoning         |
+| `GPT 5`                  | GPT 5                  | 128k    | Reasoning         |
+| `GPT 4.1`                | GPT 4.1                | 1M      | General           |
+| `Gemini 3 Flash Preview` | Gemini 3 Flash Preview | 1M      | Reasoning, vision |
+| `Gemini 2.5 Pro`         | Gemini 2.5 Pro         | 1M      | Reasoning, vision |
+| `Grok 4 Fast`            | Grok 4 Fast            | 128k    | Reasoning         |
+| `Devstral 2`             | Devstral 2             | 128k    | Coding            |
 
 <Note>
-The model catalog may change as Nexos adds or removes models. Use `openclaw models list` to see currently available models.
+OpenClaw automatically discovers all available Nexos models at startup using `GET /v1/models`. The table above is the static fallback catalog. Run `openclaw models list` to see the full live list, which includes additional models like Kimi K2.5, Mistral Large, GPT 5.1 Codex, and self-hosted open-source models (Gemma 3, Llama 4 Scout, GLM 5).
 </Note>
 
 ## Streaming and Tool Support
@@ -111,8 +122,8 @@ The model catalog may change as Nexos adds or removes models. Use `openclaw mode
 # Use Claude Opus 4.6
 openclaw agent --model "nexos/Claude Opus 4.6" --message "Summarize this task"
 
-# Use Gemini 3 Flash for fast responses
-openclaw agent --model "nexos/Gemini 3 Flash" --message "Quick health check"
+# Use Gemini 3 Flash Preview for fast responses
+openclaw agent --model "nexos/Gemini 3 Flash Preview" --message "Quick health check"
 
 # Use GPT 5.2
 openclaw agent --model "nexos/GPT 5.2" --message "Review this code"
@@ -157,7 +168,7 @@ Nexos API is at `https://api.nexos.ai/v1`. Ensure your network allows HTTPS conn
             reasoning: true,
             input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 1000000,
+            contextWindow: 200000,
             maxTokens: 128000,
           },
         ],
