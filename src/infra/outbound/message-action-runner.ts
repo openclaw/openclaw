@@ -237,6 +237,13 @@ async function resolveActionTarget(params: {
   accountId?: string | null;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
+  // Map CLI --target param to args.to for resolution
+  if (typeof params.args.to !== "string" || !params.args.to.trim()) {
+    const targetRaw = typeof params.args.target === "string" ? params.args.target.trim() : "";
+    if (targetRaw) {
+      params.args.to = targetRaw;
+    }
+  }
   const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
   if (toRaw) {
     const resolved = await resolveChannelTarget({
