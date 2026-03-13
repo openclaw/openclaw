@@ -149,6 +149,10 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
+  // NB: hasPathologicalLines also triggers on long data-URI image lines
+  // (e.g. ![chart](data:image/png;base64,...)), which skips htmlEscapeRenderer.image
+  // and renders them as raw text instead of <img>. Acceptable for now to avoid
+  // catastrophic backtracking in marked's inline patterns (#36213).
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT || hasPathologicalLines(truncated.text)) {
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     const html = `<pre class="code-block">${escaped}</pre>`;
