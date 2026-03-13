@@ -85,11 +85,12 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
-  const directChannelValue = resolveInboundChannel(ctx);
-  const includeDirectConversationInfo = Boolean(
-    directChannelValue && directChannelValue !== "webchat",
-  );
-  const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+  const threadStarterBody = safeTrim(ctx.ThreadStarterBody);
+  const history = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+  const historyCount = history.length;
+  const shouldIncludeConversationInfo = !isDirect;
+  const shouldIncludeSenderInfo = !isDirect;
+  const shouldIncludeHistoryBlock = !isDirect || historyCount >= 2;
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
@@ -107,22 +108,22 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
         safeTrim(ctx.SenderId) ??
         safeTrim(ctx.SenderUsername))
       : undefined,
-    timestamp: timestampStr,
-    group_subject: safeTrim(ctx.GroupSubject),
-    group_channel: safeTrim(ctx.GroupChannel),
-    group_space: safeTrim(ctx.GroupSpace),
-    thread_label: safeTrim(ctx.ThreadLabel),
-    topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
-    is_forum: ctx.IsForum === true ? true : undefined,
-    is_group_chat: !isDirect ? true : undefined,
-    was_mentioned: ctx.WasMentioned === true ? true : undefined,
-    has_reply_context: ctx.ReplyToBody ? true : undefined,
-    has_forwarded_context: ctx.ForwardedFrom ? true : undefined,
-    has_thread_starter: safeTrim(ctx.ThreadStarterBody) ? true : undefined,
-    history_count:
-      Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
-        ? ctx.InboundHistory.length
+    timestamp: shouldIncludeConversationInfo ? timestampStr : undefined,
+    group_subject: shouldIncludeConversationInfo ? safeTrim(ctx.GroupSubject) : undefined,
+    group_channel: shouldIncludeConversationInfo ? safeTrim(ctx.GroupChannel) : undefined,
+    group_space: shouldIncludeConversationInfo ? safeTrim(ctx.GroupSpace) : undefined,
+    thread_label: shouldIncludeConversationInfo ? safeTrim(ctx.ThreadLabel) : undefined,
+    topic_id:
+      shouldIncludeConversationInfo && ctx.MessageThreadId != null
+        ? String(ctx.MessageThreadId)
         : undefined,
+    is_forum: shouldIncludeConversationInfo && ctx.IsForum === true ? true : undefined,
+    is_group_chat: !isDirect ? true : undefined,
+    was_mentioned: !isDirect && ctx.WasMentioned === true ? true : undefined,
+    has_reply_context: !isDirect && ctx.ReplyToBody ? true : undefined,
+    has_forwarded_context: !isDirect && ctx.ForwardedFrom ? true : undefined,
+    has_thread_starter: !isDirect && threadStarterBody ? true : undefined,
+    history_count: !isDirect && historyCount > 0 ? historyCount : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(
@@ -149,7 +150,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     tag: safeTrim(ctx.SenderTag),
     e164: safeTrim(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (shouldIncludeSenderInfo && senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(
         "\n",
@@ -157,12 +158,12 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  if (safeTrim(ctx.ThreadStarterBody)) {
+  if (threadStarterBody) {
     blocks.push(
       [
         "Thread starter (untrusted, for context):",
         "```json",
-        JSON.stringify({ body: ctx.ThreadStarterBody }, null, 2),
+        JSON.stringify({ body: threadStarterBody }, null, 2),
         "```",
       ].join("\n"),
     );
@@ -210,13 +211,13 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  if (Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0) {
+  if (shouldIncludeHistoryBlock && historyCount > 0) {
     blocks.push(
       [
         "Chat history since last reply (untrusted, for context):",
         "```json",
         JSON.stringify(
-          ctx.InboundHistory.map((entry) => ({
+          history.map((entry) => ({
             sender: entry.sender,
             timestamp_ms: entry.timestamp,
             body: entry.body,
