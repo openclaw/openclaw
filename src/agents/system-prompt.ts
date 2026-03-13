@@ -676,7 +676,18 @@ export function buildAgentSystemPrompt(params: {
         const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
         return baseName.toLowerCase() === "soul.md";
       });
-      lines.push("The following project context files have been loaded:");
+      // Emit a stable file manifest before the first per-file header.
+      // Basenames of standard workspace files are fixed by the loader; listing them here
+      // extends the stable Anthropic KV-cache prefix by the length of the manifest, while
+      // still giving the agent a quick reference of which files are loaded.
+      const fileNames = validContextFiles.map((f) => {
+        const p = f.path.trim().replace(/\\/g, "/");
+        return p.split("/").pop() ?? p;
+      });
+      lines.push(
+        "The following project context files have been loaded:",
+        `Files: ${fileNames.join(", ")}`,
+      );
       if (hasSoulFile) {
         lines.push(
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
