@@ -142,11 +142,11 @@ function shouldBypassProxy(targetUrl: string, env: NodeJS.ProcessEnv): boolean {
 
   const entries = getNoProxyEntries(env);
   return entries.some((entry) => {
-    if (entry.pattern === "*") {
-      return true;
-    }
     if (entry.port && port && entry.port !== port) {
       return false;
+    }
+    if (entry.pattern === "*") {
+      return true;
     }
     // Support the CIDR-style no_proxy values commonly used in local/self-hosted
     // deployments even though undici's EnvHttpProxyAgent does not reliably do so.
