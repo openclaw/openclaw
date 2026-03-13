@@ -458,6 +458,73 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("uses explicitly configured openrouter imageModel.primary with image input (#44648)", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENROUTER_API_KEY", "openrouter-test");
+      const fetch = stubOpenAiCompletionsOkFetch("ok openrouter");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/deepseek/deepseek-chat" },
+            imageModel: { primary: "openrouter/openai/gpt-4o" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              models: [
+                makeModelDefinition("openai/gpt-4o", ["text", "image"]),
+                makeModelDefinition("deepseek/deepseek-chat", ["text"]),
+              ],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url] = fetch.mock.calls[0] as [unknown];
+      expect(String(url)).toBe("https://openrouter.ai/api/v1/chat/completions");
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok openrouter" })]),
+      );
+    });
+  });
+
+  it("resolves OpenRouter vision models by ID pattern heuristic (#44648)", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("OPENROUTER_API_KEY", "openrouter-test");
+      const fetch = stubOpenAiCompletionsOkFetch("ok vision");
+      // No explicit model config - relies on ID pattern detection
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/some-text-model" },
+            imageModel: { primary: "openrouter/anthropic/claude-3-opus" },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok vision" })]),
+      );
+    });
+  });
+
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");

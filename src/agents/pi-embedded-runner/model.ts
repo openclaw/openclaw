@@ -27,6 +27,47 @@ type InlineProviderConfig = {
   headers?: unknown;
 };
 
+/**
+ * Heuristic to detect vision-capable models based on their model ID.
+ * OpenRouter models often follow naming patterns that indicate vision support.
+ */
+function isLikelyVisionModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  // Common vision model patterns:
+  // - Models with "vision", "vl", or "visual" in the name
+  // - Claude 3+ models (claude-3-*, claude-opus-4-*, claude-sonnet-4-*) except claude-2
+  // - GPT-4 vision variants (gpt-4-vision, gpt-4o, gpt-4-turbo)
+  // - Gemini models (gemini-1.5-*, gemini-2-*, gemini-pro-vision)
+  // - Llama vision models (llava, llama-3.2-*-vision)
+  // - Qwen vision models (qwen-vl, qwen2-vl)
+  // - Pixtral models
+  const visionPatterns = [
+    /vision/,
+    /\bvl\b/, // "vl" as a separate segment (e.g., qwen-vl, MiniMax-VL-01)
+    /-vl-/, // "vl" as a segment (e.g., qwen2-vl-72b)
+    /visual/,
+    /claude-3/,
+    /claude-opus-4/,
+    /claude-sonnet-4/,
+    /claude-haiku-4/,
+    /gpt-4o/,
+    /gpt-4-turbo/,
+    /gpt-4-vision/,
+    /gpt-5/,
+    /gemini-1\.5/,
+    /gemini-2/,
+    /gemini-pro-vision/,
+    /gemini-flash/,
+    /llava/,
+    /llama-3\.2.*vision/,
+    /pixtral/,
+    /qwen-vl/,
+    /qwen2-vl/,
+    /qwen2\.5-vl/,
+  ];
+  return visionPatterns.some((pattern) => pattern.test(lower));
+}
+
 function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -207,6 +248,16 @@ export function resolveModelWithRegistry(params: {
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
   if (normalizedProvider === "openrouter") {
+    // Check if the provider config specifies input capabilities for this model
+    const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+    const configuredInput = configuredModel?.input;
+    // Use configured input if available, otherwise detect vision models by ID pattern
+    const resolvedInput: Array<"text" | "image"> =
+      Array.isArray(configuredInput) && configuredInput.length > 0
+        ? configuredInput.filter((item): item is "text" | "image" => item === "text" || item === "image")
+        : isLikelyVisionModel(modelId)
+          ? ["text", "image"]
+          : ["text"];
     return normalizeResolvedModel({
       provider,
       model: {
@@ -215,12 +266,12 @@ export function resolveModelWithRegistry(params: {
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: resolvedInput,
+        cost: configuredModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: configuredModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
+        maxTokens: configuredModel?.maxTokens ?? 8192,
       } as Model<Api>,
     });
   }
