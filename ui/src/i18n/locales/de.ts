@@ -80,7 +80,9 @@ export const de: TranslationMap = {
       sessions: "Sitzungen",
       sessionsHint: "Letzte vom Gateway verfolgte Sitzungsschlüssel.",
       cron: "Cron",
+      cronCount: "{count} gesamt",
       cronNext: "Nächste Ausführung {time}",
+      cronFailed: "Fehler: {count}",
     },
     notes: {
       title: "Notizen",
@@ -98,6 +100,8 @@ export const de: TranslationMap = {
         "Dieses Gateway erfordert Authentifizierung. Fügen Sie ein Token oder Passwort hinzu und klicken Sie auf Verbinden.",
       failed:
         "Authentifizierung fehlgeschlagen. Kopieren Sie erneut eine URL mit Token über {command}, oder aktualisieren Sie das Token und klicken Sie auf Verbinden.",
+      tokenizedUrl: "URL mit Token",
+      setToken: "Token setzen",
     },
     pairing: {
       hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
@@ -126,6 +130,43 @@ export const de: TranslationMap = {
       hidePassword: "Passwort ausblenden",
       showPassword: "Passwort anzeigen",
       togglePassword: "Passwortsichtbarkeit umschalten",
+    },
+    connection: {
+      title: "So verbinden Sie sich",
+      step1: "Starten Sie das Gateway auf Ihrem Host-Rechner:",
+      step2: "Rufen Sie eine Dashboard-URL mit Token ab:",
+      step3:
+        "Fügen Sie oben die WebSocket-URL und das Token ein oder öffnen Sie die URL mit Token direkt.",
+      step4: "Oder erzeugen Sie ein wiederverwendbares Token:",
+      docsHint: "Für den Fernzugriff wird Tailscale Serve empfohlen. ",
+      docsLink: "Dokumentation lesen →",
+    },
+    cards: {
+      cost: "Kosten",
+      costHint: "Tokens: {tokens} · Nachrichten: {messages}",
+      skills: "Fähigkeiten",
+      skillsBlocked: "Blockiert: {count}",
+      skillsActive: "Aktiv: {count}",
+      recentSessions: "Letzte Sitzungen",
+    },
+    attention: {
+      title: "Achtung",
+    },
+    eventLog: {
+      title: "Ereignisprotokoll",
+    },
+    logTail: {
+      title: "Gateway-Protokolle",
+    },
+    quickActions: {
+      newSession: "Neue Sitzung",
+      automation: "Automatisierung",
+      refreshAll: "Alles aktualisieren",
+      terminal: "Terminal",
+    },
+    palette: {
+      placeholder: "Befehl eingeben…",
+      noResults: "Keine Ergebnisse",
     },
   },
   chat: {

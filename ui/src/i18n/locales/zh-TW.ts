@@ -91,7 +91,9 @@ export const zh_TW: TranslationMap = {
       sessions: "會話",
       sessionsHint: "網關跟蹤的最近會話密鑰。",
       cron: "定時任務",
+      cronCount: "共 {count} 個",
       cronNext: "下次喚醒 {time}",
+      cronFailed: "錯誤：{count}",
     },
     notes: {
       title: "備註",
@@ -106,6 +108,8 @@ export const zh_TW: TranslationMap = {
     auth: {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
       failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      tokenizedUrl: "帶令牌的 URL",
+      setToken: "設定令牌",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
@@ -146,7 +150,10 @@ export const zh_TW: TranslationMap = {
     },
     cards: {
       cost: "費用",
+      costHint: "令牌：{tokens} · 訊息：{messages}",
       skills: "技能",
+      skillsBlocked: "已封鎖：{count}",
+      skillsActive: "可用：{count}",
       recentSessions: "最近會話",
     },
     attention: {

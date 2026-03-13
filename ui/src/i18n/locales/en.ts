@@ -92,7 +92,9 @@ export const en: TranslationMap = {
       sessions: "Sessions",
       sessionsHint: "Recent session keys tracked by the gateway.",
       cron: "Cron",
+      cronCount: "{count} total",
       cronNext: "Next wake {time}",
+      cronFailed: "Errors: {count}",
     },
     notes: {
       title: "Notes",
@@ -108,6 +110,8 @@ export const en: TranslationMap = {
       required: "This gateway requires auth. Add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
+      tokenizedUrl: "tokenized URL",
+      setToken: "set token",
     },
     pairing: {
       hint: "This device needs pairing approval from the gateway host.",
@@ -148,7 +152,10 @@ export const en: TranslationMap = {
     },
     cards: {
       cost: "Cost",
+      costHint: "Tokens: {tokens} · Messages: {messages}",
       skills: "Skills",
+      skillsBlocked: "Blocked: {count}",
+      skillsActive: "Active: {count}",
       recentSessions: "Recent Sessions",
     },
     attention: {

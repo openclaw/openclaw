@@ -116,8 +116,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">openclaw dashboard --no-open</span> →
+            ${t("overview.auth.tokenizedUrl")}<br />
+            <span class="mono">openclaw doctor --generate-gateway-token</span> →
+            ${t("overview.auth.setToken")}
           </div>
           <div style="margin-top: 6px">
             <a

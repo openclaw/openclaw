@@ -79,7 +79,9 @@ export const es: TranslationMap = {
       sessions: "Sesiones",
       sessionsHint: "Claves de sesión recientes rastreadas por la puerta de enlace.",
       cron: "Cron",
+      cronCount: "{count} en total",
       cronNext: "Próximo despertar {time}",
+      cronFailed: "Errores: {count}",
     },
     notes: {
       title: "Notas",
@@ -97,6 +99,8 @@ export const es: TranslationMap = {
         "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
       failed:
         "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
+      tokenizedUrl: "URL con token",
+      setToken: "configurar token",
     },
     pairing: {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
@@ -125,6 +129,42 @@ export const es: TranslationMap = {
       hidePassword: "Ocultar contraseña",
       showPassword: "Mostrar contraseña",
       togglePassword: "Alternar visibilidad de la contraseña",
+    },
+    connection: {
+      title: "Cómo conectarse",
+      step1: "Inicia la puerta de enlace en tu equipo host:",
+      step2: "Obtén una URL del panel con token:",
+      step3: "Pega arriba la URL de WebSocket y el token, o abre directamente la URL con token.",
+      step4: "O genera un token reutilizable:",
+      docsHint: "Para acceso remoto, se recomienda Tailscale Serve. ",
+      docsLink: "Leer la documentación →",
+    },
+    cards: {
+      cost: "Costo",
+      costHint: "Tokens: {tokens} · Mensajes: {messages}",
+      skills: "Habilidades",
+      skillsBlocked: "Bloqueadas: {count}",
+      skillsActive: "Activas: {count}",
+      recentSessions: "Sesiones recientes",
+    },
+    attention: {
+      title: "Atención",
+    },
+    eventLog: {
+      title: "Registro de eventos",
+    },
+    logTail: {
+      title: "Logs del gateway",
+    },
+    quickActions: {
+      newSession: "Nueva sesión",
+      automation: "Automatización",
+      refreshAll: "Actualizar todo",
+      terminal: "Terminal",
+    },
+    palette: {
+      placeholder: "Escribe un comando…",
+      noResults: "Sin resultados",
     },
   },
   chat: {

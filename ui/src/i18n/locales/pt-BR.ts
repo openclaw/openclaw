@@ -91,7 +91,9 @@ export const pt_BR: TranslationMap = {
       sessions: "Sessões",
       sessionsHint: "Chaves de sessão recentes rastreadas pelo gateway.",
       cron: "Cron",
+      cronCount: "{count} no total",
       cronNext: "Próximo despertar {time}",
+      cronFailed: "Erros: {count}",
     },
     notes: {
       title: "Notas",
@@ -109,6 +111,8 @@ export const pt_BR: TranslationMap = {
         "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
       failed:
         "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
+      tokenizedUrl: "URL com token",
+      setToken: "definir token",
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
@@ -149,7 +153,10 @@ export const pt_BR: TranslationMap = {
     },
     cards: {
       cost: "Custo",
+      costHint: "Tokens: {tokens} · Mensagens: {messages}",
       skills: "Habilidades",
+      skillsBlocked: "Bloqueadas: {count}",
+      skillsActive: "Ativas: {count}",
       recentSessions: "Sessões Recentes",
     },
     attention: {
