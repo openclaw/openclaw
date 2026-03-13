@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectCommandObfuscation } from "./exec-obfuscation-detect.js";
+
+// Mock the logger module
+const mockWarn = vi.fn();
+vi.mock("../logging/logger.js", () => ({
+  getLogger: () => ({ warn: mockWarn }),
+}));
 
 describe("detectCommandObfuscation", () => {
   describe("base64 decode to shell", () => {
@@ -213,6 +219,75 @@ describe("detectCommandObfuscation", () => {
       const result = detectCommandObfuscation("echo payload | base64 -d | sh");
       expect(result.detected).toBe(true);
       expect(result.matchedPatterns.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("security audit logging", () => {
+    beforeEach(() => {
+      mockWarn.mockClear();
+    });
+
+    it("logs security event when obfuscation is detected", () => {
+      detectCommandObfuscation("echo Y2F0 | base64 -d | sh");
+
+      expect(mockWarn).toHaveBeenCalledWith(
+        "Security: command obfuscation detected",
+        expect.objectContaining({
+          event_type: "security.command.obfuscation_detected",
+          severity: "warning",
+          matched_patterns: expect.arrayContaining(["base64-pipe-exec"]),
+          command_preview: expect.any(String),
+        }),
+      );
+    });
+
+    it("does not log when no obfuscation is detected", () => {
+      detectCommandObfuscation("echo hello world");
+
+      expect(mockWarn).not.toHaveBeenCalled();
+    });
+
+    it("truncates command preview to avoid logging sensitive data", () => {
+      const longCommand = "echo " + "a".repeat(200) + " | base64 -d | sh";
+
+      detectCommandObfuscation(longCommand);
+
+      const callArg = mockWarn.mock.calls[0]?.[1];
+      expect(callArg?.command_preview?.length).toBeLessThanOrEqual(100);
+    });
+
+    it("logs security event for command-too-long detection with normalized command", () => {
+      // Place invisible unicode within the first 100 chars to actually verify normalization
+      const longCommand = "\u200b\u200c" + "a".repeat(9999); // > MAX_COMMAND_CHARS, unicode in first 100 chars
+
+      detectCommandObfuscation(longCommand);
+
+      expect(mockWarn).toHaveBeenCalledWith(
+        "Security: command obfuscation detected",
+        expect.objectContaining({
+          event_type: "security.command.obfuscation_detected",
+          matched_patterns: ["command-too-long"],
+          command_preview: expect.any(String),
+        }),
+      );
+
+      // Verify the logged command does not contain invisible unicode (normalized)
+      const loggedPreview = mockWarn.mock.calls[0]?.[1]?.command_preview;
+      expect(loggedPreview).not.toContain("\u200b");
+      expect(loggedPreview).not.toContain("\u200c");
+    });
+
+    it("logs normalized command for pattern-match detections", () => {
+      // Command with invisible unicode that should be normalized
+      const command = "echo Y2F0 | base64 -d | sh\u200b";
+
+      detectCommandObfuscation(command);
+
+      const loggedPreview = mockWarn.mock.calls[0]?.[1]?.command_preview;
+      // Should not contain the zero-width space
+      expect(loggedPreview).not.toContain("\u200b");
+      // But should still contain the base64 pattern
+      expect(loggedPreview).toContain("base64");
     });
   });
 });

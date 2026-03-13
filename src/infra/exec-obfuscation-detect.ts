@@ -5,6 +5,8 @@
  * Addresses: https://github.com/openclaw/openclaw/issues/8592
  */
 
+import { getLogger } from "../logging/logger.js";
+
 export type ObfuscationDetection = {
   detected: boolean;
   reasons: string[];
@@ -18,6 +20,7 @@ type ObfuscationPattern = {
 };
 
 const MAX_COMMAND_CHARS = 10_000;
+const MAX_LOG_PREVIEW_CHARS = 100;
 
 const INVISIBLE_UNICODE_CODE_POINTS = new Set<number>([
   0x00ad,
@@ -218,12 +221,18 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
   if (!command || !command.trim()) {
     return { detected: false, reasons: [], matchedPatterns: [] };
   }
+
+  // Fast-fail for oversized commands before expensive normalization
   if (command.length > MAX_COMMAND_CHARS) {
-    return {
+    const result = {
       detected: true,
       reasons: ["Command too long; potential obfuscation"],
       matchedPatterns: ["command-too-long"],
     };
+    // Normalize for consistent logging even on oversized commands
+    const normalizedForLog = stripInvisibleUnicode(command.normalize("NFKC"));
+    logSecurityEvent(result, normalizedForLog);
+    return result;
   }
 
   const normalizedCommand = stripInvisibleUnicode(command.normalize("NFKC"));
@@ -247,9 +256,28 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
     reasons.push(pattern.description);
   }
 
-  return {
+  const result = {
     detected: matchedPatterns.length > 0,
     reasons,
     matchedPatterns,
   };
+
+  if (result.detected) {
+    logSecurityEvent(result, normalizedCommand);
+  }
+
+  return result;
+}
+
+/**
+ * Logs security event for audit and monitoring purposes.
+ * Command is truncated to avoid logging sensitive data.
+ */
+function logSecurityEvent(result: ObfuscationDetection, command: string): void {
+  getLogger().warn("Security: command obfuscation detected", {
+    event_type: "security.command.obfuscation_detected",
+    severity: "warning",
+    matched_patterns: result.matchedPatterns,
+    command_preview: command.slice(0, MAX_LOG_PREVIEW_CHARS),
+  });
 }
