@@ -59,6 +59,8 @@ type TelegramSendOpts = {
   plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
+  /** Send image media as a document to avoid Telegram photo compression. Defaults to false. */
+  forceDocument?: boolean;
   /** Send video as video note (voice bubble) instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
@@ -826,7 +828,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image") {
+      if (kind === "image" && opts.forceDocument !== true) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>

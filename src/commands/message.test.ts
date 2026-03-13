@@ -158,7 +158,7 @@ const createTelegramSendPluginRegistration = () => ({
       listActions: () => ["send"],
       handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
         return await handleTelegramAction(
-          { action, to: params.to, accountId: accountId ?? undefined },
+          { action, ...params, accountId: accountId ?? undefined },
           cfg,
         );
       }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
@@ -304,6 +304,39 @@ describe("messageCommand", () => {
     expect(handleTelegramAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "send", to: "123456", accountId: undefined }),
       resolvedConfig,
+    );
+  });
+
+  it("passes Telegram forceDocument through message send actions", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "token-abc";
+    await setRegistry(
+      createTestRegistry([
+        {
+          ...createTelegramSendPluginRegistration(),
+        },
+      ]),
+    );
+
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        media: "screenshot.png",
+        forceDocument: true,
+      },
+      deps,
+      runtime,
+    );
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "send",
+        to: "123456",
+        forceDocument: true,
+      }),
+      expect.anything(),
     );
   });
 

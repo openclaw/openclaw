@@ -514,6 +514,22 @@ describe("handleTelegramAction", () => {
       expectedContent: "",
       expectedOptions: { mediaUrl: "https://example.com/note.ogg" },
     },
+    {
+      name: "force-document",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        content: "Replying now",
+        mediaUrl: "https://example.com/screenshot.png",
+        forceDocument: true,
+      },
+      expectedTo: "123456",
+      expectedContent: "Replying now",
+      expectedOptions: {
+        mediaUrl: "https://example.com/screenshot.png",
+        forceDocument: true,
+      },
+    },
   ] as const)("maps sendMessage params for $name", async (testCase) => {
     await handleTelegramAction(testCase.params, telegramConfig());
     expect(sendMessageTelegram).toHaveBeenCalledWith(

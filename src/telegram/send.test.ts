@@ -1272,6 +1272,38 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("sends images as documents when forceDocument is true", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 62,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendDocument } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendDocument: typeof sendDocument;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "screenshot.png",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/screenshot.png",
+      forceDocument: true,
+    });
+
+    expect(sendPhoto).not.toHaveBeenCalled();
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+  });
+
   it("uses configured telegram mediaMaxMb for outbound uploads", async () => {
     const chatId = "123";
     const sendPhoto = vi.fn().mockResolvedValue({

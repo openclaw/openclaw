@@ -248,6 +248,7 @@ export async function handleTelegramAction(
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
       asVoice: readBooleanParam(params, "asVoice"),
+      forceDocument: readBooleanParam(params, "forceDocument"),
       silent: readBooleanParam(params, "silent"),
     });
     return jsonResult({

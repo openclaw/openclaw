@@ -23,6 +23,11 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--card <json>", "Adaptive Card JSON object (when supported by the channel)")
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
+        .option(
+          "--force-document",
+          "Send Telegram image media as a document to avoid compression.",
+          false,
+        )
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--silent",
