@@ -19,7 +19,10 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { getRecentDiagnosticLatencySummary } from "../../logging/diagnostic.js";
+import {
+  getRecentDiagnosticLatencySummary,
+  logEarlyStatusPolicyDecision,
+} from "../../logging/diagnostic.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -232,6 +235,18 @@ export async function runReplyAgent(params: {
       ),
       isStreaming,
       dominantSegments: latencySummary?.dominant,
+    });
+    logEarlyStatusPolicyDecision({
+      channel: replyToChannel ?? sessionCtx.Provider ?? "unknown",
+      sessionKey: queueKey,
+      sessionId: followupRun.run.sessionId,
+      queueMode: resolvedQueue.mode,
+      decisionShouldEmit: truthfulStatusDecision.decision.shouldEmit,
+      activationShouldEmit: truthfulStatusDecision.shouldEmit,
+      decisionReason: truthfulStatusDecision.decision.reason,
+      activationReason: truthfulStatusDecision.reason,
+      recommendationLevel: truthfulStatusDecision.recommendation.level,
+      recommendationReason: truthfulStatusDecision.recommendation.reason,
     });
     if (!truthfulStatusDecision.shouldEmit) {
       return;

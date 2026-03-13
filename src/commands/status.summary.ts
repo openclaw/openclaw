@@ -19,7 +19,10 @@ import {
 import { buildChannelSummary } from "../infra/channel-summary.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
-import { getRecentDiagnosticLatencySummary } from "../logging/diagnostic.js";
+import {
+  getRecentDiagnosticEarlyStatusSummary,
+  getRecentDiagnosticLatencySummary,
+} from "../logging/diagnostic.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
@@ -110,6 +113,7 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const latencySummary = getRecentDiagnosticLatencySummary();
+  const earlyStatusSummary = getRecentDiagnosticEarlyStatusSummary();
   const earlyStatusPriority = recommendTruthfulEarlyStatusFromLatency({
     dominantSegments: latencySummary?.dominant,
   });
@@ -238,6 +242,7 @@ export async function getStatusSummary(
           ...(latencySummary?.dominant ? { dominant: latencySummary.dominant } : {}),
           earlyStatusPriority,
         },
+        ...(earlyStatusSummary ? { earlyStatus: earlyStatusSummary } : {}),
       },
     },
     channelSummary,

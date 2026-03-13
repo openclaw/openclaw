@@ -143,6 +143,20 @@ export type DiagnosticTurnLatencyStageEvent = DiagnosticBaseEvent & {
   backend?: string;
 };
 
+export type DiagnosticEarlyStatusPolicyEvent = DiagnosticBaseEvent & {
+  type: "early_status.policy";
+  channel: string;
+  sessionKey?: string;
+  sessionId?: string;
+  queueMode: string;
+  decisionShouldEmit: boolean;
+  activationShouldEmit: boolean;
+  decisionReason: string;
+  activationReason: string;
+  recommendationLevel: "prioritize" | "observe" | "deprioritize";
+  recommendationReason: string;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -232,6 +246,16 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
       >
     >;
   };
+  earlyStatus?: {
+    sampleCount: number;
+    eligibleCount: number;
+    semanticGateCount: number;
+    latencyGateCount: number;
+    topReasons?: Array<{
+      reason: string;
+      count: number;
+    }>;
+  };
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
@@ -257,6 +281,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageFirstVisibleTimeoutEvent
   | DiagnosticTurnLatencyStageEvent
   | DiagnosticMessageProcessedEvent
+  | DiagnosticEarlyStatusPolicyEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticLaneEnqueueEvent

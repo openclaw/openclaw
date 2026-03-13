@@ -64,6 +64,16 @@ export type StatusSummary = {
           reason: string;
         };
       };
+      earlyStatus?: {
+        sampleCount: number;
+        eligibleCount: number;
+        semanticGateCount: number;
+        latencyGateCount: number;
+        topReasons?: Array<{
+          reason: string;
+          count: number;
+        }>;
+      };
     };
   };
   channelSummary: string[];

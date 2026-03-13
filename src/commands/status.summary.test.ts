@@ -53,6 +53,13 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
 }));
 
 vi.mock("../logging/diagnostic.js", () => ({
+  getRecentDiagnosticEarlyStatusSummary: vi.fn(() => ({
+    sampleCount: 3,
+    eligibleCount: 1,
+    semanticGateCount: 1,
+    latencyGateCount: 1,
+    topReasons: [{ reason: "latency_priority_observe", count: 1 }],
+  })),
   getRecentDiagnosticLatencySummary: vi.fn(() => ({
     sampleCount: 2,
     dominant: [{ segment: "runToFirstVisible", count: 2 }],
@@ -102,6 +109,13 @@ describe("getStatusSummary", () => {
     expect(summary.heartbeat.diagnostics?.latency?.earlyStatusPriority).toEqual({
       level: "prioritize",
       reason: "runtime_started_but_visible_feedback_arrives_late",
+    });
+    expect(summary.heartbeat.diagnostics?.earlyStatus).toEqual({
+      sampleCount: 3,
+      eligibleCount: 1,
+      semanticGateCount: 1,
+      latencyGateCount: 1,
+      topReasons: [{ reason: "latency_priority_observe", count: 1 }],
     });
   });
 });

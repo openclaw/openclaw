@@ -10,6 +10,7 @@ import {
 } from "./diagnostic-session-state.js";
 import {
   __testing,
+  logEarlyStatusPolicyDecision,
   logMessageFirstVisibleTimeout,
   logMessageFirstVisible,
   logTurnLatencyStage,
@@ -151,6 +152,13 @@ describe("stuck session diagnostics threshold", () => {
         maxMs: number;
         timeoutCount: number;
       };
+      earlyStatus?: {
+        sampleCount: number;
+        eligibleCount: number;
+        semanticGateCount: number;
+        latencyGateCount: number;
+        topReasons?: Array<{ reason: string; count: number }>;
+      };
       latency?: {
         sampleCount: number;
         dominant?: Array<{ segment: string; count: number }>;
@@ -162,6 +170,7 @@ describe("stuck session diagnostics threshold", () => {
         events.push({
           type: event.type,
           firstVisible: event.firstVisible,
+          earlyStatus: event.earlyStatus,
           latency: event.latency,
         });
       }
@@ -204,6 +213,7 @@ describe("stuck session diagnostics threshold", () => {
         maxMs: 2200,
         timeoutCount: 1,
       },
+      earlyStatus: undefined,
       latency: undefined,
     });
   });
@@ -322,6 +332,93 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveFirstVisibleWarnMs()).toBe(4_000);
   });
 
+  it("includes early-status policy gate summaries in heartbeat events", () => {
+    const events: Array<{
+      type: string;
+      earlyStatus?: {
+        sampleCount: number;
+        eligibleCount: number;
+        semanticGateCount: number;
+        latencyGateCount: number;
+        topReasons?: Array<{ reason: string; count: number }>;
+      };
+    }> = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.heartbeat") {
+        events.push({
+          type: event.type,
+          earlyStatus: event.earlyStatus,
+        });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logEarlyStatusPolicyDecision({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        queueMode: "interrupt",
+        decisionShouldEmit: true,
+        activationShouldEmit: true,
+        decisionReason: "replacement_of_active_foreground_task_is_user_visible",
+        activationReason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
+        recommendationLevel: "observe",
+        recommendationReason: "no_dominant_latency_pattern_yet",
+      });
+      logEarlyStatusPolicyDecision({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        queueMode: "steer",
+        decisionShouldEmit: true,
+        activationShouldEmit: false,
+        decisionReason: "same_task_correction_should_acknowledge_direction_change",
+        activationReason: "latency_priority_observe",
+        recommendationLevel: "observe",
+        recommendationReason:
+          "latency_is_dominant_before_visible_feedback_is_semantically_decidable",
+      });
+      logEarlyStatusPolicyDecision({
+        channel: "slack",
+        sessionKey: "agent:main:main",
+        queueMode: "queue",
+        decisionShouldEmit: false,
+        activationShouldEmit: false,
+        decisionReason: "defer_path_not_yet_modeled_as_truthful_early_status",
+        activationReason: "defer_path_not_yet_modeled_as_truthful_early_status",
+        recommendationLevel: "prioritize",
+        recommendationReason: "runtime_started_but_visible_feedback_arrives_late",
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.at(-1)).toEqual({
+      type: "diagnostic.heartbeat",
+      earlyStatus: {
+        sampleCount: 3,
+        eligibleCount: 1,
+        semanticGateCount: 1,
+        latencyGateCount: 1,
+        topReasons: [
+          {
+            reason: "replacement_of_active_task_is_prioritized_even_without_latency_signal",
+            count: 1,
+          },
+          { reason: "latency_priority_observe", count: 1 },
+          {
+            reason: "defer_path_not_yet_modeled_as_truthful_early_status",
+            count: 1,
+          },
+        ],
+      },
+    });
+  });
+
   it("formats heartbeat latency summaries as readable segment text", () => {
     expect(
       __testing.formatLatencyHeartbeatSummary({
@@ -335,6 +432,20 @@ describe("stuck session diagnostics threshold", () => {
       }),
     ).toBe(
       " latency=2 queue=100/120/140ms | run->visible=900/1100/1300ms | endToEnd=2200/2600/3000ms | dominant=runToFirstVisiblex2",
+    );
+  });
+
+  it("formats heartbeat early-status summaries as readable gate text", () => {
+    expect(
+      __testing.formatEarlyStatusHeartbeatSummary({
+        sampleCount: 4,
+        eligibleCount: 1,
+        semanticGateCount: 2,
+        latencyGateCount: 1,
+        topReasons: [{ reason: "latency_priority_observe", count: 2 }],
+      }),
+    ).toBe(
+      " earlyStatus=4 | eligible=1 | semanticGate=2 | latencyGate=1 | reasons=latency_priority_observex2",
     );
   });
 });

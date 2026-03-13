@@ -50,6 +50,9 @@ const latencySamples: Record<LatencySegmentName, number[]> = {
 };
 const latencyDominantCounts: Partial<Record<LatencySegmentName, number>> = {};
 const turnLatencySnapshots = new Map<string, TurnLatencySnapshot>();
+const EARLY_STATUS_SAMPLE_LIMIT = 50;
+const earlyStatusSamples: Array<"eligible" | "semantic_gate" | "latency_gate"> = [];
+const earlyStatusReasonCounts: Record<string, number> = {};
 
 let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
@@ -221,6 +224,88 @@ function formatLatencyHeartbeatSummary(
     return "";
   }
   return ` latency=${latency.sampleCount} ${parts.join(" | ")}`;
+}
+
+function recordEarlyStatusPolicySample(params: {
+  decisionShouldEmit: boolean;
+  activationShouldEmit: boolean;
+  activationReason: string;
+}) {
+  const category = params.activationShouldEmit
+    ? "eligible"
+    : params.decisionShouldEmit
+      ? "latency_gate"
+      : "semantic_gate";
+  earlyStatusSamples.push(category);
+  if (earlyStatusSamples.length > EARLY_STATUS_SAMPLE_LIMIT) {
+    earlyStatusSamples.splice(0, earlyStatusSamples.length - EARLY_STATUS_SAMPLE_LIMIT);
+  }
+  earlyStatusReasonCounts[params.activationReason] =
+    (earlyStatusReasonCounts[params.activationReason] ?? 0) + 1;
+}
+
+function buildEarlyStatusSummary():
+  | {
+      sampleCount: number;
+      eligibleCount: number;
+      semanticGateCount: number;
+      latencyGateCount: number;
+      topReasons?: Array<{
+        reason: string;
+        count: number;
+      }>;
+    }
+  | undefined {
+  if (earlyStatusSamples.length === 0) {
+    return undefined;
+  }
+  const summary = {
+    sampleCount: earlyStatusSamples.length,
+    eligibleCount: earlyStatusSamples.filter((value) => value === "eligible").length,
+    semanticGateCount: earlyStatusSamples.filter((value) => value === "semantic_gate").length,
+    latencyGateCount: earlyStatusSamples.filter((value) => value === "latency_gate").length,
+  };
+  const topReasons = Object.entries(earlyStatusReasonCounts)
+    .toSorted((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([reason, count]) => ({ reason, count }));
+  return {
+    ...summary,
+    ...(topReasons.length > 0 ? { topReasons } : {}),
+  };
+}
+
+function formatEarlyStatusHeartbeatSummary(
+  earlyStatus:
+    | {
+        sampleCount: number;
+        eligibleCount: number;
+        semanticGateCount: number;
+        latencyGateCount: number;
+        topReasons?: Array<{
+          reason: string;
+          count: number;
+        }>;
+      }
+    | undefined,
+): string {
+  if (!earlyStatus) {
+    return "";
+  }
+  const parts = [
+    `earlyStatus=${earlyStatus.sampleCount}`,
+    `eligible=${earlyStatus.eligibleCount}`,
+    `semanticGate=${earlyStatus.semanticGateCount}`,
+    `latencyGate=${earlyStatus.latencyGateCount}`,
+  ];
+  if (earlyStatus.topReasons && earlyStatus.topReasons.length > 0) {
+    parts.push(
+      `reasons=${earlyStatus.topReasons
+        .map((entry) => `${entry.reason}x${entry.count}`)
+        .join(",")}`,
+    );
+  }
+  return ` ${parts.join(" | ")}`;
 }
 
 function recordTurnLatencyStageSample(params: {
@@ -575,6 +660,48 @@ export function logTurnLatencyStage(
   markActivity();
 }
 
+export function logEarlyStatusPolicyDecision(params: {
+  channel: string;
+  sessionId?: string;
+  sessionKey?: string;
+  queueMode: string;
+  decisionShouldEmit: boolean;
+  activationShouldEmit: boolean;
+  decisionReason: string;
+  activationReason: string;
+  recommendationLevel: "prioritize" | "observe" | "deprioritize";
+  recommendationReason: string;
+}) {
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `early status policy: channel=${params.channel} sessionKey=${params.sessionKey ?? "unknown"} queueMode=${
+        params.queueMode
+      } decision=${params.decisionShouldEmit ? "allow" : "suppress"} activation=${
+        params.activationShouldEmit ? "emit" : "skip"
+      } recommendation=${params.recommendationLevel} reason=${params.activationReason}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "early_status.policy",
+    channel: params.channel,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    queueMode: params.queueMode,
+    decisionShouldEmit: params.decisionShouldEmit,
+    activationShouldEmit: params.activationShouldEmit,
+    decisionReason: params.decisionReason,
+    activationReason: params.activationReason,
+    recommendationLevel: params.recommendationLevel,
+    recommendationReason: params.recommendationReason,
+  });
+  recordEarlyStatusPolicySample({
+    decisionShouldEmit: params.decisionShouldEmit,
+    activationShouldEmit: params.activationShouldEmit,
+    activationReason: params.activationReason,
+  });
+  markActivity();
+}
+
 export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
@@ -755,12 +882,13 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
 
     const firstVisible = buildFirstVisibleSummary();
     const latency = buildLatencySummary();
+    const earlyStatus = buildEarlyStatusSummary();
     diag.debug(
       `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}${
         firstVisible
           ? ` firstVisible=${firstVisible.sampleCount} avg=${firstVisible.avgMs}ms p95=${firstVisible.p95Ms}ms max=${firstVisible.maxMs}ms`
           : ""
-      }${formatLatencyHeartbeatSummary(latency)}`,
+      }${formatLatencyHeartbeatSummary(latency)}${formatEarlyStatusHeartbeatSummary(earlyStatus)}`,
     );
     emitDiagnosticEvent({
       type: "diagnostic.heartbeat",
@@ -774,6 +902,7 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
       queued: totalQueued,
       firstVisible,
       latency,
+      earlyStatus,
     });
 
     void loadCommandPollBackoffRuntime()
@@ -812,6 +941,10 @@ export function getRecentDiagnosticLatencySummary() {
   return buildLatencySummary();
 }
 
+export function getRecentDiagnosticEarlyStatusSummary() {
+  return buildEarlyStatusSummary();
+}
+
 export function getDiagnosticSessionStateCountForTest(): number {
   return getDiagnosticSessionStateCountForTestImpl();
 }
@@ -830,10 +963,17 @@ export function resetDiagnosticStateForTest(): void {
   for (const segment of Object.keys(latencyDominantCounts) as LatencySegmentName[]) {
     delete latencyDominantCounts[segment];
   }
+  earlyStatusSamples.length = 0;
+  for (const reason of Object.keys(earlyStatusReasonCounts)) {
+    delete earlyStatusReasonCounts[reason];
+  }
   turnLatencySnapshots.clear();
   lastActivityAt = 0;
   stopDiagnosticHeartbeat();
 }
 
 export { diag as diagnosticLogger };
-export const __testing = { formatLatencyHeartbeatSummary };
+export const __testing = {
+  formatLatencyHeartbeatSummary,
+  formatEarlyStatusHeartbeatSummary,
+};
