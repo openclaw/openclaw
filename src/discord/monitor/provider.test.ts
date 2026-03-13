@@ -16,6 +16,15 @@ type PluginCommandSpecMock = {
   acceptsArgs: boolean;
 };
 
+function baseDiscordAccountConfig() {
+  return {
+    commands: { native: true, nativeSkills: false },
+    voice: { enabled: false },
+    agentComponents: { enabled: false },
+    execApprovals: { enabled: false },
+  };
+}
+
 const {
   clientFetchUserMock,
   clientGetPluginMock,
@@ -91,12 +100,7 @@ const {
     resolveDiscordAccountMock: vi.fn(() => ({
       accountId: "default",
       token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-      },
+      config: baseDiscordAccountConfig(),
     })),
     resolveDiscordAllowlistConfigMock: vi.fn(async () => ({
       guildEntries: undefined,
@@ -107,6 +111,23 @@ const {
     voiceRuntimeModuleLoadedMock: vi.fn(),
   };
 });
+
+function mockResolvedDiscordAccountConfig(overrides: Record<string, unknown>) {
+  resolveDiscordAccountMock.mockImplementation(() => ({
+    accountId: "default",
+    token: "cfg-token",
+    config: {
+      ...baseDiscordAccountConfig(),
+      ...overrides,
+    },
+  }));
+}
+
+function getFirstDiscordMessageHandlerParams<T extends object>() {
+  expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
+  const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
+  return firstCall?.[0];
+}
 
 vi.mock("@buape/carbon", () => {
   class ReadyListener {}
@@ -663,17 +684,9 @@ describe("monitorDiscordProvider", () => {
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
-    resolveDiscordAccountMock.mockImplementation(() => ({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-        eventQueue: { listenerTimeout: 300_000 },
-      },
-    }));
+    mockResolvedDiscordAccountConfig({
+      eventQueue: { listenerTimeout: 300_000 },
+    });
 
     await monitorDiscordProvider({
       config: baseConfig(),
@@ -687,28 +700,19 @@ describe("monitorDiscordProvider", () => {
   it("does not reuse eventQueue.listenerTimeout as the queued inbound worker timeout", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
-    resolveDiscordAccountMock.mockImplementation(() => ({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-        eventQueue: { listenerTimeout: 50_000 },
-      },
-    }));
+    mockResolvedDiscordAccountConfig({
+      eventQueue: { listenerTimeout: 50_000 },
+    });
 
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
 
-    expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
-    const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as
-      | [{ workerRunTimeoutMs?: number; listenerTimeoutMs?: number }]
-      | undefined;
-    const params = firstCall?.[0];
+    const params = getFirstDiscordMessageHandlerParams<{
+      workerRunTimeoutMs?: number;
+      listenerTimeoutMs?: number;
+    }>();
     expect(params?.workerRunTimeoutMs).toBeUndefined();
     expect("listenerTimeoutMs" in (params ?? {})).toBe(false);
   });
@@ -716,28 +720,18 @@ describe("monitorDiscordProvider", () => {
   it("forwards inbound worker timeout config to the Discord message handler", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
 
-    resolveDiscordAccountMock.mockImplementation(() => ({
-      accountId: "default",
-      token: "cfg-token",
-      config: {
-        commands: { native: true, nativeSkills: false },
-        voice: { enabled: false },
-        agentComponents: { enabled: false },
-        execApprovals: { enabled: false },
-        inboundWorker: { runTimeoutMs: 300_000 },
-      },
-    }));
+    mockResolvedDiscordAccountConfig({
+      inboundWorker: { runTimeoutMs: 300_000 },
+    });
 
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
 
-    expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
-    const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as
-      | [{ workerRunTimeoutMs?: number }]
-      | undefined;
-    const params = firstCall?.[0];
+    const params = getFirstDiscordMessageHandlerParams<{
+      workerRunTimeoutMs?: number;
+    }>();
     expect(params?.workerRunTimeoutMs).toBe(300_000);
   });
 
