@@ -1,30 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { extractTextFromChatContent } from "./chat-content.js";
 
-describe("extractTextFromChatContent", () => {
-  it("normalizes string content", () => {
+describe("shared/chat-content", () => {
+  it("normalizes plain string content", () => {
     expect(extractTextFromChatContent("  hello\nworld  ")).toBe("hello world");
   });
 
-  it("extracts text blocks from array content", () => {
+  it("extracts only text blocks from array content", () => {
     expect(
       extractTextFromChatContent([
         { type: "text", text: " hello " },
         { type: "image_url", image_url: "https://example.com" },
         { type: "text", text: "world" },
+        null,
       ]),
     ).toBe("hello world");
   });
 
-  it("applies sanitizer when provided", () => {
+  it("applies sanitizers and custom join/normalization hooks", () => {
     expect(
       extractTextFromChatContent("Here [Tool Call: foo (ID: 1)] ok", {
         sanitizeText: (text) => text.replace(/\[Tool Call:[^\]]+\]\s*/g, ""),
       }),
     ).toBe("Here ok");
-  });
 
-  it("supports custom join and normalization", () => {
     expect(
       extractTextFromChatContent(
         [
@@ -38,5 +37,15 @@ describe("extractTextFromChatContent", () => {
         },
       ),
     ).toBe("hello\nworld");
+  });
+
+  it("returns null for unsupported or empty content", () => {
+    expect(extractTextFromChatContent(123)).toBeNull();
+    expect(extractTextFromChatContent([{ type: "text", text: "   " }])).toBeNull();
+    expect(
+      extractTextFromChatContent("  ", {
+        sanitizeText: () => "",
+      }),
+    ).toBeNull();
   });
 });
