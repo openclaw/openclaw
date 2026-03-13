@@ -51,6 +51,13 @@ describe("thread-ownership plugin", () => {
       register(api as any);
     });
 
+    async function sendSlackThreadMessage() {
+      return await hooks.message_sending(
+        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
+        { channelId: "slack", conversationId: "C123" },
+      );
+    }
+
     it("allows non-slack channels", async () => {
       const result = await hooks.message_sending(
         { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
@@ -76,10 +83,7 @@ describe("thread-ownership plugin", () => {
         new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
       );
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
       expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -96,10 +100,7 @@ describe("thread-ownership plugin", () => {
         new Response(JSON.stringify({ owner: "other-agent" }), { status: 409 }),
       );
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toEqual({ cancel: true });
       expect(api.logger.info).toHaveBeenCalledWith(expect.stringContaining("cancelled send"));
@@ -108,10 +109,7 @@ describe("thread-ownership plugin", () => {
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 
-      const result = await hooks.message_sending(
-        { content: "hello", metadata: { threadTs: "1234.5678", channelId: "C123" }, to: "C123" },
-        { channelId: "slack", conversationId: "C123" },
-      );
+      const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
       expect(api.logger.warn).toHaveBeenCalledWith(
