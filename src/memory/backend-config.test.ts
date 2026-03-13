@@ -149,7 +149,9 @@ describe("checkQmdBinaryAvailable", () => {
   it("returns available=false when qmd binary is not found", async () => {
     const result = await checkQmdBinaryAvailable("nonexistent-qmd-binary-12345");
     expect(result.available).toBe(false);
-    expect(result.error).toContain("not found");
+    if (!result.available) {
+      expect(result.error).toContain("not found");
+    }
   });
 
   it("returns available=true when qmd binary is available", async () => {
@@ -176,7 +178,9 @@ describe("checkQmdBinaryAvailable", () => {
     // Should return quickly (within 500ms) even though the binary doesn't exist
     expect(elapsed).toBeLessThan(500);
     expect(result.available).toBe(false);
-    expect(result.error).toContain("not found");
+    if (!result.available) {
+      expect(result.error).toContain("not found");
+    }
   });
 
   it("handles Windows .cmd extension", async () => {
