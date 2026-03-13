@@ -116,4 +116,47 @@ describe("browser.request local timeout forwarding", () => {
     expect(observedSignal).toBeUndefined();
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
+
+  it("leaves existing-session profiles on the direct dispatch path", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "off" } } },
+      browser: {
+        defaultProfile: "existing",
+        profiles: {
+          existing: {
+            driver: "existing-session",
+          },
+        },
+      },
+    });
+
+    let observedSignal: AbortSignal | undefined;
+    dispatcherDispatchMock.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+      observedSignal = signal;
+      return { status: 200, body: { ok: true } };
+    });
+
+    const respond = vi.fn();
+
+    await browserHandlers["browser.request"]({
+      params: {
+        method: "POST",
+        path: "/navigate",
+        body: { url: "https://example.com" },
+        timeoutMs: 5,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: {
+          listConnected: () => [],
+        },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-3", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(observedSignal).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(true, { ok: true });
+  });
 });
