@@ -2764,11 +2764,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
-        minimaxApiHost: resolveMinimaxApiHost({
-          cfg: options?.config,
-          minimax: minimaxConfig,
-          runtimeApiHost: minimaxRuntime?.apiHost ?? options?.runtimeWebSearch?.minimaxApiHost,
-        }),
+        minimaxApiHost,
         braveMode,
       });
       return jsonResult(result);

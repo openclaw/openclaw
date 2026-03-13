@@ -1030,23 +1030,29 @@ describe("web_search minimax provider", () => {
     vi.spyOn(authProfiles, "loadAuthProfileStoreForSecretsRuntime").mockReturnValue({
       version: 1,
       profiles: {
-        "minimax:first": {
+        "minimax-portal:first": {
           type: "token",
-          provider: "minimax",
+          provider: "minimax-portal",
           token: "first-token", // pragma: allowlist secret
         },
-        "minimax:second": {
+        "minimax-cn:second": {
           type: "token",
-          provider: "minimax",
+          provider: "minimax-cn",
           token: "second-token", // pragma: allowlist secret
         },
       },
       order: {},
       usageStats: {},
     } as unknown as ReturnType<typeof authProfiles.loadAuthProfileStoreForSecretsRuntime>);
-    vi.spyOn(authProfiles, "resolveAuthProfileOrder").mockImplementation(({ provider }) =>
-      provider === "minimax" ? ["minimax:first", "minimax:second"] : [],
-    );
+    vi.spyOn(authProfiles, "resolveAuthProfileOrder").mockImplementation(({ provider }) => {
+      if (provider === "minimax-portal") {
+        return ["minimax-portal:first"];
+      }
+      if (provider === "minimax-cn") {
+        return ["minimax-cn:second"];
+      }
+      return [];
+    });
 
     const mockFetch = vi.fn(async (_input?: unknown, init?: unknown) => {
       const request = init as RequestInit | undefined;
@@ -1077,8 +1083,10 @@ describe("web_search minimax provider", () => {
     const result = await tool?.execute?.("call-1", { query: "probe profile fallback" });
 
     expect(mockFetch.mock.calls.length).toBe(3);
+    const thirdUrl = new URL(String(mockFetch.mock.calls[2]?.[0]));
     const thirdRequest = mockFetch.mock.calls[2]?.[1] as RequestInit | undefined;
     const thirdHeaders = thirdRequest?.headers as Record<string, string> | undefined;
+    expect(thirdUrl.host).toBe("api.minimaxi.com");
     expect(thirdHeaders?.Authorization).toBe("Bearer second-token");
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("minimax");
   });
