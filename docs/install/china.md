@@ -92,7 +92,7 @@ Note: using the mirror is usually unnecessary with TUN mode active. Only use it 
 
 ## Recommended channels for China
 
-### Feishu (飞书) — recommended
+### Feishu (飞书) - recommended
 
 Feishu is the most natural channel for China-based users. It ships bundled with OpenClaw and supports WebSocket long connections, so **no public URL or webhook is needed**.
 
