@@ -97,9 +97,13 @@ export async function loadChatHistory(state: ChatState) {
         if (
           hasTimedOut &&
           state.sessionKey === targetSession &&
-          currentFreshness === _chatHistoryFreshnessToken
+          currentFreshness === _chatHistoryFreshnessToken &&
+          state.chatMessages.length === _originalMessageCount
         ) {
-          state.lastError = null;
+          // Only clear the timeout error, not unrelated errors
+          if (state.lastError && state.lastError.includes("timed out")) {
+            state.lastError = null;
+          }
           const messages = Array.isArray(res.messages) ? res.messages : [];
           state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
           state.chatThinkingLevel = res.thinkingLevel ?? null;
