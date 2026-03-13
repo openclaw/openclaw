@@ -885,6 +885,120 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects full-host restore when the state asset source is a file", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const stateFile = path.join(rootDir, "assets", "state");
+    try {
+      await fs.mkdir(path.dirname(stateFile), { recursive: true });
+      await fs.writeFile(stateFile, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "state",
+                sourcePath: path.join(tempHome.home, ".openclaw"),
+                archivePath: "archive-root/assets/state",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing full-host restore: state asset is not a directory/);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects full-host restore when the credentials asset source is a file", async () => {
+    const originalOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const credentialsFile = path.join(rootDir, "assets", "credentials");
+    const oauthDir = path.join(tempHome.home, "external-oauth");
+    try {
+      process.env.OPENCLAW_OAUTH_DIR = oauthDir;
+      await fs.mkdir(path.dirname(credentialsFile), { recursive: true });
+      await fs.writeFile(credentialsFile, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "full-host",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [
+              {
+                kind: "credentials",
+                sourcePath: path.join(tempHome.home, ".openclaw", "credentials"),
+                archivePath: "archive-root/assets/credentials",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing full-host restore: credentials asset is not a directory/);
+    } finally {
+      if (originalOauthDir == null) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = originalOauthDir;
+      }
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects workspace-only restore when the workspace asset source is a file", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const workspaceFile = path.join(rootDir, "assets", "workspace");
+    const workspaceTarget = path.join(tempHome.home, "workspace");
+    try {
+      await fs.mkdir(path.dirname(workspaceFile), { recursive: true });
+      await fs.writeFile(workspaceFile, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [workspaceTarget],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: workspaceTarget,
+                archivePath: "archive-root/assets/workspace",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing workspace-only restore: workspace asset is not a directory/);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails full-host restore when archived workspace assets cannot be mapped", async () => {
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
     const rootDir = path.join(extractDir, "archive-root");

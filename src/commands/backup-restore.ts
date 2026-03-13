@@ -525,6 +525,19 @@ async function assertRegularFileRestoreSource(params: {
   }
 }
 
+async function assertDirectoryRestoreSource(params: {
+  sourcePath: string;
+  label: string;
+  mode: "workspace-only" | "full-host";
+}): Promise<void> {
+  const stat = await fs.lstat(params.sourcePath);
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Refusing ${params.mode} restore: ${params.label} is not a directory (${params.sourcePath}).`,
+    );
+  }
+}
+
 async function assertSafeWorkspaceRestoreTarget(params: {
   targetPath: string;
   stateDir: string;
@@ -633,9 +646,15 @@ export async function buildRestoreOperations(params: {
     }
 
     if (stateAsset) {
+      const stateSourcePath = getAssetExtractPath(params.extractedRoot, stateAsset);
+      await assertDirectoryRestoreSource({
+        sourcePath: stateSourcePath,
+        label: "state asset",
+        mode: "full-host",
+      });
       operations.push({
         kind: "state",
-        sourcePath: getAssetExtractPath(params.extractedRoot, stateAsset),
+        sourcePath: stateSourcePath,
         targetPath: stateDir,
       });
     }
@@ -672,6 +691,11 @@ export async function buildRestoreOperations(params: {
           }))
         : undefined;
     if (credentialsSourcePath) {
+      await assertDirectoryRestoreSource({
+        sourcePath: credentialsSourcePath,
+        label: "credentials asset",
+        mode: "full-host",
+      });
       operations.push({
         kind: "credentials",
         sourcePath: credentialsSourcePath,
@@ -703,6 +727,7 @@ export async function buildRestoreOperations(params: {
             workspaceTargets instanceof Map
               ? workspaceTargets.get(assetSourceKey)
               : workspaceTargets[index];
+          const sourcePath = getAssetExtractPath(params.extractedRoot, asset);
           if (!targetPath) {
             return "invalid";
           }
@@ -720,9 +745,14 @@ export async function buildRestoreOperations(params: {
             workspaceTargetError = error instanceof Error ? error : new Error(String(error));
             return "invalid";
           }
+          await assertDirectoryRestoreSource({
+            sourcePath,
+            label: "workspace asset",
+            mode: params.mode === "full-host" ? "full-host" : "workspace-only",
+          });
           candidateOperations.push({
             kind: "workspace",
-            sourcePath: getAssetExtractPath(params.extractedRoot, asset),
+            sourcePath,
             targetPath,
           });
         }
