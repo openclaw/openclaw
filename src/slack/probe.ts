@@ -26,8 +26,8 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
       ok: true,
       status: 200,
       elapsedMs: Date.now() - start,
-      bot: { id: result.user_id ?? undefined, name: result.user ?? undefined },
-      team: { id: result.team_id ?? undefined, name: result.team ?? undefined },
+      bot: { id: result.user_id, name: result.user },
+      team: { id: result.team_id, name: result.team },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
