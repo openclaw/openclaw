@@ -207,6 +207,14 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
+  /**
+   * Timeout in milliseconds between streamed SSE body chunks from the LLM provider.
+   * The timer resets on every received chunk; if no data arrives within this window
+   * the HTTP connection is aborted. Only affects the body-chunk idle timeout
+   * (undici bodyTimeout); the initial response-headers timeout is not changed.
+   * Default: 1 800 000 (30 minutes).
+   */
+  streamIdleTimeoutMs?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**

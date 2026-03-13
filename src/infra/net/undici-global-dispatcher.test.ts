@@ -128,6 +128,27 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
+  it("applies custom bodyTimeout via timeoutMs while keeping headersTimeout at default", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 120_000 });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(Agent);
+    expect(next.options?.bodyTimeout).toBe(120_000);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+  });
+
+  it("is idempotent when called twice with the same custom timeoutMs", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 120_000 });
+    ensureGlobalUndiciStreamTimeouts({ timeoutMs: 120_000 });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+  });
+
   it("re-applies when autoSelectFamily decision changes", () => {
     getDefaultAutoSelectFamily.mockReturnValue(true);
     ensureGlobalUndiciStreamTimeouts();

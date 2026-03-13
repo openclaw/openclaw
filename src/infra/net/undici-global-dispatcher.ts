@@ -100,19 +100,33 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   }
 }
 
-export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
-  const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
-  if (!Number.isFinite(timeoutMsRaw)) {
+export function ensureGlobalUndiciStreamTimeouts(opts?: {
+  timeoutMs?: number;
+  headersTimeoutMs?: number;
+}): void {
+  const bodyTimeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+  const bodyTimeoutMs = Math.max(1, Math.floor(bodyTimeoutMsRaw));
+  if (!Number.isFinite(bodyTimeoutMsRaw)) {
     return;
   }
+  // headersTimeout defaults to the overall default independently so that a
+  // short bodyTimeout (e.g. 5 s to detect stalled SSE streams) does not also
+  // shorten the time allowed to receive initial response headers.
+  const headersTimeoutMsRaw = opts?.headersTimeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+  const headersTimeoutMs = Math.max(1, Math.floor(headersTimeoutMsRaw));
+  if (!Number.isFinite(headersTimeoutMsRaw)) {
+    return;
+  }
+
   const kind = resolveCurrentDispatcherKind();
   if (kind === null) {
     return;
   }
 
   const autoSelectFamily = resolveAutoSelectFamily();
-  const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
+  const nextKey =
+    resolveDispatcherKey({ kind, timeoutMs: bodyTimeoutMs, autoSelectFamily }) +
+    `:h${headersTimeoutMs}`;
   if (lastAppliedTimeoutKey === nextKey) {
     return;
   }
@@ -121,16 +135,16 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   try {
     if (kind === "env-proxy") {
       const proxyOptions = {
-        bodyTimeout: timeoutMs,
-        headersTimeout: timeoutMs,
+        bodyTimeout: bodyTimeoutMs,
+        headersTimeout: headersTimeoutMs,
         ...(connect ? { connect } : {}),
       } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
       setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
     } else {
       setGlobalDispatcher(
         new Agent({
-          bodyTimeout: timeoutMs,
-          headersTimeout: timeoutMs,
+          bodyTimeout: bodyTimeoutMs,
+          headersTimeout: headersTimeoutMs,
           ...(connect ? { connect } : {}),
         }),
       );
