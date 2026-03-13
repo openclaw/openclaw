@@ -39,4 +39,60 @@ describe("maybeBlockOversizedModelSwitch", () => {
     expect(result).toContain("Can't switch to openrouter/shared-budget-model yet.");
     expect(result).toContain("108k/128k");
   });
+
+  it("does not block when the target model budget is unknown", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: 20_000,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = maybeBlockOversizedModelSwitch({
+      cfg,
+      sessionEntry: {
+        totalTokens: 190_000,
+        totalTokensFresh: true,
+      },
+      currentProvider: "anthropic",
+      currentModel: "claude-opus-4-5",
+      targetProvider: "openrouter",
+      targetModel: "__codex_unknown_context_window_model__",
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("still blocks when an explicit agent context cap is configured for an unknown model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          contextTokens: 90_000,
+          compaction: {
+            reserveTokensFloor: 20_000,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = maybeBlockOversizedModelSwitch({
+      cfg,
+      sessionEntry: {
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+      },
+      currentProvider: "anthropic",
+      currentModel: "claude-opus-4-5",
+      targetProvider: "openrouter",
+      targetModel: "__codex_unknown_context_window_model_with_cap__",
+    });
+
+    expect(result).toContain(
+      "Can't switch to openrouter/__codex_unknown_context_window_model_with_cap__ yet.",
+    );
+    expect(result).toContain("70k/90k");
+  });
 });

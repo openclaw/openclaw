@@ -1,9 +1,15 @@
 import { lookupContextTokens } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveCompactionReserveTokensFloor } from "../../agents/pi-settings.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { formatTokenCount } from "../../utils/usage-format.js";
+
+function normalizePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
 
 function resolveConfiguredModelContextWindow(params: {
   cfg: OpenClawConfig;
@@ -42,24 +48,19 @@ function resolveEffectiveContextWindowTokens(params: {
   cfg: OpenClawConfig;
   model: string;
 }): number | undefined {
-  const cachedWindow = lookupContextTokens(params.model);
+  const cachedWindow = normalizePositiveInt(lookupContextTokens(params.model));
   const configuredWindow = resolveConfiguredModelContextWindow(params);
-  const rawContextWindow =
-    (typeof cachedWindow === "number" && Number.isFinite(cachedWindow) && cachedWindow > 0
-      ? cachedWindow
-      : undefined) ??
-    configuredWindow ??
-    DEFAULT_CONTEXT_TOKENS;
+  const contextWindow = cachedWindow ?? configuredWindow;
+  const configuredCap = normalizePositiveInt(params.cfg.agents?.defaults?.contextTokens);
+  if (contextWindow === undefined) {
+    // Refuse a switch only when we have a real budget signal. Falling back to
+    // the global default here would block unknown/high-context models purely
+    // because the catalog is incomplete.
+    return configuredCap;
+  }
 
-  const contextWindow = Math.floor(rawContextWindow);
-  const configuredCap = params.cfg.agents?.defaults?.contextTokens;
-  if (
-    typeof configuredCap === "number" &&
-    Number.isFinite(configuredCap) &&
-    configuredCap > 0 &&
-    configuredCap < contextWindow
-  ) {
-    return Math.floor(configuredCap);
+  if (configuredCap !== undefined && configuredCap < contextWindow) {
+    return configuredCap;
   }
 
   return contextWindow;
