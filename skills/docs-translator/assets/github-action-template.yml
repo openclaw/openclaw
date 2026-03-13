@@ -1,0 +1,45 @@
+name: Docs Sync & Translate
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天執行一次
+  workflow_dispatch: # 支援手動觸發
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Upstream
+        run: |
+          git remote add upstream https://github.com/UPSTREAM_USER/UPSTREAM_REPO.git || true
+          git fetch upstream
+
+      - name: Run Translation Script
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: pnpm run docs:translate
+
+      - name: Push Changes
+        run: |
+          git push origin main || echo "No changes to push"

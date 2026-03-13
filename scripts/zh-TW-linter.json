@@ -1,0 +1,27 @@
+{
+  "rules": [
+    { "pattern": "視頻", "replacement": "影片" },
+    { "pattern": "內存", "replacement": "記憶體" },
+    { "pattern": "程序員", "replacement": "程式設計師" },
+    { "pattern": "默認", "replacement": "預設" },
+    { "pattern": "支持", "replacement": "支援" },
+    { "pattern": "鏈接", "replacement": "連結" },
+    { "pattern": "網絡", "replacement": "網路" },
+    { "pattern": "菜單", "replacement": "選單" },
+    { "pattern": "項目", "replacement": "專案" },
+    { "pattern": "配置文件", "replacement": "設定檔" },
+    { "pattern": "代碼", "replacement": "程式碼" },
+    { "pattern": "運行", "replacement": "執行" },
+    { "pattern": "軟件", "replacement": "軟體" },
+    { "pattern": "硬件", "replacement": "硬體" },
+    { "pattern": "數據庫", "replacement": "資料庫" },
+    { "pattern": "服務器", "replacement": "伺服器" },
+    { "pattern": "客戶端", "replacement": "用戶端" },
+    { "pattern": "登錄", "replacement": "登入" },
+    { "pattern": "信息", "replacement": "資訊" },
+    { "pattern": "質量", "replacement": "品質" },
+    { "pattern": "擴展", "replacement": "擴充" },
+    { "pattern": "配置", "replacement": "設定" },
+    { "pattern": "令牌", "replacement": "token" }
+  ]
+}
