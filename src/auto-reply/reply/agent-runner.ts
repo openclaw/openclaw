@@ -261,6 +261,7 @@ export async function runReplyAgent(params: {
       isStreaming,
       laneSize,
       sendStatus: opts.onStatusReply,
+      earlyStatusActivation: truthfulStatusDecision,
     });
   };
 
