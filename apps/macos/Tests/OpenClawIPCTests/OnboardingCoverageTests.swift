@@ -4,7 +4,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct OnboardingCoverageTests {
-    @Test func exerciseOnboardingPages() {
+    @Test func `exercise onboarding pages`() {
         OnboardingView.exerciseForTesting()
     }
 }

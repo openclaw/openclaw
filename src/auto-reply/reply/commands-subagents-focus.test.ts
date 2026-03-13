@@ -9,8 +9,6 @@ import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mock
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
-  const getThreadBindingManagerMock = vi.fn();
-  const resolveThreadBindingThreadNameMock = vi.fn(() => "🤖 codex");
   const readAcpSessionEntryMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
@@ -19,8 +17,6 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingUnbindMock = vi.fn();
   return {
     callGatewayMock,
-    getThreadBindingManagerMock,
-    resolveThreadBindingThreadNameMock,
     readAcpSessionEntryMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
@@ -31,7 +27,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 function buildFocusSessionBindingService() {
-  const service = {
+  return {
     touch: vi.fn(),
     listBySession(targetSessionKey: string) {
       return hoisted.sessionBindingListBySessionMock(targetSessionKey);
@@ -49,7 +45,6 @@ function buildFocusSessionBindingService() {
       return hoisted.sessionBindingUnbindMock(input);
     },
   };
-  return service;
 }
 
 vi.mock("../../gateway/call.js", () => ({
@@ -61,15 +56,6 @@ vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => {
   return {
     ...actual,
     readAcpSessionEntry: (params: unknown) => hoisted.readAcpSessionEntryMock(params),
-  };
-});
-
-vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../discord/monitor/thread-bindings.js")>();
-  return {
-    ...actual,
-    getThreadBindingManager: hoisted.getThreadBindingManagerMock,
-    resolveThreadBindingThreadName: hoisted.resolveThreadBindingThreadNameMock,
   };
 });
 
@@ -86,95 +72,6 @@ installSubagentsCommandCoreMocks();
 
 const { handleSubagentsCommand } = await import("./commands-subagents.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
-
-type FakeBinding = {
-  accountId: string;
-  channelId: string;
-  threadId: string;
-  targetKind: "subagent" | "acp";
-  targetSessionKey: string;
-  agentId: string;
-  label?: string;
-  webhookId?: string;
-  webhookToken?: string;
-  boundBy: string;
-  boundAt: number;
-};
-
-function createFakeBinding(
-  overrides: Pick<FakeBinding, "threadId" | "targetKind" | "targetSessionKey" | "agentId"> &
-    Partial<FakeBinding>,
-): FakeBinding {
-  return {
-    accountId: "default",
-    channelId: "parent-1",
-    boundBy: "user-1",
-    boundAt: Date.now(),
-    ...overrides,
-  };
-}
-
-function expectAgentListContainsThreadBinding(text: string, label: string, threadId: string): void {
-  expect(text).toContain("agents:");
-  expect(text).toContain(label);
-  expect(text).toContain(`thread:${threadId}`);
-}
-
-function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
-  const byThread = new Map<string, FakeBinding>(
-    initialBindings.map((binding) => [binding.threadId, binding]),
-  );
-
-  const manager = {
-    getIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
-    getMaxAgeMs: vi.fn(() => 0),
-    getByThreadId: vi.fn((threadId: string) => byThread.get(threadId)),
-    listBySessionKey: vi.fn((targetSessionKey: string) =>
-      [...byThread.values()].filter((binding) => binding.targetSessionKey === targetSessionKey),
-    ),
-    listBindings: vi.fn(() => [...byThread.values()]),
-    bindTarget: vi.fn(async (params: Record<string, unknown>) => {
-      const threadId =
-        typeof params.threadId === "string" && params.threadId.trim()
-          ? params.threadId.trim()
-          : "thread-created";
-      const targetSessionKey =
-        typeof params.targetSessionKey === "string" ? params.targetSessionKey.trim() : "";
-      const agentId =
-        typeof params.agentId === "string" && params.agentId.trim()
-          ? params.agentId.trim()
-          : "main";
-      const binding: FakeBinding = {
-        accountId: "default",
-        channelId:
-          typeof params.channelId === "string" && params.channelId.trim()
-            ? params.channelId.trim()
-            : "parent-1",
-        threadId,
-        targetKind:
-          params.targetKind === "subagent" || params.targetKind === "acp"
-            ? params.targetKind
-            : "acp",
-        targetSessionKey,
-        agentId,
-        label: typeof params.label === "string" ? params.label : undefined,
-        boundBy: typeof params.boundBy === "string" ? params.boundBy : "system",
-        boundAt: Date.now(),
-      };
-      byThread.set(threadId, binding);
-      return binding;
-    }),
-    unbindThread: vi.fn((params: { threadId: string }) => {
-      const binding = byThread.get(params.threadId) ?? null;
-      if (binding) {
-        byThread.delete(params.threadId);
-      }
-      return binding;
-    }),
-  };
-
-  return { manager, byThread };
-}
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -193,19 +90,17 @@ function createDiscordCommandParams(commandBody: string) {
   return params;
 }
 
-function createStoredBinding(overrides?: Partial<FakeBinding>): FakeBinding {
-  return {
-    accountId: "default",
-    channelId: "parent-1",
-    threadId: "thread-1",
-    targetKind: "subagent",
-    targetSessionKey: "agent:main:subagent:child",
-    agentId: "main",
-    label: "child",
-    boundBy: "user-1",
-    boundAt: Date.now(),
-    ...overrides,
-  };
+function createTelegramTopicCommandParams(commandBody: string) {
+  const params = buildCommandTestParams(commandBody, baseCfg, {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "-100200300:topic:77",
+    AccountId: "default",
+    MessageThreadId: "77",
+  });
+  params.command.senderId = "user-1";
+  return params;
 }
 
 function createSessionBindingRecord(
@@ -240,38 +135,24 @@ function createSessionBindingCapabilities() {
   };
 }
 
-async function runUnfocusAndExpectManualUnbind(initialBindings: FakeBinding[]) {
-  const fake = createFakeThreadBindingManager(initialBindings);
-  hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
-
-  const params = createDiscordCommandParams("/unfocus");
-  const result = await handleSubagentsCommand(params, true);
-
-  expect(result?.reply?.text).toContain("Thread unfocused");
-  expect(fake.manager.unbindThread).toHaveBeenCalledWith(
-    expect.objectContaining({
-      threadId: "thread-1",
-      reason: "manual",
-    }),
-  );
-}
-
-async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindingRecord | null }) {
+async function focusCodexAcp(
+  params = createDiscordCommandParams("/focus codex-acp"),
+  options?: { existingBinding?: SessionBindingRecord | null },
+) {
   hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
   hoisted.sessionBindingResolveByConversationMock.mockReturnValue(options?.existingBinding ?? null);
   hoisted.sessionBindingBindMock.mockImplementation(
     async (input: {
       targetSessionKey: string;
-      conversation: { accountId: string; conversationId: string };
+      conversation: { channel: string; accountId: string; conversationId: string };
       metadata?: Record<string, unknown>;
     }) =>
       createSessionBindingRecord({
         targetSessionKey: input.targetSessionKey,
         conversation: {
-          channel: "discord",
+          channel: input.conversation.channel,
           accountId: input.conversation.accountId,
           conversationId: input.conversation.conversationId,
-          parentConversationId: "parent-1",
         },
         metadata: {
           boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1",
@@ -285,23 +166,13 @@ async function focusCodexAcpInThread(options?: { existingBinding?: SessionBindin
     }
     return {};
   });
-  const params = createDiscordCommandParams("/focus codex-acp");
-  const result = await handleSubagentsCommand(params, true);
-  return { result };
-}
-
-async function runAgentsCommandAndText(): Promise<string> {
-  const params = createDiscordCommandParams("/agents");
-  const result = await handleSubagentsCommand(params, true);
-  return result?.reply?.text ?? "";
+  return await handleSubagentsCommand(params, true);
 }
 
 describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    hoisted.callGatewayMock.mockClear();
-    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
-    hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
+    hoisted.callGatewayMock.mockReset();
     hoisted.readAcpSessionEntryMock.mockReset().mockReturnValue(null);
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
@@ -313,7 +184,7 @@ describe("/focus, /unfocus, /agents", () => {
   });
 
   it("/focus resolves ACP sessions and binds the current Discord thread", async () => {
-    const { result } = await focusCodexAcpInThread();
+    const result = await focusCodexAcp();
 
     expect(result?.reply?.text).toContain("bound this thread");
     expect(result?.reply?.text).toContain("(acp)");
@@ -322,9 +193,28 @@ describe("/focus, /unfocus, /agents", () => {
         placement: "current",
         targetKind: "session",
         targetSessionKey: "agent:codex-acp:session-1",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          conversationId: "thread-1",
+        }),
         metadata: expect.objectContaining({
           introText:
             "⚙️ codex-acp session active (idle auto-unfocus after 24h inactivity). Messages here go directly to this session.",
+        }),
+      }),
+    );
+  });
+
+  it("/focus binds Telegram topics as current conversations", async () => {
+    const result = await focusCodexAcp(createTelegramTopicCommandParams("/focus codex-acp"));
+
+    expect(result?.reply?.text).toContain("bound this conversation");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          conversationId: "-100200300:topic:77",
         }),
       }),
     );
@@ -350,9 +240,8 @@ describe("/focus, /unfocus, /agents", () => {
         lastActivityAt: Date.now(),
       },
     });
-    const { result } = await focusCodexAcpInThread();
+    await focusCodexAcp();
 
-    expect(result?.reply?.text).toContain("bound this thread");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
@@ -376,27 +265,28 @@ describe("/focus, /unfocus, /agents", () => {
     );
   });
 
-  it("/unfocus removes an active thread binding for the binding owner", async () => {
-    await runUnfocusAndExpectManualUnbind([createStoredBinding()]);
-  });
-
-  it("/unfocus also unbinds ACP-focused thread bindings", async () => {
-    await runUnfocusAndExpectManualUnbind([
-      createStoredBinding({
-        targetKind: "acp",
-        targetSessionKey: "agent:codex:acp:session-1",
-        agentId: "codex",
-        label: "codex-session",
+  it("/unfocus removes an active binding for the binding owner", async () => {
+    const params = createDiscordCommandParams("/unfocus");
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSessionBindingRecord({
+        bindingId: "default:thread-1",
+        metadata: { boundBy: "user-1" },
       }),
-    ]);
+    );
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Thread unfocused");
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
+      bindingId: "default:thread-1",
+      reason: "manual",
+    });
   });
 
   it("/focus rejects rebinding when the thread is focused by another user", async () => {
-    const { result } = await focusCodexAcpInThread({
+    const result = await focusCodexAcp(undefined, {
       existingBinding: createSessionBindingRecord({
-        metadata: {
-          boundBy: "user-2",
-        },
+        metadata: { boundBy: "user-2" },
       }),
     });
 
@@ -404,7 +294,7 @@ describe("/focus, /unfocus, /agents", () => {
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
-  it("/agents includes bound persistent sessions and requester-scoped ACP bindings", async () => {
+  it("/agents includes active conversation bindings on the current channel/account", async () => {
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:child-1",
@@ -416,41 +306,61 @@ describe("/focus, /unfocus, /agents", () => {
       createdAt: Date.now(),
     });
 
-    const fake = createFakeThreadBindingManager([
-      createFakeBinding({
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child-1",
-        agentId: "main",
-        label: "child-1",
-      }),
-      createFakeBinding({
-        threadId: "thread-2",
-        targetKind: "acp",
-        targetSessionKey: "agent:main:main",
-        agentId: "codex-acp",
-        label: "main-session",
-      }),
-      createFakeBinding({
-        threadId: "thread-3",
-        targetKind: "acp",
-        targetSessionKey: "agent:codex-acp:session-2",
-        agentId: "codex-acp",
-        label: "codex-acp",
-      }),
-    ]);
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+    hoisted.sessionBindingListBySessionMock.mockImplementation((sessionKey: string) => {
+      if (sessionKey === "agent:main:subagent:child-1") {
+        return [
+          createSessionBindingRecord({
+            bindingId: "default:thread-1",
+            targetSessionKey: sessionKey,
+            targetKind: "subagent",
+            conversation: {
+              channel: "discord",
+              accountId: "default",
+              conversationId: "thread-1",
+            },
+          }),
+        ];
+      }
+      if (sessionKey === "agent:main:main") {
+        return [
+          createSessionBindingRecord({
+            bindingId: "default:thread-2",
+            targetSessionKey: sessionKey,
+            targetKind: "session",
+            conversation: {
+              channel: "discord",
+              accountId: "default",
+              conversationId: "thread-2",
+            },
+            metadata: { label: "main-session" },
+          }),
+          // Mismatched channel should be filtered.
+          createSessionBindingRecord({
+            bindingId: "default:tg-1",
+            targetSessionKey: sessionKey,
+            targetKind: "session",
+            conversation: {
+              channel: "telegram",
+              accountId: "default",
+              conversationId: "12345",
+            },
+          }),
+        ];
+      }
+      return [];
+    });
 
-    const text = await runAgentsCommandAndText();
+    const result = await handleSubagentsCommand(createDiscordCommandParams("/agents"), true);
+    const text = result?.reply?.text ?? "";
 
     expect(text).toContain("agents:");
     expect(text).toContain("thread:thread-1");
     expect(text).toContain("acp/session bindings:");
     expect(text).toContain("session:agent:main:main");
-    expect(text).not.toContain("session:agent:codex-acp:session-2");
+    expect(text).not.toContain("default:tg-1");
   });
 
-  it("/agents keeps finished session-mode runs visible while their thread binding remains", async () => {
+  it("/agents keeps finished session-mode runs visible while binding remains", async () => {
     addSubagentRunForTests({
       runId: "run-session-1",
       childSessionKey: "agent:main:subagent:persistent-1",
@@ -463,26 +373,34 @@ describe("/focus, /unfocus, /agents", () => {
       createdAt: Date.now(),
       endedAt: Date.now(),
     });
+    hoisted.sessionBindingListBySessionMock.mockImplementation((sessionKey: string) => {
+      if (sessionKey !== "agent:main:subagent:persistent-1") {
+        return [];
+      }
+      return [
+        createSessionBindingRecord({
+          bindingId: "default:thread-persistent-1",
+          targetSessionKey: sessionKey,
+          targetKind: "subagent",
+          conversation: {
+            channel: "discord",
+            accountId: "default",
+            conversationId: "thread-persistent-1",
+          },
+        }),
+      ];
+    });
 
-    const fake = createFakeThreadBindingManager([
-      createFakeBinding({
-        threadId: "thread-persistent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:persistent-1",
-        agentId: "main",
-        label: "persistent-1",
-      }),
-    ]);
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+    const result = await handleSubagentsCommand(createDiscordCommandParams("/agents"), true);
+    const text = result?.reply?.text ?? "";
 
-    const text = await runAgentsCommandAndText();
-
-    expectAgentListContainsThreadBinding(text, "persistent-1", "thread-persistent-1");
+    expect(text).toContain("persistent-1");
+    expect(text).toContain("thread:thread-persistent-1");
   });
 
-  it("/focus is discord-only", async () => {
+  it("/focus rejects unsupported channels", async () => {
     const params = buildCommandTestParams("/focus codex-acp", baseCfg);
     const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord");
+    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
   });
 });
