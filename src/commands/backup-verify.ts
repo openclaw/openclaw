@@ -5,6 +5,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_ARCHIVE_ENTRY_COUNT = 50_000;
+const MAX_ARCHIVE_ENTRY_PATH_BYTES = 4 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1 * 1024 * 1024;
 
 export type BackupManifestAsset = {
@@ -176,13 +178,36 @@ async function listArchiveEntries(
   archivePath: string,
 ): Promise<Array<{ path: string; type?: string }>> {
   const entries: Array<{ path: string; type?: string }> = [];
+  let totalEntries = 0;
+  let totalPathBytes = 0;
+  let limitError: Error | undefined;
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
+      if (limitError) {
+        return;
+      }
+      totalEntries += 1;
+      if (totalEntries > MAX_ARCHIVE_ENTRY_COUNT) {
+        limitError = new Error(
+          `Backup archive exceeds maximum entry count of ${MAX_ARCHIVE_ENTRY_COUNT}.`,
+        );
+        return;
+      }
+      totalPathBytes += Buffer.byteLength(entry.path, "utf8");
+      if (totalPathBytes > MAX_ARCHIVE_ENTRY_PATH_BYTES) {
+        limitError = new Error(
+          `Backup archive entry metadata exceeds maximum size of ${MAX_ARCHIVE_ENTRY_PATH_BYTES} bytes.`,
+        );
+        return;
+      }
       entries.push({ path: entry.path, type: entry.type });
     },
   });
+  if (limitError) {
+    throw limitError;
+  }
   return entries;
 }
 

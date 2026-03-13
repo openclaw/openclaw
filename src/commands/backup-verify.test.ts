@@ -523,6 +523,44 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("fails when archive entry metadata exceeds the scan limit", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-large-entry-list-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    try {
+      await fs.writeFile(path.join(tempDir, "payload.txt"), "payload\n", "utf8");
+
+      let entryIndex = 0;
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          cwd: tempDir,
+          portable: true,
+          onWriteEntry: (entry) => {
+            if (entry.path !== "payload.txt") {
+              return;
+            }
+            entry.path = `backup/payload/${String(entryIndex).padStart(4, "0")}-${"a".repeat(4096)}.txt`;
+            entryIndex += 1;
+          },
+        },
+        Array.from({ length: 1024 }, () => "payload.txt"),
+      );
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /entry metadata exceeds maximum size/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when the archive contains fifo tar entries", async () => {
     expect(
       findUnsupportedTarSpecialEntry([
