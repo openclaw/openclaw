@@ -41,7 +41,10 @@ describe("config plugin validation", () => {
   const suiteEnv = () =>
     ({
       ...process.env,
+      HOME: suiteHome,
+      OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
+      CLAWDBOT_STATE_DIR: undefined,
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
     }) satisfies NodeJS.ProcessEnv;
 
