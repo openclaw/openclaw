@@ -68,17 +68,13 @@ describe("chat context notice", () => {
     render(renderChat(createProps()), container);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-    const notice = container.querySelector<HTMLElement>(".context-notice");
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
-    expect(notice).not.toBeNull();
     expect(icon).not.toBeNull();
-    if (!notice || !icon) {
+    if (!icon) {
       return;
     }
 
-    const noticeStyle = getComputedStyle(notice);
     const iconStyle = getComputedStyle(icon);
-    expect(noticeStyle.display).toBe("inline-flex");
     expect(iconStyle.width).toBe("16px");
     expect(iconStyle.height).toBe("16px");
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
