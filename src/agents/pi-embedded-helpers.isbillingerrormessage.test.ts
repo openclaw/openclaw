@@ -851,4 +851,39 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies streaming server_error payloads as overloaded", () => {
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}',
+      ),
+    ).toBe("overloaded");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {\n  "type": "error",\n  "error": {\n    "type": "server_error",\n    "message": "An error occurred while processing your request."\n  }\n}',
+      ),
+    ).toBe("overloaded");
+    expect(
+      classifyFailoverReason(
+        'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
+      ),
+    ).toBe("overloaded");
+    expect(classifyFailoverReason("LLM error server_error: something went wrong")).toBe(
+      "overloaded",
+    );
+    expect(
+      classifyFailoverReason("LLM error: invalid parameter: server_error mode is not supported"),
+    ).toBeNull();
+  });
+  it("keeps oauth refresh failures in auth lane even when payload includes server_error", () => {
+    expect(
+      classifyFailoverReason(
+        'OAuth token refresh failed for qwen-portal: Qwen OAuth refresh failed: {"error":"server_error"}. Please try again or re-authenticate.',
+      ),
+    ).toBe("auth");
+  });
+  it("keeps billing precedence when payload also contains generic auth tokens", () => {
+    expect(
+      classifyFailoverReason("Billing error: insufficient credits; token expired for this account"),
+    ).toBe("billing");
+  });
 });

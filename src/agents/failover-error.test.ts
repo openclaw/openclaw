@@ -356,6 +356,49 @@ describe("failover-error", () => {
     );
   });
 
+  it("infers overloaded from streaming server_error in Codex Responses API format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}',
+      }),
+    ).toBe("overloaded");
+  });
+
+  it("infers overloaded from pretty-printed server_error payloads", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'Codex error: {\n  "type": "error",\n  "error": {\n    "type": "server_error",\n    "message": "An error occurred while processing your request."\n  }\n}',
+      }),
+    ).toBe("overloaded");
+  });
+
+  it("infers overloaded from server_error keyword in error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM error server_error: something went wrong",
+      }),
+    ).toBe("overloaded");
+  });
+
+  it("does not infer overloaded from unrelated server_error mentions", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM error: invalid parameter: server_error mode is not supported",
+      }),
+    ).toBeNull();
+  });
+
+  it("infers overloaded from OpenAI WebSocket response.failed server_error payloads", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          'OpenAI WebSocket response failed: {"type":"server_error","message":"Internal error"}',
+      }),
+    ).toBe("overloaded");
+  });
+
   it("treats AbortError reason=abort as timeout", () => {
     const err = Object.assign(new Error("aborted"), {
       name: "AbortError",

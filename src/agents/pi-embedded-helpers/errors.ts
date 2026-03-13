@@ -831,6 +831,9 @@ const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
+const STREAMING_PROVIDER_SERVER_ERROR_JSON_RE = /"(?:type|code)"\s*:\s*"server_error"/;
+const STREAMING_PROVIDER_SERVER_ERROR_PREFIX_RE =
+  /^(?:llm error|http \d{3}|codex error|openai websocket response failed)(?::)?\s+server_error\b/;
 
 export function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
@@ -854,6 +857,19 @@ function isJsonApiInternalServerError(raw: string): boolean {
   // Anthropic often wraps transient 500s in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
   return value.includes('"type":"api_error"') && value.includes("internal server error");
+}
+
+function isStreamingProviderServerError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  if (STREAMING_PROVIDER_SERVER_ERROR_JSON_RE.test(value)) {
+    return true;
+  }
+  // Accept the flattened prefix forms we emit ourselves without treating arbitrary
+  // mentions of `server_error` as provider overload signals.
+  return STREAMING_PROVIDER_SERVER_ERROR_PREFIX_RE.test(value);
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -1018,11 +1034,18 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
   }
+  // OAuth refresh wrappers can include provider payloads with `server_error`.
+  // Keep auth classification ahead of the generic streaming server_error fallback.
   if (isAuthPermanentErrorMessage(raw)) {
     return "auth_permanent";
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isStreamingProviderServerError(raw)) {
+    // Treat provider-declared server_error as transient provider overload so
+    // auth-profile cooldown + overload backoff policy can engage.
+    return "overloaded";
   }
   return null;
 }

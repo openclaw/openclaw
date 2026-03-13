@@ -62,6 +62,8 @@ const baseUsage = {
 
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+const CODEX_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request.","param":null},"sequence_number":2}';
 
 const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
   role: "assistant",
@@ -444,6 +446,30 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("applies overloaded cooldown/backoff for streaming server_error assistant failures", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(CODEX_SERVER_ERROR_PAYLOAD);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:streaming-server-error-fallback",
+        runId: "run:streaming-server-error-fallback",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
+
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
+      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expectOpenAiThenGroqAttemptOrder();
     });
   });
 

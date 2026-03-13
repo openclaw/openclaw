@@ -206,7 +206,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
         apiKey: params.apiKey,
         reasoning: "high",
         maxTokens: 64,
-        onPayload: (payload) => {
+        onPayload: (payload, _model) => {
           params.onPayload?.(payload as Record<string, unknown>);
         },
       },
