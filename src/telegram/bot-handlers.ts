@@ -1367,7 +1367,8 @@ export const registerTelegramHandlers = ({
             context: eventAuthContext,
           });
           if (!selSenderAuthorization.allowed) {
-            await editMessageWithButtons("❌ Not authorized to change default model.", []);
+            // Reply with error but don't modify the picker message
+            await replyToCallbackChat("❌ Not authorized to change default model.");
             return;
           }
 
