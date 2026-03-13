@@ -981,6 +981,7 @@ async function dispatchDiscordComponentEvent(params: {
     agentId,
     channel: "discord",
     accountId,
+    sessionKey,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,

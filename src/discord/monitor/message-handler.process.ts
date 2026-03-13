@@ -421,6 +421,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
+    sessionKey: persistedSessionKey,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,

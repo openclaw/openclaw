@@ -247,6 +247,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       agentId: route.agentId,
       channel: "signal",
       accountId: route.accountId,
+      sessionKey: route.sessionKey,
     });
 
     const typingCallbacks = createTypingCallbacks({

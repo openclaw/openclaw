@@ -274,6 +274,7 @@ export async function processMessage(params: {
     agentId: params.route.agentId,
     channel: "whatsapp",
     accountId: params.route.accountId,
+    sessionKey: params.route.sessionKey,
   });
   const isSelfChat =
     params.msg.chatType !== "group" &&
