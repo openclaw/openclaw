@@ -18,13 +18,16 @@ export function resolveNodeLlamaCppInstallTarget(moduleUrl = import.meta.url): s
     const pkg = require("../../package.json") as {
       dependencies?: Record<string, unknown>;
       optionalDependencies?: Record<string, unknown>;
+      peerDependencies?: Record<string, unknown>;
     };
     const version =
       typeof pkg.dependencies?.["node-llama-cpp"] === "string"
         ? pkg.dependencies["node-llama-cpp"].trim()
         : typeof pkg.optionalDependencies?.["node-llama-cpp"] === "string"
           ? pkg.optionalDependencies["node-llama-cpp"].trim()
-          : "";
+          : typeof pkg.peerDependencies?.["node-llama-cpp"] === "string"
+            ? pkg.peerDependencies["node-llama-cpp"].trim()
+            : "";
     return version ? `node-llama-cpp@${version}` : "node-llama-cpp";
   } catch {
     return "node-llama-cpp";
