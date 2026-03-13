@@ -29,8 +29,16 @@ export const handleDefaultModelCommand: CommandHandler = async (params, allowTex
   }
 
   const commandBody = params.command.commandBodyNormalized.trim();
-  if (!commandBody.toLowerCase().startsWith("/default_model")) {
-    return null;
+  const lowerBody = commandBody.toLowerCase();
+  if (!lowerBody.startsWith("/default_model ")) {
+    // Match /default_model followed by space or end-of-string (command boundary)
+    if (
+      lowerBody !== "/default_model" &&
+      !lowerBody.startsWith("/default_model:") &&
+      !lowerBody.startsWith("/default_model\n")
+    ) {
+      return null;
+    }
   }
 
   const unauthorized = rejectUnauthorizedCommand(params, "/default_model");
