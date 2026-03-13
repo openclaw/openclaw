@@ -104,8 +104,7 @@ function isLikelyVisionModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   const visionPatterns = [
     /vision/,
-    /\bvl\b/, // "vl" as a separate segment (e.g., qwen-vl, MiniMax-VL-01)
-    /-vl-/, // "vl" as a segment (e.g., qwen2-vl-72b)
+    /\bvl\b/, // "vl" as a separate segment (e.g., qwen-vl, qwen2-vl-72b, MiniMax-VL-01)
     /visual/,
     /claude-3/,
     /claude-opus-4/,
@@ -507,18 +506,9 @@ function resolveConfiguredFallbackModel(params: {
   // OpenRouter is a pass-through proxy - any model ID available on OpenRouter
   // should work without being pre-registered in the local catalog.
   // This fallback uses heuristics when the plugin-based capability lookup returns nothing.
+  // Note: configured models with provider-level `api` return early via inlineMatch,
+  // so we rely on heuristic detection for vision support here.
   if (normalizedProvider === "openrouter") {
-    const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
-    const configuredInput = configuredModel?.input;
-    // Use configured input if available, otherwise detect vision models by ID pattern
-    const resolvedInput: Array<"text" | "image"> =
-      Array.isArray(configuredInput) && configuredInput.length > 0
-        ? configuredInput.filter(
-            (item): item is "text" | "image" => item === "text" || item === "image",
-          )
-        : isLikelyVisionModel(modelId)
-          ? ["text", "image"]
-          : ["text"];
     return normalizeResolvedModel({
       provider,
       cfg,
@@ -529,12 +519,12 @@ function resolveConfiguredFallbackModel(params: {
         api: "openai-completions",
         provider,
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: configuredModel?.reasoning ?? false,
-        input: resolvedInput,
-        cost: configuredModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: configuredModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+        reasoning: false,
+        input: isLikelyVisionModel(modelId) ? ["text", "image"] : ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
         // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: configuredModel?.maxTokens ?? 8192,
+        maxTokens: 8192,
       } as Model<Api>,
       runtimeHooks,
     });
