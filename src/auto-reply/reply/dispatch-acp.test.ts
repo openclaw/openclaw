@@ -606,7 +606,7 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
-  it("bridges output deltas with explicit or missing stream and ignores non-output deltas", async () => {
+  it("bridges normalized output deltas with explicit or missing stream and ignores non-output deltas", async () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockImplementationOnce(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
@@ -618,7 +618,13 @@ describe("tryDispatchAcpReply", () => {
         });
         await onEvent({
           type: "text_delta",
-          text: " beta",
+          text: "alpha beta",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: " gamma",
+          stream: "output",
           tag: "agent_message_chunk",
         });
         await onEvent({
@@ -659,6 +665,16 @@ describe("tryDispatchAcpReply", () => {
         data: expect.objectContaining({
           text: "alpha beta",
           delta: " beta",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta gamma",
+          delta: " gamma",
           tag: "agent_message_chunk",
           source: "acp",
         }),

@@ -155,6 +155,22 @@ type AcpAgentEventBridgeState = {
   stopReason?: string;
 };
 
+function mergeAcpVisibleChunk(base: string, chunk: string): { text: string; delta: string } {
+  if (!base) {
+    return { text: chunk, delta: chunk };
+  }
+  if (chunk.startsWith(base) && chunk.length > base.length) {
+    return {
+      text: chunk,
+      delta: chunk.slice(base.length),
+    };
+  }
+  return {
+    text: `${base}${chunk}`,
+    delta: chunk,
+  };
+}
+
 function emitAcpLifecycleAgentEvent(params: {
   runId?: string;
   sessionKey: string;
@@ -205,14 +221,15 @@ function emitAcpRuntimeAgentEvent(params: {
     if ((event.stream && event.stream !== "output") || !event.text) {
       return;
     }
-    params.bridgeState.assistantText += event.text;
+    const visibleUpdate = mergeAcpVisibleChunk(params.bridgeState.assistantText, event.text);
+    params.bridgeState.assistantText = visibleUpdate.text;
     emitAgentEvent({
       runId: params.runId,
       sessionKey: params.sessionKey,
       stream: "assistant",
       data: {
         text: params.bridgeState.assistantText,
-        delta: event.text,
+        delta: visibleUpdate.delta,
         ...(event.tag ? { tag: event.tag } : {}),
         source: "acp",
       },
