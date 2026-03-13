@@ -49,7 +49,7 @@ type GlobalWithExternalTransports = typeof globalThis & {
 
 function getExternalTransports(): Set<LogTransport> {
   const target = globalThis as GlobalWithExternalTransports;
-  if (!target[EXTERNAL_TRANSPORTS_KEY]) {
+  if (!(target[EXTERNAL_TRANSPORTS_KEY] instanceof Set)) {
     target[EXTERNAL_TRANSPORTS_KEY] = new Set<LogTransport>();
   }
   return target[EXTERNAL_TRANSPORTS_KEY];
