@@ -9,7 +9,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { reconcileLiveAssistantCommentary } from "./assistant-output.js";
 import type { ResponseObject } from "./openai-ws-connection.js";
 import {
   buildAssistantMessageFromResponse,
@@ -1053,29 +1052,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
       phase: "commentary",
     });
     expect(deltaEvent?.partial?.content?.[0]?.textSignature).toContain("item_commentary");
-
-    const liveCommentary = await reconcileLiveAssistantCommentary({
-      message: {
-        ...deltaEvent?.partial,
-        content: [
-          ...(deltaEvent?.partial?.content ?? []),
-          {
-            type: "toolCall",
-            toolCallId: "call-1",
-            toolName: "exec",
-            args: "{}",
-          },
-        ],
-      } as unknown as Parameters<typeof reconcileLiveAssistantCommentary>[0]["message"],
-      seenSegmentIds: new Set<string>(),
-    });
-    expect(liveCommentary.newOutputs).toEqual([
-      {
-        segmentId: "item_commentary",
-        text: "Checking status",
-        phase: "commentary",
-      },
-    ]);
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {

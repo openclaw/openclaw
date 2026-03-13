@@ -6,6 +6,12 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import {
+  createAssistantOutputIdState,
+  resetAssistantOutputMessageState,
+  resolveAssistantFallbackMessageId,
+  type AssistantOutputEntry,
+} from "./assistant-output.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -64,6 +70,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
+    assistantOutputs: [],
+    seenLiveCommentarySegmentIds: new Set(),
+    pendingCommentarySegmentIds: new Set(),
+    deliveredCommentarySegmentIds: new Set(),
+    assistantOutputIdState: createAssistantOutputIdState(),
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
@@ -107,11 +118,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
-    void Promise.resolve()
-      .then(() => params.onBlockReply?.(payload))
-      .catch((err) => {
+    try {
+      const pending = params.onBlockReply(payload);
+      void Promise.resolve(pending).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
       });
+    } catch (err) {
+      log.warn(`block reply callback failed: ${String(err)}`);
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -139,6 +153,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+    resetAssistantOutputMessageState(state.assistantOutputIdState);
   };
 
   const rememberAssistantText = (text: string) => {
@@ -306,6 +321,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
+  let commentaryDeliveryQueue = Promise.resolve();
 
   const blockChunking = params.blockReplyChunking;
   const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
@@ -587,6 +603,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
+    state.assistantOutputs.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -600,6 +617,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
     state.deterministicApprovalPromptSent = false;
+    state.seenLiveCommentarySegmentIds.clear();
+    state.pendingCommentarySegmentIds.clear();
+    state.deliveredCommentarySegmentIds.clear();
     resetAssistantMessageState(0);
   };
 
@@ -608,6 +628,32 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.lastAssistant = msg;
     }
   };
+  const resolveCurrentAssistantFallbackMessageId = () =>
+    resolveAssistantFallbackMessageId(state.assistantOutputIdState);
+  const queueCommentaryDelivery = (segment: AssistantOutputEntry) => {
+    if (!params.onCommentaryReply) {
+      return;
+    }
+    if (
+      state.pendingCommentarySegmentIds.has(segment.segmentId) ||
+      state.deliveredCommentarySegmentIds.has(segment.segmentId)
+    ) {
+      return;
+    }
+    state.pendingCommentarySegmentIds.add(segment.segmentId);
+    commentaryDeliveryQueue = commentaryDeliveryQueue
+      .then(async () => {
+        await params.onCommentaryReply?.({ text: segment.text });
+        state.deliveredCommentarySegmentIds.add(segment.segmentId);
+      })
+      .catch((err) => {
+        log.warn(`commentary reply callback failed: ${String(err)}`);
+      })
+      .finally(() => {
+        state.pendingCommentarySegmentIds.delete(segment.segmentId);
+      });
+  };
+  const waitForCommentaryDelivery = () => commentaryDeliveryQueue;
 
   const ctx: EmbeddedPiSubscribeContext = {
     params,
@@ -639,6 +685,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     incrementCompactionCount,
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    resolveCurrentAssistantFallbackMessageId,
+    queueCommentaryDelivery,
+    waitForCommentaryDelivery,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
@@ -678,6 +727,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   return {
     assistantTexts,
+    assistantOutputs: state.assistantOutputs,
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
@@ -694,6 +744,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,
+    deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
+    waitForCommentaryDelivery,
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {

@@ -99,6 +99,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     whatsapp: {
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "+447700900123"],
+      commentaryDelivery: "off", // off | live
       textChunkLimit: 4000,
       chunkMode: "length", // length | newline
       mediaMaxMb: 50,
@@ -123,6 +124,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   },
 }
 ```
+
+- `commentaryDelivery`: `off` (default) keeps WhatsApp final-only. `live` allows interim assistant `commentary` updates to be sent as separate WhatsApp messages during the run.
+- Final replies still arrive separately from live commentary updates.
+- This setting is currently WhatsApp-only.
 
 <Accordion title="Multi-account WhatsApp">
 

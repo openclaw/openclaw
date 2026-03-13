@@ -238,6 +238,13 @@ export class EmbeddedBlockChunker {
 
     const fenceSplit = breakResult.fenceSplit;
     if (fenceSplit) {
+      const closeFenceLineStart = findFenceCloseLineStart(source, fenceSplit.fence);
+      if (typeof closeFenceLineStart === "number" && absoluteBreakIdx >= closeFenceLineStart) {
+        rawChunk = `${reopenPrefix}${source.slice(start, closeFenceLineStart)}`;
+        if (rawChunk.trim().length === 0) {
+          return { start: fenceSplit.fence.end, reopenFence: undefined };
+        }
+      }
       const closeFence = rawChunk.endsWith("\n")
         ? `${fenceSplit.closeFenceLine}\n`
         : `\n${fenceSplit.closeFenceLine}\n`;
@@ -247,6 +254,10 @@ export class EmbeddedBlockChunker {
     emit(rawChunk);
 
     if (fenceSplit) {
+      const closeFenceLineStart = findFenceCloseLineStart(source, fenceSplit.fence);
+      if (typeof closeFenceLineStart === "number" && absoluteBreakIdx >= closeFenceLineStart) {
+        return { start: fenceSplit.fence.end, reopenFence: undefined };
+      }
       return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
     }
 
@@ -395,6 +406,21 @@ function skipLeadingNewlines(value: string, start = 0): number {
 function stripLeadingNewlines(value: string): string {
   const start = skipLeadingNewlines(value);
   return start > 0 ? value.slice(start) : value;
+}
+
+function findFenceCloseLineStart(source: string, fence: FenceSpan): number | undefined {
+  const lineStart = source.lastIndexOf("\n", Math.max(0, fence.end - 1));
+  const closeLineStart = lineStart === -1 ? 0 : lineStart + 1;
+  const closeLine = source.slice(closeLineStart, fence.end);
+  const match = closeLine.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+  if (!match) {
+    return undefined;
+  }
+  const marker = match[2] ?? "";
+  if (!marker || marker[0] !== fence.marker[0] || marker.length < fence.marker.length) {
+    return undefined;
+  }
+  return closeLineStart;
 }
 
 function findNextParagraphBreak(

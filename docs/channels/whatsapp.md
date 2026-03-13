@@ -131,6 +131,15 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 
+## Live commentary delivery
+
+WhatsApp can optionally send interim assistant commentary updates during a run.
+
+- `channels.whatsapp.commentaryDelivery` defaults to `off`.
+- `channels.whatsapp.commentaryDelivery: "live"` sends assistant `commentary` payloads as separate WhatsApp messages while the run is still in progress.
+- The terminal assistant reply still arrives separately as the final WhatsApp message.
+- This setting is currently WhatsApp-only. Other built-in and extension channels are unchanged.
+
 ## Access control and activation
 
 <Tabs>

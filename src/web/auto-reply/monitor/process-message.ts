@@ -9,7 +9,7 @@ import {
 } from "../../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
-import { deliverNormalizedReplyPayload } from "../../../auto-reply/reply/reply-delivery.js";
+import { normalizeReplyPayloadDirectives } from "../../../auto-reply/reply/reply-delivery.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
@@ -399,61 +399,59 @@ export async function processMessage(params: {
     payload: ReplyPayload,
     kind: "commentary" | "final",
   ): Promise<void> => {
-    await deliverNormalizedReplyPayload({
+    const normalized = normalizeReplyPayloadDirectives({
       payload,
-      kind,
       trimLeadingWhitespace: true,
       parseMode: "auto",
-      // Shared normalization/bookkeeping keeps commentary delivery generic.
-      // WhatsApp only supplies the transport details and logging text.
-      deliver: async (normalizedPayload) => {
-        await deliverWebReply({
-          replyResult: normalizedPayload,
-          msg: params.msg,
-          mediaLocalRoots,
-          maxMediaBytes: params.maxMediaBytes,
-          textLimit,
-          chunkMode,
-          replyLogger: params.replyLogger,
-          connectionId: params.connectionId,
-          skipLog: false,
-          tableMode,
-        });
-        didSendReply = true;
-      },
-      rememberSentText: (text, info) => {
-        params.rememberSentText(
-          text,
-          info.kind === "final"
-            ? {
-                combinedBody,
-                combinedBodySessionKey: params.route.sessionKey,
-                logVerboseMessage: info.shouldLog,
-              }
-            : {
-                logVerboseMessage: info.shouldLog,
-              },
-        );
-      },
-      logDelivery: (info) => {
-        const fromDisplay =
-          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        if (info.kind === "commentary") {
-          whatsappOutboundLog.info(
-            `Sent commentary update to ${fromDisplay}${info.hasMedia ? " (media)" : ""}`,
-          );
-        } else {
-          whatsappOutboundLog.info(
-            `Auto-replied to ${fromDisplay}${info.hasMedia ? " (media)" : ""}`,
-          );
-        }
-        if (shouldLogVerbose()) {
-          const preview = info.payload.text != null ? elide(info.payload.text, 400) : "<media>";
-          const prefix = info.kind === "commentary" ? "Commentary body" : "Reply body";
-          whatsappOutboundLog.debug(`${prefix}: ${preview}${info.hasMedia ? " (media)" : ""}`);
-        }
-      },
     });
+    const hasMedia =
+      Boolean(normalized.payload.mediaUrl) || (normalized.payload.mediaUrls?.length ?? 0) > 0;
+    if (normalized.isSilent && !hasMedia) {
+      return;
+    }
+
+    await deliverWebReply({
+      replyResult: normalized.payload,
+      msg: params.msg,
+      mediaLocalRoots,
+      maxMediaBytes: params.maxMediaBytes,
+      textLimit,
+      chunkMode,
+      replyLogger: params.replyLogger,
+      connectionId: params.connectionId,
+      skipLog: false,
+      tableMode,
+    });
+    didSendReply = true;
+
+    params.rememberSentText(
+      normalized.payload.text,
+      kind === "final"
+        ? {
+            combinedBody,
+            combinedBodySessionKey: params.route.sessionKey,
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          }
+        : {
+            logVerboseMessage: normalized.payload.text ? true : undefined,
+          },
+    );
+
+    const fromDisplay =
+      params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+    if (kind === "commentary") {
+      whatsappOutboundLog.info(
+        `Sent commentary update to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+      );
+    } else {
+      whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+    }
+    if (shouldLogVerbose()) {
+      const preview =
+        normalized.payload.text != null ? elide(normalized.payload.text, 400) : "<media>";
+      const prefix = kind === "commentary" ? "Commentary body" : "Reply body";
+      whatsappOutboundLog.debug(`${prefix}: ${preview}${hasMedia ? " (media)" : ""}`);
+    }
   };
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({

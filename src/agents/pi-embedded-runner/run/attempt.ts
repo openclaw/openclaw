@@ -28,18 +28,12 @@ import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
-import { resolveUserPath, sleep } from "../../../utils.js";
+import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import {
-  createAssistantOutputIdState,
-  reconcileAssistantOutputs,
-  reconcileLiveAssistantCommentary,
-  type AssistantOutputEntry,
-} from "../../assistant-output.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -1547,8 +1541,11 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        assistantOutputs,
         toolMetas,
         unsubscribe,
+        deliveredCommentarySegmentIds,
+        waitForCommentaryDelivery,
         waitForCompactionRetry,
         isCompactionInFlight,
         getMessagingToolSentTexts,
@@ -1637,85 +1634,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
-      const historyBeforePrompt = activeSession.messages.slice();
       const prePromptMessageCount = activeSession.messages.length;
-      const assistantOutputs: AssistantOutputEntry[] = [];
-      const seenAssistantOutputIds = new Set<string>();
-      const seenLiveCommentaryIds = new Set<string>();
-      const deliveredCommentarySegmentIds = new Set<string>();
-      const assistantOutputIdState = createAssistantOutputIdState();
-      let reconcileStartIndex = prePromptMessageCount;
-      let stopCommentaryReconciler = false;
-      const deliverLiveCommentary = async (segment: AssistantOutputEntry) => {
-        try {
-          await params.onCommentaryReply?.({ text: segment.text });
-          deliveredCommentarySegmentIds.add(segment.segmentId);
-        } catch (err) {
-          log.warn(
-            `live commentary delivery failed: runId=${params.runId} sessionId=${params.sessionId} ${String(err)}`,
-          );
-        }
-      };
-      const reconcileLiveStreamCommentary = async () => {
-        try {
-          const result = await reconcileLiveAssistantCommentary({
-            idState: assistantOutputIdState,
-            message: activeSession.agent.state.streamMessage as AgentMessage | null | undefined,
-            priorMessages: activeSession.messages,
-            seenSegmentIds: seenLiveCommentaryIds,
-            onCommentary: params.onCommentaryReply ? deliverLiveCommentary : undefined,
-          });
-          if (result.newOutputs.length > 0) {
-            log.debug(
-              `live commentary discovered: runId=${params.runId} sessionId=${params.sessionId} count=${result.newOutputs.length}`,
-            );
-          }
-        } catch (err) {
-          log.warn(
-            `live commentary reconciliation failed: runId=${params.runId} sessionId=${params.sessionId} ${String(err)}`,
-          );
-        }
-      };
-      const reconcileFinalizedAssistantOutputs = async (messages: AgentMessage[]) => {
-        try {
-          const result = await reconcileAssistantOutputs({
-            historyBeforePrompt,
-            idState: assistantOutputIdState,
-            messages,
-            startIndex: reconcileStartIndex,
-            seenSegmentIds: seenAssistantOutputIds,
-          });
-          reconcileStartIndex = result.nextStartIndex;
-          assistantOutputs.push(...result.newOutputs);
-          if (params.onCommentaryReply) {
-            for (const segment of result.newOutputs) {
-              if (
-                segment.phase === "commentary" &&
-                !deliveredCommentarySegmentIds.has(segment.segmentId)
-              ) {
-                await deliverLiveCommentary(segment);
-              }
-            }
-          }
-        } catch (err) {
-          log.warn(
-            `assistant output reconciliation failed: runId=${params.runId} sessionId=${params.sessionId} ${String(err)}`,
-          );
-        }
-      };
-      // Only poll for live commentary when the current channel actually consumes it.
-      const commentaryReconciler = params.onCommentaryReply
-        ? (async () => {
-            while (!stopCommentaryReconciler) {
-              await reconcileLiveStreamCommentary();
-              await reconcileFinalizedAssistantOutputs(activeSession.messages);
-              if (stopCommentaryReconciler) {
-                break;
-              }
-              await sleep(250);
-            }
-          })()
-        : Promise.resolve();
       try {
         const promptStartedAt = Date.now();
 
@@ -1973,10 +1892,7 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
-        stopCommentaryReconciler = true;
-        await commentaryReconciler;
-        await reconcileLiveStreamCommentary();
-        await reconcileFinalizedAssistantOutputs(messagesSnapshot);
+        await waitForCommentaryDelivery();
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
@@ -2081,8 +1997,6 @@ export async function runEmbeddedAttempt(
             });
         }
       } finally {
-        stopCommentaryReconciler = true;
-        await commentaryReconciler;
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
@@ -2157,7 +2071,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         assistantTexts,
         assistantOutputs,
-        deliveredCommentarySegmentIds: Array.from(deliveredCommentarySegmentIds),
+        deliveredCommentarySegmentIds: deliveredCommentarySegmentIds(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),

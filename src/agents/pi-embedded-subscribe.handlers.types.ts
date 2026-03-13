@@ -3,6 +3,7 @@ import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-direct
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AssistantOutputEntry, AssistantOutputIdState } from "./assistant-output.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type {
@@ -60,6 +61,11 @@ export type EmbeddedPiSubscribeState = {
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
+  assistantOutputs: AssistantOutputEntry[];
+  seenLiveCommentarySegmentIds: Set<string>;
+  pendingCommentarySegmentIds: Set<string>;
+  deliveredCommentarySegmentIds: Set<string>;
+  assistantOutputIdState: AssistantOutputIdState;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
@@ -124,6 +130,9 @@ export type EmbeddedPiSubscribeContext = {
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
+  resolveCurrentAssistantFallbackMessageId: () => string;
+  queueCommentaryDelivery: (segment: AssistantOutputEntry) => void;
+  waitForCommentaryDelivery: () => Promise<void>;
 };
 
 /**

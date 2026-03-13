@@ -1,158 +1,62 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { deliverNormalizedReplyPayload } from "./reply-delivery.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 
-describe("deliverNormalizedReplyPayload", () => {
-  it("normalizes directives before delivery and runs commentary bookkeeping hooks", async () => {
-    const deliver = vi.fn();
-    const rememberSentText = vi.fn();
-    const logDelivery = vi.fn();
-
-    const result = await deliverNormalizedReplyPayload({
+describe("normalizeReplyPayloadDirectives", () => {
+  it("normalizes reply directives for commentary-style payloads", () => {
+    const result = normalizeReplyPayloadDirectives({
       payload: {
         text: "  [[reply_to_current]] Step 2/3: running lint.",
       },
-      kind: "commentary",
       trimLeadingWhitespace: true,
       parseMode: "auto",
-      deliver,
-      rememberSentText,
-      logDelivery,
     });
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(result).toEqual({
+      payload: {
         text: "Step 2/3: running lint.",
         replyToCurrent: true,
-      }),
-      expect.objectContaining({
-        kind: "commentary",
-        hasMedia: false,
-        delivered: true,
-        shouldLog: true,
-      }),
-    );
-    expect(rememberSentText).toHaveBeenCalledWith(
-      "Step 2/3: running lint.",
-      expect.objectContaining({
-        kind: "commentary",
-        shouldLog: true,
-      }),
-    );
-    expect(logDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "commentary",
-        delivered: true,
-      }),
-    );
-    expect(result).toEqual(
-      expect.objectContaining({
-        kind: "commentary",
-        delivered: true,
-        shouldLog: true,
-      }),
-    );
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        replyToId: undefined,
+        replyToTag: true,
+        audioAsVoice: false,
+      },
+      isSilent: false,
+    });
   });
 
-  it("skips silent commentary payloads after normalization", async () => {
-    const deliver = vi.fn();
-    const rememberSentText = vi.fn();
-    const logDelivery = vi.fn();
-
-    const result = await deliverNormalizedReplyPayload({
+  it("marks silent payloads without dropping their normalized shape", () => {
+    const result = normalizeReplyPayloadDirectives({
       payload: { text: SILENT_REPLY_TOKEN },
-      kind: "commentary",
       trimLeadingWhitespace: true,
       parseMode: "auto",
-      deliver,
-      rememberSentText,
-      logDelivery,
     });
 
-    expect(result.delivered).toBe(false);
     expect(result.isSilent).toBe(true);
-    expect(deliver).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
-    expect(logDelivery).not.toHaveBeenCalled();
+    expect(result.payload.text).toBeUndefined();
   });
 
-  it("delivers media-only commentary payloads", async () => {
-    const deliver = vi.fn();
-    const rememberSentText = vi.fn();
-    const logDelivery = vi.fn();
-
-    const result = await deliverNormalizedReplyPayload({
+  it("keeps media-only payloads renderable", () => {
+    const result = normalizeReplyPayloadDirectives({
       payload: {
         mediaUrl: "https://example.com/screenshot.png",
       },
-      kind: "commentary",
       trimLeadingWhitespace: true,
       parseMode: "auto",
-      deliver,
-      rememberSentText,
-      logDelivery,
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        kind: "commentary",
-        hasMedia: true,
-        delivered: true,
-        shouldLog: undefined,
-      }),
-    );
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(result).toEqual({
+      payload: {
+        text: undefined,
         mediaUrl: "https://example.com/screenshot.png",
-      }),
-      expect.objectContaining({
-        kind: "commentary",
-        hasMedia: true,
-        shouldLog: undefined,
-      }),
-    );
-    expect(rememberSentText).toHaveBeenCalledWith(
-      undefined,
-      expect.objectContaining({
-        kind: "commentary",
-        hasMedia: true,
-      }),
-    );
-    expect(logDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "commentary",
-        hasMedia: true,
-      }),
-    );
-  });
-
-  it("passes final delivery kind into bookkeeping hooks", async () => {
-    const deliver = vi.fn();
-    const rememberSentText = vi.fn();
-    const logDelivery = vi.fn();
-
-    await deliverNormalizedReplyPayload({
-      payload: { text: "Final summary." },
-      kind: "final",
-      trimLeadingWhitespace: true,
-      parseMode: "auto",
-      deliver,
-      rememberSentText,
-      logDelivery,
+        mediaUrls: undefined,
+        replyToId: undefined,
+        replyToTag: undefined,
+        replyToCurrent: undefined,
+        audioAsVoice: false,
+      },
+      isSilent: false,
     });
-
-    expect(rememberSentText).toHaveBeenCalledWith(
-      "Final summary.",
-      expect.objectContaining({
-        kind: "final",
-        shouldLog: true,
-      }),
-    );
-    expect(logDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "final",
-        delivered: true,
-      }),
-    );
   });
 });
