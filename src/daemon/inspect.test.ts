@@ -84,9 +84,10 @@ WantedBy=default.target
 describe("findExtraGatewayServices (linux / scanSystemdDir)", () => {
   const HOME = "/home/testuser";
   const USER_SYSTEMD_DIR = path.join(HOME, ".config", "systemd", "user");
-  const originalPlatform = process.platform;
+  let originalPlatform: string;
 
   beforeEach(() => {
+    originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
       value: "linux",
@@ -206,7 +207,7 @@ WantedBy=default.target
   });
 
   it("keeps separate entries for the same unit filename appearing in different scanned dirs (deep mode)", async () => {
-    const SYSTEM_DIR = "/etc/systemd/system";
+    const SYSTEM_DIR = path.join(path.sep, "etc", "systemd", "system");
     const contents = `\
 [Unit]
 Description=Clawdbot Gateway
