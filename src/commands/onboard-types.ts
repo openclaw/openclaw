@@ -47,6 +47,7 @@ export type BuiltInAuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "deepseek-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
@@ -76,6 +77,7 @@ export type BuiltInAuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "deepseek"
   | "modelstudio"
   | "xai"
   | "volcengine"
@@ -139,6 +141,7 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  deepseekApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;
