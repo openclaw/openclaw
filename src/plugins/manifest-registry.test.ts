@@ -346,6 +346,7 @@ describe("loadPluginManifestRegistry", () => {
       env: {
         ...process.env,
         HOME: homeA,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
       },
     });
@@ -355,6 +356,7 @@ describe("loadPluginManifestRegistry", () => {
       env: {
         ...process.env,
         HOME: homeB,
+        OPENCLAW_HOME: undefined,
         OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
       },
     });
