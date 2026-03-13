@@ -56,7 +56,30 @@ const ABORT_AWARE_LOCAL_ACT_KINDS = new Set([
   "close",
 ]);
 
-function shouldWrapLocalBrowserRequestWithTimeout(params: { path: string; body?: unknown }) {
+function resolveRequestedProfileDriver(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  query?: Record<string, unknown>;
+  body?: unknown;
+}): string | undefined {
+  const profileName =
+    resolveRequestedProfile({ query: params.query, body: params.body }) ??
+    params.cfg.browser?.defaultProfile;
+  if (!profileName) {
+    return undefined;
+  }
+  const profile = params.cfg.browser?.profiles?.[profileName];
+  return typeof profile?.driver === "string" ? profile.driver : undefined;
+}
+
+function shouldWrapLocalBrowserRequestWithTimeout(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  path: string;
+  query?: Record<string, unknown>;
+  body?: unknown;
+}) {
+  if (resolveRequestedProfileDriver(params) === "existing-session") {
+    return false;
+  }
   const path = normalizeBrowserRequestPath(params.path);
   if (path === "/navigate" || path === "/pdf") {
     return true;
@@ -305,7 +328,8 @@ export const browserHandlers: GatewayRequestHandlers = {
     }
 
     const shouldApplyLocalTimeout =
-      timeoutMs !== undefined && shouldWrapLocalBrowserRequestWithTimeout({ path, body });
+      timeoutMs !== undefined &&
+      shouldWrapLocalBrowserRequestWithTimeout({ cfg, path, query, body });
 
     let result;
     try {
