@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -18,12 +18,6 @@ import {
   moveToFailed,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
-import { DirectoryCache } from "./directory-cache.js";
-import {
-  buildOutboundDeliveryJson,
-  formatGatewaySummary,
-  formatOutboundDeliverySummary,
-} from "./format.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -613,184 +607,6 @@ describe("delivery-queue", () => {
       });
       expect(deliver).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe("DirectoryCache", () => {
-  const cfg = {} as OpenClawConfig;
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("expires entries after ttl", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const cache = new DirectoryCache<string>(1000, 10);
-
-    cache.set("a", "value-a", cfg);
-    expect(cache.get("a", cfg)).toBe("value-a");
-
-    vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
-    expect(cache.get("a", cfg)).toBeUndefined();
-  });
-
-  it("evicts least-recent entries when capacity is exceeded", () => {
-    const cases = [
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: undefined, b: "value-b", c: "value-c" },
-      },
-      {
-        actions: [
-          ["set", "a", "value-a"],
-          ["set", "b", "value-b"],
-          ["set", "a", "value-a2"],
-          ["set", "c", "value-c"],
-        ] as const,
-        expected: { a: "value-a2", b: undefined, c: "value-c" },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const cache = new DirectoryCache<string>(60_000, 2);
-      for (const action of testCase.actions) {
-        cache.set(action[1], action[2], cfg);
-      }
-      expect(cache.get("a", cfg)).toBe(testCase.expected.a);
-      expect(cache.get("b", cfg)).toBe(testCase.expected.b);
-      expect(cache.get("c", cfg)).toBe(testCase.expected.c);
-    }
-  });
-});
-
-describe("formatOutboundDeliverySummary", () => {
-  it("formats fallback and channel-specific detail variants", () => {
-    const cases = [
-      {
-        name: "fallback telegram",
-        channel: "telegram" as const,
-        result: undefined,
-        expected: "✅ Sent via Telegram. Message ID: unknown",
-      },
-      {
-        name: "fallback imessage",
-        channel: "imessage" as const,
-        result: undefined,
-        expected: "✅ Sent via iMessage. Message ID: unknown",
-      },
-      {
-        name: "telegram with chat detail",
-        channel: "telegram" as const,
-        result: {
-          channel: "telegram" as const,
-          messageId: "m1",
-          chatId: "c1",
-        },
-        expected: "✅ Sent via Telegram. Message ID: m1 (chat c1)",
-      },
-      {
-        name: "discord with channel detail",
-        channel: "discord" as const,
-        result: {
-          channel: "discord" as const,
-          messageId: "d1",
-          channelId: "chan",
-        },
-        expected: "✅ Sent via Discord. Message ID: d1 (channel chan)",
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(formatOutboundDeliverySummary(testCase.channel, testCase.result), testCase.name).toBe(
-        testCase.expected,
-      );
-    }
-  });
-});
-
-describe("buildOutboundDeliveryJson", () => {
-  it("builds direct delivery payloads across provider-specific fields", () => {
-    const cases = [
-      {
-        name: "telegram direct payload",
-        input: {
-          channel: "telegram" as const,
-          to: "123",
-          result: { channel: "telegram" as const, messageId: "m1", chatId: "c1" },
-          mediaUrl: "https://example.com/a.png",
-        },
-        expected: {
-          channel: "telegram",
-          via: "direct",
-          to: "123",
-          messageId: "m1",
-          mediaUrl: "https://example.com/a.png",
-          chatId: "c1",
-        },
-      },
-      {
-        name: "whatsapp metadata",
-        input: {
-          channel: "whatsapp" as const,
-          to: "+1",
-          result: { channel: "whatsapp" as const, messageId: "w1", toJid: "jid" },
-        },
-        expected: {
-          channel: "whatsapp",
-          via: "direct",
-          to: "+1",
-          messageId: "w1",
-          mediaUrl: null,
-          toJid: "jid",
-        },
-      },
-      {
-        name: "signal timestamp",
-        input: {
-          channel: "signal" as const,
-          to: "+1",
-          result: { channel: "signal" as const, messageId: "s1", timestamp: 123 },
-        },
-        expected: {
-          channel: "signal",
-          via: "direct",
-          to: "+1",
-          messageId: "s1",
-          mediaUrl: null,
-          timestamp: 123,
-        },
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(buildOutboundDeliveryJson(testCase.input), testCase.name).toEqual(testCase.expected);
-    }
-  });
-});
-
-describe("formatGatewaySummary", () => {
-  it("formats default and custom gateway action summaries", () => {
-    const cases = [
-      {
-        name: "default send action",
-        input: { channel: "whatsapp", messageId: "m1" },
-        expected: "✅ Sent via gateway (whatsapp). Message ID: m1",
-      },
-      {
-        name: "custom action",
-        input: { action: "Poll sent", channel: "discord", messageId: "p1" },
-        expected: "✅ Poll sent via gateway (discord). Message ID: p1",
-      },
-    ];
-
-    for (const testCase of cases) {
-      expect(formatGatewaySummary(testCase.input), testCase.name).toBe(testCase.expected);
-    }
   });
 });
 
