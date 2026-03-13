@@ -39,7 +39,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [NVIDIA](/providers/nvidia)
 - [Ollama (local models)](/providers/ollama)
 - [OpenAI (API + Codex)](/providers/openai)
-- [OpenCode Zen](/providers/opencode)
+- [OpenCode (Zen + Go)](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
 - [Qwen (OAuth)](/providers/qwen)
@@ -56,7 +56,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Community tools
 
-- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Use Claude Max/Pro subscription as an OpenAI-compatible API endpoint
+- [Claude Max API Proxy](/providers/claude-max-api-proxy) - Community proxy for Claude subscription credentials (verify Anthropic policy/terms before use)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

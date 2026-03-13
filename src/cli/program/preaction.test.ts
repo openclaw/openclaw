@@ -80,6 +80,11 @@ describe("registerPreActionHooks", () => {
   function buildProgram() {
     const program = new Command().name("openclaw");
     program.command("status").action(() => {});
+    program
+      .command("backup")
+      .command("create")
+      .option("--json")
+      .action(() => {});
     program.command("doctor").action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
@@ -101,6 +106,10 @@ describe("registerPreActionHooks", () => {
       .command("set")
       .argument("<path>")
       .argument("<value>")
+      .option("--json")
+      .action(() => {});
+    config
+      .command("validate")
       .option("--json")
       .action(() => {});
     registerPreActionHooks(program, "9.9.9-test");
@@ -140,7 +149,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(process.title).toBe("openclaw-status");
 
     vi.clearAllMocks();
@@ -202,6 +211,33 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("bypasses config guard for config validate", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for config validate when root option values are present", async () => {
+    await runPreAction({
+      parseArgv: ["config", "validate"],
+      processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for backup create", async () => {
+    await runPreAction({
+      parseArgv: ["backup", "create"],
+      processArgv: ["node", "openclaw", "backup", "create", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   beforeAll(() => {

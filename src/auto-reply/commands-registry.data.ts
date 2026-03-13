@@ -322,6 +322,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
           name: "action",
           description: "Action to run",
           type: "string",
+          preferAutocomplete: true,
           choices: [
             "spawn",
             "cancel",
@@ -353,7 +354,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "focus",
       nativeName: "focus",
-      description: "Bind this Discord thread (or a new one) to a session target.",
+      description:
+        "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
       textAlias: "/focus",
       category: "management",
       args: [
@@ -368,7 +370,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "unfocus",
       nativeName: "unfocus",
-      description: "Remove the current Discord thread binding.",
+      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
       textAlias: "/unfocus",
       category: "management",
     }),
@@ -591,6 +593,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
           description: "on or off",
           type: "string",
           choices: ["on", "off"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "fast",
+      nativeName: "fast",
+      description: "Toggle fast mode.",
+      textAlias: "/fast",
+      category: "options",
+      args: [
+        {
+          name: "mode",
+          description: "status, on, or off",
+          type: "string",
+          choices: ["status", "on", "off"],
         },
       ],
       argsMenu: "auto",

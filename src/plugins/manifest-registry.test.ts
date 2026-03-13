@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  clearPluginManifestRegistryCache,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
 
@@ -47,7 +50,76 @@ function countDuplicateWarnings(registry: ReturnType<typeof loadPluginManifestRe
   ).length;
 }
 
+function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
+  rootDir: string;
+  linked: boolean;
+} {
+  const rootDir = makeTempDir();
+  const outsideDir = makeTempDir();
+  const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+  const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+  fs.writeFileSync(
+    outsideManifest,
+    JSON.stringify({ id: params.id, configSchema: { type: "object" } }),
+    "utf-8",
+  );
+
+  try {
+    if (params.mode === "symlink") {
+      fs.symlinkSync(outsideManifest, linkedManifest);
+    } else {
+      fs.linkSync(outsideManifest, linkedManifest);
+    }
+    return { rootDir, linked: true };
+  } catch (err) {
+    if (params.mode === "symlink") {
+      return { rootDir, linked: false };
+    }
+    if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+      return { rootDir, linked: false };
+    }
+    throw err;
+  }
+}
+
+function loadSingleCandidateRegistry(params: {
+  idHint: string;
+  rootDir: string;
+  origin: "bundled" | "global" | "workspace" | "config";
+}) {
+  return loadRegistry([
+    createPluginCandidate({
+      idHint: params.idHint,
+      rootDir: params.rootDir,
+      origin: params.origin,
+    }),
+  ]);
+}
+
+function hasUnsafeManifestDiagnostic(registry: ReturnType<typeof loadPluginManifestRegistry>) {
+  return registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path"));
+}
+
+function expectUnsafeWorkspaceManifestRejected(params: {
+  id: string;
+  mode: "symlink" | "hardlink";
+}) {
+  const fixture = prepareLinkedManifestFixture({ id: params.id, mode: params.mode });
+  if (!fixture.linked) {
+    return;
+  }
+  const registry = loadSingleCandidateRegistry({
+    idHint: params.id,
+    rootDir: fixture.rootDir,
+    origin: "workspace",
+  });
+  expect(registry.plugins).toHaveLength(0);
+  expect(hasUnsafeManifestDiagnostic(registry)).toBe(true);
+}
+
 afterEach(() => {
+  clearPluginManifestRegistryCache();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) {
@@ -169,68 +241,129 @@ describe("loadPluginManifestRegistry", () => {
   });
 
   it("rejects manifest paths that escape plugin root via symlink", () => {
-    const rootDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(
-      outsideManifest,
-      JSON.stringify({ id: "unsafe-symlink", configSchema: { type: "object" } }),
-      "utf-8",
-    );
-    try {
-      fs.symlinkSync(outsideManifest, linkedManifest);
-    } catch {
-      return;
-    }
-
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "unsafe-symlink",
-        rootDir,
-        origin: "workspace",
-      }),
-    ]);
-    expect(registry.plugins).toHaveLength(0);
-    expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(true);
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-symlink", mode: "symlink" });
   });
 
   it("rejects manifest paths that escape plugin root via hardlink", () => {
     if (process.platform === "win32") {
       return;
     }
-    const rootDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
-    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
-    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
-    fs.writeFileSync(
-      outsideManifest,
-      JSON.stringify({ id: "unsafe-hardlink", configSchema: { type: "object" } }),
-      "utf-8",
-    );
-    try {
-      fs.linkSync(outsideManifest, linkedManifest);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
+    expectUnsafeWorkspaceManifestRejected({ id: "unsafe-hardlink", mode: "hardlink" });
+  });
+
+  it("allows bundled manifest paths that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const fixture = prepareLinkedManifestFixture({ id: "bundled-hardlink", mode: "hardlink" });
+    if (!fixture.linked) {
+      return;
     }
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "unsafe-hardlink",
-        rootDir,
-        origin: "workspace",
-      }),
-    ]);
-    expect(registry.plugins).toHaveLength(0);
+    const registry = loadSingleCandidateRegistry({
+      idHint: "bundled-hardlink",
+      rootDir: fixture.rootDir,
+      origin: "bundled",
+    });
+    expect(registry.plugins.some((entry) => entry.id === "bundled-hardlink")).toBe(true);
+    expect(hasUnsafeManifestDiagnostic(registry)).toBe(false);
+  });
+
+  it("does not reuse cached bundled plugin roots across env changes", () => {
+    const bundledA = makeTempDir();
+    const bundledB = makeTempDir();
+    const matrixA = path.join(bundledA, "matrix");
+    const matrixB = path.join(bundledB, "matrix");
+    fs.mkdirSync(matrixA, { recursive: true });
+    fs.mkdirSync(matrixB, { recursive: true });
+    writeManifest(matrixA, {
+      id: "matrix",
+      name: "Matrix A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(matrixB, {
+      id: "matrix",
+      name: "Matrix B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(matrixA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(matrixB, "index.ts"), "export default {}", "utf-8");
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
+      },
+    });
+
     expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(true);
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "matrix")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(matrixB));
+  });
+
+  it("does not reuse cached load-path manifests across env home changes", () => {
+    const homeA = makeTempDir();
+    const homeB = makeTempDir();
+    const demoA = path.join(homeA, "plugins", "demo");
+    const demoB = path.join(homeB, "plugins", "demo");
+    fs.mkdirSync(demoA, { recursive: true });
+    fs.mkdirSync(demoB, { recursive: true });
+    writeManifest(demoA, {
+      id: "demo",
+      name: "Demo A",
+      configSchema: { type: "object" },
+    });
+    writeManifest(demoB, {
+      id: "demo",
+      name: "Demo B",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(demoA, "index.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(path.join(demoB, "index.ts"), "export default {}", "utf-8");
+
+    const config = {
+      plugins: {
+        load: {
+          paths: ["~/plugins/demo"],
+        },
+      },
+    };
+
+    const first = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeA,
+        OPENCLAW_STATE_DIR: path.join(homeA, ".state"),
+      },
+    });
+    const second = loadPluginManifestRegistry({
+      cache: true,
+      config,
+      env: {
+        ...process.env,
+        HOME: homeB,
+        OPENCLAW_STATE_DIR: path.join(homeB, ".state"),
+      },
+    });
+
+    expect(
+      fs.realpathSync(first.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoA));
+    expect(
+      fs.realpathSync(second.plugins.find((plugin) => plugin.id === "demo")?.rootDir ?? ""),
+    ).toBe(fs.realpathSync(demoB));
   });
 });

@@ -8,6 +8,7 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -169,20 +170,27 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = await readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      runtime.log?.("telegram: command menu unchanged; skipping sync");
+      logVerbose("telegram: command menu unchanged; skipping sync");
       return;
     }
 
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
+    let deleteSucceeded = true;
     if (typeof bot.api.deleteMyCommands === "function") {
-      await withTelegramApiErrorLogging({
+      deleteSucceeded = await withTelegramApiErrorLogging({
         operation: "deleteMyCommands",
         runtime,
         fn: () => bot.api.deleteMyCommands(),
-      }).catch(() => {});
+      })
+        .then(() => true)
+        .catch(() => false);
     }
 
     if (commandsToRegister.length === 0) {
+      if (!deleteSucceeded) {
+        runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
+        return;
+      }
       await writeCachedCommandHash(accountId, botIdentity, currentHash);
       return;
     }

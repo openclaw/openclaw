@@ -43,10 +43,12 @@ export function createNativeCommandTestParams(params: {
       reset: () => {},
     },
     resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
-    resolveTelegramGroupConfig: () => ({
-      groupConfig: undefined,
-      topicConfig: undefined,
-    }),
+    resolveTelegramGroupConfig:
+      params.resolveTelegramGroupConfig ??
+      (() => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      })),
     shouldSkipUpdate: () => false,
     opts: params.opts ?? { token: "token" },
   };

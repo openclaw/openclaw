@@ -48,6 +48,21 @@ describe("resolveTelegramToken", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const dir = withTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("falls back to config token when no env or tokenFile", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const cfg = {
@@ -87,6 +102,58 @@ describe("resolveTelegramToken", () => {
     const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");
+  });
+
+  it("falls back to top-level token for non-default accounts without account token", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "top-level-token",
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("top-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("falls back to top-level tokenFile for non-default accounts", () => {
+    const dir = withTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile,
+          accounts: {
+            work: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "work" });
+    expect(res.token).toBe("file-token");
+    expect(res.source).toBe("tokenFile");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("throws when botToken is an unresolved SecretRef object", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.botToken: unresolved SecretRef/i,
+    );
   });
 });
 

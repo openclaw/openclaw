@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureConsoleSnapshot, type ConsoleSnapshot } from "./test-helpers/console-snapshot.js";
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: () => undefined,
@@ -16,15 +17,6 @@ vi.mock("./logger.js", () => ({
 }));
 
 let loadConfigCalls = 0;
-type ConsoleSnapshot = {
-  log: typeof console.log;
-  info: typeof console.info;
-  warn: typeof console.warn;
-  error: typeof console.error;
-  debug: typeof console.debug;
-  trace: typeof console.trace;
-};
-
 let originalIsTty: boolean | undefined;
 let originalOpenClawTestConsole: string | undefined;
 let snapshot: ConsoleSnapshot;
@@ -38,14 +30,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   loadConfigCalls = 0;
-  snapshot = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    trace: console.trace,
-  };
+  snapshot = captureConsoleSnapshot();
   originalIsTty = process.stdout.isTTY;
   originalOpenClawTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
   process.env.OPENCLAW_TEST_CONSOLE = "1";

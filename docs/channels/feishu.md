@@ -12,18 +12,16 @@ Feishu (Lark) is a team chat platform used by companies for messaging and collab
 
 ---
 
-## Plugin required
+## Bundled plugin
 
-Install the Feishu plugin:
+Feishu ships bundled with current OpenClaw releases, so no separate plugin install
+is required.
+
+If you are using an older build or a custom install that does not include bundled
+Feishu, install it manually:
 
 ```bash
 openclaw plugins install @openclaw/feishu
-```
-
-Local checkout (when running from a git repo):
-
-```bash
-openclaw plugins install ./extensions/feishu
 ```
 
 ---
@@ -195,7 +193,20 @@ Edit `~/.openclaw/openclaw.json`:
 }
 ```
 
-If you use `connectionMode: "webhook"`, set `verificationToken`. The Feishu webhook server binds to `127.0.0.1` by default; set `webhookHost` only if you intentionally need a different bind address.
+If you use `connectionMode: "webhook"`, set both `verificationToken` and `encryptKey`. The Feishu webhook server binds to `127.0.0.1` by default; set `webhookHost` only if you intentionally need a different bind address.
+
+#### Verification Token and Encrypt Key (webhook mode)
+
+When using webhook mode, set both `channels.feishu.verificationToken` and `channels.feishu.encryptKey` in your config. To get the values:
+
+1. In Feishu Open Platform, open your app
+2. Go to **Development** → **Events & Callbacks** (开发配置 → 事件与回调)
+3. Open the **Encryption** tab (加密策略)
+4. Copy **Verification Token** and **Encrypt Key**
+
+The screenshot below shows where to find the **Verification Token**. The **Encrypt Key** is listed in the same **Encryption** section.
+
+![Verification Token location](../images/feishu-verification-token.png)
 
 ### Configure via environment variables
 
@@ -359,9 +370,9 @@ After approval, you can chat normally.
 }
 ```
 
-### Allow specific users to run control commands in a group (e.g. /reset, /new)
+### Restrict which senders can message in a group (sender allowlist)
 
-In addition to allowing the group itself, control commands are gated by the **sender** open_id.
+In addition to allowing the group itself, **all messages** in that group are gated by the sender open_id: only users listed in `groups.<chat_id>.allowFrom` have their messages processed; messages from other members are ignored (this is full sender-level gating, not only for control commands like /reset or /new).
 
 ```json5
 {
@@ -591,6 +602,7 @@ Key options:
 | `channels.feishu.connectionMode`                  | Event transport mode                    | `websocket`      |
 | `channels.feishu.defaultAccount`                  | Default account ID for outbound routing | `default`        |
 | `channels.feishu.verificationToken`               | Required for webhook mode               | -                |
+| `channels.feishu.encryptKey`                      | Required for webhook mode               | -                |
 | `channels.feishu.webhookPath`                     | Webhook route path                      | `/feishu/events` |
 | `channels.feishu.webhookHost`                     | Webhook bind host                       | `127.0.0.1`      |
 | `channels.feishu.webhookPort`                     | Webhook bind port                       | `3000`           |

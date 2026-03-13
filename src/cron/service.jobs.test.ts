@@ -4,6 +4,13 @@ import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
+function expectCronStaggerMs(job: CronJob, expected: number): void {
+  expect(job.schedule.kind).toBe("cron");
+  if (job.schedule.kind === "cron") {
+    expect(job.schedule.staggerMs).toBe(expected);
+  }
+}
+
 describe("applyJobPatch", () => {
   const createIsolatedAgentTurnJob = (
     id: string,
@@ -481,10 +488,7 @@ describe("cron stagger defaults", () => {
       payload: { kind: "systemEvent", text: "tick" },
     });
 
-    expect(job.schedule.kind).toBe("cron");
-    if (job.schedule.kind === "cron") {
-      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
-    }
+    expectCronStaggerMs(job, DEFAULT_TOP_OF_HOUR_STAGGER_MS);
   });
 
   it("keeps exact schedules when staggerMs is explicitly 0", () => {
@@ -500,10 +504,7 @@ describe("cron stagger defaults", () => {
       payload: { kind: "systemEvent", text: "tick" },
     });
 
-    expect(job.schedule.kind).toBe("cron");
-    if (job.schedule.kind === "cron") {
-      expect(job.schedule.staggerMs).toBe(0);
-    }
+    expectCronStaggerMs(job, 0);
   });
 
   it("preserves existing stagger when editing cron expression without stagger", () => {
@@ -555,5 +556,49 @@ describe("cron stagger defaults", () => {
     if (job.schedule.kind === "cron") {
       expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+});
+
+describe("createJob delivery defaults", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  it('defaults delivery to { mode: "announce" } for isolated agentTurn jobs without explicit delivery', () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.delivery).toEqual({ mode: "announce" });
+  });
+
+  it("preserves explicit delivery for isolated agentTurn jobs", () => {
+    const state = createMockState(now);
+    const job = createJob(state, {
+      name: "isolated-explicit-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "none" },
+    });
+    expect(job.delivery).toEqual({ mode: "none" });
+  });
+
+  it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, {
+      name: "main-no-delivery",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+    expect(job.delivery).toBeUndefined();
   });
 });

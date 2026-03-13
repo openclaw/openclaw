@@ -13,6 +13,7 @@ export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-type
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   update: "Update",
+  cli: "CLI",
   diagnostics: "Diagnostics",
   logging: "Logging",
   gateway: "Gateway",
@@ -41,6 +42,7 @@ const GROUP_LABELS: Record<string, string> = {
 const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
   update: 25,
+  cli: 26,
   diagnostics: 27,
   gateway: 30,
   nodeHost: 35,
@@ -73,6 +75,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
+  "gateway.push.apns.relay.baseUrl": "https://relay.example.com",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
@@ -195,7 +198,7 @@ export function mapSensitivePaths(
   if (isSensitive) {
     next[path] = { ...next[path], sensitive: true };
   } else if (isSensitiveConfigPath(path) && !next[path]?.sensitive) {
-    log.warn(`possibly sensitive key found: (${path})`);
+    log.debug(`possibly sensitive key found: (${path})`);
   }
 
   if (currentSchema instanceof z.ZodObject) {

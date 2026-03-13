@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwn } from "./format.js";
+import { markdownToSlackMrkdwn, normalizeSlackOutboundText } from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
@@ -70,5 +70,11 @@ describe("escapeSlackMrkdwn", () => {
 
   it("escapes slack and mrkdwn control characters", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
+  });
+});
+
+describe("normalizeSlackOutboundText", () => {
+  it("normalizes markdown for outbound send/update paths", () => {
+    expect(normalizeSlackOutboundText(" **bold** ")).toBe("*bold*");
   });
 });

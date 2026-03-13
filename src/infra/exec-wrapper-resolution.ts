@@ -1,8 +1,13 @@
 import path from "node:path";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  POWERSHELL_INLINE_COMMAND_FLAGS,
+  resolveInlineCommandMatch,
+} from "./shell-inline-command.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
-const WINDOWS_EXE_SUFFIX = ".exe";
+const WINDOWS_EXECUTABLE_SUFFIXES = [".exe", ".cmd", ".bat", ".com"] as const;
 
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
@@ -26,13 +31,18 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {
     expanded.add(name);
-    expanded.add(`${name}${WINDOWS_EXE_SUFFIX}`);
+    expanded.add(`${name}.exe`);
   }
   return Array.from(expanded);
 }
 
-function stripWindowsExeSuffix(value: string): string {
-  return value.endsWith(WINDOWS_EXE_SUFFIX) ? value.slice(0, -WINDOWS_EXE_SUFFIX.length) : value;
+function stripWindowsExecutableSuffix(value: string): string {
+  for (const suffix of WINDOWS_EXECUTABLE_SUFFIXES) {
+    if (value.endsWith(suffix)) {
+      return value.slice(0, -suffix.length);
+    }
+  }
+  return value;
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
@@ -50,9 +60,6 @@ const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...WINDOWS_CMD_WRAPPER_NAMES,
   ...POWERSHELL_WRAPPER_NAMES,
 ]);
-
-const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
 
 const ENV_OPTIONS_WITH_VALUE = new Set([
   "-u",
@@ -101,6 +108,10 @@ export type ShellWrapperCommand = {
   command: string | null;
 };
 
+function isWithinDispatchClassificationDepth(depth: number): boolean {
+  return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
+}
+
 export function basenameLower(token: string): string {
   const win = path.win32.basename(token);
   const posix = path.posix.basename(token);
@@ -109,7 +120,7 @@ export function basenameLower(token: string): string {
 }
 
 export function normalizeExecutableToken(token: string): string {
-  return stripWindowsExeSuffix(basenameLower(token));
+  return stripWindowsExecutableSuffix(basenameLower(token));
 }
 
 export function isDispatchWrapperExecutable(token: string): boolean {
@@ -126,7 +137,7 @@ function normalizeRawCommand(rawCommand?: string | null): string | null {
 }
 
 function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
-  const canonicalBase = stripWindowsExeSuffix(baseExecutable);
+  const canonicalBase = stripWindowsExecutableSuffix(baseExecutable);
   for (const spec of SHELL_WRAPPER_SPECS) {
     if (spec.names.has(canonicalBase)) {
       return spec;
@@ -507,7 +518,7 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   depth: number,
   envManipulationSeen: boolean,
 ): boolean {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return false;
   }
 
@@ -586,30 +597,7 @@ function extractInlineCommandByFlags(
   flags: ReadonlySet<string>,
   options: { allowCombinedC?: boolean } = {},
 ): string | null {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    const lower = token.toLowerCase();
-    if (lower === "--") {
-      break;
-    }
-    if (flags.has(lower)) {
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-    if (options.allowCombinedC && /^-[^-]*c[^-]*$/i.test(token)) {
-      const commandIndex = lower.indexOf("c");
-      const inline = token.slice(commandIndex + 1).trim();
-      if (inline) {
-        return inline;
-      }
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-  }
-  return null;
+  return resolveInlineCommandMatch(argv, flags, options).command;
 }
 
 function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): string | null {
@@ -628,7 +616,7 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  if (depth >= MAX_DISPATCH_WRAPPER_DEPTH) {
+  if (!isWithinDispatchClassificationDepth(depth)) {
     return { isWrapper: false, command: null };
   }
 

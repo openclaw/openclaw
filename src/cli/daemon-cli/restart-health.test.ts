@@ -6,6 +6,7 @@ const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUs
 const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
+const probeGateway = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
@@ -13,7 +14,57 @@ vi.mock("../../infra/ports.js", () => ({
   inspectPortUsage: (port: number) => inspectPortUsage(port),
 }));
 
+vi.mock("../../gateway/probe.js", () => ({
+  probeGateway: (opts: unknown) => probeGateway(opts),
+}));
+
 const originalPlatform = process.platform;
+
+async function inspectUnknownListenerFallback(params: {
+  runtime: { status: "running"; pid: number } | { status: "stopped" };
+  includeUnknownListenersAsStale: boolean;
+}) {
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  classifyPortListener.mockReturnValue("unknown");
+
+  const service = {
+    readRuntime: vi.fn(async () => params.runtime),
+  } as unknown as GatewayService;
+
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ pid: 10920, command: "unknown" }],
+    hints: [],
+  });
+
+  const { inspectGatewayRestart } = await import("./restart-health.js");
+  return inspectGatewayRestart({
+    service,
+    port: 18789,
+    includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+  });
+}
+
+async function inspectAmbiguousOwnershipWithProbe(
+  probeResult: Awaited<ReturnType<typeof probeGateway>>,
+) {
+  const service = {
+    readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+  } as unknown as GatewayService;
+
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ commandLine: "" }],
+    hints: [],
+  });
+  classifyPortListener.mockReturnValue("unknown");
+  probeGateway.mockResolvedValue(probeResult);
+
+  const { inspectGatewayRestart } = await import("./restart-health.js");
+  return inspectGatewayRestart({ service, port: 18789 });
+}
 
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
@@ -26,6 +77,11 @@ describe("inspectGatewayRestart", () => {
     });
     classifyPortListener.mockReset();
     classifyPortListener.mockReturnValue("gateway");
+    probeGateway.mockReset();
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
   });
 
   afterEach(() => {
@@ -71,24 +127,8 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("treats unknown listeners as stale on Windows when enabled", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("unknown");
-
-    const service = {
-      readRuntime: vi.fn(async () => ({ status: "stopped" })),
-    } as unknown as GatewayService;
-
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 10920, command: "unknown" }],
-      hints: [],
-    });
-
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({
-      service,
-      port: 18789,
+    const snapshot = await inspectUnknownListenerFallback({
+      runtime: { status: "stopped" },
       includeUnknownListenersAsStale: true,
     });
 
@@ -96,24 +136,8 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("does not treat unknown listeners as stale when fallback is disabled", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("unknown");
-
-    const service = {
-      readRuntime: vi.fn(async () => ({ status: "stopped" })),
-    } as unknown as GatewayService;
-
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 10920, command: "unknown" }],
-      hints: [],
-    });
-
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({
-      service,
-      port: 18789,
+    const snapshot = await inspectUnknownListenerFallback({
+      runtime: { status: "stopped" },
       includeUnknownListenersAsStale: false,
     });
 
@@ -121,24 +145,8 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("does not apply unknown-listener fallback while runtime is running", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("unknown");
-
-    const service = {
-      readRuntime: vi.fn(async () => ({ status: "running", pid: 10920 })),
-    } as unknown as GatewayService;
-
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 10920, command: "unknown" }],
-      hints: [],
-    });
-
-    const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({
-      service,
-      port: 18789,
+    const snapshot = await inspectUnknownListenerFallback({
+      runtime: { status: "running", pid: 10920 },
       includeUnknownListenersAsStale: true,
     });
 
@@ -168,5 +176,48 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([]);
+  });
+
+  it("uses a local gateway probe when ownership is ambiguous", async () => {
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
+      ok: true,
+      close: null,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+  });
+
+  it("treats auth-closed probe as healthy gateway reachability", async () => {
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
+      ok: false,
+      close: { code: 1008, reason: "auth required" },
+    });
+
+    expect(snapshot.healthy).toBe(true);
+  });
+
+  it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
+    const service = {
+      readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
+    } as unknown as GatewayService;
+
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [
+        "Port is in use but process details are unavailable (install lsof or run as an admin user).",
+      ],
+      errors: ["Error: spawn lsof ENOENT"],
+    });
+
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(probeGateway).not.toHaveBeenCalled();
   });
 });

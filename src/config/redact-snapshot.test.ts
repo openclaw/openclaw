@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import {
   REDACTED_SENTINEL,
@@ -119,7 +120,7 @@ describe("redactConfigSnapshot", () => {
           serviceAccount: {
             type: "service_account",
             client_email: "bot@example.iam.gserviceaccount.com",
-            private_key: "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+            private_key: "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----", // pragma: allowlist secret
           },
         },
       },
@@ -252,6 +253,72 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).not.toContain("abcdef1234567890ghij");
     expect(result.raw).toContain(REDACTED_SENTINEL);
+  });
+
+  it("keeps non-sensitive raw fields intact when secret values overlap", () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: { password: "local" }, // pragma: allowlist secret
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config));
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const parsed: {
+      gateway?: { mode?: string; auth?: { password?: string } };
+    } = JSON5.parse(result.raw ?? "{}");
+    expect(parsed.gateway?.mode).toBe("local");
+    expect(parsed.gateway?.auth?.password).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(parsed, snapshot.config, mainSchemaHints);
+    expect(restored.gateway.mode).toBe("local");
+    expect(restored.gateway.auth.password).toBe("local");
+  });
+
+  it("preserves SecretRef structural fields while redacting SecretRef id", () => {
+    const config = {
+      models: {
+        providers: {
+          default: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: "https://api.openai.com",
+          },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config, null, 2));
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.raw).not.toContain("OPENAI_API_KEY");
+    const parsed: {
+      models?: { providers?: { default?: { apiKey?: { source?: string; provider?: string } } } };
+    } = JSON5.parse(result.raw ?? "{}");
+    expect(parsed.models?.providers?.default?.apiKey?.source).toBe("env");
+    expect(parsed.models?.providers?.default?.apiKey?.provider).toBe("default");
+    const restored = restoreRedactedValues(parsed, snapshot.config, mainSchemaHints);
+    expect(restored).toEqual(snapshot.config);
+  });
+
+  it("handles overlap fallback and SecretRef in the same snapshot", () => {
+    const config = {
+      gateway: { mode: "default", auth: { password: "default" } }, // pragma: allowlist secret
+      models: {
+        providers: {
+          default: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: "https://api.openai.com",
+          },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config, null, 2));
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const parsed = JSON5.parse(result.raw ?? "{}");
+    expect(parsed.gateway?.mode).toBe("default");
+    expect(parsed.gateway?.auth?.password).toBe(REDACTED_SENTINEL);
+    expect(parsed.models?.providers?.default?.apiKey?.source).toBe("env");
+    expect(parsed.models?.providers?.default?.apiKey?.provider).toBe("default");
+    expect(result.raw).not.toContain("OPENAI_API_KEY");
+    const restored = restoreRedactedValues(parsed, snapshot.config, mainSchemaHints);
+    expect(restored).toEqual(snapshot.config);
   });
 
   it("redacts parsed and resolved objects", () => {
@@ -713,7 +780,7 @@ describe("redactConfigSnapshot", () => {
     };
     const snapshot = makeSnapshot({
       env: {
-        GROQ_API_KEY: "gsk-secret-123",
+        GROQ_API_KEY: "gsk-secret-123", // pragma: allowlist secret
         NODE_ENV: "production",
       },
     });
@@ -736,7 +803,7 @@ describe("redactConfigSnapshot", () => {
         entries: {
           web_search: {
             env: {
-              GEMINI_API_KEY: "gemini-secret-456",
+              GEMINI_API_KEY: "gemini-secret-456", // pragma: allowlist secret
               BRAVE_REGION: "us",
             },
           },
@@ -761,14 +828,14 @@ describe("redactConfigSnapshot", () => {
     const hints = mainSchemaHints;
     const snapshot = makeSnapshot({
       env: {
-        GROQ_API_KEY: "gsk-contract-123",
+        GROQ_API_KEY: "gsk-contract-123", // pragma: allowlist secret
         NODE_ENV: "production",
       },
       skills: {
         entries: {
           web_search: {
             env: {
-              GEMINI_API_KEY: "gemini-contract-456",
+              GEMINI_API_KEY: "gemini-contract-456", // pragma: allowlist secret
               BRAVE_REGION: "us",
             },
           },

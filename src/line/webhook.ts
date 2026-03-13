@@ -3,7 +3,9 @@ import type { Request, Response, NextFunction } from "express";
 import { logVerbose, danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateLineSignature } from "./signature.js";
-import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
+import { parseLineWebhookBody } from "./webhook-utils.js";
+
+const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
 
 export interface LineWebhookOptions {
   channelSecret: string;
@@ -39,24 +41,20 @@ export function createLineWebhookMiddleware(
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
     try {
       const signature = req.headers["x-line-signature"];
-      const rawBody = readRawBody(req);
-      const body = parseWebhookBody(req, rawBody);
 
-      // LINE webhook verification sends POST {"events":[]} without a
-      // signature header.  Return 200 immediately so the LINE Developers
-      // Console "Verify" button succeeds.
       if (!signature || typeof signature !== "string") {
-        if (isLineWebhookVerificationRequest(body)) {
-          logVerbose("line: webhook verification request (empty events, no signature) - 200 OK");
-          res.status(200).json({ status: "ok" });
-          return;
-        }
         res.status(400).json({ error: "Missing X-Line-Signature header" });
         return;
       }
 
+      const rawBody = readRawBody(req);
+
       if (!rawBody) {
         res.status(400).json({ error: "Missing raw request body for signature verification" });
+        return;
+      }
+      if (Buffer.byteLength(rawBody, "utf-8") > LINE_WEBHOOK_MAX_RAW_BODY_BYTES) {
+        res.status(413).json({ error: "Payload too large" });
         return;
       }
 
@@ -66,21 +64,19 @@ export function createLineWebhookMiddleware(
         return;
       }
 
+      const body = parseWebhookBody(req, rawBody);
+
       if (!body) {
         res.status(400).json({ error: "Invalid webhook payload" });
         return;
       }
 
-      // Respond immediately to avoid timeout
-      res.status(200).json({ status: "ok" });
-
-      // Process events asynchronously
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body).catch((err) => {
-          runtime?.error?.(danger(`line webhook handler failed: ${String(err)}`));
-        });
+        await onEvents(body);
       }
+
+      res.status(200).json({ status: "ok" });
     } catch (err) {
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
       if (!res.headersSent) {
@@ -101,9 +97,17 @@ export function startLineWebhook(options: StartLineWebhookOptions): {
   path: string;
   handler: (req: Request, res: Response, _next: NextFunction) => Promise<void>;
 } {
+  const channelSecret =
+    typeof options.channelSecret === "string" ? options.channelSecret.trim() : "";
+  if (!channelSecret) {
+    throw new Error(
+      "LINE webhook mode requires a non-empty channel secret. " +
+        "Set channels.line.channelSecret in your config.",
+    );
+  }
   const path = options.path ?? "/line/webhook";
   const middleware = createLineWebhookMiddleware({
-    channelSecret: options.channelSecret,
+    channelSecret,
     onEvents: options.onEvents,
     runtime: options.runtime,
   });

@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 
+type CronServiceParams = ConstructorParameters<typeof CronService>[0];
+
 const noopLogger = {
   debug: vi.fn(),
   info: vi.fn(),
@@ -19,6 +21,24 @@ async function makeStorePath() {
       await fs.rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+function createFailureAlertCron(params: {
+  storePath: string;
+  cronConfig?: CronServiceParams["cronConfig"];
+  runIsolatedAgentJob: NonNullable<CronServiceParams["runIsolatedAgentJob"]>;
+  sendCronFailureAlert: NonNullable<CronServiceParams["sendCronFailureAlert"]>;
+}) {
+  return new CronService({
+    storePath: params.storePath,
+    cronEnabled: true,
+    cronConfig: params.cronConfig,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: params.runIsolatedAgentJob,
+    sendCronFailureAlert: params.sendCronFailureAlert,
+  });
 }
 
 describe("CronService failure alerts", () => {
@@ -43,9 +63,8 @@ describe("CronService failure alerts", () => {
       error: "wrong model id",
     }));
 
-    const cron = new CronService({
+    const cron = createFailureAlertCron({
       storePath: store.storePath,
-      cronEnabled: true,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -53,9 +72,6 @@ describe("CronService failure alerts", () => {
           cooldownMs: 60_000,
         },
       },
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
       sendCronFailureAlert,
     });
@@ -109,17 +125,13 @@ describe("CronService failure alerts", () => {
       error: "timeout",
     }));
 
-    const cron = new CronService({
+    const cron = createFailureAlertCron({
       storePath: store.storePath,
-      cronEnabled: true,
       cronConfig: {
         failureAlert: {
           enabled: false,
         },
       },
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
       sendCronFailureAlert,
     });
@@ -161,18 +173,14 @@ describe("CronService failure alerts", () => {
       error: "auth error",
     }));
 
-    const cron = new CronService({
+    const cron = createFailureAlertCron({
       storePath: store.storePath,
-      cronEnabled: true,
       cronConfig: {
         failureAlert: {
           enabled: true,
           after: 1,
         },
       },
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
       sendCronFailureAlert,
     });
@@ -204,9 +212,8 @@ describe("CronService failure alerts", () => {
       error: "temporary upstream error",
     }));
 
-    const cron = new CronService({
+    const cron = createFailureAlertCron({
       storePath: store.storePath,
-      cronEnabled: true,
       cronConfig: {
         failureAlert: {
           enabled: true,
@@ -215,9 +222,6 @@ describe("CronService failure alerts", () => {
           accountId: "global-account",
         },
       },
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob,
       sendCronFailureAlert,
     });
