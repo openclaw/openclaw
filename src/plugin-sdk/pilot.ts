@@ -44,6 +44,10 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
-export { mapAllowFromEntries } from "./channel-config-helpers.js";
+export {
+  createScopedAccountConfigAccessors,
+  mapAllowFromEntries,
+} from "./channel-config-helpers.js";
+export { formatNormalizedAllowFromEntries } from "./allow-from.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";

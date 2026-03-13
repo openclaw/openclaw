@@ -65,14 +65,23 @@ export async function monitorPilotProvider(
     pilotctlPath: account.pilotctlPath,
   };
 
-  // Ensure daemon is running.
+  // Ensure daemon is running with the correct identity.
   try {
     const status = await pilotctl.daemonStatus(pilotctlOpts);
     if (!status.running) {
       logger.info(`[${account.accountId}] daemon not running, starting...`);
       await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
+    } else if (status.hostname && status.hostname !== account.hostname) {
+      throw new Error(
+        `Pilot daemon on ${account.socketPath} is running as "${status.hostname}" but account "${account.accountId}" expects "${account.hostname}". ` +
+          "Stop the existing daemon or use a different socketPath.",
+      );
     }
-  } catch {
+  } catch (err) {
+    // Re-throw identity mismatch errors.
+    if (err instanceof Error && err.message.includes("expects")) {
+      throw err;
+    }
     logger.info(`[${account.accountId}] starting daemon...`);
     await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
   }
@@ -142,8 +151,8 @@ export async function monitorPilotProvider(
     }
   };
 
-  // Start polling in background.
-  poll().catch((err) => {
+  // Start polling in background; capture the promise so stop() can await it.
+  const pollDone = poll().catch((err) => {
     if (!stopped) {
       logger.error(`[${account.accountId}] monitor loop exited: ${String(err)}`);
     }
@@ -153,6 +162,7 @@ export async function monitorPilotProvider(
     stop: () => {
       stopped = true;
       abortController.abort(new Error("shutdown"));
+      return pollDone;
     },
   };
 }

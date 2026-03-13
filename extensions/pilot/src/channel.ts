@@ -4,7 +4,9 @@ import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   createAccountStatusSink,
+  createScopedAccountConfigAccessors,
   DEFAULT_ACCOUNT_ID,
+  formatNormalizedAllowFromEntries,
   PAIRING_APPROVED_MESSAGE,
   runPassiveAccountLifecycle,
   type ChannelPlugin,
@@ -36,6 +38,18 @@ const meta = {
   blurb: "P2P overlay network for autonomous agents",
   order: 900,
 };
+
+const pilotConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) =>
+    resolvePilotAccount({ cfg: cfg as CoreConfig, accountId }),
+  resolveAllowFrom: (account: ResolvedPilotAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: normalizePilotAllowEntry,
+    }),
+  resolveDefaultTo: (account: ResolvedPilotAccount) => account.config.defaultTo,
+});
 
 export const pilotPlugin: ChannelPlugin<ResolvedPilotAccount, PilotProbe> = {
   id: "pilot",
@@ -73,6 +87,7 @@ export const pilotPlugin: ChannelPlugin<ResolvedPilotAccount, PilotProbe> = {
       socketPath: account.socketPath,
       registry: account.registry,
     }),
+    ...pilotConfigAccessors,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -198,7 +213,7 @@ export const pilotPlugin: ChannelPlugin<ResolvedPilotAccount, PilotProbe> = {
             statusSink,
           }),
         stop: async (monitor) => {
-          monitor.stop();
+          await monitor.stop();
         },
       });
     },
