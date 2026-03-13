@@ -393,7 +393,12 @@ export const OpenClawSchema = z
                 id: z.string().min(1),
                 label: z.string().min(1),
                 icon: z.string().optional(),
-                url: z.string().min(1),
+                url: z
+                  .string()
+                  .url()
+                  .refine((u) => /^https?:\/\//i.test(u), {
+                    message: "customTab url must use http or https",
+                  }),
               })
               .strict(),
           )

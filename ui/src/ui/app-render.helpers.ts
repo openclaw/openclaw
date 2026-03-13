@@ -76,6 +76,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
             void state.loadAssistantIdentity();
           }
         }
+        state.customTabActive = null;
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}
@@ -93,7 +94,7 @@ export function renderTab(state: AppViewState, tab: Tab) {
 export function renderCustomTabItem(state: AppViewState, tab: CustomTab) {
   const isActive = state.customTabActive === tab.id;
   const collapsed = state.settings.navCollapsed;
-  const iconKey = (tab.icon ?? "globe") as keyof typeof icons;
+  const iconKey = tab.icon ?? "globe";
   const icon = icons[iconKey] ?? icons["globe"];
   return html`
     <button

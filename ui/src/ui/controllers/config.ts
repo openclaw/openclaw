@@ -34,6 +34,10 @@ export type ConfigState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   lastError: string | null;
+  /** User-defined custom tabs from `ui.customTabs` config. */
+  customTabs: import("../navigation.ts").CustomTab[];
+  /** The currently active custom tab id, or null when a built-in tab is shown. */
+  customTabActive: string | null;
 };
 
 export async function loadConfig(state: ConfigState) {
@@ -101,7 +105,12 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   }
 
   // Extract user-defined custom tabs from `ui.customTabs`.
-  state.customTabs = parseCustomTabs(snapshot.config);
+  const updatedTabs = parseCustomTabs(snapshot.config);
+  state.customTabs = updatedTabs;
+  // Clear stale active tab if it no longer exists in config.
+  if (state.customTabActive !== null && !updatedTabs.some((t) => t.id === state.customTabActive)) {
+    state.customTabActive = null;
+  }
 }
 
 /**
@@ -135,14 +144,24 @@ function parseCustomTabs(config: unknown): import("../navigation.ts").CustomTab[
     if (typeof url !== "string" || !url.trim()) {
       continue;
     }
+    // Only allow http/https URLs to prevent javascript:/data:/etc injection.
+    const trimmedUrl = url.trim();
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      continue;
+    }
+    // Skip duplicate IDs — first entry wins.
+    const trimmedId = id.trim();
+    if (result.some((t) => t.id === trimmedId)) {
+      continue;
+    }
     result.push({
-      id: id.trim(),
+      id: trimmedId,
       label: label.trim(),
       icon:
         typeof icon === "string"
           ? (icon as import("../navigation.ts").CustomTab["icon"])
           : undefined,
-      url: url.trim(),
+      url: trimmedUrl,
     });
   }
   return result;

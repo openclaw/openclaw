@@ -329,7 +329,8 @@ export function renderApp(state: AppViewState) {
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
-  const isChat = state.tab === "chat";
+  const isCustomTabActive = state.customTabActive !== null;
+  const isChat = !isCustomTabActive && state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
@@ -576,7 +577,7 @@ export function renderApp(state: AppViewState) {
           : nothing
       }
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main class="content ${isChat && state.customTabActive === null ? "content--chat" : ""}">
         ${
           state.updateAvailable &&
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
@@ -1926,7 +1927,7 @@ export function renderApp(state: AppViewState) {
                         src=${tab.url}
                         title=${tab.label}
                         style="flex:1; border:none; width:100%; height:100%;"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                        sandbox="allow-scripts allow-forms allow-popups allow-modals"
                         allow="clipboard-read; clipboard-write"
                       ></iframe>
                     `,

@@ -49,6 +49,8 @@ function createSaveState(): {
       configSearchQuery: "",
       configActiveSection: null,
       configActiveSubsection: null,
+      customTabActive: null,
+      customTabs: [],
       lastError: null,
     },
     request,

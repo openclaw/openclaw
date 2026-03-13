@@ -34,6 +34,8 @@ function createState(): ConfigState {
     configUiHints: {},
     configValid: null,
     connected: false,
+    customTabActive: null,
+    customTabs: [],
     lastError: null,
     updateRunning: false,
   };
