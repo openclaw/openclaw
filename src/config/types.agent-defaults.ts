@@ -275,7 +275,7 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
-    /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
+    /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high", "xhigh"). */
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
