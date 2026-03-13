@@ -480,6 +480,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
+  const unfurlLinks = readBooleanParam(params, "unfurlLinks");
+  const unfurlMedia = readBooleanParam(params, "unfurlMedia");
 
   const replyToId = readStringParam(params, "replyTo");
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
@@ -550,6 +552,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     bestEffort: bestEffort ?? undefined,
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
+    unfurlLinks: unfurlLinks ?? undefined,
+    unfurlMedia: unfurlMedia ?? undefined,
   });
 
   return {

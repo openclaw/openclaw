@@ -91,6 +91,8 @@ export async function executeSendAction(params: {
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
+  unfurlLinks?: boolean;
+  unfurlMedia?: boolean;
 }): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -137,6 +139,8 @@ export async function executeSendAction(params: {
     gifPlayback: params.gifPlayback,
     dryRun: params.ctx.dryRun,
     bestEffort: params.bestEffort ?? undefined,
+    unfurlLinks: params.unfurlLinks,
+    unfurlMedia: params.unfurlMedia,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
     mirror: params.ctx.mirror,

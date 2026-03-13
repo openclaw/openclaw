@@ -530,6 +530,28 @@ Legacy keys:
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
+## Per-message unfurl controls (message tool)
+
+When using the `message` tool with Slack, you can now control link unfurl behavior per send:
+
+- `unfurlLinks` → maps to Slack `unfurl_links`
+- `unfurlMedia` → maps to Slack `unfurl_media`
+
+Both options are optional. If omitted, Slack/OpenClaw defaults are unchanged.
+
+Example:
+
+```json
+{
+  "action": "send",
+  "channel": "slack",
+  "target": "channel:C12345678",
+  "message": "Build log: https://example.com/build/123",
+  "unfurlLinks": false,
+  "unfurlMedia": false
+}
+```
+
 ## Configuration reference pointers
 
 Primary reference:
