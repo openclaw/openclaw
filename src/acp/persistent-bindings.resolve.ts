@@ -52,9 +52,11 @@ function parseConfiguredBindingSessionKey(params: {
     return null;
   }
   const tokens = rest.split(":");
-  if (tokens.length < 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
+  if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
+  // Channel names have colons replaced with underscores in the key;
+  // the original channel name is recovered during binding resolution.
   const channel = normalizeBindingChannel(tokens[2]);
   if (!channel) {
     return null;

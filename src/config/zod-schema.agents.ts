@@ -71,6 +71,14 @@ const AcpBindingSchema = z
       return;
     }
     const channel = value.match.channel.trim().toLowerCase();
+    if (!channel) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "channel"],
+        message: "ACP bindings require a non-empty match.channel.",
+      });
+      return;
+    }
     if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
