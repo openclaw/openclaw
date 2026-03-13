@@ -252,6 +252,14 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: personal-assistant-tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/personal-assistant-tools/**"
+"extensions: pipeline-tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pipeline-tools/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:

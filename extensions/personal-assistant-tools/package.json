@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/personal-assistant-tools",
+  "version": "2026.3.13",
+  "private": true,
+  "description": "OpenClaw personal assistant role tools",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

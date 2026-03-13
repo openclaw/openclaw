@@ -1,0 +1,19 @@
+{
+  "id": "pipeline-tools",
+  "name": "Pipeline Tools",
+  "description": "PostgreSQL-backed CRUD tools for multi-agent pipeline: trends, ideas, specs, tasks.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "databaseUrl": {
+        "type": "string",
+        "description": "PostgreSQL connection string. Falls back to DATABASE_URL env var."
+      },
+      "maxPoolSize": {
+        "type": "number",
+        "description": "Maximum DB connection pool size."
+      }
+    }
+  }
+}

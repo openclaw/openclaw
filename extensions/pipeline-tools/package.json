@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/pipeline-tools",
+  "version": "2026.3.13",
+  "private": true,
+  "description": "PostgreSQL-backed pipeline tools for multi-agent workflow",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

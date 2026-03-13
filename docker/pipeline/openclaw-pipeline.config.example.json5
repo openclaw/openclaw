@@ -1,0 +1,91 @@
+{
+  // OpenClaw multi-agent pipeline configuration.
+  // Copy relevant sections into ~/.openclaw/openclaw.json or use `openclaw config set`.
+
+  agents: {
+    list: [
+      {
+        id: "market_analyzer",
+        workspace: "/home/node/.openclaw/workspaces/market-analyzer",
+        identity: { name: "Market Analyzer", emoji: "📊" },
+        tools: {
+          alsoAllow: [
+            "save_trend",
+            "get_trends",
+            "update_trend_status",
+            "log_agent_run",
+          ],
+        },
+      },
+      {
+        id: "trend_finder",
+        workspace: "/home/node/.openclaw/workspaces/trend-finder",
+        identity: { name: "Trend Finder", emoji: "🔍" },
+        tools: {
+          alsoAllow: [
+            "get_trends",
+            "save_trend",
+            "update_trend_status",
+            "log_agent_run",
+          ],
+        },
+      },
+      {
+        id: "brainstormer",
+        workspace: "/home/node/.openclaw/workspaces/brainstormer",
+        identity: { name: "Brainstormer", emoji: "💡" },
+        tools: {
+          alsoAllow: [
+            "get_trends",
+            "update_trend_status",
+            "save_idea",
+            "get_ideas",
+            "log_agent_run",
+          ],
+        },
+      },
+      {
+        id: "product_architect",
+        workspace: "/home/node/.openclaw/workspaces/product-architect",
+        identity: { name: "Product Architect", emoji: "🏗️" },
+        tools: {
+          alsoAllow: [
+            "get_ideas",
+            "update_idea_status",
+            "save_product_spec",
+            "get_product_specs",
+            "update_spec_status",
+            "log_agent_run",
+          ],
+        },
+      },
+      {
+        id: "software_engineer",
+        workspace: "/home/node/.openclaw/workspaces/software-engineer",
+        identity: { name: "Software Engineer", emoji: "⚙️" },
+        tools: {
+          alsoAllow: [
+            "get_product_specs",
+            "update_spec_status",
+            "save_engineering_task",
+            "get_engineering_tasks",
+            "update_task_status",
+            "log_agent_run",
+          ],
+        },
+      },
+    ],
+  },
+
+  plugins: {
+    entries: {
+      "pipeline-tools": {
+        enabled: true,
+        config: {
+          // Falls back to DATABASE_URL env var if omitted.
+          // databaseUrl: "postgres://openclaw:changeme@postgres:5432/openclaw_pipeline",
+        },
+      },
+    },
+  },
+}

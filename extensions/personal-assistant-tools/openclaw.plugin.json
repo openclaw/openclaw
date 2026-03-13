@@ -1,0 +1,54 @@
+{
+  "id": "personal-assistant-tools",
+  "name": "Personal Assistant Tools",
+  "description": "Placeholder role tools for market analysis, product ideation, software engineering, and trend finding.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "trendFinder": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultDomains": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "defaultLookbackDays": { "type": "number" },
+          "defaultMaxTrends": { "type": "number" },
+          "dailyCron": { "type": "string" }
+        }
+      },
+      "marketAnalyst": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultSymbols": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "defaultIndices": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "productArchitect": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultIdeaCount": { "type": "number" },
+          "preferredOutputStyle": { "type": "string" }
+        }
+      },
+      "softwareEngineer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultStack": { "type": "string" },
+          "defaultDeliverable": { "type": "string" }
+        }
+      }
+    }
+  }
+}
