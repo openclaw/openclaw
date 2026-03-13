@@ -101,4 +101,31 @@ describe("batchViaPlaywright", () => {
       ],
     });
   });
+
+  it("includes all nested batch failures when stopOnError is false", async () => {
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [
+        {
+          kind: "batch",
+          stopOnError: false,
+          actions: [
+            { kind: "evaluate", fn: "() => 1" },
+            { kind: "evaluate", fn: "() => 2" },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      results: [
+        {
+          ok: false,
+          error:
+            "act:evaluate is disabled by config (browser.evaluateEnabled=false); act:evaluate is disabled by config (browser.evaluateEnabled=false)",
+        },
+      ],
+    });
+  });
 });

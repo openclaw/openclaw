@@ -92,7 +92,7 @@ export async function clickViaPlaywright(opts: {
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
-    : page.locator(resolved.selector!);
+    : page.locator(resolved.selector);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
     const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
@@ -130,7 +130,7 @@ export async function hoverViaPlaywright(opts: {
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
-    : page.locator(resolved.selector!);
+    : page.locator(resolved.selector);
   try {
     await locator.hover({
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
@@ -154,10 +154,10 @@ export async function dragViaPlaywright(opts: {
   const page = await getRestoredPageForTarget(opts);
   const startLocator = resolvedStart.ref
     ? refLocator(page, requireRef(resolvedStart.ref))
-    : page.locator(resolvedStart.selector!);
+    : page.locator(resolvedStart.selector);
   const endLocator = resolvedEnd.ref
     ? refLocator(page, requireRef(resolvedEnd.ref))
-    : page.locator(resolvedEnd.selector!);
+    : page.locator(resolvedEnd.selector);
   const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
   const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
   try {
@@ -185,7 +185,7 @@ export async function selectOptionViaPlaywright(opts: {
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
-    : page.locator(resolved.selector!);
+    : page.locator(resolved.selector);
   try {
     await locator.selectOption(opts.values, {
       timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
@@ -228,7 +228,7 @@ export async function typeViaPlaywright(opts: {
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
-    : page.locator(resolved.selector!);
+    : page.locator(resolved.selector);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
     if (opts.slowly) {
@@ -429,7 +429,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
-    : page.locator(resolved.selector!);
+    : page.locator(resolved.selector);
   try {
     await locator.scrollIntoViewIfNeeded({ timeout });
   } catch (err) {
@@ -843,21 +843,25 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
       });
       break;
-    case "batch":
+    case "batch": {
       // Nested batches: delegate recursively
-      const nestedResult = await batchViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
-        actions: action.actions,
-        stopOnError: action.stopOnError,
-        evaluateEnabled,
-        depth: depth + 1,
-      });
-      const nestedFailure = nestedResult.results.find((result) => !result.ok);
-      if (nestedFailure) {
-        throw new Error(nestedFailure.error ?? "Nested batch action failed");
+      const nestedFailures = (
+        await batchViaPlaywright({
+          cdpUrl,
+          targetId: effectiveTargetId,
+          actions: action.actions,
+          stopOnError: action.stopOnError,
+          evaluateEnabled,
+          depth: depth + 1,
+        })
+      ).results.filter((result) => !result.ok);
+      if (nestedFailures.length > 0) {
+        throw new Error(
+          nestedFailures.map((result) => result.error ?? "Nested batch action failed").join("; "),
+        );
       }
       break;
+    }
     default:
       throw new Error(`Unsupported batch action kind: ${(action as { kind: string }).kind}`);
   }
