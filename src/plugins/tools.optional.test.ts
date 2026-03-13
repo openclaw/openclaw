@@ -82,6 +82,17 @@ function setOptionalDemoRegistry() {
   ]);
 }
 
+function setOptionalMemoryRegistry() {
+  setRegistry([
+    {
+      pluginId: "memory-core",
+      optional: true,
+      source: "/tmp/memory-core.js",
+      factory: () => [makeTool("memory_search"), makeTool("memory_get")],
+    },
+  ]);
+}
+
 function resolveOptionalDemoTools(toolAllowlist?: string[]) {
   return resolvePluginTools({
     context: createContext() as never,
@@ -115,6 +126,17 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(toolsByPlugin.map((tool) => tool.name)).toEqual(["optional_tool"]);
     expect(toolsByGroup.map((tool) => tool.name)).toEqual(["optional_tool"]);
+  });
+
+  it("allows optional tools via expanded core group shorthands", () => {
+    setOptionalMemoryRegistry();
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      toolAllowlist: ["group:memory"],
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["memory_search", "memory_get"]);
   });
 
   it("rejects plugin id collisions with core tool names", () => {

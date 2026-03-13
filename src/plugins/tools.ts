@@ -1,4 +1,4 @@
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { expandToolGroups, normalizeToolList, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
@@ -20,7 +20,11 @@ export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefine
 }
 
 function normalizeAllowlist(list?: string[]) {
-  return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+  const normalized = new Set(normalizeToolList(list));
+  for (const entry of expandToolGroups(list)) {
+    normalized.add(entry);
+  }
+  return normalized;
 }
 
 function isOptionalToolAllowed(params: {

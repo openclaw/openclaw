@@ -36,6 +36,22 @@ describe("stripPluginOnlyAllowlist", () => {
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
+  it("keeps core-group shorthands that expand to plugin-backed tools without warning", () => {
+    const memoryPluginGroups: PluginToolGroups = {
+      all: ["memory_search", "memory_get"],
+      byPlugin: new Map([["memory-core", ["memory_search", "memory_get"]]]),
+    };
+
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["read", "group:memory"] },
+      memoryPluginGroups,
+      coreTools,
+    );
+
+    expect(policy.policy?.allow).toEqual(["read", "group:memory"]);
+    expect(policy.unknownAllowlist).toEqual([]);
+  });
+
   it("strips allowlist with unknown entries when no core tools match", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
     const policy = stripPluginOnlyAllowlist({ allow: ["lobster"] }, emptyPlugins, coreTools);
