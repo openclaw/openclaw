@@ -328,6 +328,8 @@ export class AcpxRuntime implements AcpRuntime {
         if (attachment.mediaType.startsWith("image/")) {
           blocks.push({ type: "image", mimeType: attachment.mediaType, data: attachment.data });
         }
+        // Non-image attachments (documents, PDFs, audio, video) are not supported
+        // as binary content blocks in the ACP protocol — skip silently.
       }
       child.stdin.end(blocks.length > 0 ? JSON.stringify(blocks) : input.text);
     } else {

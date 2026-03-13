@@ -64,7 +64,7 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
   ]).trim();
 }
 
-const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB — consistent with Telegram mediaMaxMb default
 
 async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
   const mediaAttachments = normalizeAttachments(ctx);
