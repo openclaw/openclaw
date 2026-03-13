@@ -593,7 +593,7 @@ export async function sendMessageTelegram(
 ): Promise<TelegramSendResult> {
   // Suppress NO_REPLY and other silent tokens before hitting the Telegram API (parity with Slack)
   const trimmed = text?.trim() ?? "";
-  if (isSilentReplyText(trimmed) && !opts.mediaUrl && !opts.buttons) {
+  if (isSilentReplyText(trimmed) && !opts.mediaUrl && !opts.buttons?.length) {
     logVerbose("telegram send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", chatId: "" };
   }
