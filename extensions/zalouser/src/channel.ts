@@ -22,6 +22,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
+  isDangerousNameMatchingEnabled,
   isNumericTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
@@ -37,11 +38,7 @@ import {
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
-import {
-  buildZalouserGroupCandidates,
-  findZalouserGroupEntry,
-  isZalouserDangerousNameMatchingEnabled,
-} from "./group-policy.js";
+import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
@@ -220,7 +217,7 @@ function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       includeWildcard: true,
-      allowNameMatching: isZalouserDangerousNameMatchingEnabled(account.config),
+      allowNameMatching: isDangerousNameMatchingEnabled(account.config),
     }),
   );
 }

@@ -19,6 +19,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   evaluateGroupRouteAccessForPolicy,
+  isDangerousNameMatchingEnabled,
   issuePairingChallenge,
   resolveOutboundMediaUrls,
   mergeAllowlist,
@@ -33,7 +34,6 @@ import {
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
-  isZalouserDangerousNameMatchingEnabled,
   isZalouserGroupEntryAllowed,
 } from "./group-policy.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
@@ -319,7 +319,7 @@ async function processMessage(
   });
 
   const groups = account.config.groups ?? {};
-  const allowNameMatching = isZalouserDangerousNameMatchingEnabled(account.config);
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   if (isGroup) {
     const groupEntry = findZalouserGroupEntry(
       groups,
