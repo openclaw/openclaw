@@ -25,8 +25,13 @@ vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: vi.fn(),
 }));
 
+vi.mock("./chat/slash-commands.ts", () => ({
+  parseSlashCommand: vi.fn(() => null),
+}));
+
 const { handleSendChat } = await import("./app-chat.ts");
 const { sendChatMessage } = await import("./controllers/chat.ts");
+const { parseSlashCommand } = await import("./chat/slash-commands.ts");
 
 function makeAttachment(id = "att-1"): ChatAttachment {
   return {
@@ -95,5 +100,27 @@ describe("handleSendChat", () => {
     await sendPromise;
 
     expect(sendChatMessage).toHaveBeenCalledWith(host, "describe image", [attachment]);
+  });
+
+  it("clears buffered attachments when queueing a busy local slash command", async () => {
+    const attachment = makeAttachment();
+    vi.mocked(parseSlashCommand).mockReturnValue({
+      args: "",
+      command: { executeLocal: true, name: "compact" },
+    });
+    const host = makeHost({
+      chatMessage: "/compact",
+      chatAttachments: [attachment],
+      chatBufferedAttachments: [attachment],
+      chatRunId: "run-busy",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatAttachments).toEqual([]);
+    expect(host.chatBufferedAttachments).toEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(sendChatMessage).not.toHaveBeenCalled();
   });
 });

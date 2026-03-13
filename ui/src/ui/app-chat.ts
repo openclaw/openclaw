@@ -246,6 +246,7 @@ export async function handleSendChat(
       if (messageOverride == null) {
         host.chatMessage = "";
         host.chatAttachments = [];
+        host.chatBufferedAttachments = [];
       }
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
