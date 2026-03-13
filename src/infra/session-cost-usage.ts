@@ -227,8 +227,10 @@ const isTranscriptFile = (name: string): boolean =>
  * - Reset:  `<sessionId>.jsonl.reset.<timestamp>` → `<sessionId>`
  */
 const extractSessionId = (name: string): string => {
-  const jsonlIdx = name.indexOf(".jsonl");
-  return jsonlIdx >= 0 ? name.slice(0, jsonlIdx) : name;
+  // Strip .jsonl or .jsonl.reset.<timestamp> suffix from the end.
+  // Using a regex anchored at $ avoids the edge case where the session ID
+  // itself contains ".jsonl" (indexOf would truncate too early).
+  return name.replace(/\.jsonl(\.reset\..*)?$/, "");
 };
 
 async function* readJsonlRecords(filePath: string): AsyncGenerator<Record<string, unknown>> {
@@ -472,8 +474,19 @@ export async function discoverAllSessions(params?: {
     });
   }
 
+  // Deduplicate by sessionId: when both an active .jsonl and a .jsonl.reset.*
+  // exist for the same session (the common post-reset state), keep the entry
+  // with the latest mtime (the active file) to avoid duplicate rows in the UI.
+  const bySessionId = new Map<string, DiscoveredSession>();
+  for (const session of discovered) {
+    const existing = bySessionId.get(session.sessionId);
+    if (!existing || session.mtime > existing.mtime) {
+      bySessionId.set(session.sessionId, session);
+    }
+  }
+
   // Sort by mtime descending (most recent first)
-  return discovered.toSorted((a, b) => b.mtime - a.mtime);
+  return [...bySessionId.values()].toSorted((a, b) => b.mtime - a.mtime);
 }
 
 export async function loadSessionCostSummary(params: {
