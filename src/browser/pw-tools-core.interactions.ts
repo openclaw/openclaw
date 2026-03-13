@@ -14,6 +14,7 @@ import {
   requireRefOrSelector,
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
+import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
 
 type TargetOpts = {
   cdpUrl: string;
@@ -784,6 +785,14 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
       });
       break;
+    case "resize":
+      await resizeViewportViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        width: action.width,
+        height: action.height,
+      });
+      break;
     case "wait":
       if (action.fn && !evaluateEnabled) {
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
@@ -810,6 +819,13 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         fn: action.fn,
         ref: action.ref,
+        timeoutMs: action.timeoutMs,
+      });
+      break;
+    case "close":
+      await closePageViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
       });
       break;
     case "batch":
