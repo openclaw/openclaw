@@ -383,6 +383,24 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayStartupNotificationTarget = {
+  /** Target channel (telegram, discord, slack, signal, imessage, whatsapp) */
+  channel: string;
+  /** Target identifier (phone number, user ID, etc.) */
+  to: string;
+  /** Optional account ID for multi-account setups */
+  accountId?: string;
+};
+
+export type GatewayStartupNotificationConfig = {
+  /** Enable startup notification (default: false) */
+  enabled?: boolean;
+  /** Custom message template (default: "OpenClaw gateway is now online and ready.") */
+  message?: string;
+  /** List of targets to notify on startup */
+  targets?: GatewayStartupNotificationTarget[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -431,4 +449,9 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Startup notification configuration.
+   * Send a message to specified targets when the gateway starts.
+   */
+  startupNotification?: GatewayStartupNotificationConfig;
 };

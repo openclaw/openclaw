@@ -11,6 +11,7 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+  font-family: var(--font-body);
 }
 
 :root[data-theme-mode="light"] .chat-thinking {
