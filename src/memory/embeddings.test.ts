@@ -3,6 +3,7 @@ import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+import { resolveNodeLlamaCppInstallTarget } from "./node-llama.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -10,9 +11,13 @@ vi.mock("../agents/model-auth.js", async () => {
 });
 
 const importNodeLlamaCppMock = vi.fn();
-vi.mock("./node-llama.js", () => ({
-  importNodeLlamaCpp: (...args: unknown[]) => importNodeLlamaCppMock(...args),
-}));
+vi.mock("./node-llama.js", async () => {
+  const actual = await vi.importActual<typeof import("./node-llama.js")>("./node-llama.js");
+  return {
+    ...actual,
+    importNodeLlamaCpp: (...args: unknown[]) => importNodeLlamaCppMock(...args),
+  };
+});
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -402,7 +407,10 @@ describe("embedding provider local fallback", () => {
 
   it("mentions npm global install recovery when node-llama-cpp is missing", async () => {
     mockMissingLocalEmbeddingDependency();
-    await expect(createLocalProvider()).rejects.toThrow(/npm i -g node-llama-cpp@3\.16\.2/i);
+    const installTarget = resolveNodeLlamaCppInstallTarget().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await expect(createLocalProvider()).rejects.toThrow(
+      new RegExp(`npm i -g ${installTarget}`, "i"),
+    );
   });
 });
 

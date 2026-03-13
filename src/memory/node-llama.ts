@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 type NodeLlamaImporter = (specifier: string) => Promise<unknown>;
 
-function isNodeLlamaMissingError(err: unknown): boolean {
+export function isNodeLlamaMissingError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
@@ -12,6 +12,24 @@ function isNodeLlamaMissingError(err: unknown): boolean {
   return code === "ERR_MODULE_NOT_FOUND" && err.message.includes("node-llama-cpp");
 }
 
+export function resolveNodeLlamaCppInstallTarget(moduleUrl = import.meta.url): string {
+  try {
+    const require = createRequire(moduleUrl);
+    const pkg = require("../../package.json") as {
+      dependencies?: Record<string, unknown>;
+      optionalDependencies?: Record<string, unknown>;
+    };
+    const version =
+      typeof pkg.dependencies?.["node-llama-cpp"] === "string"
+        ? pkg.dependencies["node-llama-cpp"].trim()
+        : typeof pkg.optionalDependencies?.["node-llama-cpp"] === "string"
+          ? pkg.optionalDependencies["node-llama-cpp"].trim()
+          : "";
+    return version ? `node-llama-cpp@${version}` : "node-llama-cpp";
+  } catch {
+    return "node-llama-cpp";
+  }
+}
 function readModuleGlobalPaths(): string[] {
   try {
     const require = createRequire(import.meta.url);
