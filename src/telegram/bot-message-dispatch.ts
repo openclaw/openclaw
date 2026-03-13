@@ -661,6 +661,7 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
+        allowReasoningPayloads: forceBlockStreamingForReasoning,
         onPartialReply:
           answerLane.stream || reasoningLane.stream
             ? (payload) =>

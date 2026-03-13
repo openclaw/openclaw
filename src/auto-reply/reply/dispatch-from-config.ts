@@ -433,10 +433,11 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
-            // Suppress reasoning payloads — channels using this generic dispatch
-            // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
-            // Telegram has its own dispatch path that handles reasoning splitting.
-            if (shouldSuppressReasoningPayload(payload)) {
+            // Suppress reasoning payloads for channels without a dedicated reasoning
+            // lane (WhatsApp, web, etc.). Channels that set allowReasoningPayloads=true
+            // (e.g. Telegram with reasoning="on") handle reasoning splitting themselves
+            // and must receive these payloads to display them in the reasoning lane.
+            if (!params.replyOptions?.allowReasoningPayloads && shouldSuppressReasoningPayload(payload)) {
               return;
             }
             // Accumulate block text for TTS generation after streaming
