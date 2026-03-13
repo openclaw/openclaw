@@ -1,6 +1,8 @@
 import util from "node:util";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -205,4 +207,28 @@ export function listEnabledTelegramAccounts(cfg: OpenClawConfig): ResolvedTelegr
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+/**
+ * Resolve the effective reply-to mode for a Telegram account + chat type.
+ * Fallback order: replyToModeByChatType.<chatType> > replyToMode > platform default.
+ * Platform default: groups/channels → "all", DMs → "off".
+ */
+export function resolveTelegramReplyToMode(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+  chatType?: string | null,
+): ReplyToMode {
+  const account = mergeTelegramAccountConfig(cfg, normalizeAccountId(accountId));
+  const normalized = normalizeChatType(chatType ?? undefined);
+  // Per-chat-type override takes priority.
+  if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
+    return account.replyToModeByChatType[normalized] ?? "off";
+  }
+  // Global account-level override.
+  if (account.replyToMode !== undefined) {
+    return account.replyToMode;
+  }
+  // Platform default: non-direct chats thread replies; DMs don't.
+  return normalized && normalized !== "direct" ? "all" : "off";
 }

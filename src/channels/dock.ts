@@ -24,6 +24,7 @@ import { inspectSlackAccount } from "../slack/account-inspect.js";
 import { resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { inspectTelegramAccount } from "../telegram/account-inspect.js";
+import { resolveTelegramReplyToMode } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -260,14 +261,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveTelegramGroupToolPolicy,
     },
     threading: {
-      resolveReplyToMode: ({ cfg, chatType }) => {
-        const configured = cfg.channels?.telegram?.replyToMode;
-        if (configured) {
-          return configured;
-        }
-        const normalizedChatType = chatType?.trim().toLowerCase();
-        return normalizedChatType && normalizedChatType !== "direct" ? "all" : "off";
-      },
+      resolveReplyToMode: ({ cfg, accountId, chatType }) =>
+        resolveTelegramReplyToMode(cfg, accountId, chatType),
       buildToolContext: ({ context, hasRepliedRef }) => {
         // Telegram auto-threading should only use actual thread/topic IDs.
         // ReplyToId is a message ID and causes invalid message_thread_id in DMs.
