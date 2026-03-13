@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: compare post-compaction token sanity checks against full-session pre-compaction totals and skip the check when token estimation fails, so sessions with large bootstrap context keep real token counts instead of falling back to unknown. (#28347) thanks @efe-arv.
 - Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
 - Gateway/session reset: preserve `lastAccountId` and `lastThreadId` across gateway session resets so replies keep routing back to the same account and thread after `/reset`. (#44773) Thanks @Lanfei.
+- Agents/memory bootstrap: load only one root memory file, preferring `MEMORY.md` and using `memory.md` as a fallback, so case-insensitive Docker mounts no longer inject duplicate memory context. (#26054) Thanks @Lanfei.
 
 ## 2026.3.12
 
