@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
-import { evaluateExecAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { evaluateExecAllowlist } from "./exec-approvals.js";
 
 describe("exec approvals allowlist evaluation", () => {
   function evaluateAutoAllowSkills(params: {
