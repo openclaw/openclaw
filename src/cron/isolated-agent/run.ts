@@ -56,6 +56,7 @@ import {
 } from "../../security/external-content.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
+import { buildDedupContextBlock } from "./dedup-context.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -478,6 +479,11 @@ export async function runCronIsolatedAgentTurn(params: {
     commandBody = `${base}\n${timeLine}`.trim();
   }
   commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+
+  const dedupBlock = buildDedupContextBlock(params.job);
+  if (dedupBlock) {
+    commandBody = `${commandBody}\n\n${dedupBlock}`;
+  }
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
