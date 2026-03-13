@@ -150,8 +150,7 @@ function updateAllBadges() {
   const isUp = !!(relayWs && relayWs.readyState === WebSocket.OPEN)
   
   if (!extensionIsDisabled && tabs.size === 0) {
-    extensionIsDisabled = true;
-    void persistState();
+    // No auto-disable side-effect here to prevent accidental shutdown on tab close
   }
   
   let globalKind = 'error';
@@ -205,13 +204,6 @@ async function setOverlayOnTab(tabId) {
     ['__openclawOverlay', '__openclawLockedIcon'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.remove();
-    });
-    document.querySelectorAll('div').forEach(div => {
-      if (div.textContent && div.textContent.includes('OpenClaw') && 
-          div.style.position === 'fixed' && 
-          (div.style.bottom === '10px' || div.style.right === '10px')) {
-        div.remove();
-      }
     });
   }
   
@@ -1265,11 +1257,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'setLock') {
     const { locked } = msg
     void whenReady(async () => {
-      // Find the currently active attached tab if we can't find one, default to null
       let activeTabId = null;
       try {
         const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-        activeTabId = active?.id || null
+        
+        // If the active tab is already one of our attached tabs, use it.
+        if (active?.id && tabs.has(active.id)) {
+          activeTabId = active.id;
+        } else {
+          // Otherwise, pick the most recently attached tab as a fallback
+          const attachedIds = Array.from(tabs.keys()).sort((a, b) => {
+            const ta = tabs.get(a)?.attachOrder || 0
+            const tb = tabs.get(b)?.attachOrder || 0
+            return tb - ta
+          })
+          activeTabId = attachedIds[0] || null
+        }
       } catch {}
 
       const result = await setLockOnRelay(!!locked, activeTabId)

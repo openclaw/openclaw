@@ -72,7 +72,6 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   // Legacy Gemini 2.5 aliases (map to the nearest current Gemini tier).
   "gemini-2.5": "gemini-2.5-flash",
   "gemini-2.5-pro": "gemini-3-pro",
-  "gemini-2.5-flash": "gemini-2.5-flash",
   "gemini-2.5-flash-lite": "gemini-2.5-flash",
 
   // GLM (free)
@@ -216,7 +215,7 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt-5.1": "GPT-5.1",
   "glm-4.7": "GLM-4.7",
   "gemini-3-flash": "Gemini 3 Flash",
-  "gemini-2.5-flash": "Gemini 2.5 Flash Lite",
+  "gemini-2.5-flash": "Gemini 2.5 Flash",
   "gpt-5.1-codex-max": "GPT-5.1 Codex Max",
   "gpt-5.2": "GPT-5.2",
 };
