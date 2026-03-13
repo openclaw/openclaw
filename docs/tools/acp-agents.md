@@ -565,6 +565,55 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+### Use Chrome DevTools MCP with ACP agents
+
+If you want a Codex, Claude Code, or similar ACP harness to drive your current
+Chrome session through Chrome DevTools MCP, configure that MCP server on the
+`acpx` plugin. Do not add `mcpServers` to `openclaw acp`; bridge mode rejects
+per-session MCP server injection.
+
+Recommended flow:
+
+1. Enable Chrome remote debugging in Chrome at `chrome://inspect/#remote-debugging`.
+2. Install and enable the `acpx` plugin.
+3. Add `chrome-devtools-mcp` under `plugins.entries.acpx.config.mcpServers`.
+4. Run your ACP agent through OpenClaw as usual.
+
+Example:
+
+```json
+{
+  "acp": {
+    "enabled": true,
+    "backend": "acpx"
+  },
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "mcpServers": {
+            "chrome-devtools": {
+              "command": "npx",
+              "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Chrome DevTools MCP `--autoConnect` requires Chrome 144 or newer.
+- `--autoConnect` can expose the current live Chrome session for the selected
+  browser profile, so prefer a dedicated Chrome profile for automation.
+- If you only need OpenClaw to control specific existing tabs, the built-in
+  [Chrome extension relay](/tools/chrome-extension) is usually the simpler and
+  narrower-scoped option.
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:

@@ -143,6 +143,11 @@ Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
 
+If you want an ACP harness to use Chrome DevTools MCP or another MCP server,
+configure it on the ACP runtime plugin instead. For the bundled `acpx` backend,
+set `plugins.entries.acpx.config.mcpServers` and keep `openclaw acp` unchanged.
+See [ACP agents](/tools/acp-agents#use-chrome-devtools-mcp-with-acp-agents).
+
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
 If you want a coding agent such as Codex or Claude Code to talk to your

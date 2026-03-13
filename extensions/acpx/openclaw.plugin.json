@@ -98,7 +98,7 @@
     },
     "mcpServers": {
       "label": "MCP Servers",
-      "help": "Named MCP server definitions to inject into ACPX-backed session bootstrap. Each entry needs a command and can include args and env.",
+      "help": "Named MCP server definitions to inject into ACPX-backed session bootstrap. Each entry needs a command and can include args and env. Common example: chrome-devtools-mcp with --autoConnect for Chrome live-session access.",
       "advanced": true
     }
   }
