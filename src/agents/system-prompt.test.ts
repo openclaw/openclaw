@@ -636,7 +636,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("/status shows Reasoning");
   });
 
-  it("builds runtime line with stable host/channel details", () => {
+  it("builds runtime line with only stable host/os/node fields", () => {
     const runtimeInfo = {
       agentId: "work",
       host: "host",
@@ -646,24 +646,31 @@ describe("buildAgentSystemPrompt", () => {
       node: "v20",
       model: "anthropic/claude",
       defaultModel: "anthropic/claude-opus-4-5",
+      channel: "telegram",
+      capabilities: ["inlineButtons"],
     };
-    const line = buildRuntimeLine(runtimeInfo, "telegram", ["inlineButtons"], "low");
+    const line = buildRuntimeLine(runtimeInfo);
 
     // Stable fields appear in the Runtime line
     expect(line).toContain("host=host");
     expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
-    expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
-    expect(line).toContain("thinking=low");
-    // Dynamic per-session fields are NOT in the Runtime line (moved to buildRuntimeDynamicLine)
+
+    // Per-conversation and per-session dynamic fields are NOT in the Runtime line
+    // (moved to buildRuntimeDynamicLine for KV-cache stability across channels/models)
+    expect(line).not.toContain("channel=telegram");
+    expect(line).not.toContain("capabilities=inlineButtons");
+    expect(line).not.toContain("thinking=");
     expect(line).not.toContain("agent=work");
     expect(line).not.toContain("model=anthropic/claude");
     expect(line).not.toContain("default_model=");
 
     // Dynamic fields are in the separate dynamic line
-    const dynamicLine = buildRuntimeDynamicLine(runtimeInfo);
+    const dynamicLine = buildRuntimeDynamicLine(runtimeInfo, "low");
+    expect(dynamicLine).toContain("channel=telegram");
+    expect(dynamicLine).toContain("capabilities=inlineButtons");
+    expect(dynamicLine).toContain("thinking=low");
     expect(dynamicLine).toContain("agent=work");
     expect(dynamicLine).toContain("model=anthropic/claude");
     expect(dynamicLine).toContain("default_model=anthropic/claude-opus-4-5");

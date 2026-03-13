@@ -624,7 +624,7 @@ export function buildAgentSystemPrompt(params: {
       userTimezone,
     }),
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    buildRuntimeLine(runtimeInfo),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
@@ -679,7 +679,7 @@ export function buildAgentSystemPrompt(params: {
   }
 
   // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
-  const dynamicLine = buildRuntimeDynamicLine(runtimeInfo);
+  const dynamicLine = buildRuntimeDynamicLine(runtimeInfo, params.defaultThinkLevel);
   if (dynamicLine) {
     lines.push(dynamicLine);
   }
@@ -726,24 +726,20 @@ export function buildAgentSystemPrompt(params: {
   return lines.filter(Boolean).join("\n");
 }
 
-export function buildRuntimeLine(
-  runtimeInfo?: {
-    agentId?: string;
-    host?: string;
-    os?: string;
-    arch?: string;
-    node?: string;
-    model?: string;
-    defaultModel?: string;
-    shell?: string;
-    repoRoot?: string;
-  },
-  runtimeChannel?: string,
-  runtimeCapabilities: string[] = [],
-  defaultThinkLevel?: ThinkLevel,
-): string {
-  // Stable fields only — dynamic fields (agentId, model, defaultModel) are emitted
-  // separately in buildRuntimeDynamicLine so the stable prefix can be KV-cached by Anthropic.
+export function buildRuntimeLine(runtimeInfo?: {
+  agentId?: string;
+  host?: string;
+  os?: string;
+  arch?: string;
+  node?: string;
+  model?: string;
+  defaultModel?: string;
+  shell?: string;
+  repoRoot?: string;
+}): string {
+  // Stable fields only — channel, capabilities, thinking, agentId, model are emitted
+  // separately in buildRuntimeDynamicLine so the stable prefix can be KV-cached by Anthropic
+  // across sessions AND across channels (multi-channel deployments).
   return `Runtime: ${[
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
@@ -754,28 +750,43 @@ export function buildRuntimeLine(
         : "",
     runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",
-    runtimeChannel ? `channel=${runtimeChannel}` : "",
-    runtimeChannel
-      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
-      : "",
-    `thinking=${defaultThinkLevel ?? "off"}`,
   ]
     .filter(Boolean)
     .join(" | ")}`;
 }
 
 /**
- * Builds a line containing only the per-session dynamic runtime fields (model, agentId,
- * defaultModel). Kept separate from buildRuntimeLine so the stable content above (including
- * Reasoning) can be reused by Anthropic's KV prefix cache across sessions.
+ * Builds a line containing per-session and per-conversation dynamic runtime fields.
+ * Kept separate from buildRuntimeLine so the stable content above (including Reasoning)
+ * can be reused by Anthropic's KV prefix cache across sessions AND channels.
+ *
+ * Fields emitted here change per session (model, agentId) or per conversation (channel,
+ * capabilities, thinking). Moving them to the end of the prompt means the large stable
+ * prefix (boilerplate + workspace files, ~28k chars) is cached even when:
+ *   - The user switches between channels (WhatsApp → Telegram → iMessage)
+ *   - A different model is selected
+ *   - The reasoning mode changes
+ *
  * Returns an empty string when no dynamic fields are present.
  */
-export function buildRuntimeDynamicLine(runtimeInfo?: {
-  agentId?: string;
-  model?: string;
-  defaultModel?: string;
-}): string {
+export function buildRuntimeDynamicLine(
+  runtimeInfo?: {
+    agentId?: string;
+    model?: string;
+    defaultModel?: string;
+    channel?: string;
+    capabilities?: string[];
+  },
+  defaultThinkLevel?: ThinkLevel,
+): string {
   const parts = [
+    // Per-conversation: channel and capabilities change across messaging platforms
+    runtimeInfo?.channel ? `channel=${runtimeInfo.channel}` : "",
+    runtimeInfo?.channel
+      ? `capabilities=${runtimeInfo?.capabilities?.length ? runtimeInfo.capabilities.join(",") : "none"}`
+      : "",
+    // Per-session: thinking level, model, agentId, defaultModel
+    defaultThinkLevel && defaultThinkLevel !== "off" ? `thinking=${defaultThinkLevel}` : "",
     runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
