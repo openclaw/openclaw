@@ -53,6 +53,7 @@ import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
@@ -88,6 +89,7 @@ type GatewaySessionPresentationRow = Pick<
   | "derivedTitle"
   | "updatedAt"
   | "thinkingLevel"
+  | "fastMode"
   | "modelProvider"
   | "model"
   | "verboseLevel"
@@ -208,6 +210,13 @@ function buildSessionPresentation(params: {
         "Controls how much deliberate reasoning OpenClaw requests from the Gateway model.",
       currentValue: currentModeId,
       values: availableLevelIds,
+    }),
+    buildSelectConfigOption({
+      id: ACP_FAST_MODE_CONFIG_ID,
+      name: "Fast mode",
+      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
+      currentValue: row.fastMode ? "on" : "off",
+      values: ["off", "on"],
     }),
     buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
@@ -925,6 +934,7 @@ export class AcpGatewayAgent implements Agent {
       thinkingLevel: session.thinkingLevel,
       modelProvider: session.modelProvider,
       model: session.model,
+      fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
@@ -937,16 +947,26 @@ export class AcpGatewayAgent implements Agent {
 
   private resolveSessionConfigPatch(
     configId: string,
-    value: string,
+    value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string>;
+    patch: Record<string, string | boolean>;
   } {
+    if (typeof value !== "string") {
+      throw new Error(
+        `ACP bridge does not support non-string session config option values for "${configId}".`,
+      );
+    }
     switch (configId) {
       case ACP_THOUGHT_LEVEL_CONFIG_ID:
         return {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
+        };
+      case ACP_FAST_MODE_CONFIG_ID:
+        return {
+          patch: { fastMode: value === "on" },
+          overrides: { fastMode: value === "on" },
         };
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {

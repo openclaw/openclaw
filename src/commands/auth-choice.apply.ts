@@ -11,8 +11,8 @@ import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemin
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
+import { applyAuthChoiceLoadedPluginProvider } from "./auth-choice.apply.plugin-provider.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
-import { applyAuthChoiceVllm } from "./auth-choice.apply.vllm.js";
 import { applyAuthChoiceVolcengine } from "./auth-choice.apply.volcengine.js";
 import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
@@ -37,8 +37,8 @@ export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
   const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
+    applyAuthChoiceLoadedPluginProvider,
     applyAuthChoiceAnthropic,
-    applyAuthChoiceVllm,
     applyAuthChoiceOpenAI,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
