@@ -73,6 +73,29 @@ describe("config pruning defaults", () => {
     });
   });
 
+  it("loads Anthropic shorthand model aliases through config defaults", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "opus-4.6" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
+      ).toBe("short");
+    });
+  });
+
   it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
     await withTempHome(async (home) => {
       await writeConfigForTest(home, {

@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,7 +9,17 @@ import {
   toAcpMcpServers,
 } from "./config.js";
 
+const require = createRequire(import.meta.url);
+
 describe("acpx plugin config parsing", () => {
+  it("keeps the pinned version aligned with the bundled dependency", () => {
+    const pkg = require("../package.json") as {
+      dependencies?: { acpx?: string };
+    };
+
+    expect(pkg.dependencies?.acpx).toBe(ACPX_PINNED_VERSION);
+  });
+
   it("resolves bundled acpx with pinned version by default", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
