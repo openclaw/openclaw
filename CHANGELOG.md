@@ -662,6 +662,7 @@ Docs: https://docs.openclaw.ai
 - Memory flush/bootstrap file protection: restrict memory-flush runs to append-only `read`/`write` tools and route host-side memory appends through root-enforced safe file handles so flush turns cannot overwrite bootstrap files via `exec` or unsafe raw rewrites. (#38574) Thanks @frankekn.
 - Mattermost/DM media uploads: resolve bare 26-character Mattermost IDs user-first for direct messages so media sends no longer fail with `403 Forbidden` when targets are configured as unprefixed user IDs. (#29925) Thanks @teconomix.
 - Voice-call/OpenAI TTS config parity: add missing `speed`, `instructions`, and `baseUrl` fields to the OpenAI TTS config schema and gate `instructions` to supported models so voice-call overrides validate and route cleanly through core TTS. (#39226) Thanks @ademczuk.
+- ACP/client final-message delivery: preserve terminal assistant text snapshots before resolving `end_turn`, so ACP clients no longer drop the last visible reply when the gateway sends the final message body on the terminal chat event. (#17615) Thanks @pjeby.
 
 ## 2026.3.2
 
