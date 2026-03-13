@@ -5,6 +5,8 @@ export const RUN_RECEIPT_SCHEMA_VERSION = "RunReceiptV1" as const;
 export const OUTCOME_RECORD_SCHEMA_VERSION = "OutcomeRecordV1" as const;
 export const VALIDATION_REPORT_SCHEMA_VERSION = "ValidationReportV1" as const;
 export const ANGELA_TASK_ENVELOPE_SCHEMA_VERSION = "AngelaTaskEnvelopeV1" as const;
+export const LEGACY_DELEGATED_EXECUTION_TRANSPORT = "angela-http" as const;
+export const CANONICAL_DELEGATED_EXECUTION_TRANSPORT = "delegated-http" as const;
 
 export const OPERATOR_TASK_TIERS = ["LITE", "STANDARD", "HEAVY"] as const;
 export const OPERATOR_TASK_STATES = [
@@ -22,7 +24,8 @@ export const OPERATOR_REQUESTER_KINDS = ["operator", "agent", "system"] as const
 export const OPERATOR_EXECUTION_TRANSPORTS = [
   "2tony-http",
   "deb-http",
-  "angela-http",
+  CANONICAL_DELEGATED_EXECUTION_TRANSPORT,
+  LEGACY_DELEGATED_EXECUTION_TRANSPORT,
   "sessions_send",
   "inline",
   "manual",
@@ -43,6 +46,25 @@ export const OPERATOR_EXTERNAL_RECEIPT_SCHEMAS = [
   "AngelaTaskReceiptV1",
 ] as const;
 
+export function canonicalizeOperatorExecutionTransport<
+  T extends (typeof OPERATOR_EXECUTION_TRANSPORTS)[number],
+>(transport: T): Exclude<T, typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT> | "delegated-http" {
+  return transport === LEGACY_DELEGATED_EXECUTION_TRANSPORT
+    ? CANONICAL_DELEGATED_EXECUTION_TRANSPORT
+    : transport;
+}
+
+export function isDelegatedExecutionTransport(
+  transport: string | null | undefined,
+): transport is
+  | typeof CANONICAL_DELEGATED_EXECUTION_TRANSPORT
+  | typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT {
+  return (
+    transport === CANONICAL_DELEGATED_EXECUTION_TRANSPORT ||
+    transport === LEGACY_DELEGATED_EXECUTION_TRANSPORT
+  );
+}
+
 export const operatorContextRefSchema = z.object({
   kind: z.enum(OPERATOR_CONTEXT_REF_KINDS),
   value: z.string().trim().min(1),
@@ -56,12 +78,15 @@ export const operatorReplyTargetSchema = z.object({
 
 export const operatorExecutionPreferenceSchema = z
   .object({
-    transport: z.enum(OPERATOR_EXECUTION_TRANSPORTS).default("2tony-http"),
+    // Default new operator work to the delegated first-class-agent boundary.
+    transport: z
+      .enum(OPERATOR_EXECUTION_TRANSPORTS)
+      .default(CANONICAL_DELEGATED_EXECUTION_TRANSPORT),
     runtime: z.enum(OPERATOR_EXECUTION_RUNTIMES).default("acpx"),
     durable: z.boolean().default(true),
   })
   .default({
-    transport: "2tony-http",
+    transport: CANONICAL_DELEGATED_EXECUTION_TRANSPORT,
     runtime: "acpx",
     durable: true,
   });
@@ -160,6 +185,7 @@ export const outcomeRecordSchema = z.object({
 export const operatorTaskPatchSchema = z.object({
   state: z.enum(OPERATOR_TASK_STATES),
   owner: z.string().trim().min(1).nullable().optional(),
+  attempt: z.number().int().min(0).optional(),
   queue_latency_ms: z.number().int().min(0).nullable().optional(),
   artifacts: z.array(z.string().trim().min(1)).optional(),
   failure_code: z.string().trim().min(1).nullable().optional(),
@@ -171,6 +197,8 @@ export const operatorTaskPatchSchema = z.object({
 const operatorExternalReceiptBaseSchema = z.object({
   task_id: z.string().trim().min(1),
   run_id: z.string().trim().min(1),
+  delegated_run_id: z.string().trim().min(1).nullable().optional(),
+  upstream_run_id: z.string().trim().min(1).nullable().optional(),
   state: z.enum(OPERATOR_EXTERNAL_RECEIPT_STATES),
   owner: z.string().trim().min(1).nullable().optional(),
   attempt: z.number().int().min(0).default(0),

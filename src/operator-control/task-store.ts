@@ -4,6 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import {
   OPERATOR_TASK_STATES,
+  canonicalizeOperatorExecutionTransport,
   operatorExternalReceiptSchema,
   operatorTaskPatchSchema,
   outcomeRecordSchema,
@@ -32,14 +33,26 @@ export type OperatorTaskEvent = {
 export type OperatorTaskRecord = {
   envelope: OperatorTaskEnvelope;
   receipt: OperatorRunReceipt;
+  maxRetries: number;
+  retryAfterMs: number | null;
   events: OperatorTaskEvent[];
   validation: OperatorValidationReport | null;
   outcome: OperatorOutcomeRecord | null;
 };
 
+export type OperatorPendingReceiptRecord = {
+  id: string;
+  taskId: string;
+  receipt: OperatorExternalReceipt;
+  enqueuedAt: number;
+  attempts: number;
+  lastError: string | null;
+};
+
 type OperatorTaskStoreState = {
   version: 1;
   tasks: OperatorTaskRecord[];
+  pendingReceipts: OperatorPendingReceiptRecord[];
 };
 
 export type OperatorTaskListFilters = {
@@ -65,6 +78,7 @@ function createDefaultStore(): OperatorTaskStoreState {
   return {
     version: STORE_VERSION,
     tasks: [],
+    pendingReceipts: [],
   };
 }
 
@@ -77,8 +91,18 @@ function loadStore(): OperatorTaskStoreState {
   if (!raw || typeof raw !== "object" || !Array.isArray((raw as { tasks?: unknown }).tasks)) {
     return createDefaultStore();
   }
-  const parsed = raw as OperatorTaskStoreState;
-  return parsed.version === STORE_VERSION ? parsed : createDefaultStore();
+  const parsed = raw as Partial<OperatorTaskStoreState>;
+  return parsed.version === STORE_VERSION
+    ? {
+        version: STORE_VERSION,
+        tasks: parsed.tasks ?? [],
+        pendingReceipts: Array.isArray(parsed.pendingReceipts)
+          ? parsed.pendingReceipts
+              .map((entry) => normalizePendingReceiptRecord(entry))
+              .filter((entry) => entry.taskId)
+          : [],
+      }
+    : createDefaultStore();
 }
 
 function saveStore(store: OperatorTaskStoreState): void {
@@ -101,14 +125,78 @@ function createEvent(params: {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number | null): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const rounded = Math.round(value);
+  return rounded >= 0 ? rounded : fallback;
+}
+
+function normalizeMaxRetries(value: unknown): number {
+  return normalizeNonNegativeInteger(value, 3) ?? 3;
+}
+
+function normalizeRetryAfterMs(value: unknown): number | null {
+  return normalizeNonNegativeInteger(value, null);
+}
+
+function normalizePendingReceiptRecord(
+  record: OperatorPendingReceiptRecord,
+): OperatorPendingReceiptRecord {
+  return {
+    id: typeof record.id === "string" && record.id.trim() ? record.id : randomUUID(),
+    taskId: typeof record.taskId === "string" && record.taskId.trim() ? record.taskId : "",
+    receipt: operatorExternalReceiptSchema.parse(record.receipt),
+    enqueuedAt:
+      typeof record.enqueuedAt === "number" && Number.isFinite(record.enqueuedAt)
+        ? Math.round(record.enqueuedAt)
+        : Date.now(),
+    attempts:
+      typeof record.attempts === "number" && Number.isFinite(record.attempts)
+        ? Math.max(0, Math.round(record.attempts))
+        : 0,
+    lastError:
+      typeof record.lastError === "string" && record.lastError.trim() ? record.lastError : null,
+  };
+}
+
 function canTransition(from: OperatorTaskState, to: OperatorTaskState): boolean {
   return TRANSITIONS[from]?.includes(to) ?? false;
 }
 
 function normalizeTaskRecord(record: OperatorTaskRecord): OperatorTaskRecord {
+  const envelope = taskEnvelopeSchema.parse(record.envelope);
+  const receipt = runReceiptSchema.parse(record.receipt);
+  const rawRecord = record as OperatorTaskRecord & {
+    maxRetries?: unknown;
+    retryAfterMs?: unknown;
+  };
   return {
-    envelope: taskEnvelopeSchema.parse(record.envelope),
-    receipt: runReceiptSchema.parse(record.receipt),
+    envelope: {
+      ...envelope,
+      execution: {
+        ...envelope.execution,
+        transport: canonicalizeOperatorExecutionTransport(envelope.execution.transport),
+      },
+    },
+    receipt: receipt.execution
+      ? {
+          ...receipt,
+          execution: {
+            ...receipt.execution,
+            transport: canonicalizeOperatorExecutionTransport(receipt.execution.transport),
+          },
+        }
+      : receipt,
+    maxRetries: normalizeMaxRetries(rawRecord.maxRetries),
+    retryAfterMs: normalizeRetryAfterMs(rawRecord.retryAfterMs),
     events: Array.isArray(record.events)
       ? record.events.map((event) => ({
           id: typeof event.id === "string" && event.id.trim() ? event.id : randomUUID(),
@@ -148,7 +236,13 @@ function findExistingTask(
   );
 }
 
-function buildInitialTaskRecord(envelope: OperatorTaskEnvelope): OperatorTaskRecord {
+function buildInitialTaskRecord(
+  envelope: OperatorTaskEnvelope,
+  retryPolicy?: {
+    maxRetries?: number;
+    retryAfterMs?: number | null;
+  },
+): OperatorTaskRecord {
   const now = Date.now();
   return {
     envelope,
@@ -166,6 +260,8 @@ function buildInitialTaskRecord(envelope: OperatorTaskEnvelope): OperatorTaskRec
       artifacts: [],
       failure_code: null,
     },
+    maxRetries: normalizeMaxRetries(retryPolicy?.maxRetries),
+    retryAfterMs: normalizeRetryAfterMs(retryPolicy?.retryAfterMs),
     events: [
       createEvent({ state: "accepted", owner: envelope.requester.id, note: "task accepted" }),
     ],
@@ -178,13 +274,17 @@ export function submitOperatorTask(input: unknown): {
   created: boolean;
   task: OperatorTaskRecord;
 } {
+  const inputRecord = asRecord(input);
   const envelope = resolveOperatorTaskEnvelope(input);
   const store = loadStore();
   const existing = findExistingTask(store, envelope);
   if (existing) {
     return { created: false, task: normalizeTaskRecord(existing) };
   }
-  const created = buildInitialTaskRecord(envelope);
+  const created = buildInitialTaskRecord(envelope, {
+    maxRetries: inputRecord?.maxRetries ?? inputRecord?.max_retries,
+    retryAfterMs: inputRecord?.retryAfterMs ?? inputRecord?.retry_after_ms,
+  });
   store.tasks.unshift(created);
   saveStore(store);
   return {
@@ -250,7 +350,11 @@ export function patchOperatorTask(taskId: string, input: unknown): OperatorTaskR
     throw new Error(`Invalid task transition: ${current.receipt.state} -> ${patch.state}`);
   }
   const nextAttempt =
-    patch.state === "retrying" ? current.receipt.attempt + 1 : current.receipt.attempt;
+    patch.attempt !== undefined
+      ? patch.attempt
+      : patch.state === "retrying"
+        ? current.receipt.attempt + 1
+        : current.receipt.attempt;
   const nextReceipt: OperatorRunReceipt = {
     ...current.receipt,
     state: patch.state,
@@ -317,7 +421,8 @@ export function applyOperatorExternalReceipt(
         ? receipt.metadata.targetAgentId.trim()
         : null) ??
       current.receipt.owner ??
-      (receipt.schema === "AngelaTaskReceiptV1" ? "angela" : "2tony"),
+      (receipt.schema === "AngelaTaskReceiptV1" ? "delegated-agent" : "2tony"),
+    attempt: receipt.attempt,
     queue_latency_ms: receipt.queue_latency_ms ?? current.receipt.queue_latency_ms ?? null,
     artifacts: receipt.artifacts.length > 0 ? receipt.artifacts : current.receipt.artifacts,
     failure_code: receipt.failure_code ?? null,
@@ -349,6 +454,189 @@ export function applyOperatorExternalReceipt(
   }
 
   return patchOperatorTask(taskId, patch);
+}
+
+function isInvalidTaskTransitionError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Invalid task transition:");
+}
+
+function buildPendingReceiptFingerprint(taskId: string, receipt: OperatorExternalReceipt): string {
+  return [
+    taskId,
+    receipt.schema,
+    receipt.run_id,
+    receipt.state,
+    receipt.updated_at,
+    receipt.failure_code ?? "",
+  ].join(":");
+}
+
+export function queueOperatorExternalReceipt(
+  taskId: string,
+  input: unknown,
+  options?: {
+    attempts?: number;
+    enqueuedAt?: number;
+    lastError?: string | null;
+  },
+): OperatorPendingReceiptRecord {
+  const receipt = operatorExternalReceiptSchema.parse(input) satisfies OperatorExternalReceipt;
+  if (receipt.task_id !== taskId) {
+    throw new Error(`receipt task_id mismatch: expected ${taskId}, received ${receipt.task_id}`);
+  }
+
+  const store = loadStore();
+  const fingerprint = buildPendingReceiptFingerprint(taskId, receipt);
+  const existing = store.pendingReceipts.find(
+    (entry) => buildPendingReceiptFingerprint(entry.taskId, entry.receipt) === fingerprint,
+  );
+  if (existing) {
+    const updated = normalizePendingReceiptRecord({
+      ...existing,
+      attempts: options?.attempts ?? existing.attempts,
+      enqueuedAt: options?.enqueuedAt ?? existing.enqueuedAt,
+      lastError: options?.lastError ?? existing.lastError,
+    });
+    store.pendingReceipts = store.pendingReceipts.map((entry) =>
+      entry.id === existing.id ? updated : entry,
+    );
+    saveStore(store);
+    return updated;
+  }
+
+  const queued = normalizePendingReceiptRecord({
+    id: randomUUID(),
+    taskId,
+    receipt,
+    enqueuedAt: options?.enqueuedAt ?? Date.now(),
+    attempts: options?.attempts ?? 0,
+    lastError: options?.lastError ?? null,
+  });
+  store.pendingReceipts.push(queued);
+  saveStore(store);
+  return queued;
+}
+
+export function acceptOperatorExternalReceipt(
+  taskId: string,
+  input: unknown,
+):
+  | { queued: false; task: OperatorTaskRecord | null }
+  | { queued: true; task: null; pendingReceipt: OperatorPendingReceiptRecord; reason: string } {
+  try {
+    return { queued: false, task: applyOperatorExternalReceipt(taskId, input) };
+  } catch (error) {
+    if (!isInvalidTaskTransitionError(error)) {
+      throw error;
+    }
+    return {
+      queued: true,
+      task: null,
+      pendingReceipt: queueOperatorExternalReceipt(taskId, input, {
+        lastError: error.message,
+      }),
+      reason: error.message,
+    };
+  }
+}
+
+export function processPendingReceipts(options?: { limit?: number }): {
+  processed: number;
+  applied: number;
+  requeued: number;
+  remaining: number;
+} {
+  const store = loadStore();
+  const limit = Math.min(200, Math.max(1, Math.round(options?.limit ?? 50)));
+  const pending = store.pendingReceipts.slice(0, limit);
+  const leftover = store.pendingReceipts.slice(limit);
+  store.pendingReceipts = leftover;
+  saveStore(store);
+
+  let applied = 0;
+  let requeued = 0;
+  for (const entry of pending) {
+    try {
+      const task = applyOperatorExternalReceipt(entry.taskId, entry.receipt);
+      if (task) {
+        applied += 1;
+        continue;
+      }
+      queueOperatorExternalReceipt(entry.taskId, entry.receipt, {
+        attempts: entry.attempts + 1,
+        enqueuedAt: entry.enqueuedAt,
+        lastError: "task not found",
+      });
+      requeued += 1;
+    } catch (error) {
+      queueOperatorExternalReceipt(entry.taskId, entry.receipt, {
+        attempts: entry.attempts + 1,
+        enqueuedAt: entry.enqueuedAt,
+        lastError: error instanceof Error ? error.message : "receipt replay failed",
+      });
+      requeued += 1;
+    }
+  }
+
+  return {
+    processed: pending.length,
+    applied,
+    requeued,
+    remaining: loadStore().pendingReceipts.length,
+  };
+}
+
+export function listRecoverableDeadLetters(): OperatorTaskRecord[] {
+  return loadStore()
+    .tasks.map(normalizeTaskRecord)
+    .filter(
+      (task) => task.receipt.state === "dead-letter" && task.receipt.attempt < task.maxRetries,
+    );
+}
+
+export function resubmitDeadLetteredTask(taskId: string): OperatorTaskRecord | null {
+  const store = loadStore();
+  const index = store.tasks.findIndex((task) => task.envelope.task_id === taskId);
+  if (index === -1) {
+    return null;
+  }
+
+  const current = normalizeTaskRecord(store.tasks[index]);
+  if (current.receipt.state !== "dead-letter") {
+    throw new Error(`task ${taskId} is not dead-lettered`);
+  }
+  if (current.receipt.attempt >= current.maxRetries) {
+    throw new Error(
+      `task ${taskId} exhausted retries (${current.receipt.attempt}/${current.maxRetries})`,
+    );
+  }
+
+  const nextAttempt = current.receipt.attempt + 1;
+  const nextReceipt: OperatorRunReceipt = {
+    ...current.receipt,
+    state: "queued",
+    owner: current.receipt.owner ?? "tonya",
+    attempt: nextAttempt,
+    updated_at: Date.now(),
+    failure_code: null,
+  };
+  const next: OperatorTaskRecord = {
+    ...current,
+    receipt: runReceiptSchema.parse(nextReceipt),
+    outcome: null,
+    events: [
+      ...current.events,
+      createEvent({
+        state: "queued",
+        owner: nextReceipt.owner,
+        note: "resubmitted from dead-letter",
+        failureCode: null,
+      }),
+    ],
+  };
+  store.tasks[index] = next;
+  saveStore(store);
+  return next;
 }
 
 export function getOperatorTaskStorePath(): string {

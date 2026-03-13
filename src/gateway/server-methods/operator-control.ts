@@ -13,7 +13,7 @@ import {
 } from "../../operator-control/memory-store.js";
 import { getOperatorControlStatus } from "../../operator-control/operator-status.js";
 import {
-  applyOperatorExternalReceipt,
+  acceptOperatorExternalReceipt,
   getOperatorTask,
   listOperatorTasks,
   patchOperatorTask,
@@ -207,8 +207,16 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const task = applyOperatorExternalReceipt(taskId, params.receipt ?? params);
-      if (!task) {
+      const result = acceptOperatorExternalReceipt(taskId, params.receipt ?? params);
+      if (result.queued) {
+        respond(true, {
+          queued: true,
+          reason: result.reason,
+          pendingReceipt: result.pendingReceipt,
+        });
+        return;
+      }
+      if (!result.task) {
         respond(
           false,
           undefined,
@@ -216,8 +224,8 @@ export const operatorControlHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await syncOperatorTaskToDeb(task, "receipt");
-      respond(true, task);
+      await syncOperatorTaskToDeb(result.task, "receipt");
+      respond(true, result.task);
     } catch (error) {
       if (error instanceof ZodError) {
         respond(

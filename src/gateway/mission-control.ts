@@ -21,7 +21,7 @@ import {
 } from "../operator-control/memory-store.js";
 import { getOperatorControlStatus } from "../operator-control/operator-status.js";
 import {
-  applyOperatorExternalReceipt,
+  acceptOperatorExternalReceipt,
   getOperatorTask,
   listOperatorTasks,
   patchOperatorTask,
@@ -759,8 +759,16 @@ async function handleMissionControlApiRequest(params: {
           return true;
         }
         const payload = await readJsonRequestBody(req, MISSION_CONTROL_DEB_MAX_BODY_BYTES);
-        const updated = applyOperatorExternalReceipt(taskId, payload);
-        if (!updated) {
+        const result = acceptOperatorExternalReceipt(taskId, payload);
+        if (result.queued) {
+          respondJson(res, 202, req, {
+            queued: true,
+            reason: result.reason,
+            pendingReceipt: result.pendingReceipt,
+          });
+          return true;
+        }
+        if (!result.task) {
           respondJson(res, 404, req, {
             error: {
               message: "Operator task not found",
@@ -768,8 +776,8 @@ async function handleMissionControlApiRequest(params: {
           });
           return true;
         }
-        await syncOperatorTaskToDeb(updated, "receipt");
-        respondJson(res, 200, req, updated);
+        await syncOperatorTaskToDeb(result.task, "receipt");
+        respondJson(res, 200, req, result.task);
         return true;
       }
       if (req.method === "GET" || req.method === "HEAD") {

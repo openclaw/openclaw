@@ -20,6 +20,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { processPendingReceipts } from "../operator-control/task-store.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -180,6 +181,17 @@ export async function startGatewaySidecars(params: {
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
   });
+
+  try {
+    const pendingReceipts = processPendingReceipts();
+    if (pendingReceipts.applied > 0 || pendingReceipts.requeued > 0) {
+      params.log.warn(
+        `operator pending receipts replayed on startup: applied=${pendingReceipts.applied} requeued=${pendingReceipts.requeued} remaining=${pendingReceipts.remaining}`,
+      );
+    }
+  } catch (err) {
+    params.log.warn(`operator pending receipt replay failed on startup: ${String(err)}`);
+  }
 
   if (shouldWakeFromRestartSentinel()) {
     setTimeout(() => {

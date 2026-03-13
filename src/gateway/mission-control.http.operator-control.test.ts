@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { processPendingReceipts } from "../operator-control/task-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
@@ -245,6 +246,81 @@ describe.sequential("mission-control operator control routes", () => {
         receipt: {
           state: "completed",
           owner: "tonys-angels",
+        },
+      });
+    });
+  });
+
+  it("queues out-of-order receipts on the shared callback route and replays them later", async () => {
+    await withStateDirEnv("openclaw-mc-operator-pending-receipt-", async () => {
+      const createTask = await requestMissionControl({
+        method: "POST",
+        url: "/mission-control/api/tasks",
+        body: {
+          task_id: "task-operator-pending-1",
+          idempotency_key: "idem-operator-pending-1",
+          requester: { id: "tonya", kind: "operator" },
+          target: { capability: "marketing", team_id: "marketing" },
+          objective: "Queue an out-of-order delegated receipt",
+          tier: "STANDARD",
+          acceptance_criteria: ["receipt eventually applies"],
+          timeout_s: 900,
+          execution: {
+            transport: "manual",
+            runtime: "acpx",
+            durable: true,
+          },
+        },
+      });
+      expect(createTask.statusCode).toBe(201);
+
+      const createdPayload = JSON.parse(String(createTask.body)) as {
+        task: { receipt: { run_id: string } };
+      };
+
+      const queuedReceipt = await requestMissionControl({
+        method: "POST",
+        url: "/mission-control/api/tasks/task-operator-pending-1/receipts",
+        body: {
+          schema: "AngelaTaskReceiptV1",
+          task_id: "task-operator-pending-1",
+          run_id: createdPayload.task.receipt.run_id,
+          state: "started",
+          attempt: 0,
+          created_at: 1_700_000_000_000,
+          updated_at: 1_700_000_000_100,
+          summary: "delegate started work",
+        },
+      });
+      expect(queuedReceipt.statusCode).toBe(202);
+      expect(JSON.parse(String(queuedReceipt.body))).toMatchObject({
+        queued: true,
+      });
+
+      const queueTask = await requestMissionControl({
+        method: "PATCH",
+        url: "/mission-control/api/tasks/task-operator-pending-1",
+        body: {
+          state: "queued",
+          owner: "tonys-angels",
+        },
+      });
+      expect(queueTask.statusCode).toBe(200);
+
+      expect(processPendingReceipts()).toMatchObject({
+        processed: 1,
+        applied: 1,
+        requeued: 0,
+      });
+
+      const task = await requestMissionControl({
+        method: "GET",
+        url: "/mission-control/api/tasks/task-operator-pending-1",
+      });
+      expect(task.statusCode).toBe(200);
+      expect(JSON.parse(String(task.body))).toMatchObject({
+        receipt: {
+          state: "started",
         },
       });
     });

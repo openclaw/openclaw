@@ -1,5 +1,6 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
+import { processPendingReceipts } from "../operator-control/task-store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
@@ -129,6 +130,12 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+    }
+
+    try {
+      processPendingReceipts();
+    } catch (err) {
+      params.logHealth.error(`pending receipt replay failed: ${formatError(err)}`);
     }
   }, 60_000);
 

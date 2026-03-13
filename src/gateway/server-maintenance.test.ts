@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
+const processPendingReceiptsMock = vi.fn(() => ({
+  processed: 0,
+  applied: 0,
+  requeued: 0,
+  remaining: 0,
+}));
 
 vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
@@ -10,6 +16,10 @@ vi.mock("../media/store.js", async (importOriginal) => {
     cleanOldMedia: cleanOldMediaMock,
   };
 });
+
+vi.mock("../operator-control/task-store.js", () => ({
+  processPendingReceipts: processPendingReceiptsMock,
+}));
 
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 
@@ -120,6 +130,22 @@ describe("startGatewayMaintenanceTimers", () => {
 
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(cleanOldMediaMock).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("replays pending operator receipts on the maintenance interval", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+    });
+
+    processPendingReceiptsMock.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(processPendingReceiptsMock).toHaveBeenCalledTimes(1);
 
     stopMaintenanceTimers(timers);
   });

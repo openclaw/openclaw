@@ -3,6 +3,10 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { dispatchOperatorTask, submitOperatorTaskAndDispatch } from "./dispatch.js";
 import { getOperatorTask, submitOperatorTask } from "./task-store.js";
+import {
+  getOperatorTransportCircuitSnapshot,
+  resetOperatorTransportCircuitBreakers,
+} from "./transport-circuit-breaker.js";
 
 function create2TonyFetchMock(
   taskResponse?: Record<string, unknown>,
@@ -74,6 +78,7 @@ describe("operator task dispatch", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetOperatorTransportCircuitBreakers();
   });
 
   afterEach(() => {
@@ -105,6 +110,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["queued in worker"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -148,6 +158,11 @@ describe("operator task dispatch", () => {
         tier: "HEAVY",
         acceptance_criteria: ["clear reason returned"],
         timeout_s: 900,
+        execution: {
+          transport: "2tony-http",
+          runtime: "acpx",
+          durable: true,
+        },
       });
 
       const result = await withEnvAsync(
@@ -197,6 +212,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["queued in worker"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -231,6 +251,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["worker receives validate-k8s payload"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -272,6 +297,11 @@ describe("operator task dispatch", () => {
             tier: "STANDARD",
             acceptance_criteria: ["task blocks early"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -311,6 +341,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["task blocks before worker dead-letter"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -347,6 +382,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["task blocks early"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -390,6 +430,11 @@ describe("operator task dispatch", () => {
             },
             acceptance_criteria: ["task blocks early"],
             timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "acpx",
+              durable: true,
+            },
           }),
       );
 
@@ -397,6 +442,102 @@ describe("operator task dispatch", () => {
       const task = getOperatorTask("task-dispatch-stale-worker-runtime");
       expect(task?.receipt.state).toBe("blocked");
       expect(task?.receipt.failure_code).toBe("stale_runtime");
+    });
+  });
+
+  it("opens and recovers the delegated transport circuit breaker after repeated failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
+
+    await withStateDirEnv("operator-dispatch-delegated-circuit-", async () => {
+      const failingFetch = createHttpDelegateFetchMock({
+        actionResponse: { ok: true },
+        actionStatus: 200,
+        actionStatusText: "OK",
+        readyStatus: 503,
+        readyStatusText: "Service Unavailable",
+      });
+      globalThis.fetch = failingFetch as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_ANGELA_URL: "http://angela.internal:3011",
+        },
+        async () => {
+          for (let index = 1; index <= 5; index += 1) {
+            await submitOperatorTaskAndDispatch({
+              task_id: `task-delegated-circuit-${index}`,
+              idempotency_key: `task-delegated-circuit-${index}`,
+              requester: { id: "tonya", kind: "operator" },
+              target: { capability: "marketing", alias: "tonys-angels" },
+              objective: "Trip the delegated transport circuit",
+              tier: "STANDARD",
+              acceptance_criteria: ["dispatch blocks"],
+              timeout_s: 900,
+              execution: {
+                transport: "delegated-http",
+                runtime: "acpx",
+                durable: true,
+              },
+            });
+          }
+
+          expect(getOperatorTransportCircuitSnapshot("delegated-http").state).toBe("open");
+
+          const callsBeforeOpenBlock = failingFetch.mock.calls.length;
+          const blocked = await submitOperatorTaskAndDispatch({
+            task_id: "task-delegated-circuit-open-block",
+            idempotency_key: "task-delegated-circuit-open-block",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "marketing", alias: "tonys-angels" },
+            objective: "Circuit should short-circuit",
+            tier: "STANDARD",
+            acceptance_criteria: ["dispatch blocks before fetch"],
+            timeout_s: 900,
+            execution: {
+              transport: "delegated-http",
+              runtime: "acpx",
+              durable: true,
+            },
+          });
+
+          expect(blocked.dispatch.message).toContain("transport circuit open");
+          expect(failingFetch.mock.calls.length).toBe(callsBeforeOpenBlock);
+
+          vi.setSystemTime(new Date("2026-03-13T12:01:01.000Z"));
+          const recoveredFetch = createHttpDelegateFetchMock({
+            actionResponse: { ok: true, status: "accepted" },
+            actionStatus: 202,
+            actionStatusText: "Accepted",
+            readyBody: { ready: true },
+          });
+          globalThis.fetch = recoveredFetch as unknown as typeof fetch;
+
+          const recovered = await submitOperatorTaskAndDispatch({
+            task_id: "task-delegated-circuit-recovered",
+            idempotency_key: "task-delegated-circuit-recovered",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "marketing", alias: "tonys-angels" },
+            objective: "Half-open probe should recover the circuit",
+            tier: "STANDARD",
+            acceptance_criteria: ["dispatch succeeds"],
+            timeout_s: 900,
+            execution: {
+              transport: "delegated-http",
+              runtime: "acpx",
+              durable: true,
+            },
+          });
+
+          expect(recovered.dispatch).toMatchObject({
+            attempted: true,
+            accepted: true,
+            endpoint: "http://angela.internal:3011/api/message",
+            statusCode: 202,
+          });
+          expect(getOperatorTransportCircuitSnapshot("delegated-http").state).toBe("closed");
+        },
+      );
     });
   });
 
@@ -445,6 +586,46 @@ describe("operator task dispatch", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
       expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    });
+  });
+
+  it("blocks legacy 2Tony dispatch when a task requests subagent runtime", async () => {
+    await withStateDirEnv("operator-dispatch-2tony-subagent-runtime-", async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_2TONY_URL: "http://2tony.internal:3009",
+        },
+        async () =>
+          await submitOperatorTaskAndDispatch({
+            task_id: "task-dispatch-2tony-subagent-runtime",
+            idempotency_key: "task-dispatch-2tony-subagent-runtime",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "backend", alias: "raekwon" },
+            objective: "Do not route legacy worker tasks through subagent runtime",
+            tier: "STANDARD",
+            inputs: {
+              worker_task_type: "git-status",
+            },
+            acceptance_criteria: ["dispatch blocks before contacting 2Tony"],
+            timeout_s: 900,
+            execution: {
+              transport: "2tony-http",
+              runtime: "subagent",
+              durable: true,
+            },
+          }),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.dispatch.message).toContain(
+        "transport 2tony-http does not support runtime subagent",
+      );
+      const task = getOperatorTask("task-dispatch-2tony-subagent-runtime");
+      expect(task?.receipt.state).toBe("blocked");
+      expect(task?.receipt.failure_code).toBe("dispatch_failed");
     });
   });
 
@@ -806,7 +987,7 @@ describe("operator task dispatch", () => {
     });
   });
 
-  it("dispatches marketing tasks to Angela when team routing selects angela-http", async () => {
+  it("dispatches marketing tasks through the delegated first-class-agent boundary", async () => {
     await withStateDirEnv("operator-dispatch-angela-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
@@ -861,12 +1042,14 @@ describe("operator task dispatch", () => {
       const task = getOperatorTask("task-dispatch-4");
       expect(task?.receipt.state).toBe("queued");
       expect(task?.receipt.owner).toBe("tonys-angels");
-      expect(task?.events.at(-1)?.note).toContain("dispatched to tonys-angels via angela-http");
-      expect(task?.envelope.execution.transport).toBe("angela-http");
+      expect(task?.events.at(-1)?.note).toContain(
+        "dispatched to tonys-angels via delegated first-class-agent boundary",
+      );
+      expect(task?.envelope.execution.transport).toBe("delegated-http");
     });
   });
 
-  it("dispatches engineering tasks to Bobby through the Tonya-hosted angela-http boundary", async () => {
+  it("dispatches engineering tasks to Bobby through the delegated first-class-agent boundary", async () => {
     await withStateDirEnv("operator-dispatch-engineering-bobby-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
@@ -917,8 +1100,10 @@ describe("operator task dispatch", () => {
       const task = getOperatorTask("task-dispatch-engineering-bobby");
       expect(task?.receipt.state).toBe("queued");
       expect(task?.receipt.owner).toBe("bobby-digital");
-      expect(task?.events.at(-1)?.note).toContain("dispatched to bobby-digital via angela-http");
-      expect(task?.envelope.execution.transport).toBe("angela-http");
+      expect(task?.events.at(-1)?.note).toContain(
+        "dispatched to bobby-digital via delegated first-class-agent boundary",
+      );
+      expect(task?.envelope.execution.transport).toBe("delegated-http");
     });
   });
 
@@ -974,6 +1159,59 @@ describe("operator task dispatch", () => {
       const task = getOperatorTask("task-dispatch-angela-global-default");
       expect(task?.receipt.state).toBe("queued");
       expect(task?.receipt.owner).toBe("tonys-angels");
+    });
+  });
+
+  it("allows delegated first-class-agent dispatch when a task explicitly requests subagent runtime", async () => {
+    await withStateDirEnv("operator-dispatch-angela-subagent-runtime-", async () => {
+      const fetchMock = createHttpDelegateFetchMock({
+        actionResponse: {
+          status: "accepted",
+          message: "Delegated subagent request accepted",
+        },
+        actionStatus: 202,
+        actionStatusText: "Accepted",
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_ANGELA_URL: "http://tonya.internal:18789",
+        },
+        async () =>
+          await submitOperatorTaskAndDispatch({
+            task_id: "task-dispatch-angela-subagent-runtime",
+            idempotency_key: "task-dispatch-angela-subagent-runtime",
+            requester: { id: "tonya", kind: "operator" },
+            target: { capability: "marketing", team_id: "marketing" },
+            objective: "Route delegated work through the subagent runtime",
+            tier: "STANDARD",
+            acceptance_criteria: ["delegated transport accepts subagent runtime"],
+            timeout_s: 900,
+            execution: {
+              transport: "angela-http",
+              runtime: "subagent",
+              durable: true,
+            },
+          }),
+      );
+
+      expect(result.dispatch).toMatchObject({
+        attempted: true,
+        accepted: true,
+        endpoint: "http://tonya.internal:18789/api/message",
+        statusCode: 202,
+      });
+      const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+      expect(
+        JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
+      ).toMatchObject({
+        execution: {
+          transport: "delegated-http",
+          runtime: "subagent",
+          durable: true,
+        },
+      });
     });
   });
 
@@ -1043,7 +1281,9 @@ describe("operator task dispatch", () => {
       );
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(result.dispatch.message).toContain("tonys-angels via angela-http not ready");
+      expect(result.dispatch.message).toContain(
+        "tonys-angels via delegated first-class-agent boundary not ready",
+      );
       const task = getOperatorTask("task-dispatch-angela-not-ready");
       expect(task?.receipt.state).toBe("blocked");
       expect(task?.receipt.failure_code).toBe("delegate_unavailable");
@@ -1089,7 +1329,7 @@ describe("operator task dispatch", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(result.dispatch.message).toContain(
-        "tonys-angels via angela-http runtime not ready for dispatch",
+        "tonys-angels via delegated first-class-agent boundary runtime not ready for dispatch",
       );
       const task = getOperatorTask("task-dispatch-angela-stale-runtime");
       expect(task?.receipt.state).toBe("blocked");
@@ -1123,7 +1363,7 @@ describe("operator task dispatch", () => {
           }),
       );
 
-      expect(result.dispatch.message).toContain("angela-http response did not satisfy");
+      expect(result.dispatch.message).toContain("delegated transport response did not satisfy");
       const task = getOperatorTask("task-dispatch-angela-invalid-contract");
       expect(task?.receipt.state).toBe("blocked");
       expect(task?.receipt.failure_code).toBe("dispatch_failed");

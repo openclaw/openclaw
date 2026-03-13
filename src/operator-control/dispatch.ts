@@ -1,10 +1,22 @@
 import { ZodError } from "zod";
 import { resolveOperatorDelegatedDefaultAlias } from "./agent-registry.js";
-import type { OperatorBlockerCode } from "./contracts.js";
+import {
+  CANONICAL_DELEGATED_EXECUTION_TRANSPORT,
+  LEGACY_DELEGATED_EXECUTION_TRANSPORT,
+  canonicalizeOperatorExecutionTransport,
+  type OperatorBlockerCode,
+} from "./contracts.js";
 import { resolveOperatorRuntimeFreshness } from "./runtime-freshness.js";
 import { getOperatorTask, patchOperatorTask, submitOperatorTask } from "./task-store.js";
 import type { OperatorTaskRecord } from "./task-store.js";
 import { getResolvedOperatorTaskTeam } from "./team-routing.js";
+import {
+  assertOperatorTransportCircuitClosed,
+  OperatorTransportCircuitOpenError,
+  recordOperatorTransportDispatchFailure,
+  recordOperatorTransportDispatchSuccess,
+  type OperatorTransportCircuitName,
+} from "./transport-circuit-breaker.js";
 import { getOperatorWorkerReady, isOperatorWorkerClientError } from "./worker-client.js";
 import {
   coerceOperatorRuntimeIdentity,
@@ -256,6 +268,44 @@ function buildTaskDecomposition(task: OperatorTaskRecord, workerTaskType: string
     },
     validationChecklist: task.envelope.acceptance_criteria,
   };
+}
+
+type SupportedDispatchTransport =
+  | "2tony-http"
+  | "deb-http"
+  | typeof CANONICAL_DELEGATED_EXECUTION_TRANSPORT
+  | typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT;
+
+const SUPPORTED_RUNTIME_BY_TRANSPORT: Record<
+  SupportedDispatchTransport,
+  ReadonlySet<"acpx" | "subagent" | "inline">
+> = {
+  "2tony-http": new Set(["acpx"]),
+  "deb-http": new Set(["acpx"]),
+  "delegated-http": new Set(["acpx", "subagent"]),
+  "angela-http": new Set(["acpx", "subagent"]),
+};
+
+function resolveCircuitTransport(task: OperatorTaskRecord): OperatorTransportCircuitName | null {
+  const transport = canonicalizeOperatorExecutionTransport(task.envelope.execution.transport);
+  if (transport === "2tony-http" || transport === "deb-http" || transport === "delegated-http") {
+    return transport;
+  }
+  return null;
+}
+
+function shouldRecordCircuitFailure(error: unknown): boolean {
+  if (error instanceof OperatorTransportCircuitOpenError) {
+    return false;
+  }
+  if (!(error instanceof DispatchBlockError)) {
+    return true;
+  }
+  return (
+    error.code === "delegate_unavailable" ||
+    error.code === "dispatch_failed" ||
+    error.code === "stale_runtime"
+  );
 }
 
 function resolve2TonyTaskType(task: OperatorTaskRecord): string {
@@ -589,9 +639,9 @@ function buildDelegatedTransportPayload(task: OperatorTaskRecord): {
     teamId: task.envelope.target.team_id ?? null,
   });
   if (!owner) {
-    throw new Error("angela-http target alias not configured");
+    throw new Error("delegated first-class-agent target alias not configured");
   }
-  const delegateName = `${owner} via angela-http`;
+  const delegateName = `${owner} via delegated first-class-agent boundary`;
 
   return {
     baseUrl,
@@ -828,7 +878,7 @@ async function dispatchToDelegatedTransport(task: OperatorTaskRecord): Promise<D
     request.baseUrl,
     readAuthorizationHeader(request.init.headers),
     {
-      label: "Domain orchestrator",
+      label: "Delegated first-class-agent boundary",
       maxAgeEnv: "OPENCLAW_OPERATOR_ANGELA_MAX_AGE_HOURS",
       approvedRefsEnv: "OPENCLAW_OPERATOR_ANGELA_APPROVED_REFS",
       requireIdentityEnv: "OPENCLAW_OPERATOR_REQUIRE_ANGELA_IDENTITY",
@@ -845,7 +895,7 @@ async function dispatchToDelegatedTransport(task: OperatorTaskRecord): Promise<D
   } else if (response.ok) {
     throw new DispatchBlockError(
       "dispatch_failed",
-      "angela-http response did not satisfy the receipt contract",
+      "delegated transport response did not satisfy the acceptance contract",
     );
   }
 
@@ -866,6 +916,7 @@ function resolveDispatchFailureEndpoint(task: OperatorTaskRecord): string {
       } catch {
         return `${resolveDebBaseUrl() ?? "<unconfigured>"}/update`;
       }
+    case "delegated-http":
     case "angela-http":
       try {
         return buildDelegatedTransportPayload(task).endpoint;
@@ -875,6 +926,22 @@ function resolveDispatchFailureEndpoint(task: OperatorTaskRecord): string {
     default:
       return `${resolve2TonyBaseUrl() ?? "<unconfigured>"}/task`;
   }
+}
+
+function assertSupportedTransportRuntime(task: OperatorTaskRecord): void {
+  const transport = task.envelope.execution.transport;
+  if (transport === "manual" || transport === "inline" || transport === "sessions_send") {
+    return;
+  }
+  const runtime = task.envelope.execution.runtime;
+  const supported = SUPPORTED_RUNTIME_BY_TRANSPORT[transport];
+  if (supported.has(runtime)) {
+    return;
+  }
+  throw new DispatchBlockError(
+    "dispatch_failed",
+    `transport ${transport} does not support runtime ${runtime}`,
+  );
 }
 
 export async function dispatchOperatorTask(taskId: string): Promise<DispatchResult> {
@@ -891,18 +958,44 @@ export async function dispatchOperatorTask(taskId: string): Promise<DispatchResu
     );
   }
 
-  switch (task.envelope.execution.transport) {
-    case "2tony-http":
-      return await dispatchTo2Tony(task);
-    case "deb-http":
-      return await dispatchToDeb(task);
-    case "angela-http":
-      return await dispatchToDelegatedTransport(task);
-    default:
-      return {
-        attempted: false,
-        reason: `transport ${task.envelope.execution.transport} is not wired for automatic dispatch`,
-      };
+  assertSupportedTransportRuntime(task);
+  const circuitTransport = resolveCircuitTransport(task);
+  if (circuitTransport) {
+    assertOperatorTransportCircuitClosed(circuitTransport);
+  }
+
+  try {
+    let result: DispatchResult;
+    switch (task.envelope.execution.transport) {
+      case "2tony-http":
+        result = await dispatchTo2Tony(task);
+        break;
+      case "deb-http":
+        result = await dispatchToDeb(task);
+        break;
+      case "delegated-http":
+      case "angela-http":
+        result = await dispatchToDelegatedTransport(task);
+        break;
+      default:
+        result = {
+          attempted: false,
+          reason: `transport ${task.envelope.execution.transport} is not wired for automatic dispatch`,
+        };
+    }
+    if (circuitTransport) {
+      if (result.attempted && result.accepted) {
+        recordOperatorTransportDispatchSuccess(circuitTransport);
+      } else if (result.attempted) {
+        recordOperatorTransportDispatchFailure(circuitTransport);
+      }
+    }
+    return result;
+  } catch (error) {
+    if (circuitTransport && shouldRecordCircuitFailure(error)) {
+      recordOperatorTransportDispatchFailure(circuitTransport);
+    }
+    throw error;
   }
 }
 
@@ -952,7 +1045,9 @@ export async function submitOperatorTaskAndDispatch(input: unknown): Promise<{
     const code =
       error instanceof DispatchBlockError
         ? error.code
-        : ("dispatch_failed" satisfies OperatorBlockerCode);
+        : error instanceof OperatorTransportCircuitOpenError
+          ? ("delegate_unavailable" satisfies OperatorBlockerCode)
+          : ("dispatch_failed" satisfies OperatorBlockerCode);
     blockOperatorTask(
       task,
       code,

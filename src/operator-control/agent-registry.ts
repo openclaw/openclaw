@@ -100,6 +100,14 @@ type RawAgentRegistry = {
   k8s_cluster?: unknown;
 };
 
+type CompiledOperatorAgentRegistryCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  snapshot: CompiledOperatorAgentRegistry;
+};
+
+const registryCache = new Map<string, CompiledOperatorAgentRegistryCacheEntry>();
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -146,8 +154,7 @@ function resolveAgentsRegistrySourcePath(params?: {
   return path.join(workspaceDir, "memory", "reference", "agents.yaml");
 }
 
-function parseRawRegistry(sourcePath: string): RawAgentRegistry {
-  const raw = fs.readFileSync(sourcePath, "utf8");
+function parseRawRegistry(raw: string, sourcePath: string): RawAgentRegistry {
   const parsed = YAML.parse(raw, { schema: "core" }) as unknown;
   const record = asRecord(parsed);
   if (!record) {
@@ -343,8 +350,15 @@ export function compileOperatorAgentRegistry(params?: {
   sourcePath?: string;
 }): CompiledOperatorAgentRegistry {
   const sourcePath = resolveAgentsRegistrySourcePath(params);
+  const cacheKey = path.resolve(sourcePath);
+  const sourceStats = fs.statSync(sourcePath);
+  const cached = registryCache.get(cacheKey);
+  if (cached && cached.mtimeMs === sourceStats.mtimeMs && cached.size === sourceStats.size) {
+    return cached.snapshot;
+  }
+
   const rawYaml = fs.readFileSync(sourcePath, "utf8");
-  const parsed = parseRawRegistry(sourcePath);
+  const parsed = parseRawRegistry(rawYaml, sourcePath);
   const operatorRuntime = compileOperatorRuntime(parsed);
   const compiledAgents = (Array.isArray(parsed.agents) ? parsed.agents : []).map(
     compileAgentRecord,
@@ -450,7 +464,23 @@ export function compileOperatorAgentRegistry(params?: {
     }),
   };
   saveJsonFile(resolveRegistryArtifactPath(), snapshot);
+  registryCache.set(cacheKey, {
+    mtimeMs: sourceStats.mtimeMs,
+    size: sourceStats.size,
+    snapshot,
+  });
   return snapshot;
+}
+
+export function invalidateRegistryCache(params?: {
+  workspaceDir?: string;
+  sourcePath?: string;
+}): void {
+  if (params?.sourcePath || params?.workspaceDir) {
+    registryCache.delete(path.resolve(resolveAgentsRegistrySourcePath(params)));
+    return;
+  }
+  registryCache.clear();
 }
 
 function findCompiledOperatorTeam(

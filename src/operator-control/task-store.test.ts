@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  acceptOperatorExternalReceipt,
   applyOperatorExternalReceipt,
   getOperatorTask,
   getOperatorTaskStatusSummary,
   listOperatorTasks,
+  listRecoverableDeadLetters,
   patchOperatorTask,
+  processPendingReceipts,
+  resubmitDeadLetteredTask,
   submitOperatorTask,
 } from "./task-store.js";
 
@@ -199,7 +203,7 @@ describe("operator task store", () => {
     });
   });
 
-  it("falls back to the delegated target agent when an angela-http receipt omits owner", async () => {
+  it("falls back to the delegated target agent when a delegated receipt omits owner", async () => {
     await withStateDirEnv("operator-task-store-angela-target-agent-fallback-", async () => {
       const created = submitOperatorTask({
         task_id: "task-5",
@@ -239,6 +243,100 @@ describe("operator task store", () => {
       expect(completed?.receipt.state).toBe("completed");
       expect(completed?.receipt.owner).toBe("bobby-digital");
       expect(completed?.outcome?.outcome).toBe("success");
+    });
+  });
+
+  it("lists and resubmits recoverable dead-letter tasks until retries are exhausted", async () => {
+    await withStateDirEnv("operator-task-store-dead-letter-recovery-", async () => {
+      submitOperatorTask({
+        task_id: "task-dead-letter-1",
+        idempotency_key: "idem-dead-letter-1",
+        requester: { id: "tonya", kind: "operator" },
+        target: { capability: "backend" },
+        objective: "Retry dead-lettered work",
+        tier: "STANDARD",
+        acceptance_criteria: ["task can be resubmitted"],
+        timeout_s: 1200,
+        maxRetries: 3,
+      });
+
+      patchOperatorTask("task-dead-letter-1", {
+        state: "queued",
+        owner: "2tony",
+      });
+      patchOperatorTask("task-dead-letter-1", {
+        state: "dead-letter",
+        owner: "2tony",
+        attempt: 1,
+        failure_code: "tool-timeout",
+      });
+
+      expect(listRecoverableDeadLetters().map((task) => task.envelope.task_id)).toEqual([
+        "task-dead-letter-1",
+      ]);
+
+      const resubmitted = resubmitDeadLetteredTask("task-dead-letter-1");
+      expect(resubmitted?.receipt.state).toBe("queued");
+      expect(resubmitted?.receipt.attempt).toBe(2);
+      expect(resubmitted?.outcome).toBeNull();
+
+      patchOperatorTask("task-dead-letter-1", {
+        state: "dead-letter",
+        owner: "2tony",
+        attempt: 3,
+        failure_code: "tool-timeout",
+      });
+
+      expect(listRecoverableDeadLetters()).toEqual([]);
+      expect(() => resubmitDeadLetteredTask("task-dead-letter-1")).toThrow(
+        "task task-dead-letter-1 exhausted retries (3/3)",
+      );
+      expect(getOperatorTask("task-dead-letter-1")?.receipt.state).toBe("dead-letter");
+    });
+  });
+
+  it("queues out-of-order receipts and replays them once the task state catches up", async () => {
+    await withStateDirEnv("operator-task-store-pending-receipts-", async () => {
+      const created = submitOperatorTask({
+        task_id: "task-pending-receipt-1",
+        idempotency_key: "idem-pending-receipt-1",
+        requester: { id: "tonya", kind: "operator" },
+        target: { capability: "marketing" },
+        objective: "Queue an out-of-order receipt",
+        tier: "STANDARD",
+        acceptance_criteria: ["receipt is replayed later"],
+        timeout_s: 1200,
+      });
+
+      const queued = acceptOperatorExternalReceipt("task-pending-receipt-1", {
+        schema: "AngelaTaskReceiptV1",
+        task_id: "task-pending-receipt-1",
+        run_id: created.task.receipt.run_id,
+        state: "started",
+        attempt: 0,
+        created_at: Date.now() - 1000,
+        updated_at: Date.now(),
+        summary: "delegate started work",
+      });
+
+      expect(queued).toMatchObject({
+        queued: true,
+        reason: "Invalid task transition: accepted -> started",
+      });
+      expect(getOperatorTask("task-pending-receipt-1")?.receipt.state).toBe("accepted");
+
+      patchOperatorTask("task-pending-receipt-1", {
+        state: "queued",
+        owner: "tonys-angels",
+      });
+
+      expect(processPendingReceipts()).toMatchObject({
+        processed: 1,
+        applied: 1,
+        requeued: 0,
+        remaining: 0,
+      });
+      expect(getOperatorTask("task-pending-receipt-1")?.receipt.state).toBe("started");
     });
   });
 });

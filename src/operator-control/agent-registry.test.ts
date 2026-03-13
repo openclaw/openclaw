@@ -1,14 +1,21 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   compileOperatorAgentRegistry,
+  invalidateRegistryCache,
   resolveOperatorDelegatedDefaultAlias,
 } from "./agent-registry.js";
 
 describe("compileOperatorAgentRegistry", () => {
+  afterEach(() => {
+    invalidateRegistryCache();
+    vi.restoreAllMocks();
+  });
+
   it("compiles agents.yaml into a stable registry artifact", async () => {
     await withStateDirEnv("operator-registry-", async ({ stateDir }) => {
       await withTempDir("operator-registry-workspace-", async (dir) => {
@@ -319,6 +326,41 @@ describe("compileOperatorAgentRegistry", () => {
         expect(() => compileOperatorAgentRegistry({ sourcePath })).toThrow(
           "team dispatch_default_alias must be a member of team engineering: bobby-digital",
         );
+      });
+    });
+  });
+
+  it("caches compiled registries until the source mtime changes", async () => {
+    await withStateDirEnv("operator-registry-cache-", async () => {
+      await withTempDir("operator-registry-cache-workspace-", async (dir) => {
+        const sourcePath = path.join(dir, "agents.yaml");
+        await fs.writeFile(
+          sourcePath,
+          ["agents:", "  - id: tonya", "    name: Tonya", ""].join("\n"),
+          "utf8",
+        );
+
+        const readSpy = vi.spyOn(fsSync, "readFileSync");
+        const first = compileOperatorAgentRegistry({ sourcePath });
+        const second = compileOperatorAgentRegistry({ sourcePath });
+
+        expect(second).toBe(first);
+        expect(readSpy).toHaveBeenCalledTimes(1);
+
+        await fs.writeFile(
+          sourcePath,
+          ["agents:", "  - id: tonya", "    name: Tonya", "  - id: deb", "    name: Deb", ""].join(
+            "\n",
+          ),
+          "utf8",
+        );
+        const bumpedMtime = new Date(Date.now() + 2_000);
+        await fs.utimes(sourcePath, bumpedMtime, bumpedMtime);
+
+        const third = compileOperatorAgentRegistry({ sourcePath });
+        expect(third).not.toBe(first);
+        expect(third.agentCount).toBe(2);
+        expect(readSpy).toHaveBeenCalledTimes(2);
       });
     });
   });
