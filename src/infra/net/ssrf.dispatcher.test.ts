@@ -1,21 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor, getDefaultAutoSelectFamily } =
-  vi.hoisted(() => ({
-    agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
-      this.options = options;
-    }),
-    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-      this: { options: unknown },
-      options: unknown,
-    ) {
-      this.options = options;
-    }),
-    proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
-      this.options = options;
-    }),
-    getDefaultAutoSelectFamily: vi.fn(() => true),
-  }));
+const {
+  agentCtor,
+  envHttpProxyAgentCtor,
+  proxyAgentCtor,
+  getDefaultAutoSelectFamily,
+} = vi.hoisted(() => ({
+  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
+    this.options = options;
+  }),
+  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+  getDefaultAutoSelectFamily: vi.fn(() => true),
+}));
 
 vi.mock("undici", () => ({
   Agent: agentCtor,
@@ -52,9 +56,8 @@ describe("createPinnedDispatcher", () => {
       expect(dispatcher).toBeDefined();
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
-          autoSelectFamilyAttemptTimeout: 300, // Set attempt timeout for Happy Eyeballs
+          autoSelectFamilyAttemptTimeout: 300,
           lookup,
-          // Note: autoSelectFamily is NOT set here - we respect process-level setting
         },
       });
     });
@@ -71,14 +74,14 @@ describe("createPinnedDispatcher", () => {
       createPinnedDispatcher(pinned, {
         mode: "direct",
         connect: {
-          autoSelectFamilyAttemptTimeout: 500, // Caller can override defaults
+          autoSelectFamilyAttemptTimeout: 500,
           lookup: previousLookup,
         },
       });
 
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
-          autoSelectFamilyAttemptTimeout: 500, // Caller's value wins
+          autoSelectFamilyAttemptTimeout: 500,
           lookup,
         },
       });
@@ -95,14 +98,14 @@ describe("createPinnedDispatcher", () => {
       createPinnedDispatcher(pinned, {
         mode: "direct",
         connect: {
-          autoSelectFamily: false, // Explicitly disable
+          autoSelectFamily: false,
         },
       });
 
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
-          autoSelectFamily: false, // Caller's explicit value wins
-          autoSelectFamilyAttemptTimeout: 300, // Default timeout still applied
+          autoSelectFamily: false,
+          autoSelectFamilyAttemptTimeout: 300,
           lookup,
         },
       });
@@ -129,7 +132,7 @@ describe("createPinnedDispatcher", () => {
       expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
         connect: {
           autoSelectFamily: true,
-          autoSelectFamilyAttemptTimeout: 300, // Default applied by withPinnedLookup
+          autoSelectFamilyAttemptTimeout: 300,
           lookup,
         },
         proxyTls: {
@@ -157,7 +160,6 @@ describe("createPinnedDispatcher", () => {
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
           lookup,
-          // No autoSelectFamilyAttemptTimeout - respects process-level disable
         },
       });
     });
@@ -208,7 +210,6 @@ describe("createPinnedDispatcher", () => {
       expect(agentCtor).toHaveBeenCalledWith({
         connect: {
           lookup,
-          // No autoSelectFamily defaults on older Node.js
         },
       });
     });
