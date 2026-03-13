@@ -146,6 +146,37 @@
   flex-shrink: 0;
 }
 
+/* Context usage warning pill */
+.context-notice {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  margin: 0 auto 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ctx-color, #d97706) 35%, transparent);
+  background: var(--ctx-bg, rgba(217, 119, 6, 0.12));
+  color: var(--ctx-color, #d97706);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.context-notice__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+}
+
+.context-notice__detail {
+  color: color-mix(in srgb, currentColor 72%, var(--muted));
+  font-variant-numeric: tabular-nums;
+}
+
 /* Chat compose - sticky at bottom */
 .chat-compose {
   position: sticky;
