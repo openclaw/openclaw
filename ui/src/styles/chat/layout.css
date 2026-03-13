@@ -864,6 +864,16 @@
   color: var(--foreground);
 }
 
+.agent-chat__welcome-avatar {
+  width: 56px;
+  height: 56px;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
 .agent-chat__avatar--logo {
   width: 48px;
   height: 48px;
@@ -878,6 +888,8 @@
 .agent-chat__avatar--logo img {
   width: 32px;
   height: 32px;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 

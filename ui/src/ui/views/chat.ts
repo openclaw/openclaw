@@ -579,7 +579,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       <div class="agent-chat__welcome-glow"></div>
       ${
         avatar
-          ? html`<img src=${avatar} alt=${name} style="width:56px; height:56px; border-radius:50%; object-fit:cover;" />`
+          ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
           : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="OpenClaw" /></div>`
       }
       <h2>${name}</h2>
