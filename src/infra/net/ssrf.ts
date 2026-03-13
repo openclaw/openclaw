@@ -268,6 +268,7 @@ export type PinnedDispatcherPolicy =
   | {
       mode: "explicit-proxy";
       proxyUrl: string;
+      connect?: Record<string, unknown>;
       proxyTls?: Record<string, unknown>;
     };
 
@@ -370,13 +371,14 @@ export function createPinnedDispatcher(
   }
 
   const proxyUrl = policy.proxyUrl.trim();
-  if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
-  }
-  return new ProxyAgent({
+  // CWE-918: Pass pinned lookup to ProxyAgent so the target hostname resolves
+  // to the pre-validated IP addresses, preventing DNS rebinding attacks.
+  const proxyOpts: Record<string, unknown> = {
     uri: proxyUrl,
-    proxyTls: { ...policy.proxyTls },
-  });
+    ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
+    requestTls: withPinnedLookup(pinned.lookup, policy.connect),
+  };
+  return new ProxyAgent(proxyOpts as ConstructorParameters<typeof ProxyAgent>[0]);
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {

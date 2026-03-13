@@ -102,7 +102,7 @@ describe("createPinnedDispatcher", () => {
     });
   });
 
-  it("keeps explicit proxy routing intact", () => {
+  it("passes pinned lookup to explicit proxy via requestTls", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
       hostname: "api.telegram.org",
@@ -122,6 +122,9 @@ describe("createPinnedDispatcher", () => {
       uri: "http://127.0.0.1:7890",
       proxyTls: {
         autoSelectFamily: false,
+      },
+      requestTls: {
+        lookup,
       },
     });
   });
