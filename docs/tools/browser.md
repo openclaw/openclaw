@@ -204,9 +204,47 @@ the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
 - **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
   discover the WebSocket debugger URL, then connects.
 - **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
-  skipping `/json/version`. Use this for services like
-  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  skipping `/json/version`. These providers auto-create a browser session on
+  WebSocket connect, so no manual session creation step is needed. Use this for
+  services like [Browser Use](https://cloud.browser-use.com),
+  [Browserbase](https://www.browserbase.com), or any provider that hands you a
   WebSocket URL.
+
+### Browser Use
+
+Set up a [Browser Use](https://cloud.browser-use.com) cloud browser profile with anti-detect stealth, CAPTCHA solving, persistent profiles, and residential proxies.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browseruse",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browseruse: {
+        // All Browser Use session params can be added as query params.
+        // See: https://docs.browser-use.com/cloud/api-v2/browsers/create-browser-session
+        cdpUrl: "wss://connect.browser-use.com?apiKey=<BROWSER_USE_API_KEY>&timeout=240&profileId=<PROFILE_ID>&proxyCountryCode=us",
+        color: "#ff750e",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://cloud.browser-use.com) and copy your **API Key** from the
+  [dashboard](https://cloud.browser-use.com/settings?tab=api-keys&new=1).
+- Replace `<BROWSER_USE_API_KEY>` with your real Browser Use API key.
+- Replace `<PROFILE_ID>` with a persistent profile ID, or remove the
+  `profileId` param if you don't need profile persistence.
+- All [Browser Use session parameters](https://docs.browser-use.com/cloud/api-v2/browsers/create-browser-session)
+  (timeout, profileId, proxyCountryCode, screen size, custom proxy, etc.)
+  are passed as query params in the `cdpUrl`.
+- [Pay-as-you-go pricing](https://browser-use.com/pricing) starts at $0.06/hr per browser session with up to 25 concurrent sessions and no monthly commitment — just buy credits and go.
+- See [Browser Use docs](https://docs.browser-use.com) for full API reference, SDK guides, and integration examples.
 
 ### Browserbase
 
@@ -236,8 +274,6 @@ Notes:
 - [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
   from the [Overview dashboard](https://www.browserbase.com/overview).
 - Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
-- Browserbase auto-creates a browser session on WebSocket connect, so no
-  manual session creation step is needed.
 - The free tier allows one concurrent session and one browser hour per month.
   See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
