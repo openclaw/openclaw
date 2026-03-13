@@ -802,14 +802,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private isMultimodalProviderValidationError(message: string): boolean {
-    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|codec|duration|media type|file type|(audio|video).*(too long|duration)|(too long|duration).*(audio|video))/i.test(
+    return /(page limit|too many pages|mime type|unsupported (file|media|mime|codec|format)|invalid (mime|codec|format|duration|media|file)|media type|file type|(audio|video).*(codec|too long|duration)|(codec|too long|duration).*(audio|video))/i.test(
       message,
     );
   }
 
   private isSkippableMultimodalInputError(message: string): boolean {
     if (
-      /(401|403|429|quota|rate[_ ]limit|too many requests|5\d\d|timed? out|timeout|network|econn|enotfound|service unavailable|unavailable)/i.test(
+      /(401|403|429|quota|rate[_ ]limit|too many requests|5\d\d|timed? out|timeout|deadline|network|econn|enotfound|service unavailable|unavailable)/i.test(
         message,
       )
     ) {

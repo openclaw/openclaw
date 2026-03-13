@@ -69,6 +69,12 @@ vi.mock("./embeddings.js", () => {
                     if (input.text.toLowerCase().includes("generic400.pdf")) {
                       throw new Error("400 bad request");
                     }
+                    if (input.text.toLowerCase().includes("codecerr.mp4")) {
+                      throw new Error("http2: client connection force closed, codec error");
+                    }
+                    if (input.text.toLowerCase().includes("durationerr.mp4")) {
+                      throw new Error("deadline exceeded, request duration: 30.5s");
+                    }
                     if (input.text.toLowerCase().includes("outage.mp4")) {
                       throw new Error("503 upstream unavailable");
                     }
@@ -427,6 +433,46 @@ describe("memory index", () => {
     const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
 
     await expect(manager.sync({ reason: "test" })).rejects.toThrow(/400 bad request/);
+
+    await manager.close?.();
+  });
+
+  it("fails sync for non-media codec errors", async () => {
+    const mediaDir = path.join(workspaceDir, "media-codec-error");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "codecerr.mp4"), Buffer.from("mp4"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-codec-error-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["video"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+
+    await expect(manager.sync({ reason: "test" })).rejects.toThrow(/codec error/);
+
+    await manager.close?.();
+  });
+
+  it("fails sync for deadline duration errors", async () => {
+    const mediaDir = path.join(workspaceDir, "media-duration-error");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "durationerr.mp4"), Buffer.from("mp4"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-duration-error-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["video"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+
+    await expect(manager.sync({ reason: "test" })).rejects.toThrow(
+      /deadline exceeded, request duration: 30\.5s/,
+    );
 
     await manager.close?.();
   });
