@@ -27,10 +27,12 @@ const ALLOWED_TLON_COMMANDS = new Set([
 /**
  * Find the tlon binary from the skill package
  */
-function findTlonBinary(): string {
+function findTlonBinary(logger?: OpenClawPluginApi["logger"]): string {
+  const log = (msg: string) => logger?.debug?.(msg);
+
   // Check in node_modules/.bin
   const skillBin = join(__dirname, "node_modules", ".bin", "tlon");
-  console.log(`[tlon] Checking for binary at: ${skillBin}, exists: ${existsSync(skillBin)}`);
+  log(`[tlon] Checking for binary at: ${skillBin}, exists: ${existsSync(skillBin)}`);
   if (existsSync(skillBin)) return skillBin;
 
   // Check for platform-specific binary directly
@@ -38,13 +40,13 @@ function findTlonBinary(): string {
   const arch = process.arch;
   const platformPkg = `@tloncorp/tlon-skill-${platform}-${arch}`;
   const platformBin = join(__dirname, "node_modules", platformPkg, "tlon");
-  console.log(
+  log(
     `[tlon] Checking for platform binary at: ${platformBin}, exists: ${existsSync(platformBin)}`,
   );
   if (existsSync(platformBin)) return platformBin;
 
   // Fallback to PATH
-  console.log(`[tlon] Falling back to PATH lookup for 'tlon'`);
+  log(`[tlon] Falling back to PATH lookup for 'tlon'`);
   return "tlon";
 }
 
@@ -133,7 +135,7 @@ const plugin = {
     api.registerChannel({ plugin: tlonPlugin });
 
     // Register the tlon tool
-    const tlonBinary = findTlonBinary();
+    const tlonBinary = findTlonBinary(api.logger);
     api.logger.info(`[tlon] Registering tlon tool, binary: ${tlonBinary}`);
     api.registerTool({
       name: "tlon",
