@@ -2,6 +2,7 @@ import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
   ProviderNonInteractiveApiKeyResult,
 } from "../plugins/types.js";
@@ -85,7 +86,7 @@ function buildOpenAICompatibleSelfHostedProviderConfig(params: {
   };
 }
 
-export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(params: {
+type OpenAICompatibleSelfHostedProviderSetupParams = {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   providerId: string;
@@ -97,13 +98,34 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(param
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-}): Promise<{
+};
+
+type OpenAICompatibleSelfHostedProviderPromptResult = {
   config: OpenClawConfig;
   credential: AuthProfileCredential;
   modelId: string;
   modelRef: string;
   profileId: string;
-}> {
+};
+
+function buildSelfHostedProviderAuthResult(
+  result: OpenAICompatibleSelfHostedProviderPromptResult,
+): ProviderAuthResult {
+  return {
+    profiles: [
+      {
+        profileId: result.profileId,
+        credential: result.credential,
+      },
+    ],
+    configPatch: result.config,
+    defaultModel: result.modelRef,
+  };
+}
+
+export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
+  params: OpenAICompatibleSelfHostedProviderSetupParams,
+): Promise<OpenAICompatibleSelfHostedProviderPromptResult> {
   const baseUrlRaw = await params.prompter.text({
     message: `${params.providerLabel} base URL`,
     initialValue: params.defaultBaseUrl,
@@ -150,6 +172,13 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(param
     modelRef: configured.modelRef,
     profileId: configured.profileId,
   };
+}
+
+export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
+  params: OpenAICompatibleSelfHostedProviderSetupParams,
+): Promise<ProviderAuthResult> {
+  const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider(params);
+  return buildSelfHostedProviderAuthResult(result);
 }
 
 function buildMissingNonInteractiveModelIdMessage(params: {
