@@ -61,17 +61,60 @@ describe("wrapToolMutationLock", () => {
     const wrapped = wrapToolMutationLock(base, process.cwd());
 
     const p1 = wrapped.execute("call-1", { path: "same.txt", content: "one" });
-    const p2 = wrapped.execute("call-2", { file_path: "same.txt", content: "two" });
 
     await waitUntil(() => {
       expect(events).toEqual(["start:one"]);
     });
+
+    const p2 = wrapped.execute("call-2", { file_path: "same.txt", content: "two" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["start:one"]);
 
     firstGate.resolve();
 
     await expect(p1).resolves.toMatchObject({ content: [{ type: "text", text: "one" }] });
     await expect(p2).resolves.toMatchObject({ content: [{ type: "text", text: "two" }] });
     expect(events).toEqual(["start:one", "end:one", "start:two", "end:two"]);
+  });
+
+  it("aborts queued same-path calls when signal is canceled", async () => {
+    const firstGate = deferred();
+    const events: string[] = [];
+
+    const base: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write",
+      parameters: {},
+      execute: async (_toolCallId, params) => {
+        const record = params as Record<string, unknown>;
+        const content = typeof record.content === "string" ? record.content : "";
+        events.push(`start:${content}`);
+        if (content === "one") {
+          await firstGate.promise;
+        }
+        events.push(`end:${content}`);
+        return textResult(content);
+      },
+    };
+
+    const wrapped = wrapToolMutationLock(base, process.cwd());
+    const p1 = wrapped.execute("call-1", { path: "same.txt", content: "one" });
+
+    await waitUntil(() => {
+      expect(events).toEqual(["start:one"]);
+    });
+
+    const controller = new AbortController();
+    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" }, controller.signal);
+    controller.abort();
+
+    await expect(p2).rejects.toMatchObject({ name: "AbortError" });
+    expect(events).toEqual(["start:one"]);
+
+    firstGate.resolve();
+    await expect(p1).resolves.toMatchObject({ content: [{ type: "text", text: "one" }] });
+    expect(events).toEqual(["start:one", "end:one"]);
   });
 
   it("allows different paths to run concurrently", async () => {
@@ -143,11 +186,14 @@ describe("wrapToolMutationLock", () => {
     const wrapped = wrapToolMutationLock(base, process.cwd(), { containerWorkdir: "/agent" });
 
     const p1 = wrapped.execute("call-1", { path: "/agent/same.txt", content: "one" });
-    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" });
 
     await waitUntil(() => {
       expect(events).toEqual(["start:/agent/same.txt"]);
     });
+
+    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["start:/agent/same.txt"]);
 
     gate.resolve();
     await Promise.all([p1, p2]);
@@ -183,11 +229,14 @@ describe("wrapToolMutationLock", () => {
     const wrapped = wrapToolMutationLock(base, process.cwd(), { containerWorkdir: "/agent" });
 
     const p1 = wrapped.execute("call-1", { path: "file:///agent/same.txt", content: "one" });
-    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" });
 
     await waitUntil(() => {
       expect(events).toEqual(["start:file:///agent/same.txt"]);
     });
+
+    const p2 = wrapped.execute("call-2", { path: "same.txt", content: "two" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["start:file:///agent/same.txt"]);
 
     gate.resolve();
     await Promise.all([p1, p2]);
@@ -223,11 +272,14 @@ describe("wrapToolMutationLock", () => {
     const wrapped = wrapToolMutationLock(base, process.cwd(), { containerWorkdir: "/agent" });
 
     const p1 = wrapped.execute("call-1", { path: "/agent/../agent/same.txt", content: "one" });
-    const p2 = wrapped.execute("call-2", { path: "/agent/same.txt", content: "two" });
 
     await waitUntil(() => {
       expect(events).toEqual(["start:/agent/../agent/same.txt"]);
     });
+
+    const p2 = wrapped.execute("call-2", { path: "/agent/same.txt", content: "two" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["start:/agent/../agent/same.txt"]);
 
     gate.resolve();
     await Promise.all([p1, p2]);

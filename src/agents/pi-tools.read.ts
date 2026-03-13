@@ -388,8 +388,8 @@ export function wrapToolMutationLock(
       });
       workspaceMutationLocks.set(lockKey, current);
 
-      await previous;
       try {
+        await waitForQueuedMutation(previous, signal);
         return await withWorkspaceLock(
           lockKey,
           {
@@ -410,6 +410,39 @@ export function wrapToolMutationLock(
     },
   };
 }
+async function waitForQueuedMutation(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await previous;
+    return;
+  }
+
+  if (signal.aborted) {
+    throw createAbortError();
+  }
+
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    await Promise.race([previous, abortPromise]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error("Operation aborted.");
+  error.name = "AbortError";
+  return error;
+}
+
 async function canonicalizeMutationLockKey(targetPath: string): Promise<string> {
   const resolved = path.resolve(targetPath);
   const suffix: string[] = [];
