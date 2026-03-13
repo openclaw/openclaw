@@ -17,6 +17,7 @@ const acquireSessionWriteLockMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const waitForEmbeddedPiRunEndMock = vi.fn();
+const diagWarnMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", () => ({
   streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -66,6 +67,12 @@ vi.mock("./auth-profiles/session-override.js", () => ({
     resolveSessionAuthProfileOverrideMock(...args),
 }));
 
+vi.mock("../logging/diagnostic.js", () => ({
+  diagnosticLogger: {
+    warn: (...args: unknown[]) => diagWarnMock(...args),
+  },
+}));
+
 const { BTW_CUSTOM_TYPE, runBtwSideQuestion } = await import("./btw.js");
 
 function makeAsyncEvents(events: unknown[]) {
@@ -105,6 +112,7 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     waitForEmbeddedPiRunEndMock.mockReset();
+    diagWarnMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
@@ -422,6 +430,60 @@ describe("runBtwSideQuestion", () => {
           question: "What is 17 * 19?",
           answer: "323",
         }),
+      );
+    });
+  });
+
+  it("logs deferred persistence failures through the diagnostic logger", async () => {
+    acquireSessionWriteLockMock
+      .mockRejectedValueOnce(
+        new Error("session file locked (timeout 250ms): pid=123 /tmp/session.lock"),
+      )
+      .mockRejectedValueOnce(
+        new Error("session file locked (timeout 10000ms): pid=123 /tmp/session.lock"),
+      );
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "323" });
+    await vi.waitFor(() => {
+      expect(diagWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("btw transcript persistence skipped: sessionId=session-1"),
       );
     });
   });

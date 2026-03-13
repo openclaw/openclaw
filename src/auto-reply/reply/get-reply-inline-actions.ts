@@ -37,6 +37,7 @@ function getBuiltinSlashCommands(): Set<string> {
     return builtinSlashCommands;
   }
   builtinSlashCommands = listReservedChatSlashCommandNames([
+    "btw",
     "think",
     "verbose",
     "reasoning",

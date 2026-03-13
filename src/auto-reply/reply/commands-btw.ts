@@ -1,12 +1,20 @@
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const BTW_USAGE = "Usage: /btw <side question>";
 
-export const handleBtwCommand: CommandHandler = async (params) => {
+export const handleBtwCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
   const match = params.command.commandBodyNormalized.match(/^\/btw(?:\s+(.*))?$/i);
   if (!match) {
     return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/btw");
+  if (unauthorized) {
+    return unauthorized;
   }
 
   const question = match[1]?.trim() ?? "";

@@ -15,6 +15,7 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../config/sessions.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -97,7 +98,7 @@ function deferBtwCustomEntryPersist(params: {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[btw] skipped transcript persistence: ${message}`);
+      diag.warn(`btw transcript persistence skipped: sessionId=${params.sessionId} err=${message}`);
     }
   })();
 }

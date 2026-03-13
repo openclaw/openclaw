@@ -32,6 +32,23 @@ describe("handleBtwCommand", () => {
     });
   });
 
+  it("ignores /btw when text commands are disabled", async () => {
+    const result = await handleBtwCommand(buildParams("/btw what changed?"), false);
+
+    expect(result).toBeNull();
+    expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores /btw from unauthorized senders", async () => {
+    const params = buildParams("/btw what changed?");
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
+  });
+
   it("requires an active session context", async () => {
     const params = buildParams("/btw what changed?");
     params.sessionEntry = undefined;
