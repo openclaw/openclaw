@@ -1560,18 +1560,19 @@ export async function updateConfigFile(
   options: ConfigWriteOptions = {},
 ): Promise<void> {
   const io = createConfigIO();
-  await io.updateConfigFile(async (current) => {
-    // Re-apply the runtime snapshot overlay the same way writeConfigFile does,
-    // but on the freshly-read on-disk state rather than on a stale pre-computed cfg.
-    if (runtimeConfigSnapshot && runtimeConfigSourceSnapshot) {
-      // Project the caller's transform result back onto the source snapshot so
-      // secret references are preserved correctly.
-      const transformed = await transform(current);
-      const runtimePatch = createMergePatch(runtimeConfigSnapshot, transformed);
-      return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
-    }
-    return transform(current);
-  }, options);
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+  // Delegate entirely to the IO layer — the transform receives the freshly-read
+  // on-disk config inside the advisory lock, and writeConfigFileUnderLock handles
+  // env-var reference restoration on its own.  The runtimeConfigSource overlay
+  // used by writeConfigFile is intentionally omitted here: it is only valid when
+  // the caller's config was derived from runtimeConfigSnapshot, which is not the
+  // case for a transform-based write.
+  await io.updateConfigFile(transform, options);
+  // If a runtime snapshot was active, invalidate it so subsequent loadConfig()
+  // calls re-read from disk instead of returning stale in-memory state.
+  if (hadRuntimeSnapshot) {
+    clearRuntimeConfigSnapshot();
+  }
 }
 
 export async function writeConfigFile(
