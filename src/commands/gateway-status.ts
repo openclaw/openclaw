@@ -225,7 +225,7 @@ export async function gatewayStatusCommand(
     });
   }
   for (const result of probed) {
-    if (result.authDiagnostics.length === 0) {
+    if (result.authDiagnostics.length === 0 || result.probe.ok) {
       continue;
     }
     for (const diagnostic of result.authDiagnostics) {
