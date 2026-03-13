@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setConsoleActivityDetailMode } from "./console.js";
+import * as consoleModule from "./console.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -18,7 +18,7 @@ function renderConsoleValue(value: unknown): string {
 }
 
 afterEach(() => {
-  setConsoleActivityDetailMode(false);
+  consoleModule.setConsoleActivityDetailMode(false);
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
@@ -48,7 +48,7 @@ describe("activity console style", () => {
     expect(out.join("\n")).not.toContain("run-123");
 
     out.length = 0;
-    setConsoleActivityDetailMode(true);
+    consoleModule.setConsoleActivityDetailMode(true);
 
     log.debug("embedded run tool end", {
       activity: {
@@ -76,5 +76,31 @@ describe("activity console style", () => {
     log.warn("plain warning line without activity");
 
     expect(warns.join("\n")).toContain("plain warning line without activity");
+  });
+
+  it("uses the local activity timestamp helper instead of UTC slicing", () => {
+    setLoggerOverride({ level: "debug", consoleLevel: "debug", consoleStyle: "activity" });
+    const log = createSubsystemLogger("agent/embedded");
+
+    const out: string[] = [];
+    const timeSpy = vi
+      .spyOn(consoleModule, "formatConsoleTimestamp")
+      .mockImplementation((style) => (style === "activity" ? "LOCAL-TIME" : "UNUSED"));
+    vi.spyOn(console, "log").mockImplementation((value?: unknown) => {
+      out.push(renderConsoleValue(value));
+    });
+
+    log.debug("embedded run tool end", {
+      activity: {
+        kind: "tool",
+        summary: "Write AGENTS.md",
+        runId: "run-123",
+        toolCallId: "call-456",
+        status: "ok",
+      },
+    });
+
+    expect(timeSpy).toHaveBeenCalledWith("activity");
+    expect(out[0]?.startsWith("LOCAL-TIME ")).toBe(true);
   });
 });

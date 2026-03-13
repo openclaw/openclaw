@@ -209,7 +209,7 @@ function formatConsoleLine(opts: {
     if (activity) {
       return renderActivityLine(activity, {
         mode: isConsoleActivityDetailMode() ? "full" : "normal",
-        time: new Date().toISOString().slice(11, 19),
+        time: formatConsoleTimestamp("activity"),
         level: opts.level,
         subsystem: opts.subsystem,
       });

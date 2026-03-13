@@ -181,7 +181,7 @@ function isEpipeError(err: unknown): boolean {
 
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
-  if (style === "pretty") {
+  if (style === "pretty" || style === "activity") {
     const h = String(now.getHours()).padStart(2, "0");
     const m = String(now.getMinutes()).padStart(2, "0");
     const s = String(now.getSeconds()).padStart(2, "0");
