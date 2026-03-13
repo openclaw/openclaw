@@ -156,6 +156,7 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
+// This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
 // Windows doesn't support Unix permission bits — chmod 0o755 is a no-op and
 // statSync().mode never reports execute bits, so these tests are meaningless there.
 describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
