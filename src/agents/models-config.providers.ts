@@ -14,6 +14,7 @@ import {
 } from "./cloudflare-ai-gateway.js";
 import {
   buildHuggingfaceProvider,
+  buildModelScopeProvider,
   buildKilocodeProviderWithDiscovery,
   buildVeniceProvider,
   buildVercelAiGatewayProvider,
@@ -701,6 +702,10 @@ const SIMPLE_IMPLICIT_PROVIDER_LOADERS: ImplicitProviderLoader[] = [
   withApiKey("together", async ({ apiKey }) => ({ ...buildTogetherProvider(), apiKey })),
   withApiKey("huggingface", async ({ apiKey, discoveryApiKey }) => ({
     ...(await buildHuggingfaceProvider(discoveryApiKey)),
+    apiKey,
+  })),
+  withApiKey("modelscope", async ({ apiKey, discoveryApiKey }) => ({
+    ...(await buildModelScopeProvider(discoveryApiKey)),
     apiKey,
   })),
   withApiKey("qianfan", async ({ apiKey }) => ({ ...buildQianfanProvider(), apiKey })),

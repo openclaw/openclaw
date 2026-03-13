@@ -10,6 +10,7 @@ import {
   applyKimiCodeConfig,
   applyLitellmConfig,
   applyMistralConfig,
+  applyModelScopeConfig,
   applyModelStudioConfig,
   applyModelStudioConfigCn,
   applyMoonshotConfig,
@@ -31,6 +32,7 @@ import {
   setKimiCodingApiKey,
   setLitellmApiKey,
   setMistralApiKey,
+  setModelScopeApiKey,
   setModelStudioApiKey,
   setMoonshotApiKey,
   setOpenaiApiKey,
@@ -487,6 +489,23 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
           applyAuthProfileConfig(cfg, {
             profileId: "huggingface:default",
             provider: "huggingface",
+            mode: "api_key",
+          }),
+        ),
+    },
+    {
+      authChoices: ["modelscope-api-key"],
+      provider: "modelscope",
+      flagValue: params.opts.modelscopeApiKey,
+      flagName: "--modelscope-api-key",
+      envVar: "HF_TOKEN",
+      profileId: "modelscope:default",
+      setCredential: withStorage(setModelScopeApiKey),
+      applyConfig: (cfg) =>
+        applyModelScopeConfig(
+          applyAuthProfileConfig(cfg, {
+            profileId: "modelscope:default",
+            provider: "modelscope",
             mode: "api_key",
           }),
         ),
