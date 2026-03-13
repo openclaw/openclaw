@@ -54,9 +54,23 @@ describe("shared/tailscale-status", () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it("continues when the first candidate returns success but malformed Self data", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, stdout: '{"Self":"bad"}' })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: 'prefix {"Self":{"TailscaleIPs":["100.64.0.11"]}} suffix',
+      });
+
+    await expect(resolveTailnetHostWithRunner(run)).resolves.toBe("100.64.0.11");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
     const run = vi
       .fn()
+      .mockResolvedValueOnce({ code: null, stdout: "boom" })
       .mockResolvedValueOnce({ code: 1, stdout: "boom" })
       .mockResolvedValueOnce({ code: 0, stdout: "   " });
 
