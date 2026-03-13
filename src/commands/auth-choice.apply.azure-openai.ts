@@ -15,7 +15,8 @@ import {
 } from "./azure-openai-config.js";
 import { applyAuthProfileConfig, setAzureOpenaiApiKey } from "./onboard-auth.js";
 
-const AZURE_OPENAI_BASE_URL_PLACEHOLDER = "https://<resource>.openai.azure.com/openai/v1";
+const AZURE_OPENAI_BASE_URL_PLACEHOLDER =
+  "https://<resource>.openai.azure.com/openai/v1 or https://<resource>.services.ai.azure.com/openai/v1 or https://<resource>.cognitiveservices.azure.com/openai/v1";
 
 async function resolveAzureOpenAIBaseUrl(params: ApplyAuthChoiceParams): Promise<string> {
   const fromOpts = params.opts?.azureOpenaiBaseUrl?.trim();

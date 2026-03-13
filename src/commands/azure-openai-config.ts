@@ -45,7 +45,7 @@ export function normalizeAzureOpenAIBaseUrl(value: string): string {
     parsed = new URL(candidate);
   } catch {
     throw new Error(
-      "Azure OpenAI base URL must be a valid URL (for example: https://<resource>.openai.azure.com/openai/v1).",
+      "Azure OpenAI base URL must be a valid URL (for example: https://<resource>.openai.azure.com/openai/v1 or https://<resource>.services.ai.azure.com/openai/v1 or https://<resource>.cognitiveservices.azure.com/openai/v1).",
     );
   }
 
