@@ -4,7 +4,7 @@ import { rawDataToString } from "./ws.js";
 
 describe("rawDataToString", () => {
   it("returns string input unchanged", () => {
-    expect(rawDataToString("hello")).toBe("hello");
+    expect(rawDataToString("hello" as never)).toBe("hello");
   });
 
   it("decodes Buffer, Buffer[] and ArrayBuffer inputs", () => {
