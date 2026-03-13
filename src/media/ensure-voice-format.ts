@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { parseFfprobeCodecAndSampleRate, runFfmpeg, runFfprobe } from "./ffmpeg-exec.js";
@@ -55,7 +56,10 @@ export async function ensureVoiceFormat(
   // Transcode to OGG/Opus at the expected sample rate.
   // Always resample to 48 kHz — lower rates (e.g. 24 kHz from some TTS providers)
   // cause 0.5× playback speed on channels that hard-code 48 kHz decoding.
-  const tempDir = resolvePreferredOpenClawTmpDir();
+  // Write into a temp subdirectory so callers can use scheduleCleanup(dir).
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "voice-fmt-"));
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
   await runFfmpeg([
