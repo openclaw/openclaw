@@ -11,7 +11,7 @@ import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
 export type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
-export type BackupSkipReason = "covered" | "missing";
+export type BackupSkipReason = "covered" | "missing" | "excluded";
 
 export type BackupAsset = {
   kind: BackupAssetKind;
@@ -106,11 +106,13 @@ async function canonicalizeExistingPath(targetPath: string): Promise<string> {
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    includeBrowser?: boolean;
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
 ): Promise<BackupPlan> {
   const includeWorkspace = params.includeWorkspace ?? true;
+  const includeBrowser = params.includeBrowser ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
@@ -241,6 +243,20 @@ export async function resolveBackupPlanFromDisk(
       displayPath: shortenHomePath(candidate.canonicalPath),
       archivePath: buildBackupArchivePath(archiveRoot, candidate.canonicalPath),
     });
+  }
+
+  if (!includeBrowser) {
+    for (const asset of included) {
+      if (asset.kind === "state") {
+        const browserDir = path.join(asset.sourcePath, "browser");
+        skipped.push({
+          kind: "state",
+          sourcePath: browserDir,
+          displayPath: shortenHomePath(browserDir),
+          reason: "excluded",
+        });
+      }
+    }
   }
 
   return {

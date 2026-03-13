@@ -26,6 +26,7 @@ export function registerBackupCommand(program: Command) {
     .option("--verify", "Verify the archive after writing it", false)
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
+    .option("--no-include-browser", "Exclude browser profile data from the backup")
     .addHelpText(
       "after",
       () =>
@@ -48,6 +49,10 @@ export function registerBackupCommand(program: Command) {
             "Back up state/config without agent workspace files.",
           ],
           ["openclaw backup create --only-config", "Back up only the active JSON config file."],
+          [
+            "openclaw backup create --no-include-browser",
+            "Back up without browser profile data (saves ~1.6GB).",
+          ],
         ])}`,
     )
     .action(async (opts) => {
@@ -59,6 +64,7 @@ export function registerBackupCommand(program: Command) {
           verify: Boolean(opts.verify),
           onlyConfig: Boolean(opts.onlyConfig),
           includeWorkspace: opts.includeWorkspace as boolean,
+          includeBrowser: opts.includeBrowser as boolean,
         });
       });
     });

@@ -53,6 +53,7 @@ describe("registerBackupCommand", () => {
         verify: false,
         onlyConfig: false,
         includeWorkspace: true,
+        includeBrowser: true,
       }),
     );
   });
@@ -75,6 +76,17 @@ describe("registerBackupCommand", () => {
       runtime,
       expect.objectContaining({
         verify: true,
+      }),
+    );
+  });
+
+  it("honors --no-include-browser", async () => {
+    await runCli(["backup", "create", "--no-include-browser"]);
+
+    expect(backupCreateCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        includeBrowser: false,
       }),
     );
   });
