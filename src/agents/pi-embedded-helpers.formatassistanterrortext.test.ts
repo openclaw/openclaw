@@ -117,6 +117,28 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a friendly message for tool_use/tool_result mismatch (Anthropic verbatim)", () => {
+    // This is the exact raw error Anthropic returns when a tool_result is missing.
+    // Without the fix it falls through to the generic invalidRequest handler and
+    // exposes the raw API message to the user.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27: `tool_use` ids were found without `tool_result` blocks immediately after: exec17734030655683. Each `tool_use` block must have a corresponding `tool_result` block in the next message."}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("tool call mismatch");
+    expect(result).toContain("/new");
+    // Must NOT leak the raw Anthropic message
+    expect(result).not.toContain("exec17734030655683");
+    expect(result).not.toContain("LLM request rejected");
+  });
+
+  it("returns a friendly message for tool_result without tool_use variant", () => {
+    const msg = makeAssistantError("tool_result blocks found without preceding tool_use blocks");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("tool call mismatch");
+    expect(result).toContain("/new");
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

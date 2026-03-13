@@ -732,6 +732,21 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Catch tool_use / tool_result pairing errors before the generic invalidRequest handler.
+  // These occur when a tool call result is dropped (timeout, race condition, last-message edge
+  // case) and the Anthropic API rejects the conversation with a raw technical message that
+  // should never be shown to the user verbatim.
+  if (
+    /tool_use.*ids.*without.*tool_result|tool_result.*without.*tool_use|tool_use.*tool_result.*immediately/i.test(
+      raw,
+    )
+  ) {
+    return (
+      "Session history has a tool call mismatch — please try again. " +
+      "If this persists, use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
