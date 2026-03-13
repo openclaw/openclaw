@@ -284,6 +284,34 @@ describe("tts", () => {
         expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
       }
     });
+
+    it("uses ogg-opus for voice-bubble channels (telegram/feishu/whatsapp) when format is not user-configured", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(resolveEdgeOutputFormat(config, "telegram")).toBe("ogg-24khz-16bit-mono-opus");
+      expect(resolveEdgeOutputFormat(config, "feishu")).toBe("ogg-24khz-16bit-mono-opus");
+      expect(resolveEdgeOutputFormat(config, "whatsapp")).toBe("ogg-24khz-16bit-mono-opus");
+    });
+
+    it("keeps default mp3 for non-voice-bubble channels", () => {
+      const config = resolveTtsConfig(baseCfg);
+      expect(resolveEdgeOutputFormat(config, "discord")).toBe("audio-24khz-48kbitrate-mono-mp3");
+      expect(resolveEdgeOutputFormat(config, null)).toBe("audio-24khz-48kbitrate-mono-mp3");
+      expect(resolveEdgeOutputFormat(config, undefined)).toBe("audio-24khz-48kbitrate-mono-mp3");
+    });
+
+    it("respects user-configured edge format even on voice-bubble channels", () => {
+      const customCfg: OpenClawConfig = {
+        ...baseCfg,
+        messages: {
+          tts: {
+            edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+          },
+        },
+      };
+      const config = resolveTtsConfig(customCfg);
+      // User explicitly set a format — don't override it.
+      expect(resolveEdgeOutputFormat(config, "telegram")).toBe("audio-24khz-96kbitrate-mono-mp3");
+    });
   });
 
   describe("parseTtsDirectives", () => {
