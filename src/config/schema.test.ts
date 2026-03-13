@@ -218,8 +218,8 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed.web?.fetch?.readability).toBe(true);
-    expect(parsed.web?.fetch).toMatchObject({
+    expect(parsed?.web?.fetch?.readability).toBe(true);
+    expect(parsed?.web?.fetch).toMatchObject({
       firecrawl: {
         enabled: true,
         apiKey: "firecrawl-test-key",
