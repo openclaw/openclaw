@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
+import { withRunningWebhookMonitor } from "./monitor.webhook.test-helpers.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -22,61 +20,6 @@ vi.mock("./client.js", async () => {
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
-
-async function getFreePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return address.port;
-}
-
-async function waitUntilServerReady(url: string): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
-    try {
-      const response = await fetch(url, { method: "GET" });
-      if (response.status >= 200 && response.status < 500) {
-        return;
-      }
-    } catch {
-      // retry
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`server did not start: ${url}`);
-}
-
-function buildConfig(params: {
-  accountId: string;
-  path: string;
-  port: number;
-  verificationToken?: string;
-  encryptKey?: string;
-}): ClawdbotConfig {
-  return {
-    channels: {
-      feishu: {
-        enabled: true,
-        accounts: {
-          [params.accountId]: {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "secret_test", // pragma: allowlist secret
-            connectionMode: "webhook",
-            webhookHost: "127.0.0.1",
-            webhookPort: params.port,
-            webhookPath: params.path,
-            encryptKey: params.encryptKey,
-            verificationToken: params.verificationToken,
-          },
-        },
-      },
-    },
-  } as ClawdbotConfig;
-}
 
 function signFeishuPayload(params: {
   encryptKey: string;
@@ -107,43 +50,6 @@ function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknow
   return Buffer.concat([iv, encrypted]).toString("base64");
 }
 
-async function withRunningWebhookMonitor(
-  params: {
-    accountId: string;
-    path: string;
-    verificationToken: string;
-    encryptKey: string;
-  },
-  run: (url: string) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const cfg = buildConfig({
-    accountId: params.accountId,
-    path: params.path,
-    port,
-    encryptKey: params.encryptKey,
-    verificationToken: params.verificationToken,
-  });
-
-  const abortController = new AbortController();
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const monitorPromise = monitorFeishuProvider({
-    config: cfg,
-    runtime,
-    abortSignal: abortController.signal,
-  });
-
-  const url = `http://127.0.0.1:${port}${params.path}`;
-  await waitUntilServerReady(url);
-
-  try {
-    await run(url);
-  } finally {
-    abortController.abort();
-    await monitorPromise;
-  }
-}
-
 afterEach(() => {
   stopFeishuMonitor();
 });
@@ -159,6 +65,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const payload = { type: "url_verification", challenge: "challenge-token" };
         const response = await fetch(url, {
@@ -185,6 +92,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const response = await fetch(url, {
           method: "POST",
@@ -208,6 +116,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const response = await fetch(url, {
           method: "POST",
@@ -231,6 +140,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const payload = { type: "url_verification", challenge: "challenge-token" };
         const response = await fetch(url, {
@@ -255,6 +165,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const payload = {
           schema: "2.0",
@@ -283,6 +194,7 @@ describe("Feishu webhook signed-request e2e", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const payload = {
           encrypt: encryptFeishuPayload("encrypt_key", {
