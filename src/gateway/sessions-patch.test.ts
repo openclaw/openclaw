@@ -319,6 +319,73 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnDepth).toBe(2);
   });
 
+  test("persists argus mainline protection metadata", async () => {
+    const before = Date.now();
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          argusMainlineState: "protected",
+          argusProtectMinutes: 15,
+        },
+      }),
+    );
+    expect(entry.argus?.mainlineState).toBe("protected");
+    expect(entry.argus?.protectUntil).toBeGreaterThanOrEqual(before + 14 * 60_000);
+  });
+
+  test("persists argus recovery state and reason", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          argusRecoveryState: "active",
+          argusRecoveryReason: "resume unfinished mainline",
+        },
+      }),
+    );
+    expect(entry.argus?.mainlineState).toBe("protected");
+    expect(entry.argus?.recoveryState).toBe("active");
+    expect(entry.argus?.recoveryReason).toBe("resume unfinished mainline");
+    expect(typeof entry.argus?.recoveryUpdatedAt).toBe("number");
+  });
+
+  test("clears argus metadata when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess",
+        updatedAt: 1,
+        argus: {
+          mainlineState: "protected",
+          protectUntil: Date.now() + 60_000,
+          recoveryState: "pending",
+          recoveryUpdatedAt: Date.now(),
+          recoveryReason: "waiting",
+        },
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          argusMainlineState: null,
+          argusProtectMinutes: null,
+          argusRecoveryState: null,
+          argusRecoveryReason: null,
+        },
+      }),
+    );
+    expect(entry.argus).toBeUndefined();
+  });
+
+  test("rejects invalid argusProtectMinutes values", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, argusProtectMinutes: 0 },
+    });
+    expectPatchError(result, "invalid argusProtectMinutes");
+  });
+
   test("rejects spawnDepth on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },

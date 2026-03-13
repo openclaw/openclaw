@@ -24,9 +24,23 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
+vi.mock("../../config/config.js", () => ({
+  loadConfig: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...original,
+    loadSessionStore: vi.fn().mockReturnValue({}),
+    resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
+  };
+});
+
 const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry.js");
 const { readLatestAssistantReply } = await import("../../agents/tools/agent-step.js");
 const { callGateway } = await import("../../gateway/call.js");
+const { loadSessionStore } = await import("../../config/sessions.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
   await vi.advanceTimersByTimeAsync(advanceMs);
@@ -248,6 +262,30 @@ describe("waitForDescendantSubagentSummary", () => {
     });
     expect(result).toBe("on it");
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("suppresses descendant synthesis when requester session is argus-protected", async () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:main:cron-session": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        argus: {
+          mainlineState: "protected",
+          protectUntil: Date.now() + 10 * 60_000,
+        },
+      },
+    });
+
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "agent:main:cron-session",
+      initialReply: "on it",
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
+
+    expect(result).toBeUndefined();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readLatestAssistantReply).not.toHaveBeenCalled();
   });
 
   it("awaits active descendants via agent.wait and returns synthesis after grace period", async () => {

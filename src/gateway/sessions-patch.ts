@@ -76,9 +76,25 @@ function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined
   return undefined;
 }
 
+function normalizeArgusMainlineState(raw: string): "active" | "protected" | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "active" || normalized === "protected") {
+    return normalized;
+  }
+  return undefined;
+}
+
 function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
   const normalized = raw.trim().toLowerCase();
   if (normalized === "children" || normalized === "none") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeArgusRecoveryState(raw: string): "pending" | "active" | "verified" | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "pending" || normalized === "active" || normalized === "verified") {
     return normalized;
   }
   return undefined;
@@ -211,6 +227,122 @@ export async function applySessionsPatchToStore(params: {
         return invalid("subagentControlScope cannot be changed once set");
       }
       next.subagentControlScope = normalized;
+    }
+  }
+
+  const currentArgus = existing?.argus;
+  let nextArgus: Partial<NonNullable<SessionEntry["argus"]>> | undefined = currentArgus
+    ? { ...currentArgus }
+    : undefined;
+  let didTouchArgus = false;
+
+  if ("argusMainlineState" in patch) {
+    const raw = patch.argusMainlineState;
+    didTouchArgus = true;
+    if (raw === null) {
+      if (nextArgus) {
+        delete nextArgus.mainlineState;
+        delete nextArgus.protectUntil;
+      }
+    } else if (raw !== undefined) {
+      const normalized = normalizeArgusMainlineState(String(raw));
+      if (!normalized) {
+        return invalid('invalid argusMainlineState (use "active"|"protected")');
+      }
+      nextArgus = nextArgus ?? {
+        mainlineState: normalized,
+        protectUntil: now,
+      };
+      nextArgus.mainlineState = normalized;
+    }
+  }
+
+  if ("argusProtectMinutes" in patch) {
+    const raw = patch.argusProtectMinutes;
+    didTouchArgus = true;
+    if (raw === null) {
+      if (nextArgus) {
+        delete nextArgus.protectUntil;
+      }
+    } else if (raw !== undefined) {
+      const numeric = Number(raw);
+      if (!Number.isInteger(numeric) || numeric < 1) {
+        return invalid("invalid argusProtectMinutes (use an integer >= 1)");
+      }
+      nextArgus = nextArgus ?? {
+        mainlineState: "protected",
+        protectUntil: now,
+      };
+      nextArgus.protectUntil = now + numeric * 60_000;
+      if (!nextArgus.mainlineState) {
+        nextArgus.mainlineState = "protected";
+      }
+    }
+  }
+
+  if ("argusRecoveryState" in patch) {
+    const raw = patch.argusRecoveryState;
+    didTouchArgus = true;
+    if (raw === null) {
+      if (nextArgus) {
+        delete nextArgus.recoveryState;
+        delete nextArgus.recoveryUpdatedAt;
+        delete nextArgus.recoveryReason;
+      }
+    } else if (raw !== undefined) {
+      const normalized = normalizeArgusRecoveryState(String(raw));
+      if (!normalized) {
+        return invalid('invalid argusRecoveryState (use "pending"|"active"|"verified")');
+      }
+      nextArgus = nextArgus ?? {
+        mainlineState: "protected",
+        protectUntil: now,
+      };
+      nextArgus.recoveryState = normalized;
+      nextArgus.recoveryUpdatedAt = now;
+    }
+  }
+
+  if ("argusRecoveryReason" in patch) {
+    const raw = patch.argusRecoveryReason;
+    didTouchArgus = true;
+    if (raw === null) {
+      if (nextArgus) {
+        delete nextArgus.recoveryReason;
+      }
+    } else if (raw !== undefined) {
+      const trimmed = String(raw).trim();
+      if (!trimmed) {
+        return invalid("invalid argusRecoveryReason: empty");
+      }
+      nextArgus = nextArgus ?? {
+        mainlineState: "protected",
+        protectUntil: now,
+      };
+      nextArgus.recoveryReason = trimmed;
+      nextArgus.recoveryUpdatedAt = now;
+    }
+  }
+
+  if (didTouchArgus) {
+    const hasMainline = Boolean(
+      nextArgus?.mainlineState &&
+      typeof nextArgus.protectUntil === "number" &&
+      Number.isFinite(nextArgus.protectUntil),
+    );
+    const hasRecovery = Boolean(nextArgus?.recoveryState);
+    if (hasRecovery && !hasMainline) {
+      nextArgus = nextArgus ?? {
+        mainlineState: "protected",
+        protectUntil: now,
+      };
+      nextArgus.mainlineState = nextArgus.mainlineState ?? "protected";
+      nextArgus.protectUntil = nextArgus.protectUntil ?? now;
+    }
+    if (!hasMainline && !hasRecovery) {
+      delete next.argus;
+    } else if (nextArgus) {
+      next.argus = nextArgus as NonNullable<SessionEntry["argus"]>;
     }
   }
 

@@ -21,6 +21,7 @@ import {
   MAX_RETRIES,
   moveToFailed,
   recoverPendingDeliveries,
+  updateDeliveryPayloads,
 } from "./delivery-queue.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
@@ -105,6 +106,7 @@ describe("delivery-queue", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        lanePriority: "internal-followup",
         mirror: {
           sessionKey: "agent:main:main",
           text: "hello",
@@ -190,6 +192,29 @@ describe("delivery-queue", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect(entry.lastAttemptAt).toBeGreaterThan(0);
       expect(entry.lastError).toBe("connection refused");
+    });
+  });
+
+  describe("updateDeliveryPayloads", () => {
+    it("replaces payloads without resetting retry metadata", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "first" }, { text: "second" }],
+        },
+        tmpDir,
+      );
+
+      await failDelivery(id, "temporary failure", tmpDir);
+      await updateDeliveryPayloads(id, [{ text: "second" }], tmpDir);
+
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
+      expect(entry.payloads).toEqual([{ text: "second" }]);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("temporary failure");
+      expect(typeof entry.lastAttemptAt).toBe("number");
     });
   });
 
@@ -354,6 +379,7 @@ describe("delivery-queue", () => {
         entry.enqueuedAt = state.enqueuedAt;
       }
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+      return entry;
     };
     const runRecovery = async ({
       deliver,
@@ -573,6 +599,56 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
       expect(remaining[0]?.id).toBe(blockedId);
+    });
+
+    it("recovers user-visible entries ahead of older internal followup entries", async () => {
+      const internalId = await enqueueDelivery(
+        {
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "internal" }],
+          silent: true,
+        },
+        tmpDir,
+      );
+      const userVisibleId = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "2",
+          payloads: [{ text: "visible" }],
+          mirror: { sessionKey: "agent:main:main" },
+        },
+        tmpDir,
+      );
+
+      const internalEntry = setEntryState(internalId, {
+        retryCount: 0,
+        enqueuedAt: Date.now() - 20_000,
+      });
+      const userEntry = setEntryState(userVisibleId, {
+        retryCount: 0,
+        enqueuedAt: Date.now() - 10_000,
+      });
+      expect(internalEntry.lanePriority).toBe("internal-followup");
+      expect(userEntry.lanePriority).toBe("user-visible");
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
+
+      expect(result).toEqual({
+        recovered: 2,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
+      expect(deliver).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
+      );
+      expect(deliver).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ channel: "whatsapp", to: "+1", skipQueue: true }),
+      );
     });
 
     it("recovers deferred entries on a later restart once backoff elapsed", async () => {

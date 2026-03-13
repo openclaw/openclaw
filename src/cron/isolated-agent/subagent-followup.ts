@@ -1,7 +1,15 @@
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry.js";
 import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  isArgusProtectedSession,
+  isArgusRecoverySession,
+  loadSessionStore,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 
 function resolveCronSubagentTimings() {
   const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
@@ -40,6 +48,19 @@ const INTERIM_CRON_HINTS = [
 
 function normalizeHintText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function shouldDeferArgusProtectedFollowup(sessionKey: string): boolean {
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const entry = store[sessionKey];
+    return isArgusProtectedSession(entry) || isArgusRecoverySession(entry);
+  } catch {
+    return false;
+  }
 }
 
 export function isLikelyInterimCronMessage(value: string): boolean {
@@ -124,6 +145,9 @@ export async function waitForDescendantSubagentSummary(params: {
   timeoutMs: number;
   observedActiveDescendants?: boolean;
 }): Promise<string | undefined> {
+  if (shouldDeferArgusProtectedFollowup(params.sessionKey)) {
+    return undefined;
+  }
   const timings = resolveCronSubagentTimings();
   const initialReply = params.initialReply?.trim();
   const deadline = Date.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));

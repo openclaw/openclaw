@@ -71,6 +71,29 @@ async function writeCurrentProcessLock(lockPath: string, extra?: Record<string, 
   );
 }
 
+async function writeArgusSessionStore(params: {
+  sessionFile: string;
+  argus: NonNullable<import("../config/sessions/types.js").SessionEntry["argus"]>;
+}) {
+  const storePath = path.join(path.dirname(params.sessionFile), "sessions.json");
+  await fs.writeFile(
+    storePath,
+    JSON.stringify(
+      {
+        "agent:main:main": {
+          sessionId: "sess-1",
+          updatedAt: Date.now(),
+          sessionFile: params.sessionFile,
+          argus: params.argus,
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
 async function expectActiveInProcessLockIsNotReclaimed(params?: {
   legacyStarttime?: unknown;
 }): Promise<void> {
@@ -210,6 +233,46 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("watchdog preserves argus-protected in-process locks", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const sessionFile = path.join(root, "session.jsonl");
+      const lockPath = `${sessionFile}.lock`;
+      await writeArgusSessionStore({
+        sessionFile,
+        argus: {
+          mainlineState: "protected",
+          protectUntil: Date.now() + 10 * 60_000,
+        },
+      });
+      await expect(
+        __testing.readArgusSessionContext({ sessionFile, nowMs: Date.now() }),
+      ).resolves.toMatchObject({ argusProtected: true, argusRecoveryActive: false });
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        maxHoldMs: 1,
+      });
+
+      await __testing.runLockWatchdogCheck(Date.now() + 1000);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await expect(
+        acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 50,
+          allowReentrant: false,
+        }),
+      ).rejects.toThrow(/session file locked/);
+
+      await lock.release();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      warnSpy.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
@@ -276,6 +339,51 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(staleDeadLock)).rejects.toThrow();
       await expect(fs.access(staleAliveLock)).rejects.toThrow();
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps argus-protected stale lock files during cleanup", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const protectedLock = path.join(sessionsDir, "protected.jsonl.lock");
+    const protectedSessionFile = path.join(sessionsDir, "protected.jsonl");
+
+    try {
+      await writeArgusSessionStore({
+        sessionFile: protectedSessionFile,
+        argus: {
+          mainlineState: "protected",
+          protectUntil: nowMs + 10 * 60_000,
+          recoveryState: "active",
+          recoveryUpdatedAt: nowMs,
+          recoveryReason: "resume mainline",
+        },
+      });
+      await fs.writeFile(
+        protectedLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+      });
+
+      expect(result.cleaned).toHaveLength(0);
+      expect(result.locks[0]?.argusProtected).toBe(true);
+      expect(result.locks[0]?.argusRecoveryActive).toBe(true);
+      await expect(fs.access(protectedLock)).resolves.toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import {
   signalOutbound,
   telegramOutbound,
@@ -32,6 +32,8 @@ type DeliverMockState = {
     enqueueDelivery: (...args: unknown[]) => Promise<string>;
     ackDelivery: (...args: unknown[]) => Promise<void>;
     failDelivery: (...args: unknown[]) => Promise<void>;
+    hasPendingUserVisibleDeliveries: (...args: unknown[]) => Promise<boolean>;
+    updateDeliveryPayloads: (...args: unknown[]) => Promise<void>;
   };
   log: {
     warn: (...args: unknown[]) => void;
@@ -56,6 +58,8 @@ export const deliverMocks: DeliverMockState = {
     enqueueDelivery: async () => "mock-queue-id",
     ackDelivery: async () => {},
     failDelivery: async () => {},
+    hasPendingUserVisibleDeliveries: async () => false,
+    updateDeliveryPayloads: async () => {},
   },
   log: {
     warn: () => {},
@@ -89,6 +93,12 @@ const _queueMocks = vi.hoisted(() => ({
   ),
   ackDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.ackDelivery(...args)),
   failDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.failDelivery(...args)),
+  hasPendingUserVisibleDeliveries: vi.fn(
+    async (...args: unknown[]) => await deliverMocks.queue.hasPendingUserVisibleDeliveries(...args),
+  ),
+  updateDeliveryPayloads: vi.fn(
+    async (...args: unknown[]) => await deliverMocks.queue.updateDeliveryPayloads(...args),
+  ),
 }));
 const _logMocks = vi.hoisted(() => ({
   warn: vi.fn((...args: unknown[]) => deliverMocks.log.warn(...args)),
@@ -129,6 +139,8 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: _queueMocks.enqueueDelivery,
   ackDelivery: _queueMocks.ackDelivery,
   failDelivery: _queueMocks.failDelivery,
+  hasPendingUserVisibleDeliveries: _queueMocks.hasPendingUserVisibleDeliveries,
+  updateDeliveryPayloads: _queueMocks.updateDeliveryPayloads,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -190,6 +202,8 @@ export function resetDeliverTestState() {
   deliverMocks.queue.enqueueDelivery = async () => "mock-queue-id";
   deliverMocks.queue.ackDelivery = async () => {};
   deliverMocks.queue.failDelivery = async () => {};
+  deliverMocks.queue.hasPendingUserVisibleDeliveries = async () => false;
+  deliverMocks.queue.updateDeliveryPayloads = async () => {};
   deliverMocks.log.warn = () => {};
   deliverMocks.sessions.appendAssistantMessageToSessionTranscript = async () => ({
     ok: true,
@@ -209,6 +223,8 @@ export function resetDeliverTestMocks(params?: { includeSessionMocks?: boolean }
   queueMocks.enqueueDelivery.mockClear();
   queueMocks.ackDelivery.mockClear();
   queueMocks.failDelivery.mockClear();
+  queueMocks.hasPendingUserVisibleDeliveries.mockClear();
+  queueMocks.updateDeliveryPayloads.mockClear();
   logMocks.warn.mockClear();
   if (params?.includeSessionMocks) {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -239,4 +255,60 @@ export async function runChunkedWhatsAppDelivery(params: {
     ...(params.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };
+}
+
+export async function deliverSingleWhatsAppForHookTest(params: {
+  deliverOutboundPayloads: (
+    params: DeliverOutboundPayloadsParams,
+  ) => Promise<OutboundDeliveryResult[]>;
+  sessionKey?: string;
+}) {
+  const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+  await params.deliverOutboundPayloads({
+    cfg: whatsappChunkConfig,
+    channel: "whatsapp",
+    to: "+1555",
+    payloads: [{ text: "hello" }],
+    deps: { sendWhatsApp },
+    ...(params.sessionKey ? { session: { key: params.sessionKey } } : {}),
+  });
+}
+
+export async function runBestEffortPartialFailureDelivery(params: {
+  deliverOutboundPayloads: (
+    params: DeliverOutboundPayloadsParams,
+  ) => Promise<OutboundDeliveryResult[]>;
+}) {
+  const sendWhatsApp = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("fail"))
+    .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+  const onError = vi.fn();
+  const results = await params.deliverOutboundPayloads({
+    cfg: {},
+    channel: "whatsapp",
+    to: "+1555",
+    payloads: [{ text: "a" }, { text: "b" }],
+    deps: { sendWhatsApp },
+    bestEffort: true,
+    onError,
+  });
+  return { sendWhatsApp, onError, results };
+}
+
+export function expectSuccessfulWhatsAppInternalHookPayload(
+  expected: Partial<{
+    content: string;
+    messageId: string;
+    isGroup: boolean;
+    groupId: string;
+  }>,
+) {
+  return expect.objectContaining({
+    to: "+1555",
+    success: true,
+    channelId: "whatsapp",
+    conversationId: "+1555",
+    ...expected,
+  });
 }

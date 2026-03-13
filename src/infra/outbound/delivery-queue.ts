@@ -19,6 +19,7 @@ const BACKOFF_MS: readonly number[] = [
   600_000, // retry 4: 10m
 ];
 
+export type DeliveryLanePriority = "user-visible" | "internal-followup";
 type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -35,6 +36,7 @@ type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
+  lanePriority?: DeliveryLanePriority;
   mirror?: OutboundMirror;
 };
 
@@ -52,6 +54,19 @@ export type RecoverySummary = {
   skippedMaxRetries: number;
   deferredBackoff: number;
 };
+
+function resolveLanePriority(params: QueuedDeliveryPayload): DeliveryLanePriority {
+  if (params.lanePriority) {
+    return params.lanePriority;
+  }
+  if (params.silent) {
+    return "internal-followup";
+  }
+  if (params.mirror?.sessionKey?.trim()) {
+    return "user-visible";
+  }
+  return "user-visible";
+}
 
 function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
@@ -120,6 +135,7 @@ export async function enqueueDelivery(
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
+    lanePriority: resolveLanePriority(params),
     mirror: params.mirror,
     retryCount: 0,
   };
@@ -167,6 +183,23 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
+export async function updateDeliveryPayloads(
+  id: string,
+  payloads: ReplyPayload[],
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const entry: QueuedDelivery = JSON.parse(raw);
+  entry.payloads = payloads;
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
     encoding: "utf-8",
@@ -227,6 +260,21 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   return entries;
 }
 
+export async function hasPendingUserVisibleDeliveries(params?: {
+  stateDir?: string;
+  excludeId?: string | null;
+}): Promise<boolean> {
+  const pending = await loadPendingDeliveries(params?.stateDir);
+  return pending.some(
+    (entry) =>
+      entry.id !== params?.excludeId && (entry.lanePriority ?? "user-visible") === "user-visible",
+  );
+}
+
+function lanePriorityWeight(priority: DeliveryLanePriority | undefined): number {
+  return priority === "internal-followup" ? 1 : 0;
+}
+
 /** Move a queue entry to the failed/ subdirectory. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   const queueDir = resolveQueueDir(stateDir);
@@ -275,24 +323,31 @@ function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
   entry: QueuedDelivery;
   migrated: boolean;
 } {
+  let migrated = false;
+  let next = entry;
+  if (!entry.lanePriority) {
+    next = {
+      ...next,
+      lanePriority: resolveLanePriority(entry),
+    };
+    migrated = true;
+  }
   const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
+    typeof next.lastAttemptAt === "number" &&
+    Number.isFinite(next.lastAttemptAt) &&
+    next.lastAttemptAt > 0;
+  if (hasAttemptTimestamp || next.retryCount <= 0) {
+    return { entry: next, migrated };
   }
   const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
+    typeof next.enqueuedAt === "number" && Number.isFinite(next.enqueuedAt) && next.enqueuedAt > 0;
   if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
+    return { entry: next, migrated };
   }
   return {
     entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
+      ...next,
+      lastAttemptAt: next.enqueuedAt,
     },
     migrated: true,
   };
@@ -330,7 +385,13 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   // Process oldest first.
-  pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  pending.sort((a, b) => {
+    const laneDelta = lanePriorityWeight(a.lanePriority) - lanePriorityWeight(b.lanePriority);
+    if (laneDelta !== 0) {
+      return laneDelta;
+    }
+    return a.enqueuedAt - b.enqueuedAt;
+  });
 
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 

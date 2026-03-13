@@ -1,6 +1,11 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  isArgusProtectedSession,
+  isArgusRecoverySession,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
@@ -21,6 +26,8 @@ type HeldLock = {
   lockPath: string;
   acquiredAt: number;
   maxHoldMs: number;
+  argusProtectUntil?: number;
+  argusRecoveryActive?: boolean;
   releasePromise?: Promise<void>;
 };
 
@@ -32,6 +39,8 @@ export type SessionLockInspection = {
   ageMs: number | null;
   stale: boolean;
   staleReasons: string[];
+  argusProtected: boolean;
+  argusRecoveryActive: boolean;
   removed: boolean;
 };
 
@@ -60,7 +69,14 @@ type WatchdogState = {
 
 type LockInspectionDetails = Pick<
   SessionLockInspection,
-  "pid" | "pidAlive" | "createdAt" | "ageMs" | "stale" | "staleReasons"
+  | "pid"
+  | "pidAlive"
+  | "createdAt"
+  | "ageMs"
+  | "stale"
+  | "staleReasons"
+  | "argusProtected"
+  | "argusRecoveryActive"
 >;
 
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
@@ -197,6 +213,12 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
     if (heldForMs <= held.maxHoldMs) {
       continue;
     }
+    if (
+      (typeof held.argusProtectUntil === "number" && held.argusProtectUntil > nowMs) ||
+      held.argusRecoveryActive
+    ) {
+      continue;
+    }
 
     // eslint-disable-next-line no-console
     console.warn(
@@ -291,11 +313,69 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   }
 }
 
-function inspectLockPayload(
+function resolveSessionStorePathForLock(sessionFile: string): string {
+  return path.join(path.dirname(sessionFile), "sessions.json");
+}
+
+function resolveStoredSessionFilePath(params: {
+  sessionDir: string;
+  sessionFile: string;
+  entry: SessionEntry;
+}): string | null {
+  const stored = params.entry.sessionFile?.trim();
+  if (!stored) {
+    return null;
+  }
+  const candidate = path.isAbsolute(stored)
+    ? path.resolve(stored)
+    : path.resolve(params.sessionDir, stored);
+  return path.normalize(candidate);
+}
+
+async function readArgusSessionContext(params: { sessionFile: string; nowMs: number }): Promise<{
+  argusProtected: boolean;
+  argusProtectUntil?: number;
+  argusRecoveryActive: boolean;
+}> {
+  const storePath = resolveSessionStorePathForLock(params.sessionFile);
+  try {
+    const raw = await fs.readFile(storePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { argusProtected: false, argusRecoveryActive: false };
+    }
+    const sessionDir = path.dirname(storePath);
+    const targetFile = path.normalize(path.resolve(params.sessionFile));
+    for (const entry of Object.values(parsed)) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const resolved = resolveStoredSessionFilePath({
+        sessionDir,
+        sessionFile: targetFile,
+        entry,
+      });
+      if (!resolved || resolved !== targetFile) {
+        continue;
+      }
+      return {
+        argusProtected: isArgusProtectedSession(entry, params.nowMs),
+        argusProtectUntil: entry.argus?.protectUntil,
+        argusRecoveryActive: isArgusRecoverySession(entry),
+      };
+    }
+  } catch {
+    return { argusProtected: false, argusRecoveryActive: false };
+  }
+  return { argusProtected: false, argusRecoveryActive: false };
+}
+
+async function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
   nowMs: number,
-): LockInspectionDetails {
+  sessionFile?: string,
+): Promise<LockInspectionDetails> {
   const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
   const createdAt = typeof payload?.createdAt === "string" ? payload.createdAt : null;
@@ -328,6 +408,31 @@ function inspectLockPayload(
     staleReasons.push("too-old");
   }
 
+  const argusContext = sessionFile
+    ? await readArgusSessionContext({ sessionFile, nowMs })
+    : { argusProtected: false, argusRecoveryActive: false };
+  if (argusContext.argusProtected || argusContext.argusRecoveryActive) {
+    const filteredReasons = staleReasons.filter((reason) => reason !== "too-old");
+    if (argusContext.argusProtected) {
+      filteredReasons.push("argus-protected");
+    }
+    if (argusContext.argusRecoveryActive) {
+      filteredReasons.push("argus-recovery-active");
+    }
+    return {
+      pid,
+      pidAlive,
+      createdAt,
+      ageMs,
+      stale: filteredReasons.some(
+        (reason) => reason !== "argus-protected" && reason !== "argus-recovery-active",
+      ),
+      staleReasons: filteredReasons,
+      argusProtected: argusContext.argusProtected,
+      argusRecoveryActive: argusContext.argusRecoveryActive,
+    };
+  }
+
   return {
     pid,
     pidAlive,
@@ -335,6 +440,8 @@ function inspectLockPayload(
     ageMs,
     stale: staleReasons.length > 0,
     staleReasons,
+    argusProtected: false,
+    argusRecoveryActive: false,
   };
 }
 
@@ -419,7 +526,12 @@ export async function cleanStaleLockFiles(params: {
   for (const entry of lockEntries) {
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
-    const inspected = inspectLockPayload(payload, staleMs, nowMs);
+    const inspected = await inspectLockPayload(
+      payload,
+      staleMs,
+      nowMs,
+      lockPath.slice(0, -".lock".length),
+    );
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
@@ -491,12 +603,18 @@ export async function acquireSessionWriteLock(params: {
         lockPayload.starttime = starttime;
       }
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
+      const argusContext = await readArgusSessionContext({
+        sessionFile,
+        nowMs: Date.now(),
+      });
       const createdHeld: HeldLock = {
         count: 1,
         handle,
         lockPath,
         acquiredAt: Date.now(),
         maxHoldMs,
+        argusProtectUntil: argusContext.argusProtectUntil,
+        argusRecoveryActive: argusContext.argusRecoveryActive,
       };
       HELD_LOCKS.set(normalizedSessionFile, createdHeld);
       return {
@@ -523,7 +641,7 @@ export async function acquireSessionWriteLock(params: {
       }
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
-      const inspected = inspectLockPayload(payload, staleMs, nowMs);
+      const inspected = await inspectLockPayload(payload, staleMs, nowMs, normalizedSessionFile);
       const orphanSelfLock = shouldTreatAsOrphanSelfLock({
         payload,
         normalizedSessionFile,
@@ -556,5 +674,6 @@ export const __testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   releaseAllLocksSync,
+  readArgusSessionContext,
   runLockWatchdogCheck,
 };

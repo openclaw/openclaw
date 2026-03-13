@@ -48,6 +48,28 @@ export type SessionAcpMeta = {
   lastError?: string;
 };
 
+export type SessionArgusMainlineState = "active" | "protected";
+
+export type SessionArgusRecoveryState = "pending" | "active" | "verified";
+
+export type SessionArgusMeta = {
+  /**
+   * Tracks whether the session currently owns the primary user-visible task line.
+   */
+  mainlineState: SessionArgusMainlineState;
+  /**
+   * Protection window end (epoch ms). During this window, stale follow-ups and
+   * recovery work should not preempt the active mainline.
+   */
+  protectUntil: number;
+  /**
+   * Optional recovery state for unfinished task-line repair.
+   */
+  recoveryState?: SessionArgusRecoveryState;
+  recoveryUpdatedAt?: number;
+  recoveryReason?: string;
+};
+
 export type AcpSessionRuntimeOptions = {
   /**
    * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
@@ -182,6 +204,7 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  argus?: SessionArgusMeta;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
@@ -241,6 +264,23 @@ export function setSessionRuntimeModel(
   entry.modelProvider = provider;
   entry.model = model;
   return true;
+}
+
+export function isArgusProtectedSession(
+  entry: Pick<SessionEntry, "argus"> | undefined,
+  now = Date.now(),
+): boolean {
+  return Boolean(
+    entry?.argus &&
+    entry.argus.mainlineState &&
+    Number.isFinite(entry.argus.protectUntil) &&
+    entry.argus.protectUntil > now,
+  );
+}
+
+export function isArgusRecoverySession(entry: Pick<SessionEntry, "argus"> | undefined): boolean {
+  const state = entry?.argus?.recoveryState;
+  return state === "pending" || state === "active";
 }
 
 export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";

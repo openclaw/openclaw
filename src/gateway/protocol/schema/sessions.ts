@@ -127,6 +127,19 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    argusMainlineState: Type.Optional(
+      Type.Union([Type.Literal("active"), Type.Literal("protected"), Type.Null()]),
+    ),
+    argusProtectMinutes: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+    argusRecoveryState: Type.Optional(
+      Type.Union([
+        Type.Literal("pending"),
+        Type.Literal("active"),
+        Type.Literal("verified"),
+        Type.Null(),
+      ]),
+    ),
+    argusRecoveryReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
