@@ -135,6 +135,7 @@ import {
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { recordTokenUsage } from "../../usage-log.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -2757,6 +2758,19 @@ export async function runEmbeddedAttempt(
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
       }
+
+      recordTokenUsage({
+        workspaceDir: params.workspaceDir,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        model: params.modelId,
+        label: "llm_output",
+        usage: getUsageTotals(),
+      }).catch((err) => {
+        log.warn(`token usage log failed: ${String(err)}`);
+      });
 
       return {
         aborted,
