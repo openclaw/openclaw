@@ -7,10 +7,6 @@ on:
       - Dockerfile.sandbox
       - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
-    paths:
-      - Dockerfile.sandbox
-      - Dockerfile.sandbox-common
-      - scripts/sandbox-common-setup.sh
 
 concurrency:
   group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -33,12 +29,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'EOF'
+          docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'INNEREOF'
           FROM debian:bookworm-slim
           RUN useradd --create-home --shell /bin/bash sandbox
           USER sandbox
           WORKDIR /home/sandbox
-          EOF
+          INNEREOF
 
       - name: Build sandbox-common image (root for installs, sandbox at runtime)
         shell: bash

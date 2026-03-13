@@ -5,7 +5,7 @@ on:
     types: [opened, edited, labeled]
   issue_comment:
     types: [created]
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 permissions: {}

@@ -490,7 +490,7 @@ jobs:
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
     needs: [docs-scope, changed-scope, check]
-    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
     runs-on: macos-latest
     steps:
       - name: Checkout
