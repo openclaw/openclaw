@@ -46,6 +46,9 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    agentsList: null,
+    currentAgentId: "",
+    onAgentChange: () => undefined,
     ...overrides,
   };
 }
@@ -189,15 +192,14 @@ describe("chat view", () => {
       renderChat(
         createProps({
           canAbort: true,
+          sending: true,
           onAbort,
         }),
       ),
       container,
     );
 
-    const stopButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Stop",
-    );
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
@@ -217,8 +219,8 @@ describe("chat view", () => {
       container,
     );
 
-    const newSessionButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "New session",
+    const newSessionButton = container.querySelector<HTMLButtonElement>(
+      'button[title="New session"]',
     );
     expect(newSessionButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));

@@ -11,6 +11,8 @@ export type ChatQueueItem = {
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   mode?: "steered" | "queued";
+  localCommandArgs?: string;
+  localCommandName?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";

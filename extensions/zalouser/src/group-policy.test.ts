@@ -23,6 +23,18 @@ describe("zalouser group policy helpers", () => {
     ).toEqual(["123", "group:123", "chan-1", "Team Alpha", "team-alpha", "*"]);
   });
 
+  it("builds id-only candidates when name matching is disabled", () => {
+    expect(
+      buildZalouserGroupCandidates({
+        groupId: "123",
+        groupChannel: "chan-1",
+        groupName: "Team Alpha",
+        includeGroupIdAlias: true,
+        allowNameMatching: false,
+      }),
+    ).toEqual(["123", "group:123", "*"]);
+  });
+
   it("finds the first matching group entry", () => {
     const groups = {
       "group:123": { allow: true },

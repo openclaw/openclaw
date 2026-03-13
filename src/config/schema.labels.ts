@@ -255,6 +255,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Dangerously Disable Control UI Device Auth (Deprecated)",
+  "gateway.push": "Gateway Push Delivery",
+  "gateway.push.apns": "Gateway APNs Delivery",
+  "gateway.push.apns.relay": "Gateway APNs Relay",
+  "gateway.push.apns.relay.baseUrl": "Gateway APNs Relay Base URL",
+  "gateway.push.apns.relay.timeoutMs": "Gateway APNs Relay Timeout (ms)",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.http.endpoints.chatCompletions.maxBodyBytes": "OpenAI Chat Completions Max Body Bytes",
   "gateway.http.endpoints.chatCompletions.maxImageParts": "OpenAI Chat Completions Max Image Parts",
@@ -354,6 +359,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes": "Session Delta Bytes",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
+  "agents.defaults.memorySearch.sync.sessions.postCompactionForce":
+    "Force Reindex After Compaction",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
@@ -468,6 +475,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
   "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
+  "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",

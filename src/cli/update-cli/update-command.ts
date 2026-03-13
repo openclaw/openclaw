@@ -24,8 +24,10 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveGlobalInstallSpec,
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
@@ -269,12 +271,18 @@ async function runPackageInstallUpdate(params: {
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
   });
+  const installEnv = await createGlobalInstallEnv();
   const runCommand = createGlobalCommandRunner();
 
   const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
+  const installSpec = resolveGlobalInstallSpec({
+    packageName,
+    tag: params.tag,
+    env: installEnv,
+  });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
   if (pkgRoot) {
@@ -286,7 +294,8 @@ async function runPackageInstallUpdate(params: {
 
   const updateStep = await runUpdateStep({
     name: "global update",
-    argv: globalInstallArgs(manager, `${packageName}@${params.tag}`),
+    argv: globalInstallArgs(manager, installSpec),
+    env: installEnv,
     timeoutMs: params.timeoutMs,
     progress: params.progress,
   });
@@ -380,6 +389,7 @@ async function runGitUpdate(params: {
       name: "global install",
       argv: globalInstallArgs(manager, updateRoot),
       cwd: updateRoot,
+      env: await createGlobalInstallEnv(),
       timeoutMs: effectiveTimeout,
       progress: params.progress,
     });
@@ -835,28 +845,29 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  const result = switchToPackage
-    ? await runPackageInstallUpdate({
-        root,
-        installKind,
-        tag,
-        timeoutMs: timeoutMs ?? 20 * 60_000,
-        startedAt,
-        progress,
-      })
-    : await runGitUpdate({
-        root,
-        switchToGit,
-        installKind,
-        timeoutMs,
-        startedAt,
-        progress,
-        channel,
-        tag,
-        showProgress,
-        opts,
-        stop,
-      });
+  const result =
+    updateInstallKind === "package"
+      ? await runPackageInstallUpdate({
+          root,
+          installKind,
+          tag,
+          timeoutMs: timeoutMs ?? 20 * 60_000,
+          startedAt,
+          progress,
+        })
+      : await runGitUpdate({
+          root,
+          switchToGit,
+          installKind,
+          timeoutMs,
+          startedAt,
+          progress,
+          channel,
+          tag,
+          showProgress,
+          opts,
+          stop,
+        });
 
   stop();
   printResult(result, { ...opts, hideSteps: showProgress });
