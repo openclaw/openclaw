@@ -86,16 +86,17 @@ async function setRuntimeApiKeyForCompletion(params: {
   authStorage: SimpleCompletionAuthStorage;
   model: Model<Api>;
   apiKey: string;
-}): Promise<void> {
+}): Promise<string> {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("../providers/github-copilot-token.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
     params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
-    return;
+    return copilotToken.token;
   }
   params.authStorage.setRuntimeApiKey(params.model.provider, params.apiKey);
+  return params.apiKey;
 }
 
 function hasMissingApiKeyAllowance(params: {
@@ -142,8 +143,9 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
+  let resolvedApiKey = rawApiKey;
   if (rawApiKey) {
-    await setRuntimeApiKeyForCompletion({
+    resolvedApiKey = await setRuntimeApiKeyForCompletion({
       authStorage: resolved.authStorage,
       model: resolved.model,
       apiKey: rawApiKey,
@@ -152,7 +154,10 @@ export async function prepareSimpleCompletionModel(params: {
 
   return {
     model: resolved.model,
-    auth,
+    auth: {
+      ...auth,
+      apiKey: resolvedApiKey,
+    },
   };
 }
 
