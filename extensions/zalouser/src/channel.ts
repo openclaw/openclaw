@@ -20,9 +20,9 @@ import {
   buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
   deleteAccountFromConfigSection,
   formatAllowFromLowercase,
+  isDangerousNameMatchingEnabled,
   isNumericTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
@@ -43,6 +43,7 @@ import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 import {
@@ -166,6 +167,16 @@ function resolveZalouserQrProfile(accountId?: string | null): string {
   return normalized;
 }
 
+function resolveZalouserOutboundChunkMode(cfg: OpenClawConfig, accountId?: string) {
+  return getZalouserRuntime().channel.text.resolveChunkMode(cfg, "zalouser", accountId);
+}
+
+function resolveZalouserOutboundTextChunkLimit(cfg: OpenClawConfig, accountId?: string) {
+  return getZalouserRuntime().channel.text.resolveTextChunkLimit(cfg, "zalouser", accountId, {
+    fallbackLimit: zalouserDock.outbound?.textChunkLimit ?? 2000,
+  });
+}
+
 function mapUser(params: {
   id: string;
   name?: string | null;
@@ -206,6 +217,7 @@ function resolveZalouserGroupPolicyEntry(params: ChannelGroupContext) {
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       includeWildcard: true,
+      allowNameMatching: isDangerousNameMatchingEnabled(account.config),
     }),
   );
 }
@@ -595,14 +607,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkTextForOutbound,
-    chunkerMode: "text",
-    textChunkLimit: 2000,
+    chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
+    chunkerMode: "markdown",
     sendPayload: async (ctx) =>
       await sendPayloadWithChunkedTextAndMedia({
         ctx,
-        textChunkLimit: zalouserPlugin.outbound!.textChunkLimit,
-        chunker: zalouserPlugin.outbound!.chunker,
         sendText: (nextCtx) => zalouserPlugin.outbound!.sendText!(nextCtx),
         sendMedia: (nextCtx) => zalouserPlugin.outbound!.sendMedia!(nextCtx),
         emptyResult: { channel: "zalouser", messageId: "" },
@@ -613,6 +622,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       const result = await sendMessageZalouser(target.threadId, text, {
         profile: account.profile,
         isGroup: target.isGroup,
+        textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+        textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },
@@ -624,6 +636,9 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         isGroup: target.isGroup,
         mediaUrl,
         mediaLocalRoots,
+        textMode: "markdown",
+        textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
+        textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
       });
       return buildChannelSendResult("zalouser", result);
     },
