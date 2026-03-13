@@ -62,7 +62,7 @@ function isMcporterCommand(cmd: unknown): boolean {
   if (typeof cmd !== "string") {
     return false;
   }
-  return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
+  return /(^|[\\/])mcporter(?:\.cmd|\.exe)?$/i.test(cmd);
 }
 
 async function seedWindowsCmdShimFixture(params: {
@@ -72,10 +72,16 @@ async function seedWindowsCmdShimFixture(params: {
   const nodeModulesDir = path.join(params.rootDir, "node_modules");
   const shimDir = path.join(nodeModulesDir, ".bin");
   const packageDir = path.join(nodeModulesDir, params.packageName);
+  const entrypointPath = path.join(packageDir, "dist", `${params.packageName}.exe`);
   const scriptPath = path.join(packageDir, "dist", "cli.js");
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.mkdir(path.dirname(entrypointPath), { recursive: true });
   await fs.mkdir(shimDir, { recursive: true });
-  await fs.writeFile(path.join(shimDir, `${params.packageName}.cmd`), "@echo off\r\n", "utf8");
+  await fs.writeFile(
+    path.join(shimDir, `${params.packageName}.cmd`),
+    `@echo off\r\n"%~dp0\\..\\${params.packageName}\\dist\\${params.packageName}.exe" %*\r\n`,
+    "utf8",
+  );
+  await fs.writeFile(entrypointPath, "", "utf8");
   await fs.writeFile(
     path.join(packageDir, "package.json"),
     JSON.stringify({
@@ -1153,8 +1159,10 @@ describe("QmdMemoryManager", () => {
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
         const command = String(call[0]);
+        const args = call[1] as string[] | undefined;
         const options = call[2] as { shell?: boolean } | undefined;
         expect(command).not.toMatch(/(^|[\\/])qmd\.cmd$/i);
+        expect(args?.[0]).toBe("update");
         expect(options?.shell).not.toBe(true);
       }
 
@@ -1673,9 +1681,11 @@ describe("QmdMemoryManager", () => {
       );
       expect(mcporterCall).toBeDefined();
       const callCommand = mcporterCall?.[0];
+      const callArgs = mcporterCall?.[1] as string[] | undefined;
       expect(typeof callCommand).toBe("string");
       const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
       expect(callCommand).not.toBe("mcporter.cmd");
+      expect(callArgs?.[0]).toBe("call");
       expect(options?.shell).not.toBe(true);
 
       await manager.close();
