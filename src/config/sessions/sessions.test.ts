@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../../infra/json-files.js";
 import {
@@ -323,6 +324,78 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
     }
+  });
+
+  it("keeps the existing leaf after appending a delivery-mirror message", async () => {
+    const sessionId = "test-session-leaf";
+    const sessionKey = "test-session-leaf-key";
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        sessionFile,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "seed user" }],
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "seed assistant" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const savedLeafId = sessionManager.getLeafId();
+    expect(savedLeafId).not.toBeNull();
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "delivery mirror entry",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    const reopened = SessionManager.open(result.sessionFile);
+
+    const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+    const entries = lines.map((line) => JSON.parse(line));
+    const deliveryMirrorEntry = entries.find(
+      (entry) => entry.type === "message" && entry.message?.model === "delivery-mirror",
+    );
+    const branchSummaryEntries = entries.filter((entry) => entry.type === "branch_summary");
+
+    expect(deliveryMirrorEntry?.id).toBeTruthy();
+    expect(branchSummaryEntries.length).toBeGreaterThan(0);
+    expect(branchSummaryEntries.some((entry) => entry.parentId === savedLeafId)).toBe(true);
+    expect(reopened.getLeafId()).not.toBe(deliveryMirrorEntry?.id);
   });
 });
 
