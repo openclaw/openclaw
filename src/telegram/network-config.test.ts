@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,
@@ -178,7 +179,7 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
   ])("$name", ({ env, network, nodeMajor, expected }) => {
     const decision = resolveTelegramDnsResultOrderDecision({
       env,
-      network,
+      network: network as TelegramNetworkConfig | undefined,
       nodeMajor,
     });
     expect(decision).toEqual(expected);

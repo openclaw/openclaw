@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { UpdateChannel, UpdateChannelSource } from "./update-channels.js";
 import {
   channelToNpmTag,
   formatUpdateChannelLabel,
@@ -43,7 +44,7 @@ describe("channelToNpmTag", () => {
     { channel: "beta", expected: "beta" },
     { channel: "dev", expected: "dev" },
   ])("maps $channel to $expected", ({ channel, expected }) => {
-    expect(channelToNpmTag(channel)).toBe(expected);
+    expect(channelToNpmTag(channel as UpdateChannel)).toBe(expected);
   });
 });
 
@@ -52,7 +53,7 @@ describe("resolveEffectiveUpdateChannel", () => {
     {
       name: "prefers config over git metadata",
       params: {
-        configChannel: "beta",
+        configChannel: "beta" as UpdateChannel,
         installKind: "git" as const,
         git: { tag: "v2026.2.24", branch: "feature/test" },
       },
@@ -146,7 +147,13 @@ describe("formatUpdateChannelLabel", () => {
       expected: "stable (default)",
     },
   ])("$name", ({ params, expected }) => {
-    expect(formatUpdateChannelLabel(params)).toBe(expected);
+    expect(
+      formatUpdateChannelLabel({
+        ...params,
+        channel: params.channel as UpdateChannel,
+        source: params.source as UpdateChannelSource,
+      }),
+    ).toBe(expected);
   });
 });
 

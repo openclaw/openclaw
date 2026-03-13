@@ -9,7 +9,7 @@ export type SafeOpenSyncResult =
 
 export type SafeOpenSyncAllowedType = "file" | "directory";
 
-type SafeOpenSyncFs = Pick<
+export type SafeOpenSyncFs = Pick<
   typeof fs,
   "constants" | "lstatSync" | "realpathSync" | "openSync" | "fstatSync" | "closeSync"
 >;

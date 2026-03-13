@@ -30,14 +30,14 @@ describe("install mode option helpers", () => {
     expect(
       resolveInstallModeOptions(
         {
-          logger: params.loggerKey ? loggers[params.loggerKey] : undefined,
+          logger: params.loggerKey ? loggers[params.loggerKey as keyof typeof loggers] : undefined,
           mode: params.mode,
           dryRun: params.dryRun,
         },
         loggers.default,
       ),
     ).toEqual({
-      logger: loggers[expected.loggerKey],
+      logger: loggers[expected.loggerKey as keyof typeof loggers],
       mode: expected.mode,
       dryRun: expected.dryRun,
     });

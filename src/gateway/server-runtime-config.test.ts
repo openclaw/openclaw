@@ -268,6 +268,10 @@ describe("resolveGatewayRuntimeConfig", () => {
         expected: undefined,
       },
     ])("$name", async ({ strictTransportSecurity, expected }) => {
+      const sts =
+        strictTransportSecurity === true
+          ? undefined
+          : (strictTransportSecurity as string | false | undefined);
       const result = await resolveGatewayRuntimeConfig({
         cfg: {
           gateway: {
@@ -275,7 +279,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             auth: { mode: "none" },
             http: {
               securityHeaders: {
-                strictTransportSecurity,
+                strictTransportSecurity: sts,
               },
             },
           },

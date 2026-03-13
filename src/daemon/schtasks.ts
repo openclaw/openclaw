@@ -388,7 +388,7 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
     new Set(
       diagnostics.listeners
         .map((listener) => listener.pid)
-        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+        .filter((p): p is number => p != null && Number.isFinite(p) && p > 0),
     ),
   );
 }
@@ -472,7 +472,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
     new Set(
       diagnostics.listeners
         .map((listener) => listener.pid)
-        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+        .filter((p): p is number => p != null && Number.isFinite(p) && p > 0),
     ),
   );
   for (const pid of pids) {

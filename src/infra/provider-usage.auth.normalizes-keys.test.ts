@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
+import type { ProviderAuth } from "./provider-usage.auth.js";
 import { resolveProviderAuths } from "./provider-usage.auth.js";
 
 describe("resolveProviderAuths key normalization", () => {
@@ -215,7 +216,11 @@ describe("resolveProviderAuths key normalization", () => {
       expected: [{ provider: "minimax", token: "code-plan-key" }],
     },
   ])("$name", async ({ providers, env, expected }) => {
-    await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
+    await expectResolvedAuthsFromSuiteHome({
+      providers: [...providers],
+      env,
+      expected: expected as ProviderAuth[],
+    });
   });
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {

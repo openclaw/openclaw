@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SafeOpenSyncFs } from "./safe-open-sync.js";
 import { openVerifiedFileSync } from "./safe-open-sync.js";
 
 async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
@@ -129,7 +130,7 @@ describe("openVerifiedFileSync", () => {
 
     const opened = openVerifiedFileSync({
       filePath: "/input/file.txt",
-      ioFs,
+      ioFs: ioFs as unknown as SafeOpenSyncFs,
     });
     expect(opened.ok).toBe(false);
     if (!opened.ok) {
@@ -155,7 +156,7 @@ describe("openVerifiedFileSync", () => {
     const opened = openVerifiedFileSync({
       filePath: "/input/file.txt",
       rejectPathSymlink: true,
-      ioFs,
+      ioFs: ioFs as unknown as SafeOpenSyncFs,
     });
     expect(opened.ok).toBe(false);
     if (!opened.ok) {

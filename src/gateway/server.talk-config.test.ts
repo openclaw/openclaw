@@ -95,7 +95,7 @@ async function fetchTalkConfig(
 }
 
 function expectElevenLabsTalkConfig(
-  talk: TalkConfigPayload["config"] extends { talk?: infer T } ? T : never,
+  talk: NonNullable<TalkConfigPayload["config"]>["talk"],
   expected: {
     voiceId?: string;
     apiKey?: string | SecretRef;
