@@ -2148,4 +2148,64 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("injects Authorization Bearer header when AWS_BEARER_TOKEN_BEDROCK is set", () => {
+    const prev = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    process.env.AWS_BEARER_TOKEN_BEDROCK = "bedrock-test-token"; // pragma: allowlist secret
+    try {
+      const { calls, agent } = createOptionsCaptureAgent();
+
+      applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "us.anthropic.claude-sonnet-4-5");
+
+      const model = {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-5",
+      } as Model<"bedrock-converse-stream">;
+      const context: Context = { messages: [] };
+
+      void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.headers).toMatchObject({
+        "X-Custom": "1",
+        Authorization: "Bearer bedrock-test-token",
+      });
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+      } else {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = prev;
+      }
+    }
+  });
+
+  it("does not inject Bearer header when AWS_BEARER_TOKEN_BEDROCK is not set", () => {
+    const prev = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+    try {
+      const { calls, agent } = createOptionsCaptureAgent();
+
+      applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "us.anthropic.claude-sonnet-4-5");
+
+      const model = {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-5",
+      } as Model<"bedrock-converse-stream">;
+      const context: Context = { messages: [] };
+
+      void agent.streamFn?.(model, context, {});
+
+      expect(calls).toHaveLength(1);
+      const headers = calls[0]?.headers ?? {};
+      expect(headers).not.toHaveProperty("Authorization");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+      } else {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = prev;
+      }
+    }
+  });
 });

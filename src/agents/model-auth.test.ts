@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import {
@@ -8,6 +9,7 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
   resolveAwsSdkEnvVarName,
+  resolveBedrockBearerToken,
   resolveModelAuthMode,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
@@ -88,16 +90,53 @@ describe("resolveModelAuthMode", () => {
     ).toBe("aws-sdk");
   });
 
-  it("returns aws-sdk for bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
-    );
+  it("returns aws-sdk for bedrock alias without explicit auth override", async () => {
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
+        "aws-sdk",
+      );
+    });
   });
 
-  it("returns aws-sdk for aws-bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "aws-sdk",
+  it("returns aws-sdk for aws-bedrock alias without explicit auth override", async () => {
+    await withEnvAsync({ AWS_BEARER_TOKEN_BEDROCK: undefined }, async () => {
+      expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
+        "aws-sdk",
+      );
+    });
+  });
+
+  it("returns api-key for bedrock when bearer token is set", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-bearer-test", // pragma: allowlist secret
+        AWS_ACCESS_KEY_ID: undefined,
+        AWS_SECRET_ACCESS_KEY: undefined,
+        AWS_PROFILE: undefined,
+      },
+      async () => {
+        expect(
+          resolveModelAuthMode("amazon-bedrock", undefined, { version: 1, profiles: {} }),
+        ).toBe("api-key");
+      },
     );
+  });
+});
+
+describe("resolveBedrockBearerToken", () => {
+  it("returns the trimmed token value when set", () => {
+    const env = { AWS_BEARER_TOKEN_BEDROCK: "  my-token  " } as NodeJS.ProcessEnv;
+    expect(resolveBedrockBearerToken(env)).toBe("my-token");
+  });
+
+  it("returns undefined when env var is missing", () => {
+    expect(resolveBedrockBearerToken({} as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
+  it("returns undefined when env var is empty/whitespace", () => {
+    expect(
+      resolveBedrockBearerToken({ AWS_BEARER_TOKEN_BEDROCK: "  " } as NodeJS.ProcessEnv),
+    ).toBeUndefined();
   });
 });
 
