@@ -290,8 +290,10 @@ export class FeishuStreamingSession {
         throw new Error(`Card element update failed with HTTP ${response.status}`);
       }
       await release();
-      // Only advance sequence after confirmed success
+      // Only advance sequence/currentText after confirmed success to avoid
+      // close() skipping the final update when a prior request failed.
       this.state.sequence = nextSequence;
+      this.state.currentText = text;
     } catch (error) {
       onError?.(error);
     }
@@ -323,7 +325,6 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
-      this.state.currentText = mergedText;
       await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
     await this.queue;
@@ -343,7 +344,6 @@ export class FeishuStreamingSession {
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.currentText) {
       await this.updateCardContent(text);
-      this.state.currentText = text;
     }
 
     // Close streaming mode
