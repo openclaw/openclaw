@@ -3,6 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} from "../../agents/pi-embedded-runner/runs.js";
+import {
+  getSubagentRunByChildSessionKey,
+  replaceSubagentRunAfterSteer,
+} from "../../agents/subagent-registry.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -63,6 +73,7 @@ import { chatHandlers } from "./chat.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
+  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
@@ -113,6 +124,26 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
       ? (params.payload as { status?: unknown }).status
       : undefined;
   return status === "started";
+}
+
+function reactivateCompletedSubagentSession(params: {
+  sessionKey: string;
+  runId?: string;
+}): boolean {
+  const runId = params.runId?.trim();
+  if (!runId) {
+    return false;
+  }
+  const existing = getSubagentRunByChildSessionKey(params.sessionKey);
+  if (!existing || typeof existing.endedAt !== "number") {
+    return false;
+  }
+  return replaceSubagentRunAfterSteer({
+    previousRunId: existing.runId,
+    nextRunId: runId,
+    fallback: existing,
+    runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
+  });
 }
 
 function emitSessionsChanged(
@@ -276,6 +307,216 @@ function resolveAbortSessionKey(params: {
     }
   }
   return params.requestedKey;
+}
+
+function hasTrackedActiveSessionRun(params: {
+  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  requestedKey: string;
+  canonicalKey: string;
+}): boolean {
+  for (const active of params.context.chatAbortControllers.values()) {
+    if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function interruptSessionRunIfActive(params: {
+  req: GatewayRequestHandlerOptions["req"];
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+}): Promise<{ interrupted: boolean; error?: ReturnType<typeof errorShape> }> {
+  const hasTrackedRun = hasTrackedActiveSessionRun({
+    context: params.context,
+    requestedKey: params.requestedKey,
+    canonicalKey: params.canonicalKey,
+  });
+  const hasEmbeddedRun =
+    typeof params.sessionId === "string" && params.sessionId
+      ? isEmbeddedPiRunActive(params.sessionId)
+      : false;
+
+  if (!hasTrackedRun && !hasEmbeddedRun) {
+    return { interrupted: false };
+  }
+
+  if (hasTrackedRun) {
+    let abortOk = true;
+    let abortError: ReturnType<typeof errorShape> | undefined;
+    const abortSessionKey = resolveAbortSessionKey({
+      context: params.context,
+      requestedKey: params.requestedKey,
+      canonicalKey: params.canonicalKey,
+    });
+
+    await chatHandlers["chat.abort"]({
+      req: params.req,
+      params: {
+        sessionKey: abortSessionKey,
+      },
+      respond: (ok, _payload, error) => {
+        abortOk = ok;
+        abortError = error;
+      },
+      context: params.context,
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+    });
+
+    if (!abortOk) {
+      return {
+        interrupted: true,
+        error:
+          abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
+      };
+    }
+  }
+
+  if (hasEmbeddedRun && params.sessionId) {
+    abortEmbeddedPiRun(params.sessionId);
+  }
+
+  clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
+
+  if (hasEmbeddedRun && params.sessionId) {
+    const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+    if (!ended) {
+      return {
+        interrupted: true,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Session ${params.requestedKey} is still active; try again in a moment.`,
+        ),
+      };
+    }
+  }
+
+  return { interrupted: true };
+}
+
+async function handleSessionSend(params: {
+  method: "sessions.send" | "sessions.steer";
+  req: GatewayRequestHandlerOptions["req"];
+  params: Record<string, unknown>;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+  interruptIfActive: boolean;
+}) {
+  if (
+    !assertValidParams(params.params, validateSessionsSendParams, params.method, params.respond)
+  ) {
+    return;
+  }
+  const p = params.params;
+  const key = requireSessionKey((p as { key?: unknown }).key, params.respond);
+  if (!key) {
+    return;
+  }
+  const { entry, canonicalKey, storePath } = loadSessionEntry(key);
+  if (!entry?.sessionId) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+    );
+    return;
+  }
+
+  let interruptedActiveRun = false;
+  if (params.interruptIfActive) {
+    const interruptResult = await interruptSessionRunIfActive({
+      req: params.req,
+      context: params.context,
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+      requestedKey: key,
+      canonicalKey,
+      sessionId: entry.sessionId,
+    });
+    if (interruptResult.error) {
+      params.respond(false, undefined, interruptResult.error);
+      return;
+    }
+    interruptedActiveRun = interruptResult.interrupted;
+  }
+
+  const messageSeq = readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length + 1;
+  let sendAcked = false;
+  let sendPayload: unknown;
+  let sendCached = false;
+  let startedRunId: string | undefined;
+  await chatHandlers["chat.send"]({
+    req: params.req,
+    params: {
+      sessionKey: canonicalKey,
+      message: (p as { message: string }).message,
+      thinking: (p as { thinking?: string }).thinking,
+      attachments: (p as { attachments?: unknown[] }).attachments,
+      timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
+      idempotencyKey:
+        typeof (p as { idempotencyKey?: string }).idempotencyKey === "string" &&
+        (p as { idempotencyKey?: string }).idempotencyKey?.trim()
+          ? (p as { idempotencyKey?: string }).idempotencyKey.trim()
+          : randomUUID(),
+    },
+    respond: (ok, payload, error, meta) => {
+      sendAcked = ok;
+      sendPayload = payload;
+      sendCached = meta?.cached === true;
+      startedRunId =
+        payload &&
+        typeof payload === "object" &&
+        typeof (payload as { runId?: unknown }).runId === "string"
+          ? (payload as { runId: string }).runId
+          : undefined;
+      if (ok && shouldAttachPendingMessageSeq({ payload, cached: meta?.cached === true })) {
+        params.respond(
+          true,
+          {
+            ...(payload && typeof payload === "object" ? payload : {}),
+            messageSeq,
+            ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
+          },
+          undefined,
+          meta,
+        );
+        return;
+      }
+      params.respond(
+        ok,
+        ok && payload && typeof payload === "object"
+          ? {
+              ...payload,
+              ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
+            }
+          : payload,
+        error,
+        meta,
+      );
+    },
+    context: params.context,
+    client: params.client,
+    isWebchatConnect: params.isWebchatConnect,
+  });
+  if (sendAcked) {
+    if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
+      reactivateCompletedSubagentSession({
+        sessionKey: canonicalKey,
+        runId: startedRunId,
+      });
+    }
+    emitSessionsChanged(params.context, {
+      sessionKey: canonicalKey,
+      reason: interruptedActiveRun ? "steer" : "send",
+    });
+  }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
@@ -589,65 +830,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
   },
   "sessions.send": async ({ req, params, respond, context, client, isWebchatConnect }) => {
-    if (!assertValidParams(params, validateSessionsSendParams, "sessions.send", respond)) {
-      return;
-    }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
-      return;
-    }
-    const { entry, canonicalKey, storePath } = loadSessionEntry(key);
-    if (!entry?.sessionId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
-      );
-      return;
-    }
-    const messageSeq =
-      readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length + 1;
-    let sendAcked = false;
-    await chatHandlers["chat.send"]({
+    await handleSessionSend({
+      method: "sessions.send",
       req,
-      params: {
-        sessionKey: canonicalKey,
-        message: p.message,
-        thinking: p.thinking,
-        attachments: p.attachments,
-        timeoutMs: p.timeoutMs,
-        idempotencyKey:
-          typeof p.idempotencyKey === "string" && p.idempotencyKey.trim()
-            ? p.idempotencyKey.trim()
-            : randomUUID(),
-      },
-      respond: (ok, payload, error, meta) => {
-        sendAcked = ok;
-        if (ok && shouldAttachPendingMessageSeq({ payload, cached: meta?.cached === true })) {
-          respond(
-            true,
-            {
-              ...(payload && typeof payload === "object" ? payload : {}),
-              messageSeq,
-            },
-            undefined,
-            meta,
-          );
-          return;
-        }
-        respond(ok, payload, error, meta);
-      },
+      params,
+      respond,
       context,
       client,
       isWebchatConnect,
+      interruptIfActive: false,
     });
-    if (sendAcked) {
-      emitSessionsChanged(context, {
-        sessionKey: canonicalKey,
-        reason: "send",
-      });
-    }
+  },
+  "sessions.steer": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    await handleSessionSend({
+      method: "sessions.steer",
+      req,
+      params,
+      respond,
+      context,
+      client,
+      isWebchatConnect,
+      interruptIfActive: true,
+    });
   },
   "sessions.abort": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
