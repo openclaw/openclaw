@@ -255,6 +255,48 @@ export type SavedMedia = {
   contentType?: string;
 };
 
+function buildSavedMediaId(params: {
+  baseId: string;
+  ext: string;
+  originalFilename?: string;
+}): string {
+  if (!params.originalFilename) {
+    return params.ext ? `${params.baseId}${params.ext}` : params.baseId;
+  }
+
+  const base = path.parse(params.originalFilename).name;
+  const sanitized = sanitizeFilename(base);
+  return sanitized
+    ? `${sanitized}---${params.baseId}${params.ext}`
+    : `${params.baseId}${params.ext}`;
+}
+
+function buildSavedMediaResult(params: {
+  dir: string;
+  id: string;
+  size: number;
+  contentType?: string;
+}): SavedMedia {
+  return {
+    id: params.id,
+    path: path.join(params.dir, params.id),
+    size: params.size,
+    contentType: params.contentType,
+  };
+}
+
+async function writeSavedMediaBuffer(params: {
+  dir: string;
+  id: string;
+  buffer: Buffer;
+}): Promise<string> {
+  const dest = path.join(params.dir, params.id);
+  await retryAfterRecreatingDir(params.dir, () =>
+    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
+  );
+  return dest;
+}
+
 export type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
@@ -321,20 +363,19 @@ export async function saveMediaSource(
       filePath: source,
     });
     const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-    const id = ext ? `${baseId}${ext}` : baseId;
+    const id = buildSavedMediaId({ baseId, ext });
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
-    return { id, path: finalDest, size, contentType: mime };
+    return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
   // local path
   try {
     const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
-    const id = ext ? `${baseId}${ext}` : baseId;
-    const dest = path.join(dir, id);
-    await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
-    return { id, path: dest, size: stat.size, contentType: mime };
+    const id = buildSavedMediaId({ baseId, ext });
+    await writeSavedMediaBuffer({ dir, id, buffer });
+    return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (err instanceof SafeOpenError) {
       throw toSaveMediaSourceError(err);
@@ -359,19 +400,7 @@ export async function saveMediaBuffer(
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
-
-  let id: string;
-  if (originalFilename) {
-    // Embed original name: {sanitized}---{uuid}.ext
-    const base = path.parse(originalFilename).name;
-    const sanitized = sanitizeFilename(base);
-    id = sanitized ? `${sanitized}---${uuid}${ext}` : `${uuid}${ext}`;
-  } else {
-    // Legacy: just UUID
-    id = ext ? `${uuid}${ext}` : uuid;
-  }
-
-  const dest = path.join(dir, id);
-  await retryAfterRecreatingDir(dir, () => fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE }));
-  return { id, path: dest, size: buffer.byteLength, contentType: mime };
+  const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
+  await writeSavedMediaBuffer({ dir, id, buffer });
+  return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
