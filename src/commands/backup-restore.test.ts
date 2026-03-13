@@ -664,6 +664,43 @@ describe("backup restore", () => {
     }
   });
 
+  it("rejects workspace restore targets that point to an existing file", async () => {
+    const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));
+    const rootDir = path.join(extractDir, "archive-root");
+    const workspaceTarget = path.join(tempHome.home, "workspace.txt");
+    try {
+      await fs.mkdir(path.join(rootDir, "assets", "workspace"), { recursive: true });
+      await fs.writeFile(workspaceTarget, "not a directory\n", "utf8");
+
+      await expect(
+        buildRestoreOperations({
+          mode: "workspace-only",
+          extractedRoot: rootDir,
+          manifest: {
+            schemaVersion: 1,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            archiveRoot: "archive-root",
+            runtimeVersion: "2026.3.9",
+            platform: process.platform,
+            nodeVersion: process.version,
+            paths: {
+              workspaceDirs: [workspaceTarget],
+            },
+            assets: [
+              {
+                kind: "workspace",
+                sourcePath: workspaceTarget,
+                archivePath: "archive-root/assets/workspace",
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/Refusing to restore workspace to an existing non-directory/);
+    } finally {
+      await fs.rm(extractDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects full-host restore when OPENCLAW_CONFIG_PATH resolves to the home directory", async () => {
     const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-extract-"));

@@ -562,6 +562,20 @@ async function assertSafeWorkspaceRestoreTarget(params: {
   ) {
     throw new Error(`Refusing to restore workspace to an unsafe path: ${resolved}`);
   }
+
+  try {
+    const stat = await fs.stat(params.targetPath);
+    if (!stat.isDirectory()) {
+      throw new Error(
+        `Refusing to restore workspace to an existing non-directory (${resolved}). ` +
+          "Set it to a dedicated directory before restoring.",
+      );
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
 }
 
 export async function buildRestoreOperations(params: {

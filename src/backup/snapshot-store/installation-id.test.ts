@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveInstallationId } from "./installation-id.js";
 
 describe("resolveInstallationId", () => {
@@ -39,5 +39,48 @@ describe("resolveInstallationId", () => {
         createIfMissing: true,
       }),
     ).rejects.toThrow("Invalid backup installation record");
+  });
+
+  it("retries after create races until the winning installation record is complete", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-installation-id-"));
+    tempDirs.push(stateDir);
+    const backupDir = path.join(stateDir, "backup");
+    const filePath = path.join(backupDir, "installation.json");
+    const validRecord = `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        installationId: "inst_1234567890abcdef12345678",
+        createdAt: "2026-03-13T00:00:00.000Z",
+      },
+      null,
+      2,
+    )}\n`;
+
+    const readFileMock = vi.spyOn(fs, "readFile");
+    readFileMock.mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    readFileMock.mockResolvedValueOnce("{");
+    readFileMock.mockResolvedValueOnce(validRecord);
+
+    const writeFileMock = vi.spyOn(fs, "writeFile");
+    writeFileMock.mockRejectedValueOnce(Object.assign(new Error("exists"), { code: "EEXIST" }));
+
+    const mkdirMock = vi.spyOn(fs, "mkdir");
+
+    try {
+      await expect(
+        resolveInstallationId({
+          stateDir,
+          createIfMissing: true,
+        }),
+      ).resolves.toBe("inst_1234567890abcdef12345678");
+
+      expect(mkdirMock).toHaveBeenCalledWith(backupDir, { recursive: true });
+      expect(writeFileMock).toHaveBeenCalledTimes(1);
+      expect(readFileMock).toHaveBeenCalledWith(filePath, "utf8");
+    } finally {
+      readFileMock.mockRestore();
+      writeFileMock.mockRestore();
+      mkdirMock.mockRestore();
+    }
   });
 });

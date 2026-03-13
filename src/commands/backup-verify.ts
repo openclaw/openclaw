@@ -223,6 +223,10 @@ function isRootManifestEntry(entryPath: string): boolean {
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
 
+function requiresExactArchiveEntry(asset: BackupManifestAsset): boolean {
+  return asset.kind === "config";
+}
+
 function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
@@ -249,7 +253,7 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     const nested = normalizedEntries.some(
       (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
     );
-    if (!exact && !nested) {
+    if (!exact && (!nested || requiresExactArchiveEntry(asset))) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }
