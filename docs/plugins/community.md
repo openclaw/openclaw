@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **Civic Google** — Eliminate all Google OAuth setup for your OpenClaw deployment. Without this plugin, integrators must run `gog auth add`, manage OAuth credentials, and handle token refresh manually. With it, Civic AuthZ owns the full credential lifecycle: tokens are fetched fresh on every call, refreshed automatically, and scoped to exactly what the agent needs (e.g. `gmail.readonly` for search, `gmail.compose` for drafts — never over-permissioned). Supports Gmail, Calendar, Drive, Contacts, Sheets, and Docs via the built-in `gog` CLI.
+- **Civic Google** — Zero-config Google OAuth for OpenClaw: Civic AuthZ handles credentials, token refresh, and least-privilege scope selection automatically — no `gog auth add` needed.
   npm: `@civic/openclaw-google`
   repo: `https://github.com/civicteam/openclaw-google`
   install: `openclaw plugins install @civic/openclaw-google`
