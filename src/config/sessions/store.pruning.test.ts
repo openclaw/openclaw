@@ -105,7 +105,9 @@ describe("rotateSessionFile", () => {
     // during that window would find the file missing, fall back to {}, and
     // generate a new sessionId — a "memory wipe".  copyFile keeps the
     // original present so concurrent readers always see valid data.
-    const content = JSON.stringify({ "user:123": { sessionId: "sess-abc", updatedAt: Date.now() } });
+    const content = JSON.stringify({
+      "user:123": { sessionId: "sess-abc", updatedAt: Date.now() },
+    });
     await fs.writeFile(storePath, content, "utf-8");
 
     let contentDuringRotation: string | undefined;

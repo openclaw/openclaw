@@ -269,7 +269,7 @@ async function getSessionFileSize(storePath: string): Promise<number | null> {
 
 /**
  * Rotate the sessions file if it exceeds the configured size threshold.
- * Renames the current file to `sessions.json.bak.{timestamp}` and cleans up
+ * Copies the current file to `sessions.json.bak.{timestamp}` and cleans up
  * old rotation backups, keeping only the 3 most recent `.bak.*` files.
  */
 export async function rotateSessionFile(
