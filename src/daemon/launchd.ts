@@ -360,11 +360,20 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  const serviceTarget = `${domain}/${label}`;
+
+  // Disable the service first to prevent KeepAlive from auto-restarting it.
+  // The LaunchAgent plist has KeepAlive=true with a 1-second ThrottleInterval,
+  // so without disable, launchd would immediately respawn the process after kill.
+  await execLaunchctl(["disable", serviceTarget]);
+
+  // Use SIGTERM to stop the process while keeping the service registered in launchd.
+  // This allows `gateway start` to work afterward without needing to re-bootstrap.
+  const res = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 export async function installLaunchAgent({
@@ -493,8 +502,21 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
-  // If the service was previously booted out, re-register the plist and retry.
+  // If the service was previously disabled (from stop), enable and retry kickstart.
   await execLaunchctl(["enable", serviceTarget]);
+  const retryKick = await execLaunchctl(["kickstart", "-k", serviceTarget]);
+  if (retryKick.code === 0) {
+    try {
+      stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
+        throw err;
+      }
+    }
+    return { outcome: "completed" };
+  }
+
+  // If the service was previously booted out, re-register the plist and retry.
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();

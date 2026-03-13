@@ -349,7 +349,11 @@ describe("launchd install", () => {
   it("falls back to bootstrap when kickstart cannot find the service", async () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Could not find service";
-    state.kickstartFailuresRemaining = 1;
+    // With the new enable + kickstart retry logic, we need 2 failures:
+    // 1. Initial kickstart fails
+    // 2. Enable + kickstart retry also fails (service was booted out, not just disabled)
+    // Then bootstrap + kickstart succeeds.
+    state.kickstartFailuresRemaining = 2;
 
     const result = await restartLaunchAgent({
       env,
@@ -371,7 +375,7 @@ describe("launchd install", () => {
     );
 
     expect(result).toEqual({ outcome: "completed" });
-    expect(kickstartCalls).toHaveLength(2);
+    expect(kickstartCalls).toHaveLength(3);
     expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
