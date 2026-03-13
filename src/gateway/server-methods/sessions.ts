@@ -8,10 +8,6 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
-import {
-  getSubagentRunByChildSessionKey,
-  replaceSubagentRunAfterSteer,
-} from "../../agents/subagent-registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -50,6 +46,7 @@ import {
   emitSessionUnboundLifecycleEvent,
   performGatewaySessionReset,
 } from "../session-reset-service.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
@@ -124,26 +121,6 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
       ? (params.payload as { status?: unknown }).status
       : undefined;
   return status === "started";
-}
-
-function reactivateCompletedSubagentSession(params: {
-  sessionKey: string;
-  runId?: string;
-}): boolean {
-  const runId = params.runId?.trim();
-  if (!runId) {
-    return false;
-  }
-  const existing = getSubagentRunByChildSessionKey(params.sessionKey);
-  if (!existing || typeof existing.endedAt !== "number") {
-    return false;
-  }
-  return replaceSubagentRunAfterSteer({
-    previousRunId: existing.runId,
-    nextRunId: runId,
-    fallback: existing,
-    runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
-  });
 }
 
 function emitSessionsChanged(

@@ -47,6 +47,7 @@ import {
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
+import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadGatewaySessionRow,
@@ -641,10 +642,23 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
     respond(true, accepted, undefined, { runId });
 
+    if (resolvedSessionKey) {
+      reactivateCompletedSubagentSession({
+        sessionKey: resolvedSessionKey,
+        runId,
+      });
+    }
+
     if (requestedSessionKey && resolvedSessionKey && isNewSession) {
       emitSessionsChanged(context, {
         sessionKey: resolvedSessionKey,
         reason: "create",
+      });
+    }
+    if (resolvedSessionKey) {
+      emitSessionsChanged(context, {
+        sessionKey: resolvedSessionKey,
+        reason: "send",
       });
     }
 

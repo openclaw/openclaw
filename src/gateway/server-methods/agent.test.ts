@@ -5,10 +5,13 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
+  loadGatewaySessionRow: vi.fn(),
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
+  getSubagentRunByChildSessionKey: vi.fn(),
+  replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -17,6 +20,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: mocks.loadSessionEntry,
+    loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
 
@@ -62,6 +66,11 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
+vi.mock("../../agents/subagent-registry.js", () => ({
+  getSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
+  replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
+}));
+
 vi.mock("../session-reset-service.js", () => ({
   performGatewaySessionReset: (...args: unknown[]) =>
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
@@ -86,6 +95,8 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -417,6 +428,102 @@ describe("gateway agent handler", () => {
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
+
+  it("reactivates completed subagent sessions and broadcasts send updates", async () => {
+    const childSessionKey = "agent:main:subagent:followup";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "sess-followup",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+    mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      status: "running",
+      startedAt: 123,
+      endedAt: undefined,
+      runtimeMs: 10,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: "run-new",
+      },
+      {
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "accepted",
+      }),
+      undefined,
+      { runId: "run-new" },
+    );
+    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
+      previousRunId: "run-old",
+      nextRunId: "run-new",
+      fallback: completedRun,
+      runTimeoutSeconds: 0,
+    });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "send",
+        status: "running",
+        startedAt: 123,
+        endedAt: undefined,
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
