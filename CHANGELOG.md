@@ -216,6 +216,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded runner: recover canonical allowlisted tool names from malformed `toolCallId` and malformed non-blank tool-name variants before dispatch, while failing closed on ambiguous matches. (#34485) thanks @yuweuii.
 - Agents/failover: classify ZenMux quota-refresh `402` responses as `rate_limit` so model fallback retries continue instead of stopping on a temporary subscription window. (#43917) thanks @bwjoke.
 - Agents/failover: classify HTTP 422 malformed-request responses as `format` and recognize OpenRouter "requires more credits" billing errors so provider fallback triggers instead of surfacing raw errors. (#43823) thanks @jnMetaCode.
+- Memory/QMD Windows: fail closed when `qmd.cmd` or `mcporter.cmd` wrappers cannot be resolved to a direct entrypoint, so memory search no longer falls back to shell execution on Windows.
 
 ## 2026.3.8
 
