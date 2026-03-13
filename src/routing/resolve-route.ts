@@ -90,6 +90,10 @@ function normalizeId(value: unknown): string {
 
 function normalizePeerIdForChannel(channel: string, value: unknown): string {
   const normalized = normalizeId(value);
+  // Signal route/session matching already uses lowercase peer ids internally.
+  // Keep this canonicalization scoped to routing only: outbound Signal targets
+  // still preserve group-id casing because signal-cli treats group ids as
+  // base64-like, case-sensitive values.
   return channel === "signal" ? normalized.toLowerCase() : normalized;
 }
 

@@ -219,6 +219,9 @@ describe("resolveAgentRoute", () => {
     });
     expect(route.agentId).toBe("signal-group");
     expect(route.matchedBy).toBe("binding.peer");
+    expect(route.sessionKey).toBe(
+      "agent:signal-group:signal:group:npy/ppdwlkd996qtl3+0d2jdqgzpy3ysf9nty4p7bae=",
+    );
   });
 
   test("keeps peer binding matching case-sensitive for non-signal channels", () => {
