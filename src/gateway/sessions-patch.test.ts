@@ -149,6 +149,37 @@ describe("gateway sessions patch", () => {
     expect(entry.reasoningLevel).toBeUndefined();
   });
 
+  test("persists fastMode=false (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, fastMode: false },
+      }),
+    );
+    expect(entry.fastMode).toBe(false);
+  });
+
+  test("persists fastMode=true", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, fastMode: true },
+      }),
+    );
+    expect(entry.fastMode).toBe(true);
+  });
+
+  test("clears fastMode when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { fastMode: true } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: null },
+      }),
+    );
+    expect(entry.fastMode).toBeUndefined();
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

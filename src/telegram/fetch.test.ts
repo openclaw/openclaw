@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFetch } from "../infra/fetch.js";
-import { resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -313,12 +313,13 @@ describe("resolveTelegramFetch", () => {
       .mockResolvedValueOnce({ ok: true } as Response)
       .mockResolvedValueOnce({ ok: true } as Response);
 
-    const resolved = resolveTelegramFetchOrThrow(undefined, {
+    const transport = resolveTelegramTransport(undefined, {
       network: {
         autoSelectFamily: true,
         dnsResultOrder: "ipv4first",
       },
     });
+    const resolved = transport.fetch;
 
     await resolved("https://api.telegram.org/botx/sendMessage");
     await resolved("https://api.telegram.org/botx/sendChatAction");
@@ -336,6 +337,11 @@ describe("resolveTelegramFetch", () => {
       expect.objectContaining({
         family: 4,
         autoSelectFamily: false,
+      }),
+    );
+    expect(transport.pinnedDispatcherPolicy).toEqual(
+      expect.objectContaining({
+        mode: "direct",
       }),
     );
   });

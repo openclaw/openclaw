@@ -12,11 +12,13 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   return {
     ...original,
     completeSimple: vi.fn(),
-    // Some auth helpers import oauth provider metadata at module load time.
-    getOAuthProviders: () => [],
-    getOAuthApiKey: vi.fn(async () => null),
   };
 });
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthProviders: () => [],
+  getOAuthApiKey: vi.fn(async () => null),
+}));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModel: vi.fn((provider: string, modelId: string) => ({
