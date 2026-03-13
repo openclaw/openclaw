@@ -269,10 +269,10 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: {
         messages: {
           ackReaction: "👀",
-          ackReactionTiming: "run-start",
         },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
+      discordConfig: { ackReactionTiming: "run-start" },
       shouldRequireMention: true,
       effectiveWasMentioned: true,
     });
@@ -296,10 +296,10 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: {
         messages: {
           ackReaction: "👀",
-          ackReactionTiming: "run-start",
         },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
+      discordConfig: { ackReactionTiming: "run-start" },
       shouldRequireMention: false,
       effectiveWasMentioned: false,
     });
@@ -319,10 +319,10 @@ describe("processDiscordMessage ack reactions", () => {
       cfg: {
         messages: {
           ackReaction: "👀",
-          ackReactionTiming: "run-start",
         },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
+      discordConfig: { ackReactionTiming: "run-start" },
       shouldRequireMention: true,
       effectiveWasMentioned: true,
     });

@@ -554,6 +554,7 @@ export const DiscordAccountSchema = z
       .optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    ackReactionTiming: z.enum(["received", "run-start"]).optional(),
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
       .optional(),

@@ -152,7 +152,6 @@ export const MessagesSchema = z
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
-    ackReactionTiming: z.enum(["received", "run-start"]).optional(),
     ackReactionScope: z
       .enum(["group-mentions", "group-all", "direct", "all", "off", "none"])
       .optional(),

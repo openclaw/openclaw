@@ -1476,8 +1476,6 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
-  "messages.ackReactionTiming":
-    'When to send ack reactions. "received" reacts as soon as the inbound message is accepted; "run-start" waits until the agent emits real run activity. Default: "received".',
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
   "messages.statusReactions":
@@ -1498,6 +1496,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":
     "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
+  "channels.discord.ackReactionTiming":
+    'When to send Discord ack reactions. "received" reacts as soon as the inbound message is accepted; "run-start" waits until the agent emits real run activity. Default: "received".',
   "channels.discord.draftChunk.minChars":
     'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
   "channels.discord.draftChunk.maxChars":

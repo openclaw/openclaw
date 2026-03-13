@@ -145,7 +145,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
-  const ackReactionTiming = cfg.messages?.ackReactionTiming ?? "received";
+  const ackReactionTiming = discordConfig?.ackReactionTiming ?? "received";
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const shouldAckReaction = () =>
