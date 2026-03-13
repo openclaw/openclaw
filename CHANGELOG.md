@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/media downloads: thread the same direct or proxy transport policy into SSRF-guarded file fetches so inbound attachments keep working when Telegram falls back between env-proxy and direct networking. (#44639) Thanks @obviyus.
 - Agents/compaction: compare post-compaction token sanity checks against full-session pre-compaction totals and skip the check when token estimation fails, so sessions with large bootstrap context keep real token counts instead of falling back to unknown. (#28347) thanks @efe-arv.
 - Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
+- Agents/OpenAI WebSocket: omit `tool_choice` when the resolved tools list is empty so vLLM-compatible providers no longer reject tool-less requests. (#44229) thanks @JosepLee.
 
 ## 2026.3.12
 
