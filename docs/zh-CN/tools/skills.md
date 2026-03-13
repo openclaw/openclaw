@@ -274,6 +274,6 @@ OpenClaw 作为安装的一部分（npm 包或 OpenClaw.app）发布一组基线
 
 ## 寻找更多 Skills？
 
-浏览 https://clawhub.com。
+浏览 [ClawHub](https://clawhub.com)。
 
 ---
