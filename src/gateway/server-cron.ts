@@ -302,7 +302,8 @@ export function buildGatewayCronService(params: {
       const runLaneReset = (lane: string) => {
         const result = resetLane(lane, {
           dropQueued: false,
-          skipIfActive: true,
+          skipIfActive: false,
+          force: true,
         });
         if (result.droppedQueued > 0) {
           cronLogger.warn(
@@ -313,18 +314,10 @@ export function buildGatewayCronService(params: {
             "cron: unexpected queued task drop during degraded runner recovery",
           );
         }
-        if (!result.reset && result.activeBefore > 0) {
-          cronLogger.warn(
-            {
-              lane: result.lane,
-              activeTasks: result.activeBefore,
-            },
-            "cron: skipped lane reset during degraded runner recovery; active tasks still running",
-          );
-        }
       };
 
       runLaneReset(CommandLane.Cron);
+      runLaneReset(CommandLane.Nested);
 
       const { agentId: resolvedAgentId } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronAgentSessionKey({
