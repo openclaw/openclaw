@@ -1079,7 +1079,11 @@ export function renderChat(props: ChatProps) {
   };
 
   return html`
-    <section class="card chat">
+    <section
+      class="card chat"
+      @drop=${(e: DragEvent) => handleDrop(e, props)}
+      @dragover=${(e: DragEvent) => handleDragOver(e)}
+    >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
 
