@@ -826,6 +826,10 @@ export async function textToSpeechTelephony(params: {
         errors.push("edge: unsupported for telephony");
         continue;
       }
+      if (provider === "minimax") {
+        errors.push("minimax: unsupported for telephony");
+        continue;
+      }
 
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {

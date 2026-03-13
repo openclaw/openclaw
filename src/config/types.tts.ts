@@ -75,7 +75,7 @@ export type TtsConfig = {
     voice?: string;
     /** Playback speed (0.5–2.0, default 1.0). */
     speed?: number;
-    /** Volume (0–10, default 1.0). */
+    /** Volume (>0–10, default 1.0). Must be strictly positive. */
     vol?: number;
     /** Pitch shift in semitones (−12–12, default 0). */
     pitch?: number;
