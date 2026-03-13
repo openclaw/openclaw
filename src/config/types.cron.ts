@@ -27,6 +27,35 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+/** A script to run at a cron lifecycle hook point. */
+export type CronHookEntry = {
+  /** Path to hook script (.cjs/.ts), workspace-relative or absolute. */
+  script: string;
+  /** Execution priority — lower numbers run first (default: 10). */
+  priority?: number;
+  /** Only run this hook when the filter criteria match. */
+  filter?: {
+    workflow?: string[];
+    jobId?: string[];
+    agentId?: string[];
+  };
+};
+
+export type CronLifecycleHookPoint = "beforeRun" | "afterComplete" | "onFailure" | "afterRun";
+
+/** Global cron lifecycle hooks registered in openclaw.json cron section. */
+export type CronHooksConfig = {
+  [K in CronLifecycleHookPoint]?: CronHookEntry[];
+};
+
+/** Per-job hook overrides stored in jobs.json. */
+export type CronJobHooksConfig = {
+  [K in CronLifecycleHookPoint]?: string[];
+} & {
+  /** Hook points for which global hooks should be skipped. */
+  skipGlobal?: CronLifecycleHookPoint[];
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -57,4 +86,6 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /** Lifecycle hooks that run at defined points during cron job execution. */
+  hooks?: CronHooksConfig;
 };
