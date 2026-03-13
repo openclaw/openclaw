@@ -39,6 +39,7 @@ import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
+  looksLikeSessionKey,
   shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
@@ -311,6 +312,27 @@ export function createSessionStatusTool(opts?: {
             alias,
             mainKey,
           });
+        }
+      }
+
+      // When invoked from an embedded CLI context (opts.agentSessionKey) with a bare
+      // session ID that isn't registered in any session store (e.g. ad-hoc
+      // `openclaw agent --local --session-id <id>`), fall back to the agent's main
+      // session key.  This runs AFTER resolveSessionKeyFromSessionId() so that
+      // session IDs that genuinely map to non-main sessions are resolved correctly.
+      if (
+        !resolved &&
+        !requestedKeyParam &&
+        opts?.agentSessionKey &&
+        !looksLikeSessionKey(opts.agentSessionKey)
+      ) {
+        const mainSessionKey = buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey });
+        agentId = DEFAULT_AGENT_ID;
+        storePath = resolveStorePath(cfg.session?.store, { agentId });
+        store = loadSessionStore(storePath);
+        resolved = resolveSessionEntry({ store, keyRaw: mainSessionKey, alias, mainKey });
+        if (resolved) {
+          requestedKeyRaw = mainSessionKey;
         }
       }
 
