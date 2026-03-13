@@ -161,11 +161,11 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
     case "type": {
       const ref = toStringOrEmpty(raw.ref) || undefined;
       const selector = toStringOrEmpty(raw.selector) || undefined;
-      const text = toStringOrEmpty(raw.text);
+      const text = raw.text;
       if (!ref && !selector) {
         throw new Error("type requires ref or selector");
       }
-      if (!text) {
+      if (typeof text !== "string") {
         throw new Error("type requires text");
       }
       const targetId = toStringOrEmpty(raw.targetId) || undefined;
