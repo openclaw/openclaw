@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -14,6 +15,7 @@ const {
   resolveMemorySearchConfigMock,
   resolveSessionAgentIdMock,
   estimateTokensMock,
+  sessionMessages,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -65,6 +67,18 @@ const {
     })),
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
+    sessionMessages: [
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ] as unknown[],
   };
 });
 
@@ -96,18 +110,11 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
-        messages: [
-          { role: "user", content: "hello", timestamp: 1 },
-          { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-          {
-            role: "toolResult",
-            toolCallId: "t1",
-            toolName: "exec",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-            timestamp: 3,
-          },
-        ],
+        messages: sessionMessages.map((message) =>
+          typeof structuredClone === "function"
+            ? structuredClone(message)
+            : JSON.parse(JSON.stringify(message)),
+        ),
         agent: {
           replaceMessages: vi.fn((messages: unknown[]) => {
             session.messages = [...(messages as typeof session.messages)];
@@ -277,9 +284,15 @@ vi.mock("../../config/channel-capabilities.js", () => ({
   resolveChannelCapabilities: vi.fn(() => undefined),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
-  normalizeMessageChannel: vi.fn(() => undefined),
-}));
+vi.mock("../../utils/message-channel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  );
+  return {
+    ...actual,
+    normalizeMessageChannel: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("../pi-embedded-helpers.js", () => ({
   ensureSessionHeader: vi.fn(async () => {}),
@@ -321,7 +334,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
-import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
+import { __testing, compactEmbeddedPiSession, compactEmbeddedPiSessionDirect } from "./compact.js";
 
 const sessionHook = (action: string) =>
   triggerInternalHook.mock.calls.find(
@@ -372,6 +385,20 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -736,6 +763,79 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     const result = await resultPromise;
     expect(result.ok).toBe(true);
+  });
+
+  it("skips compaction when the transcript only contains boilerplate replies and tool output", async () => {
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "<b>HEARTBEAT_OK</b>", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+        isError: false,
+        timestamp: 2,
+      },
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+    expect(sessionCompactImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not treat assistant-only tool-call blocks as meaningful conversation", () => {
+    expect(
+      __testing.hasMeaningfulConversationContent({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      } as AgentMessage),
+    ).toBe(false);
+  });
+
+  it("counts tool output as real only when a meaningful user ask exists in the lookback window", () => {
+    const heartbeatToolResultWindow = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+    expect(
+      __testing.hasRealConversationContent(
+        heartbeatToolResultWindow[1],
+        heartbeatToolResultWindow,
+        1,
+      ),
+    ).toBe(false);
+
+    const realAskToolResultWindow = [
+      { role: "assistant", content: "NO_REPLY" },
+      { role: "user", content: "please inspect the failing PR" },
+      {
+        role: "toolResult",
+        toolCallId: "t2",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+    expect(
+      __testing.hasRealConversationContent(realAskToolResultWindow[2], realAskToolResultWindow, 2),
+    ).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", async () => {

@@ -7,6 +7,10 @@ import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
 import {
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
+} from "../compaction-real-conversation.js";
+import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
   MIN_CHUNK_RATIO,
@@ -173,10 +177,6 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
     lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
   }
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
-}
-
-function isRealConversationMessage(message: AgentMessage): boolean {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
 }
 
 function computeFileLists(fileOps: FileOperations): {
@@ -698,7 +698,11 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+    if (
+      !preparation.messagesToSummarize.some((message, index, messages) =>
+        isRealConversationMessage(message, messages, index),
+      )
+    ) {
       log.warn(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
@@ -994,6 +998,8 @@ export const __testing = {
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
+  hasMeaningfulConversationContent,
+  isRealConversationMessage,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
