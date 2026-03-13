@@ -196,6 +196,37 @@ describe("diagnostics-otel service", () => {
     registerLogTransportMock.mockReset();
   });
 
+  test("warns once when legacy captureContent key is configured", async () => {
+    const service = createDiagnosticsOtelService();
+    const logger = createLogger();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: OTEL_TEST_ENDPOINT,
+            protocol: OTEL_TEST_PROTOCOL,
+            traces: true,
+            captureContent: false,
+          },
+        },
+      },
+      logger,
+      stateDir: OTEL_TEST_STATE_DIR,
+    };
+
+    await service.start(ctx);
+    await service.stop?.(ctx);
+    await service.start(ctx);
+    await service.stop?.(ctx);
+
+    const captureContentWarnings = logger.warn.mock.calls.filter(([message]) =>
+      String(message).includes("diagnostics.otel.captureContent"),
+    );
+    expect(captureContentWarnings).toHaveLength(1);
+  });
+
   test("records message-flow metrics and spans", async () => {
     const { registeredTransports } = setupRegisteredTransports();
 
