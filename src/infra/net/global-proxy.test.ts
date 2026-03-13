@@ -58,12 +58,21 @@ describe("applyGlobalProxyDispatcher", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("passes ALL_PROXY as explicit httpProxy/httpsProxy when no standard proxy vars are set", () => {
+  it("rewrites socks5:// ALL_PROXY to http:// for EnvHttpProxyAgent compatibility", () => {
     process.env.ALL_PROXY = "socks5://127.0.0.1:7897";
     applyGlobalProxyDispatcher();
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
-      httpProxy: "socks5://127.0.0.1:7897",
-      httpsProxy: "socks5://127.0.0.1:7897",
+      httpProxy: "http://127.0.0.1:7897",
+      httpsProxy: "http://127.0.0.1:7897",
+    });
+  });
+
+  it("passes http:// ALL_PROXY as-is", () => {
+    process.env.ALL_PROXY = "http://127.0.0.1:7897";
+    applyGlobalProxyDispatcher();
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledWith({
+      httpProxy: "http://127.0.0.1:7897",
+      httpsProxy: "http://127.0.0.1:7897",
     });
   });
 

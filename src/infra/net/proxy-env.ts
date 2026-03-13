@@ -54,6 +54,32 @@ export function hasEnvHttpProxyConfigured(
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
 
+const SOCKS_PROTOCOL_RE = /^socks[45h]?:\/\//i;
+
+/**
+ * Rewrite proxy URLs whose protocol is unsupported by undici's
+ * EnvHttpProxyAgent (which only accepts http:// and https://).
+ *
+ * SOCKS5 URLs are rewritten to http:// on the same host:port because most
+ * local proxy tools (Clash, V2Ray, Shadowsocks) accept HTTP CONNECT on the
+ * same listener. For truly SOCKS-only endpoints this will fail at connect
+ * time, which is still better than silently going direct.
+ *
+ * Returns `null` for protocols that cannot be meaningfully rewritten.
+ */
+function normalizeProxyUrlForUndici(url: string): string | null {
+  // Fast path: already http(s).
+  if (/^https?:\/\//i.test(url)) {
+    return url;
+  }
+  // Rewrite socks4/5/5h to http on the same host:port.
+  if (SOCKS_PROTOCOL_RE.test(url)) {
+    return url.replace(SOCKS_PROTOCOL_RE, "http://");
+  }
+  // Unknown protocol — cannot meaningfully rewrite.
+  return null;
+}
+
 /**
  * When only ALL_PROXY (or all_proxy) is set and no standard HTTP_PROXY /
  * HTTPS_PROXY vars exist, return explicit `httpProxy` / `httpsProxy` options
@@ -88,5 +114,14 @@ export function resolveAllProxyFallbackOptions(
     return undefined;
   }
 
-  return { httpProxy: allProxy, httpsProxy: allProxy };
+  // EnvHttpProxyAgent only supports http:// and https:// proxy URLs.
+  // Many local proxy tools (Clash, V2Ray, Shadowsocks) expose HTTP CONNECT
+  // on the same port as SOCKS5, so rewrite socks5(h):// to http:// as a
+  // best-effort fallback rather than letting the constructor throw.
+  const proxyUrl = normalizeProxyUrlForUndici(allProxy);
+  if (!proxyUrl) {
+    return undefined;
+  }
+
+  return { httpProxy: proxyUrl, httpsProxy: proxyUrl };
 }
