@@ -462,6 +462,7 @@ const ToolLoopDetectionSchema = z
     warningThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
+    staleThresholdMs: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
   })
   .strict()

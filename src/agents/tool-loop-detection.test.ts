@@ -236,6 +236,38 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeLessThanOrEqual(after);
     });
 
+    it("does not clear stale history on its own (ownership is in detectToolCallLoop)", () => {
+      const state = createState();
+
+      // Record some calls with timestamps in the past (>60s ago)
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-1");
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-2");
+      recordToolCall(state, "read", { path: "/file.txt" }, "old-3");
+      expect(state.toolCallHistory).toHaveLength(3);
+
+      // Manually backdate all entries to 2 minutes ago
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+
+      // recordToolCall no longer clears stale history — that responsibility
+      // belongs to detectToolCallLoop which always runs first in production.
+      recordToolCall(state, "read", { path: "/file.txt" }, "new-1");
+      expect(state.toolCallHistory).toHaveLength(4);
+    });
+
+    it("does not clear history when last entry is recent", () => {
+      const state = createState();
+
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-1");
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-2");
+      expect(state.toolCallHistory).toHaveLength(2);
+
+      // Record another call immediately — history should be preserved
+      recordToolCall(state, "read", { path: "/file.txt" }, "recent-3");
+      expect(state.toolCallHistory).toHaveLength(3);
+    });
+
     it("respects configured historySize", () => {
       const state = createState();
 
@@ -258,6 +290,80 @@ describe("tool-loop-detection", () => {
 
       const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
       expect(loopResult.stuck).toBe(false);
+    });
+
+    it("clears stale history before checking for loops", () => {
+      const state = createState();
+
+      // Simulate a previous heartbeat cycle with repeated calls that would
+      // normally trigger a warning.
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `old-${i}`);
+      }
+      expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
+
+      // Backdate all entries to 2 minutes ago (stale)
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+
+      // detectToolCallLoop should clear stale history before checking,
+      // so the same tool+args should NOT trigger a warning.
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        enabledLoopDetectionConfig,
+      );
+      expect(result.stuck).toBe(false);
+      expect(state.toolCallHistory).toHaveLength(0);
+    });
+
+    it("respects configurable staleThresholdMs", () => {
+      const state = createState();
+
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `old-${i}`);
+      }
+
+      // Backdate entries to 90 seconds ago — stale under default 60s but
+      // fresh under a custom 120s threshold.
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 90_000;
+      }
+
+      // With a 120s threshold the history is still "fresh", so the loop
+      // detector should see all the repeated calls and fire a warning.
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        { enabled: true, staleThresholdMs: 120_000 },
+      );
+      expect(result.stuck).toBe(true);
+      expect(state.toolCallHistory).toHaveLength(WARNING_THRESHOLD);
+    });
+
+    it("detectToolCallLoop does not flag a loop on the first call of a new heartbeat cycle", () => {
+      const state = createState();
+      // Build up history to WARNING_THRESHOLD
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordToolCall(state, "read", { path: "/file.txt" }, `old-${i}`);
+      }
+      // Backdate all entries
+      for (const call of state.toolCallHistory!) {
+        call.timestamp = Date.now() - 120_000;
+      }
+      // Production order: detect THEN record
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/file.txt" },
+        enabledLoopDetectionConfig,
+      );
+      expect(result.stuck).toBe(false);
+      recordToolCall(state, "read", { path: "/file.txt" }, "new-1");
+      expect(state.toolCallHistory).toHaveLength(1);
     });
 
     it("does not flag unique tool calls", () => {
