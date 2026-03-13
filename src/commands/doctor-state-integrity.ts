@@ -15,6 +15,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
+import { detectOpenClawTestStateDir } from "../config/state-dir-classify.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
@@ -490,8 +491,23 @@ export async function noteStateIntegrity(
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
+  const testStateDir = detectOpenClawTestStateDir(stateDir, {
+    homedir: homedir(),
+    resolveRealPath: tryResolveRealPath,
+  });
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
+
+  if (testStateDir) {
+    warnings.push(
+      [
+        `- State directory is under a test-state root (${displayStateDir}).`,
+        `- Test state dirs are useful for experiments, but they frequently drift from the primary runtime at ${shortenHomePath(defaultStateDir)}.`,
+        "- For the live gateway, prefer the primary state dir unless you intentionally want an isolated sandbox.",
+        `  Fix: unset OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH or reinstall the service against ${shortenHomePath(defaultStateDir)}.`,
+      ].join("\n"),
+    );
+  }
 
   if (cloudSyncedStateDir) {
     warnings.push(

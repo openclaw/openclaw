@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   createConfigIO,
   resolveConfigPath,
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
+import { detectOpenClawTestStateDir } from "../../config/state-dir-classify.js";
 import type {
   OpenClawConfig,
   GatewayBindMode,
@@ -28,12 +31,14 @@ import {
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
+import { resolveRuntimeServiceVersion } from "../../version.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
   path: string;
+  stateDir: string;
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
@@ -64,6 +69,8 @@ type DaemonConfigContext = {
   cliConfigSummary: ConfigSummary;
   daemonConfigSummary: ConfigSummary;
   configMismatch: boolean;
+  stateDirMismatch: boolean;
+  daemonUsesTestStateDir: boolean;
 };
 
 type ResolvedGatewayStatus = {
@@ -91,6 +98,13 @@ export type DaemonStatus = {
   config?: {
     cli: ConfigSummary;
     daemon?: ConfigSummary;
+    mismatch?: boolean;
+    stateDirMismatch?: boolean;
+    serviceUsesTestStateDir?: boolean;
+  };
+  version?: {
+    cli: string;
+    service?: string;
     mismatch?: boolean;
   };
   gateway?: GatewayStatusSummary;
@@ -125,6 +139,15 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
+async function normalizePathForComparison(value: string): Promise<string> {
+  const resolvedPath = path.resolve(value);
+  try {
+    return await fs.realpath(resolvedPath);
+  } catch {
+    return resolvedPath;
+  }
+}
+
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
 ): Promise<DaemonConfigContext> {
@@ -134,10 +157,12 @@ async function loadDaemonConfigContext(
   } satisfies Record<string, string | undefined>;
 
   const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
+  const cliStateDir = resolveStateDir(process.env);
   const daemonConfigPath = resolveConfigPath(
     mergedDaemonEnv as NodeJS.ProcessEnv,
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
   );
+  const daemonStateDir = resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv);
 
   const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
   const daemonIO = createConfigIO({
@@ -154,6 +179,7 @@ async function loadDaemonConfigContext(
 
   const cliConfigSummary: ConfigSummary = {
     path: cliSnapshot?.path ?? cliConfigPath,
+    stateDir: cliStateDir,
     exists: cliSnapshot?.exists ?? false,
     valid: cliSnapshot?.valid ?? true,
     ...(cliSnapshot?.issues?.length ? { issues: cliSnapshot.issues } : {}),
@@ -161,11 +187,23 @@ async function loadDaemonConfigContext(
   };
   const daemonConfigSummary: ConfigSummary = {
     path: daemonSnapshot?.path ?? daemonConfigPath,
+    stateDir: daemonStateDir,
     exists: daemonSnapshot?.exists ?? false,
     valid: daemonSnapshot?.valid ?? true,
     ...(daemonSnapshot?.issues?.length ? { issues: daemonSnapshot.issues } : {}),
     controlUi: daemonCfg.gateway?.controlUi,
   };
+  const [
+    normalizedCliConfigPath,
+    normalizedDaemonConfigPath,
+    normalizedCliStateDir,
+    normalizedDaemonStateDir,
+  ] = await Promise.all([
+    normalizePathForComparison(cliConfigSummary.path),
+    normalizePathForComparison(daemonConfigSummary.path),
+    normalizePathForComparison(cliConfigSummary.stateDir),
+    normalizePathForComparison(daemonConfigSummary.stateDir),
+  ]);
 
   return {
     mergedDaemonEnv,
@@ -173,7 +211,12 @@ async function loadDaemonConfigContext(
     daemonCfg,
     cliConfigSummary,
     daemonConfigSummary,
-    configMismatch: cliConfigSummary.path !== daemonConfigSummary.path,
+    configMismatch: normalizedCliConfigPath !== normalizedDaemonConfigPath,
+    stateDirMismatch: normalizedCliStateDir !== normalizedDaemonStateDir,
+    daemonUsesTestStateDir:
+      detectOpenClawTestStateDir(daemonConfigSummary.stateDir, {
+        homedir: mergedDaemonEnv.HOME?.trim() || process.env.HOME,
+      }) !== null,
   };
 }
 
@@ -276,6 +319,8 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
+    stateDirMismatch,
+    daemonUsesTestStateDir,
   } = await loadDaemonConfigContext(serviceEnv);
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
@@ -333,6 +378,10 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
+  const cliVersion = resolveRuntimeServiceVersion(process.env);
+  const serviceVersion = trimToUndefined(serviceEnv?.OPENCLAW_SERVICE_VERSION) ?? undefined;
+  const versionMismatch = Boolean(serviceVersion && serviceVersion !== cliVersion);
+
   return {
     service: {
       label: service.label,
@@ -347,6 +396,13 @@ export async function gatherDaemonStatus(
       cli: cliConfigSummary,
       daemon: daemonConfigSummary,
       ...(configMismatch ? { mismatch: true } : {}),
+      ...(stateDirMismatch ? { stateDirMismatch: true } : {}),
+      ...(daemonUsesTestStateDir ? { serviceUsesTestStateDir: true } : {}),
+    },
+    version: {
+      cli: cliVersion,
+      ...(serviceVersion ? { service: serviceVersion } : {}),
+      ...(versionMismatch ? { mismatch: true } : {}),
     },
     gateway,
     port: portStatus,

@@ -1,6 +1,8 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
+const fsRealpath = vi.fn(async (value: string) => value);
 const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -48,6 +50,18 @@ let cliLoadedConfig: Record<string, unknown> = {
     bind: "loopback",
   },
 };
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      realpath: fsRealpath,
+    },
+    realpath: fsRealpath,
+  };
+});
 
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({ configPath }: { configPath: string }) => {
@@ -132,6 +146,8 @@ describe("gatherDaemonStatus", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
+    fsRealpath.mockClear();
+    fsRealpath.mockImplementation(async (value: string) => value);
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     daemonLoadedConfig = {
@@ -325,5 +341,57 @@ describe("gatherDaemonStatus", () => {
     expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
+  });
+
+  it("reports service state-dir and version drift", async () => {
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        HOME: "/Users/tester",
+        OPENCLAW_STATE_DIR: "/Users/tester/.openclaw-tests/2026.3.2-state",
+        OPENCLAW_CONFIG_PATH: "/Users/tester/.openclaw-tests/2026.3.2-state/openclaw.json",
+        OPENCLAW_SERVICE_VERSION: "2026.3.8",
+      },
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.config?.stateDirMismatch).toBe(true);
+    expect(status.config?.serviceUsesTestStateDir).toBe(true);
+    expect(status.config?.daemon?.stateDir).toBe("/Users/tester/.openclaw-tests/2026.3.2-state");
+    expect(status.version?.service).toBe("2026.3.8");
+    expect(status.version?.mismatch).toBe(true);
+  });
+
+  it("does not report config or state-dir drift when paths resolve to the same realpath", async () => {
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon/link",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/link/openclaw.json",
+      },
+    });
+    fsRealpath.mockImplementation(async (value: string) => {
+      if (value === path.resolve("/tmp/openclaw-daemon/link")) {
+        return path.resolve("/tmp/openclaw-cli");
+      }
+      if (value === path.resolve("/tmp/openclaw-daemon/link/openclaw.json")) {
+        return path.resolve("/tmp/openclaw-cli/openclaw.json");
+      }
+      return value;
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.config?.mismatch).toBeUndefined();
+    expect(status.config?.stateDirMismatch).toBeUndefined();
   });
 });

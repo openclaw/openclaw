@@ -179,6 +179,90 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("removes removed plugin refs on repair", async () => {
+    await withTempHome(async (home) => {
+      const removedPluginDir = path.join(home, "google-antigravity-auth");
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(removedPluginDir, { recursive: true });
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(removedPluginDir, "index.js"),
+        'export default { id: "google-antigravity-auth", register() {} };\n',
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(removedPluginDir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: "google-antigravity-auth",
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            plugins: {
+              allow: ["google-antigravity-auth"],
+              entries: {
+                "google-antigravity-auth": { enabled: true },
+              },
+              load: {
+                paths: [removedPluginDir],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      expect(result.cfg.plugins).toBeUndefined();
+    });
+  });
+
+  it("removes redundant bundled discord overrides on repair", async () => {
+    const bundledDiscordPath = path.join(process.cwd(), "extensions", "discord");
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+          installs: {
+            discord: {
+              source: "path",
+              sourcePath: bundledDiscordPath,
+              installPath: bundledDiscordPath,
+            },
+          },
+          load: {
+            paths: [bundledDiscordPath],
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.plugins).toBeUndefined();
+  });
+
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
