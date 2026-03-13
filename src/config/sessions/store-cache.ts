@@ -57,13 +57,10 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  // Use JSON.parse instead of structuredClone to avoid native (C++) memory accumulation.
-  // structuredClone allocates serialization buffers outside the V8 heap that GC cannot
-  // reclaim fast enough for large/frequent session stores. Session stores contain only
-  // JSON-serializable data (no Dates, Maps, or circular refs), so this is safe.
-  return cached.serialized
-    ? JSON.parse(cached.serialized)
-    : JSON.parse(JSON.stringify(cached.store));
+  // JSON-based deep copy instead of structuredClone to avoid native (C++) memory
+  // accumulation outside the V8 heap. Always clone from cached.store (post-migration),
+  // never from cached.serialized which may be stale pre-migration disk data.
+  return JSON.parse(JSON.stringify(cached.store));
 }
 
 export function writeSessionStoreCache(params: {
@@ -74,10 +71,9 @@ export function writeSessionStoreCache(params: {
   serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    // JSON-based deep copy to avoid native memory leaks from structuredClone (see readSessionStoreCache).
-    store: params.serialized
-      ? JSON.parse(params.serialized)
-      : JSON.parse(JSON.stringify(params.store)),
+    // JSON-based deep copy instead of structuredClone to avoid native memory leaks.
+    // Always clone from params.store (post-migration), not params.serialized (pre-migration).
+    store: JSON.parse(JSON.stringify(params.store)),
     loadedAt: Date.now(),
     storePath: params.storePath,
     mtimeMs: params.mtimeMs,
