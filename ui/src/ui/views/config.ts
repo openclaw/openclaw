@@ -969,16 +969,15 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
-    Object.assign({}, cat, {
-      sections: cat.sections.filter(
-        (s) =>
-          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
-          (!include || include.has(s.key)) &&
-          (!exclude || !exclude.has(s.key)),
-      ),
-    }),
-  ).filter((cat) => cat.sections.length > 0);
+  const visibleCategories = SECTION_CATEGORIES.map((cat) => ({
+    ...cat,
+    sections: cat.sections.filter(
+      (s) =>
+        ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+        (!include || include.has(s.key)) &&
+        (!exclude || !exclude.has(s.key)),
+    ),
+  })).filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
