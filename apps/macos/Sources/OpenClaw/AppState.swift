@@ -783,7 +783,7 @@ extension AppState {
         remoteToken: String,
         remoteTokenDirty: Bool) -> [String: Any]
     {
-        updatedRemoteGatewayConfig(
+        Self.updatedRemoteGatewayConfig(
             current: current,
             transport: transport,
             remoteUrl: remoteUrl,
@@ -804,7 +804,7 @@ extension AppState {
         remoteToken: String,
         remoteTokenDirty: Bool) -> [String: Any]
     {
-        syncedGatewayRoot(
+        Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             connectionMode: connectionMode,
             remoteTransport: remoteTransport,
