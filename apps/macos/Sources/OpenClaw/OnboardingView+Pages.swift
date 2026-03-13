@@ -508,6 +508,8 @@ extension OnboardingView {
             return ("exclamationmark.triangle.fill", .orange)
         case .gatewayTokenNotConfigured:
             return ("wrench.and.screwdriver.fill", .orange)
+        case .setupCodeExpired:
+            return ("qrcode.viewfinder", .orange)
         case .passwordRequired:
             return ("lock.slash.fill", .orange)
         case .pairingRequired:
