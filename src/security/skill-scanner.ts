@@ -170,6 +170,20 @@ const LINE_RULES: LineRule[] = [
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
   },
+  // R6: détecter le chargement dynamique de module via require(variable)
+  {
+    ruleId: "dynamic-require",
+    severity: "critical",
+    message: "Dynamic require() with variable argument detected",
+    pattern: /\brequire\s*\(\s*(?!['"`])(?!\s*['"`])/,
+  },
+  // R6: détecter l'import() dynamique (expression non-littérale)
+  {
+    ruleId: "dynamic-import",
+    severity: "critical",
+    message: "Dynamic import() with non-literal argument detected",
+    pattern: /\bimport\s*\(\s*(?!['"`])(?!\s*['"`])/,
+  },
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
