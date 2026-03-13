@@ -178,7 +178,7 @@ export function registerBrowserManageCommands(
           return;
         }
         const dest = result.to ?? result.from;
-        defaultRuntime.log(info(`🦞 browser profile moved to Trash (${dest})`));
+        defaultRuntime.log(info(`🦞 browser profile moved to Trash (${shortenHomePath(dest)})`));
       });
     });
 

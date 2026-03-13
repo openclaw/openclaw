@@ -1,3 +1,4 @@
+import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
 import { createBrowserProgram } from "./browser-cli-test-helpers.js";
@@ -75,5 +76,24 @@ describe("browser manage start timeout option", () => {
     expect(startCall).toBeDefined();
     expect(startCall?.[0]).toMatchObject({ timeout: "60000" });
     expect(startCall?.[2]).toBeUndefined();
+  });
+
+  it("shortens reset-profile trash paths in human output", async () => {
+    const home = os.homedir();
+    mocks.callBrowserRequest.mockImplementationOnce(async () => ({
+      moved: true,
+      from: `${home}/.openclaw/browser/default`,
+      to: `${home}/.Trash/openclaw-browser-default`,
+    }));
+
+    const program = createProgram();
+    await program.parseAsync(["browser", "reset-profile"], { from: "user" });
+
+    expect(mocks.runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("(~/.Trash/openclaw-browser-default)"),
+    );
+    expect(mocks.runtimeLog).not.toHaveBeenCalledWith(
+      expect.stringContaining(`${home}/.Trash/openclaw-browser-default`),
+    );
   });
 });
