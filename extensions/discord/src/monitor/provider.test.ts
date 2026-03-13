@@ -549,7 +549,7 @@ describe("monitorDiscordProvider", () => {
 
   it("throws when fetchUser('@me') returns undefined or empty object", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
-    clientFetchUserMock.mockResolvedValueOnce({});
+    clientFetchUserMock.mockResolvedValueOnce({} as { id: string });
 
     await expect(
       monitorDiscordProvider({
