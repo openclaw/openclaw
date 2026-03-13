@@ -463,6 +463,24 @@ async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promi
   return false;
 }
 
+async function terminateBusyPortListeners(port: number): Promise<number[]> {
+  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  if (diagnostics?.status !== "busy") {
+    return [];
+  }
+  const pids = Array.from(
+    new Set(
+      diagnostics.listeners
+        .map((listener) => listener.pid)
+        .filter((pid): pid is number => Number.isFinite(pid) && pid > 0),
+    ),
+  );
+  for (const pid of pids) {
+    await terminateGatewayProcessTree(pid, 300);
+  }
+  return pids;
+}
+
 async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
   const port = resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -655,7 +673,14 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (stopPort) {
-    await waitForGatewayPortRelease(stopPort);
+    const released = await waitForGatewayPortRelease(stopPort);
+    if (!released) {
+      await terminateBusyPortListeners(stopPort);
+      const releasedAfterForce = await waitForGatewayPortRelease(stopPort, 2_000);
+      if (!releasedAfterForce) {
+        throw new Error(`gateway port ${stopPort} is still busy after stop`);
+      }
+    }
   }
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
@@ -684,7 +709,14 @@ export async function restartScheduledTask({
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
-    await waitForGatewayPortRelease(restartPort);
+    const released = await waitForGatewayPortRelease(restartPort);
+    if (!released) {
+      await terminateBusyPortListeners(restartPort);
+      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
+      if (!releasedAfterForce) {
+        throw new Error(`gateway port ${restartPort} is still busy before restart`);
+      }
+    }
   }
   const res = await execSchtasks(["/Run", "/TN", taskName]);
   if (res.code !== 0) {
