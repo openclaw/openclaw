@@ -75,7 +75,11 @@ import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  applyBeforeToolsResolveHook,
+  createOpenClawCodingTools,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -475,9 +479,18 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, {
+      agentId: sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      channelId: params.currentChannelId,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      requesterSenderId: params.senderId ?? undefined,
+      senderIsOwner: params.senderIsOwner,
+    });
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsEnabled ? toolsAfterHook : [],
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;

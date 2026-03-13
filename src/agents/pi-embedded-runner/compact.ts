@@ -63,7 +63,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
+import { applyBeforeToolsResolveHook, createOpenClawCodingTools } from "../pi-tools.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -430,6 +430,7 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+    const runtimeChannel = normalizeMessageChannel(resolvedMessageProvider);
     const { contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
@@ -484,8 +485,18 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
+    // requesterSenderId is omitted: compact path has no per-message sender id.
+    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, {
+      agentId: resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+        .sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      channelId: runtimeChannel ?? undefined,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      senderIsOwner: params.senderIsOwner,
+    });
     const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsEnabled ? toolsAfterHook : [],
       provider,
     });
     const bundleMcpRuntime = toolsEnabled
@@ -513,7 +524,6 @@ export async function compactEmbeddedPiSessionDirect(
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
