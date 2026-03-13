@@ -688,11 +688,18 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 }
 
+const MAX_BATCH_DEPTH = 5;
+
 async function executeSingleAction(
   action: BrowserActRequest,
   cdpUrl: string,
   targetId?: string,
+  evaluateEnabled?: boolean,
+  depth = 0,
 ): Promise<void> {
+  if (depth > MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
+  }
   const effectiveTargetId = action.targetId ?? targetId;
   switch (action.kind) {
     case "click":
@@ -778,6 +785,9 @@ async function executeSingleAction(
       });
       break;
     case "wait":
+      if (action.fn && !evaluateEnabled) {
+        throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
+      }
       await waitForViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
@@ -792,6 +802,9 @@ async function executeSingleAction(
       });
       break;
     case "evaluate":
+      if (!evaluateEnabled) {
+        throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
+      }
       await evaluateViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
@@ -806,6 +819,8 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         actions: action.actions,
         stopOnError: action.stopOnError,
+        evaluateEnabled,
+        depth: depth + 1,
       });
       break;
     default:
@@ -818,11 +833,17 @@ export async function batchViaPlaywright(opts: {
   targetId?: string;
   actions: BrowserActRequest[];
   stopOnError?: boolean;
+  evaluateEnabled?: boolean;
+  depth?: number;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
+  const depth = opts.depth ?? 0;
+  if (depth > MAX_BATCH_DEPTH) {
+    throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
+  }
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
     try {
-      await executeSingleAction(action, opts.cdpUrl, opts.targetId);
+      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
       results.push({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
