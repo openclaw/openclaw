@@ -1,3 +1,7 @@
+import {
+  DEFAULT_AGENT_ID,
+  parseAgentSessionKey,
+} from "../../../../src/routing/session-key.js";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -259,11 +263,63 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
 }
 
+/**
+ * Check if two session keys match, supporting alias matching.
+ * For example, "main" matches "agent:main:main" when they refer to the same session.
+ * In multi-agent deployments, aliases only match canonical keys where agentId equals the alias
+ * (e.g., "main" matches "agent:main:main" but not "agent:secondary:main").
+ */
+function matchesSessionKey(current: string, incoming: string): boolean {
+  if (current === incoming) {
+    return true;
+  }
+  // Parse both keys to compare agent ID and rest components
+  const currentParsed = parseAgentSessionKey(current);
+  const incomingParsed = parseAgentSessionKey(incoming);
+  // If both are parsed (agent:... format), compare components
+  if (currentParsed && incomingParsed) {
+    return (
+      currentParsed.agentId === incomingParsed.agentId &&
+      currentParsed.rest === incomingParsed.rest
+    );
+  }
+  // Handle alias vs canonical format matching
+  // Case 1: current is alias (e.g., "main" or "webchat"), incoming is canonical (e.g., "agent:main:main")
+  if (!currentParsed && incomingParsed) {
+    // For alias matching, require:
+    // 1. The alias matches the canonical format's rest component
+    // 2. The canonical format's agentId equals DEFAULT_AGENT_ID (aliases map to the default agent)
+    // This prevents "main" from incorrectly matching "agent:secondary:main" in multi-agent deployments,
+    // and ensures aliases like "webchat" correctly match "agent:main:webchat" (not "agent:secondary:webchat").
+    const aliasLower = current.toLowerCase();
+    return (
+      incomingParsed.rest === aliasLower &&
+      incomingParsed.agentId === DEFAULT_AGENT_ID
+    );
+  }
+  // Case 2: current is canonical, incoming is alias
+  if (currentParsed && !incomingParsed) {
+    // For alias matching, require:
+    // 1. The alias matches the canonical format's rest component
+    // 2. The canonical format's agentId equals DEFAULT_AGENT_ID (aliases map to the default agent)
+    const aliasLower = incoming.toLowerCase();
+    return (
+      currentParsed.rest === aliasLower &&
+      currentParsed.agentId === DEFAULT_AGENT_ID
+    );
+  }
+  // Both are non-parsed (aliases like "main"), do exact match
+  return current === incoming;
+}
+
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  // Use flexible sessionKey matching to support alias variations (e.g., "main" vs "agent:main:main").
+  // This ensures real-time updates work even when the UI uses an alias while the server sends
+  // the canonical session key.
+  if (!matchesSessionKey(state.sessionKey, payload.sessionKey)) {
     return null;
   }
 
