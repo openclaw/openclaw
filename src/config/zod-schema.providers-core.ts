@@ -59,6 +59,14 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const SlackCapabilitiesSchema = z.union([
+  z.array(z.string()),
+  z
+    .object({
+      interactiveReplies: z.boolean().optional(),
+    })
+    .strict(),
+]);
 
 export const TelegramTopicSchema = z
   .object({
@@ -831,7 +839,7 @@ export const SlackAccountSchema = z
     mode: z.enum(["socket", "http"]).optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
+    capabilities: SlackCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,

@@ -8,6 +8,7 @@ export {
   resolveSlackAccount,
   resolveSlackReplyToMode,
 } from "../slack/accounts.js";
+export { isSlackInteractiveRepliesEnabled } from "../slack/interactive-replies.js";
 export { inspectSlackAccount } from "../slack/account-inspect.js";
 export {
   projectCredentialSnapshotFields,

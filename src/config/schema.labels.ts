@@ -813,6 +813,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.appToken": "Slack App Token",
   "channels.slack.userToken": "Slack User Token",
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
+  "channels.slack.capabilities.interactiveReplies": "Slack Interactive Replies",
   "channels.slack.streaming": "Slack Streaming Mode",
   "channels.slack.nativeStreaming": "Slack Native Streaming",
   "channels.slack.streamMode": "Slack Stream Mode (Legacy)",
