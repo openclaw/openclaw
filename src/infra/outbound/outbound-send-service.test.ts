@@ -34,6 +34,18 @@ vi.mock("../../config/sessions.js", () => ({
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
+  function pluginActionResult(messageId: string) {
+    return {
+      ok: true,
+      value: { messageId },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    };
+  }
+
   beforeEach(() => {
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
@@ -75,15 +87,7 @@ describe("executeSendAction", () => {
   });
 
   it("uses plugin poll action when available", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue({
-      ok: true,
-      value: { messageId: "poll-plugin" },
-      continuePrompt: "",
-      output: "",
-      sessionId: "s1",
-      model: "gpt-5.2",
-      usage: {},
-    });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
 
     const result = await executePollAction({
       ctx: {
@@ -103,15 +107,7 @@ describe("executeSendAction", () => {
   });
 
   it("passes agent-scoped media local roots to plugin dispatch", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue({
-      ok: true,
-      value: { messageId: "msg-plugin" },
-      continuePrompt: "",
-      output: "",
-      sessionId: "s1",
-      model: "gpt-5.2",
-      usage: {},
-    });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
       ctx: {
@@ -134,15 +130,7 @@ describe("executeSendAction", () => {
   });
 
   it("passes mirror idempotency keys through plugin-handled sends", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue({
-      ok: true,
-      value: { messageId: "msg-plugin" },
-      continuePrompt: "",
-      output: "",
-      sessionId: "s1",
-      model: "gpt-5.2",
-      usage: {},
-    });
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
       ctx: {
