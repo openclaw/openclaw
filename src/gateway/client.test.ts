@@ -23,6 +23,11 @@ class MockWebSocket {
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
+  readyState: number = 0; // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+  static readonly OPEN = 1;
+  static readonly CONNECTING = 0;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -52,6 +57,7 @@ class MockWebSocket {
   }
 
   close(code?: number, reason?: string): void {
+    this.readyState = 2;
     this.emitClose(code ?? 1000, reason ?? "");
   }
 
@@ -60,6 +66,7 @@ class MockWebSocket {
   }
 
   emitOpen(): void {
+    this.readyState = 1;
     for (const handler of this.openHandlers) {
       handler();
     }
@@ -72,6 +79,7 @@ class MockWebSocket {
   }
 
   emitClose(code: number, reason: string): void {
+    this.readyState = 3;
     for (const handler of this.closeHandlers) {
       handler(code, Buffer.from(reason));
     }
@@ -577,6 +585,53 @@ describe("GatewayClient connect auth payload", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
+    client.stop();
+    vi.useRealTimers();
+  });
+});
+
+describe("GatewayClient reconnect() timer cleanup", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    loadDeviceAuthTokenMock.mockReset();
+    clearDeviceAuthTokenMock.mockReset();
+    storeDeviceAuthTokenMock.mockReset();
+  });
+
+  it("clears the handshake connectTimer so it cannot spuriously close the next socket", async () => {
+    vi.useFakeTimers();
+    const connectErrors: Error[] = [];
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "tok",
+      onConnectError: (err) => connectErrors.push(err),
+    });
+
+    // Start and let the WebSocket open — this arms the connect-challenge timeout.
+    client.start();
+    const ws1 = getLatestWs();
+    ws1.emitOpen(); // readyState → 1 (OPEN); queueConnect() arms connectTimer (~2000ms)
+
+    // Simulate ctrl+r mid-handshake (before connect.challenge arrives).
+    // Without the fix, the old connectTimer would still be running.
+    client.reconnect(); // should clear connectTimer AND close ws1
+
+    // Advance past the original 2 s handshake window.
+    // The reconnect backoff fires at 1000 ms, so the second socket will be created.
+    await vi.advanceTimersByTimeAsync(1_100);
+    const ws2 = getLatestWs();
+    expect(wsInstances).toHaveLength(2); // new socket was opened
+    ws2.emitOpen(); // second socket enters OPEN state
+
+    // Advance another 1500 ms — if the stale connectTimer were still alive it
+    // would fire here (total ~2600 ms from ws1.emitOpen) and close ws2 with a
+    // false "connect challenge timeout".
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    // The new socket should still be alive (not closed by a stale timer).
+    expect(ws2.readyState).toBe(1); // still OPEN
+    expect(connectErrors.map((e) => e.message)).not.toContain("gateway connect challenge timeout");
+
     client.stop();
     vi.useRealTimers();
   });

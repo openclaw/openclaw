@@ -612,6 +612,12 @@ export class GatewayClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // Cancel any in-flight handshake timeout so a stale timer cannot close the
+    // next socket attempt with a false "connect challenge timeout".
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     // Reset backoff so the next auto-reconnect after this also starts fast.
     this.backoffMs = 1000;
     if (this.ws) {
