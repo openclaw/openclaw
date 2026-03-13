@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildRuntimeLine,
+  buildRuntimeDynamicLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -626,33 +630,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("/status shows Reasoning");
   });
 
-  it("builds runtime line with agent and channel details", () => {
-    const line = buildRuntimeLine(
-      {
-        agentId: "work",
-        host: "host",
-        repoRoot: "/repo",
-        os: "macOS",
-        arch: "arm64",
-        node: "v20",
-        model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
-      },
-      "telegram",
-      ["inlineButtons"],
-      "low",
-    );
+  it("builds runtime line with stable host/channel details", () => {
+    const runtimeInfo = {
+      agentId: "work",
+      host: "host",
+      repoRoot: "/repo",
+      os: "macOS",
+      arch: "arm64",
+      node: "v20",
+      model: "anthropic/claude",
+      defaultModel: "anthropic/claude-opus-4-5",
+    };
+    const line = buildRuntimeLine(runtimeInfo, "telegram", ["inlineButtons"], "low");
 
-    expect(line).toContain("agent=work");
+    // Stable fields appear in the Runtime line
     expect(line).toContain("host=host");
     expect(line).toContain("repo=/repo");
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
-    expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlineButtons");
     expect(line).toContain("thinking=low");
+    // Dynamic per-session fields are NOT in the Runtime line (moved to buildRuntimeDynamicLine)
+    expect(line).not.toContain("agent=work");
+    expect(line).not.toContain("model=anthropic/claude");
+    expect(line).not.toContain("default_model=");
+
+    // Dynamic fields are in the separate dynamic line
+    const dynamicLine = buildRuntimeDynamicLine(runtimeInfo);
+    expect(dynamicLine).toContain("agent=work");
+    expect(dynamicLine).toContain("model=anthropic/claude");
+    expect(dynamicLine).toContain("default_model=anthropic/claude-opus-4-5");
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {

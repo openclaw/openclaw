@@ -678,6 +678,7 @@ export function buildAgentSystemPrompt(params: {
 
   // Keep dynamic runtime metadata after the stable prompt body so Anthropic can reuse
   // a larger cached prefix across sessions.
+  // Order: stable fields → Reasoning (often stable) → dynamic per-session fields (model, agentId).
   lines.push(
     ...buildTimeSection({
       userTimezone,
@@ -685,6 +686,8 @@ export function buildAgentSystemPrompt(params: {
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    // Dynamic per-session fields on a final line so the stable prefix above can be KV-cached.
+    buildRuntimeDynamicLine(runtimeInfo),
   );
 
   return lines.filter(Boolean).join("\n");
@@ -706,9 +709,8 @@ export function buildRuntimeLine(
   runtimeCapabilities: string[] = [],
   defaultThinkLevel?: ThinkLevel,
 ): string {
-  // Stable fields first (host, os, node, shell, channel, capabilities, thinking),
-  // then dynamic per-session fields (agentId, model, defaultModel) so Anthropic KV cache
-  // can reuse the maximum stable prefix across sessions.
+  // Stable fields only — dynamic fields (agentId, model, defaultModel) are emitted
+  // separately in buildRuntimeDynamicLine so the stable prefix can be KV-cached by Anthropic.
   return `Runtime: ${[
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
@@ -724,11 +726,26 @@ export function buildRuntimeLine(
       ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
-    // Dynamic per-session fields (kept last to maximise stable KV-cache prefix)
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
-    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
   ]
     .filter(Boolean)
     .join(" | ")}`;
+}
+
+/**
+ * Builds a line containing only the per-session dynamic runtime fields (model, agentId,
+ * defaultModel). Kept separate from buildRuntimeLine so the stable content above (including
+ * Reasoning) can be reused by Anthropic's KV prefix cache across sessions.
+ * Returns an empty string when no dynamic fields are present.
+ */
+export function buildRuntimeDynamicLine(runtimeInfo?: {
+  agentId?: string;
+  model?: string;
+  defaultModel?: string;
+}): string {
+  const parts = [
+    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+    runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" | ") : "";
 }
