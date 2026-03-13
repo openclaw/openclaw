@@ -1,6 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
+
+const tempDirs: string[] = [];
+
+function readTranscriptMessages(sessionFile: string): AgentMessage[] {
+  return SessionManager.open(sessionFile)
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -200,6 +214,12 @@ function expectResolvedIntroTextInBindMetadata(): void {
 }
 
 describe("spawnAcpDirect", () => {
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
   beforeEach(() => {
     hoisted.state.cfg = createDefaultSpawnConfig();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
@@ -381,9 +401,10 @@ describe("spawnAcpDirect", () => {
     const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
       (call: unknown[]) => call[0] as { threadId?: string },
     );
-    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls).toHaveLength(3);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+    expect(transcriptCalls[2]?.threadId).toBe("child-thread");
   });
 
   it("does not inline delivery for fresh oneshot ACP runs", async () => {
@@ -420,6 +441,61 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
+  });
+
+  it("seeds the ACP transcript with the initial spawn task before the run completes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-123.jsonl");
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry: {
+        sessionId: "sess-123",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+    }));
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "run",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      taskDelivered: true,
+    });
+
+    const messages = readTranscriptMessages(sessionFile);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: "Investigate flaky tests",
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:main",
+        sourceChannel: "discord",
+        sourceTool: "sessions_spawn",
+      },
+    });
+
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.message).toBe("Investigate flaky tests");
+    expect(agentCall?.params?.inputProvenance).toMatchObject({
+      kind: "inter_session",
+      sourceTool: "sessions_spawn",
+    });
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
@@ -644,6 +720,41 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps seed transcript routing aligned with dispatch when thread=true streams to parent", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("session");
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.threadId).toBeUndefined();
+
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { threadId?: string },
+    );
+    expect(transcriptCalls).toHaveLength(3);
+    expect(transcriptCalls[0]?.threadId).toBeUndefined();
+    expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+    expect(transcriptCalls[2]?.threadId).toBeUndefined();
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {

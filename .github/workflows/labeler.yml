@@ -1,7 +1,7 @@
 name: Labeler
 
 on:
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted-only labeling workflow; does not check out or execute PR code
     types: [opened, synchronize, reopened]
   issues:
     types: [opened]
@@ -22,6 +22,7 @@ jobs:
   label:
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -30,22 +31,52 @@ jobs:
         continue-on-error: true
         with:
           app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
+      - name: Resolve GitHub auth token
+        id: auth-token
+        shell: bash
+        env:
+          PRIMARY_TOKEN: ${{ steps.app-token.outputs.token }}
+          FALLBACK_TOKEN: ${{ steps.app-token-fallback.outputs.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for candidate in "$PRIMARY_TOKEN" "$FALLBACK_TOKEN" "$DEFAULT_TOKEN"; do
+            if [ -z "$candidate" ]; then
+              continue
+            fi
+
+            status="$(
+              curl -sS -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $candidate" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/rate_limit
+            )"
+            if [ "$status" = "200" ]; then
+              echo "::add-mask::$candidate"
+              echo "token=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "No valid GitHub token available for labeler workflow." >&2
+          exit 1
       - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5
         with:
           configuration-path: .github/labeler.yml
-          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          repo-token: ${{ steps.auth-token.outputs.token }}
           sync-labels: true
       - name: Apply PR size label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.auth-token.outputs.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -134,7 +165,7 @@ jobs:
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.auth-token.outputs.token }}
           script: |
             const login = context.payload.pull_request?.user?.login;
             if (!login) {
@@ -205,7 +236,7 @@ jobs:
       - name: Apply too-many-prs label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.auth-token.outputs.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -378,6 +409,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
@@ -386,17 +418,47 @@ jobs:
         continue-on-error: true
         with:
           app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
+      - name: Resolve GitHub auth token
+        id: auth-token
+        shell: bash
+        env:
+          PRIMARY_TOKEN: ${{ steps.app-token.outputs.token }}
+          FALLBACK_TOKEN: ${{ steps.app-token-fallback.outputs.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for candidate in "$PRIMARY_TOKEN" "$FALLBACK_TOKEN" "$DEFAULT_TOKEN"; do
+            if [ -z "$candidate" ]; then
+              continue
+            fi
+
+            status="$(
+              curl -sS -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $candidate" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/rate_limit
+            )"
+            if [ "$status" = "200" ]; then
+              echo "::add-mask::$candidate"
+              echo "token=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "No valid GitHub token available for labeler workflow." >&2
+          exit 1
       - name: Backfill PR labels
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.auth-token.outputs.token }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -634,17 +696,47 @@ jobs:
         continue-on-error: true
         with:
           app-id: "2729701"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }} # zizmor: ignore[secrets-outside-env] GitHub App key must be passed directly to the token action
+      - name: Resolve GitHub auth token
+        id: auth-token
+        shell: bash
+        env:
+          PRIMARY_TOKEN: ${{ steps.app-token.outputs.token }}
+          FALLBACK_TOKEN: ${{ steps.app-token-fallback.outputs.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for candidate in "$PRIMARY_TOKEN" "$FALLBACK_TOKEN" "$DEFAULT_TOKEN"; do
+            if [ -z "$candidate" ]; then
+              continue
+            fi
+
+            status="$(
+              curl -sS -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $candidate" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/rate_limit
+            )"
+            if [ "$status" = "200" ]; then
+              echo "::add-mask::$candidate"
+              echo "token=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "No valid GitHub token available for labeler workflow." >&2
+          exit 1
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.auth-token.outputs.token }}
           script: |
             const login = context.payload.issue?.user?.login;
             if (!login) {

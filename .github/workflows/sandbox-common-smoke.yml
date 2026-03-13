@@ -13,6 +13,10 @@ on:
       - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
 
+permissions:
+  actions: read
+  contents: read
+
 concurrency:
   group: sandbox-common-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -25,6 +29,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@v3

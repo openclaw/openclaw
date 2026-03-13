@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  actions: read
+  contents: read
+
 concurrency:
   group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -15,6 +19,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Fail on tabs in workflow files
         run: |
@@ -46,6 +62,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Install actionlint
         shell: bash

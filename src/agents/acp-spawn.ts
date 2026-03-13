@@ -10,6 +10,7 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
+import { persistAcpPromptTranscript } from "../acp/session-transcript.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
 import {
   resolveThreadBindingIntroText,
@@ -27,6 +28,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
@@ -41,6 +43,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
@@ -86,6 +89,7 @@ export type SpawnAcpResult = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  taskDelivered?: boolean;
   streamLogPath?: string;
   note?: string;
   error?: string;
@@ -400,6 +404,26 @@ function prepareAcpThreadBinding(params: {
   };
 }
 
+function resolveAcpSpawnInputProvenance(params: {
+  parentSessionKey?: string;
+  parentChannel?: string;
+}): InputProvenance {
+  const sourceSessionKey = params.parentSessionKey?.trim();
+  const sourceChannel = params.parentChannel?.trim();
+  if (sourceSessionKey || sourceChannel) {
+    return {
+      kind: "inter_session",
+      sourceSessionKey,
+      sourceChannel,
+      sourceTool: "sessions_spawn",
+    };
+  }
+  return {
+    kind: "internal_system",
+    sourceTool: "sessions_spawn",
+  };
+}
+
 export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
@@ -539,6 +563,11 @@ export async function spawnAcpDirect(
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let initializedMeta: SessionAcpMeta | undefined;
+  let storePath: string | undefined;
+  let sessionStore: Record<string, SessionEntry> | undefined;
+  let sessionEntry: SessionEntry | undefined;
+  let sessionId: string | undefined;
   try {
     await callGateway({
       method: "sessions.patch",
@@ -550,10 +579,10 @@ export async function spawnAcpDirect(
       timeoutMs: 10_000,
     });
     sessionCreated = true;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
-    const sessionStore = loadSessionStore(storePath);
-    let sessionEntry: SessionEntry | undefined = sessionStore[sessionKey];
-    const sessionId = sessionEntry?.sessionId;
+    storePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+    sessionStore = loadSessionStore(storePath);
+    sessionEntry = sessionStore[sessionKey];
+    sessionId = sessionEntry?.sessionId;
     if (sessionId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId,
@@ -578,6 +607,7 @@ export async function spawnAcpDirect(
       runtime: initialized.runtime,
       handle: initialized.handle,
     };
+    initializedMeta = initialized.meta;
 
     if (preparedBinding) {
       binding = await bindingService.bind({
@@ -674,6 +704,7 @@ export async function spawnAcpDirect(
   // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
   const useInlineDelivery =
     hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
+  const dispatchThreadId = useInlineDelivery ? deliveryThreadId : undefined;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
@@ -682,6 +713,30 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  const taskInputProvenance = resolveAcpSpawnInputProvenance({
+    parentSessionKey,
+    parentChannel: ctx.agentChannel,
+  });
+  if (sessionId) {
+    try {
+      sessionEntry = await persistAcpPromptTranscript({
+        promptText: params.task,
+        sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: targetAgentId,
+        threadId: dispatchThreadId,
+        sessionCwd: resolveAcpSessionCwd(initializedMeta) ?? params.cwd ?? process.cwd(),
+        inputProvenance: taskInputProvenance,
+      });
+    } catch (error) {
+      log.warn(
+        `ACP spawn transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -703,10 +758,11 @@ export async function spawnAcpDirect(
         channel: useInlineDelivery ? requesterOrigin?.channel : undefined,
         to: useInlineDelivery ? inferredDeliveryTo : undefined,
         accountId: useInlineDelivery ? (requesterOrigin?.accountId ?? undefined) : undefined,
-        threadId: useInlineDelivery ? deliveryThreadId : undefined,
+        threadId: dispatchThreadId,
         idempotencyKey: childIdem,
         deliver: useInlineDelivery,
         label: params.label || undefined,
+        inputProvenance: taskInputProvenance,
       },
       timeoutMs: 10_000,
     });
@@ -747,6 +803,7 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       runId: childRunId,
       mode: spawnMode,
+      taskDelivered: true,
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
@@ -757,6 +814,7 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
+    taskDelivered: true,
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

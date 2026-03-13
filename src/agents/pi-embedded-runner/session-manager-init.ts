@@ -42,12 +42,9 @@ export async function prepareSessionManagerForRun(params: {
   }
 
   if (params.hadSessionFile && header && !hasAssistant) {
-    // Reset file so the first assistant flush includes header+user+assistant in order.
+    // Truncate prompt-only session files so the next flush rewrites the complete
+    // in-memory transcript once an assistant message arrives.
     await fs.writeFile(params.sessionFile, "", "utf-8");
-    sm.fileEntries = [header];
-    sm.byId?.clear?.();
-    sm.labelsById?.clear?.();
-    sm.leafId = null;
     sm.flushed = false;
   }
 }

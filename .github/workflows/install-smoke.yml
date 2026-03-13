@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+
 concurrency:
   group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -21,12 +25,24 @@ jobs:
         with:
           fetch-depth: 1
           fetch-tags: false
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Ensure docs-scope base commit
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          remote-url: ${{ github.server_url }}/${{ github.repository }}.git
 
       - name: Detect docs-only changes
         id: check
@@ -39,6 +55,18 @@ jobs:
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prepare PR merge result
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/prepare-pr-merge-result
+        with:
+          base-repo: ${{ github.repository }}
+          base-ref: ${{ github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@v3
