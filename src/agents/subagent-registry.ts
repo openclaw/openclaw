@@ -16,6 +16,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
@@ -130,6 +131,76 @@ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "ex
   defaultRuntime.log(
     `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}`,
   );
+}
+
+/**
+ * Last-resort notification when the announce retry budget is exhausted.
+ *
+ * The normal announce pipeline injects a message into the requester's *model
+ * session* so the agent can summarise and forward the result.  When that path
+ * fails repeatedly, the result is silently dropped — the user never finds out.
+ *
+ * This function attempts one final best-effort delivery directly to the user's
+ * channel (channel + accountId + to stored in `entry.requesterOrigin`) by
+ * calling the gateway `agent` method with `deliver: true` so the gateway
+ * bypasses the session queue and sends the raw text to the user's inbox.
+ *
+ * Failure is intentionally swallowed — if this also fails the outcome is
+ * identical to the previous behaviour (silent drop), but a log entry is added
+ * so operators can correlate lost results via the audit log.
+ */
+async function notifyAnnounceGiveUp(entry: SubagentRunRecord): Promise<void> {
+  try {
+    const origin = normalizeDeliveryContext(entry.requesterOrigin);
+    const channel = typeof origin?.channel === "string" ? origin.channel.trim().toLowerCase() : "";
+    const to = typeof origin?.to === "string" ? origin.to.trim() : "";
+    const hasDeliverableTarget =
+      Boolean(channel) && Boolean(to) && isDeliverableMessageChannel(channel);
+    if (!hasDeliverableTarget) {
+      // No usable delivery target — nothing to do beyond the warning already logged.
+      return;
+    }
+
+    const taskLabel = entry.label?.trim() || entry.task?.trim() || "task";
+    const retryCount = entry.announceRetryCount ?? 0;
+    const resultText = (entry.frozenResultText ?? "").trim();
+
+    const notifyText = [
+      `⚠️ Subagent result delivery failed after ${retryCount} attempts.`,
+      `Task: ${taskLabel}`,
+      resultText ? `\nResult (recovered):\n${resultText}` : "\n(No result text was captured.)",
+    ].join("\n");
+
+    const threadId =
+      origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+
+    await callGateway({
+      method: "agent",
+      params: {
+        sessionKey: entry.requesterSessionKey,
+        message: notifyText,
+        deliver: true,
+        channel,
+        accountId: origin?.accountId,
+        to,
+        threadId,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: entry.childSessionKey,
+          sourceTool: "subagent_announce_giveup_notify",
+        },
+      },
+      timeoutMs: 30_000,
+    });
+
+    defaultRuntime.log(
+      `[info] Subagent announce give-up notify delivered run=${entry.runId} channel=${channel}`,
+    );
+  } catch (err) {
+    defaultRuntime.log(
+      `[warn] Subagent announce give-up notify failed run=${entry.runId}: ${String(err)}`,
+    );
+  }
 }
 
 function persistSubagentRuns() {
@@ -608,6 +679,10 @@ function resumeSubagentRun(runId: string) {
     logAnnounceGiveUp(entry, "retry-limit");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
+    // Best-effort: attempt one last direct channel delivery so the user is
+    // not left waiting indefinitely.  Fire-and-forget — failure is logged
+    // inside notifyAnnounceGiveUp and must not propagate to the caller.
+    void notifyAnnounceGiveUp(entry);
     return;
   }
   if (
