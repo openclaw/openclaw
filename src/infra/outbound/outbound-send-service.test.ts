@@ -17,10 +17,14 @@ vi.mock("./message.js", () => ({
   sendPoll: mocks.sendPoll,
 }));
 
-vi.mock("../../media/local-roots.js", () => ({
-  getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
-  getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
-}));
+vi.mock("../../media/local-roots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../media/local-roots.js")>();
+  return {
+    ...actual,
+    getDefaultMediaLocalRoots: mocks.getDefaultMediaLocalRoots,
+    getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
+  };
+});
 
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
