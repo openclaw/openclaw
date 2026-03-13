@@ -163,74 +163,74 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "restarts the Startup fallback by killing the current pid and relaunching the entry",
-    async () => {
-      await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-        schtasksResponses.push(
-          { code: 0, stdout: "", stderr: "" },
-          { code: 1, stdout: "", stderr: "not found" },
-          { code: 0, stdout: "", stderr: "" },
-          { code: 1, stdout: "", stderr: "not found" },
-        );
-        await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-        await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
-        inspectPortUsage.mockResolvedValue({
+  it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+      );
+      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
+      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 5151, command: "node.exe" }],
+        hints: [],
+      });
+
+      const stdout = new PassThrough();
+      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+      // Windows uses taskkill.exe; non-Windows uses killProcessTree.
+      if (process.platform !== "win32") {
+        expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
+      }
+      expect(spawn).toHaveBeenCalledWith(
+        "cmd.exe",
+        ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
+        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+      );
+    });
+  });
+
+  it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      await writeGatewayScript(env);
+      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
+      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      inspectPortUsage
+        .mockResolvedValueOnce({
           port: 18789,
           status: "busy",
           listeners: [{ pid: 5151, command: "node.exe" }],
           hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5151, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
         });
 
-        const stdout = new PassThrough();
-        await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
-          outcome: "completed",
-        });
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...env };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      // Windows uses taskkill.exe; non-Windows uses killProcessTree.
+      if (process.platform !== "win32") {
         expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
-        expect(spawn).toHaveBeenCalledWith(
-          "cmd.exe",
-          ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
-          expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
-        );
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "kills the Startup fallback runtime even when the CLI env omits the gateway port",
-    async () => {
-      await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-        schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
-        await writeGatewayScript(env);
-        await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
-        await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
-        inspectPortUsage
-          .mockResolvedValueOnce({
-            port: 18789,
-            status: "busy",
-            listeners: [{ pid: 5151, command: "node.exe" }],
-            hints: [],
-          })
-          .mockResolvedValueOnce({
-            port: 18789,
-            status: "busy",
-            listeners: [{ pid: 5151, command: "node.exe" }],
-            hints: [],
-          })
-          .mockResolvedValueOnce({
-            port: 18789,
-            status: "free",
-            listeners: [],
-            hints: [],
-          });
-
-        const stdout = new PassThrough();
-        const envWithoutPort = { ...env };
-        delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
-        await stopScheduledTask({ env: envWithoutPort, stdout });
-
-        expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
-      });
-    },
-  );
+      }
+    });
+  });
 });
