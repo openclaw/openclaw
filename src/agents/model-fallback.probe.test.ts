@@ -2,8 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { AuthProfileStore } from "./auth-profiles.js";
 import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 // Mock auth-profiles module — must be before importing model-fallback
