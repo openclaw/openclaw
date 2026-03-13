@@ -81,6 +81,9 @@ vi.mock("./embeddings.js", () => {
                     if (input.text.toLowerCase().includes("limitbytes.mp4")) {
                       throw new Error("400 maximum 5242880 bytes");
                     }
+                    if (input.text.toLowerCase().includes("plain413.mp4")) {
+                      throw new Error("gemini embeddings failed: 413");
+                    }
                     if (input.text.toLowerCase().includes("outage.mp4")) {
                       throw new Error("503 upstream unavailable");
                     }
@@ -486,6 +489,31 @@ describe("memory index", () => {
 
     const videoResults = await manager.search("video");
     expect(videoResults.some((result) => result.path.endsWith("limitbytes.mp4"))).toBe(false);
+
+    const imageResults = await manager.search("image");
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+
+    await manager.close?.();
+  });
+
+  it("skips plain 413 multimodal errors without aborting sync", async () => {
+    const mediaDir = path.join(workspaceDir, "media-plain-413");
+    await fs.mkdir(mediaDir, { recursive: true });
+    await fs.writeFile(path.join(mediaDir, "plain413.mp4"), Buffer.from("mp4"));
+    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, `index-plain-413-${randomUUID()}.sqlite`),
+      provider: "gemini",
+      model: "gemini-embedding-2-preview",
+      extraPaths: [mediaDir],
+      multimodal: { enabled: true, modalities: ["image", "video"] },
+    });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    await manager.sync({ reason: "test" });
+
+    const videoResults = await manager.search("video");
+    expect(videoResults.some((result) => result.path.endsWith("plain413.mp4"))).toBe(false);
 
     const imageResults = await manager.search("image");
     expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);

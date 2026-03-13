@@ -796,7 +796,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private isStructuredInputTooLargeError(message: string): boolean {
-    return /(payload too large|request too large|input too large|too many tokens|input limit|request size|max(?:imum)?\D+\d[\d,]*\D+bytes|\d[\d,]*\D+bytes\D+max|limit\D+\d[\d,]*\D+bytes)/i.test(
+    return /(\b413\b|payload too large|request too large|input too large|too many tokens|input limit|request size|max(?:imum)?\D+\d[\d,]*\D+bytes|\d[\d,]*\D+bytes\D+max|limit\D+\d[\d,]*\D+bytes)/i.test(
       message,
     );
   }
