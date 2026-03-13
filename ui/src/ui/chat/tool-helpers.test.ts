@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview, looksLikeJson } from "./tool-helpers.ts";
+import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -136,63 +136,6 @@ describe("tool-helpers", () => {
 
       expect(result.length).toBe(101); // 100 + ellipsis
       expect(result.endsWith("…")).toBe(true);
-    });
-  });
-
-  describe("looksLikeJson", () => {
-    it("returns true for empty object", () => {
-      expect(looksLikeJson("{}")).toBe(true);
-    });
-
-    it("returns true for empty array", () => {
-      expect(looksLikeJson("[]")).toBe(true);
-    });
-
-    it("returns true for object with properties", () => {
-      expect(looksLikeJson('{ "key": "value" }')).toBe(true);
-    });
-
-    it("returns true for array with elements", () => {
-      expect(looksLikeJson("[1, 2, 3]")).toBe(true);
-    });
-
-    it("returns true for indented object", () => {
-      expect(looksLikeJson("  { indented }")).toBe(true);
-    });
-
-    it("returns true for indented array", () => {
-      expect(looksLikeJson("  [1, 2]")).toBe(true);
-    });
-
-    it("returns false for plain text", () => {
-      expect(looksLikeJson("hello world")).toBe(false);
-    });
-
-    it("returns false for plain text with spaces", () => {
-      expect(looksLikeJson("plain text")).toBe(false);
-    });
-
-    it("returns false for parentheses", () => {
-      expect(looksLikeJson("(not json)")).toBe(false);
-    });
-
-    it("returns false for text starting with other characters", () => {
-      expect(looksLikeJson("some other content")).toBe(false);
-    });
-
-    it("returns false for empty string", () => {
-      expect(looksLikeJson("")).toBe(false);
-    });
-
-    it("regression: malformed truncated JSON from cron tool (sample.json msg5)", () => {
-      // Simulates truncated JSON output that starts with { but never closes properly
-      const malformedJson =
-        '{"status":"running","data":{"items":[{"id":1,"name":"test"},' +
-        '"details":{"nested":{"value":"very long content here"}}}}}...(truncated)';
-      expect(looksLikeJson(malformedJson)).toBe(true);
-      // Before fix: markdown content was always routed through toSanitizedMarkdownHtml()
-      // which calls marked.parse() — this hangs on malformed JSON with unclosed code fences.
-      // After fix: content starting with { or [ is rendered as <pre>, bypassing marked.parse().
     });
   });
 });

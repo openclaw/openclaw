@@ -58,6 +58,13 @@ const sanitizeOptions = {
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
+
+// Lines longer than this have markdown-special characters escaped before
+// parsing to prevent catastrophic regex backtracking in marked (#36213).
+// Markdown is prose — no real paragraph line needs to be this long. Data
+// blobs (JSON, logs) commonly exceed it and contain brackets that trigger
+// exponential backtracking in marked's link/image regex.
+const MARKDOWN_LINE_ESCAPE_THRESHOLD = 1500;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -107,6 +114,26 @@ function installHooks() {
   });
 }
 
+/**
+ * Escape markdown-special characters in lines that exceed the safe threshold.
+ * Prevents catastrophic regex backtracking in marked's inline tokenizer when
+ * processing long data blobs (JSON, logs, etc.) that contain bracket chars.
+ */
+function escapeMarkdownInLongLines(text: string): string {
+  if (text.length < MARKDOWN_LINE_ESCAPE_THRESHOLD) {
+    return text;
+  }
+  const lines = text.split("\n");
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].length > MARKDOWN_LINE_ESCAPE_THRESHOLD) {
+      lines[i] = lines[i].replace(/([[\]()\\*_`~])/g, "\\$1");
+      changed = true;
+    }
+  }
+  return changed ? lines.join("\n") : text;
+}
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
@@ -134,7 +161,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = marked.parse(`${truncated.text}${suffix}`, {
+    rendered = marked.parse(escapeMarkdownInLongLines(`${truncated.text}${suffix}`), {
       renderer: htmlEscapeRenderer,
       gfm: true,
       breaks: true,

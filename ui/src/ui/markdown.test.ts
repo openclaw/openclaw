@@ -89,6 +89,27 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("|------|");
   });
 
+  it("does not hang on long single-line JSON blob (#36213)", () => {
+    // Simulate a large single-line JSON tool result similar to sample.json.
+    // Before fix, marked.parse() would catastrophically backtrack on long lines
+    // with bracket characters. The fix escapes markdown-special chars in long lines.
+    const fakeSession = '{"key":"value","sessions":[{"id":"abc","nested":{"a":1}}]}';
+    const longJson = fakeSession.repeat(50); // ~2900 chars, single line
+    const start = performance.now();
+    const html = toSanitizedMarkdownHtml(longJson);
+    const elapsed = performance.now() - start;
+    expect(elapsed).toBeLessThan(2000);
+    expect(html).toContain("sessions");
+    expect(html).toContain("key");
+  });
+
+  it("still renders short lines with brackets as markdown (#36213)", () => {
+    const md = "Status: [update](https://example.com) complete";
+    const html = toSanitizedMarkdownHtml(md);
+    expect(html).toContain("<a");
+    expect(html).toContain("update");
+  });
+
   it("does not throw on deeply nested emphasis markers (#36213)", () => {
     // Pathological patterns that can trigger catastrophic backtracking / recursion
     const nested = "*".repeat(500) + "text" + "*".repeat(500);
