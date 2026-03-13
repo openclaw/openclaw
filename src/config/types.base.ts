@@ -187,6 +187,10 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /**
+   * Legacy compatibility key retained for older configs. No-op.
+   */
+  captureContent?: boolean;
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
