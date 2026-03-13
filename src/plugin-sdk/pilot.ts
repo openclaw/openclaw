@@ -4,6 +4,10 @@
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
+export {
   buildAccountScopedDmSecurityPolicy,
   formatPairingApproveHint,
 } from "../channels/plugins/helpers.js";

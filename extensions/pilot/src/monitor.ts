@@ -65,23 +65,35 @@ export async function monitorPilotProvider(
     pilotctlPath: account.pilotctlPath,
   };
 
-  // Ensure daemon is running with the correct identity.
+  // Ensure daemon is running with the correct identity and registry.
+  let needsStart = false;
   try {
     const status = await pilotctl.daemonStatus(pilotctlOpts);
     if (!status.running) {
-      logger.info(`[${account.accountId}] daemon not running, starting...`);
-      await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
+      needsStart = true;
     } else if (status.hostname && status.hostname !== account.hostname) {
       throw new Error(
         `Pilot daemon on ${account.socketPath} is running as "${status.hostname}" but account "${account.accountId}" expects "${account.hostname}". ` +
           "Stop the existing daemon or use a different socketPath.",
       );
+    } else if (status.registry && account.registry && status.registry !== account.registry) {
+      throw new Error(
+        `Pilot daemon on ${account.socketPath} is connected to registry "${status.registry}" but account "${account.accountId}" expects "${account.registry}". ` +
+          "Stop the existing daemon or use a different socketPath.",
+      );
     }
   } catch (err) {
-    // Re-throw identity mismatch errors.
-    if (err instanceof Error && err.message.includes("expects")) {
+    if (
+      err instanceof Error &&
+      (err.message.includes("expects") || err.message.includes("connected to registry"))
+    ) {
       throw err;
     }
+    // Status call itself failed — daemon likely not running.
+    needsStart = true;
+  }
+
+  if (needsStart) {
     logger.info(`[${account.accountId}] starting daemon...`);
     await pilotctl.daemonStart(account.hostname, account.registry, pilotctlOpts);
   }

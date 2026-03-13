@@ -6,9 +6,11 @@ import {
   createAccountStatusSink,
   createScopedAccountConfigAccessors,
   DEFAULT_ACCOUNT_ID,
+  deleteAccountFromConfigSection,
   formatNormalizedAllowFromEntries,
   PAIRING_APPROVED_MESSAGE,
   runPassiveAccountLifecycle,
+  setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/pilot";
 import {
@@ -87,6 +89,31 @@ export const pilotPlugin: ChannelPlugin<ResolvedPilotAccount, PilotProbe> = {
       socketPath: account.socketPath,
       registry: account.registry,
     }),
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg: cfg as CoreConfig,
+        sectionKey: "pilot",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg: cfg as CoreConfig,
+        sectionKey: "pilot",
+        accountId,
+        clearBaseFields: [
+          "name",
+          "hostname",
+          "socketPath",
+          "registry",
+          "pilotctlPath",
+          "pollIntervalMs",
+          "dmPolicy",
+          "allowFrom",
+          "defaultTo",
+        ],
+      }),
     ...pilotConfigAccessors,
   },
   security: {
