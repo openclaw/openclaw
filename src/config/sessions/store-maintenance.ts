@@ -269,7 +269,7 @@ async function getSessionFileSize(storePath: string): Promise<number | null> {
 
 /**
  * Rotate the sessions file if it exceeds the configured size threshold.
- * Renames the current file to `sessions.json.bak.{timestamp}` and cleans up
+ * Copies the current file to `sessions.json.bak.{timestamp}` and cleans up
  * old rotation backups, keeping only the 3 most recent `.bak.*` files.
  */
 export async function rotateSessionFile(
@@ -288,16 +288,26 @@ export async function rotateSessionFile(
     return false;
   }
 
-  // Rotate: rename current file to .bak.{timestamp}
+  // Rotate: copy current file to .bak.{timestamp} (NOT rename).
+  //
+  // Using copyFile instead of rename is intentional: rename would remove
+  // sessions.json for the brief period until writeSessionStoreAtomic creates
+  // the replacement.  Any inbound message processed during that window would
+  // find the file missing, fall back to an empty store, and generate a new
+  // sessionId — causing a "memory wipe" mid-conversation (issue #18572).
+  //
+  // copyFile leaves the original in place so readers always see a valid file.
+  // The subsequent atomic write (tmp → sessions.json) will overwrite it with
+  // the pruned/updated content, keeping disk usage bounded.
   const backupPath = `${storePath}.bak.${Date.now()}`;
   try {
-    await fs.promises.rename(storePath, backupPath);
+    await fs.promises.copyFile(storePath, backupPath);
     log.info("rotated session store file", {
       backupPath: path.basename(backupPath),
       sizeBytes: fileSize,
     });
   } catch {
-    // If rename fails (e.g. file disappeared), skip rotation.
+    // If copy fails (e.g. file disappeared), skip rotation.
     return false;
   }
 
