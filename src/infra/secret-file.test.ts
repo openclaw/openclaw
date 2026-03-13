@@ -29,6 +29,37 @@ describe("readSecretFileSync", () => {
     await writeFile(file, " top-secret \n", "utf8");
 
     expect(readSecretFileSync(file, "Gateway password")).toBe("top-secret");
+    expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
+  });
+
+  it("surfaces resolvedPath and error details for missing files", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-secret.txt");
+
+    const result = loadSecretFileSync(file, "Gateway password");
+
+    expect(result).toMatchObject({
+      ok: false,
+      resolvedPath: file,
+      message: expect.stringContaining(`Failed to inspect Gateway password file at ${file}:`),
+      error: expect.any(Error),
+    });
+  });
+
+  it("preserves the underlying cause when throwing for missing files", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-secret.txt");
+
+    let thrown: Error | undefined;
+    try {
+      readSecretFileSync(file, "Gateway password");
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it("rejects files larger than the secret-file limit", async () => {
