@@ -896,17 +896,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               messages: turnPrefixMessages,
               model,
               apiKey,
-                  signal,
-                  reserveTokens,
-                  maxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: composeSplitTurnInstructions(
-                    TURN_PREFIX_INSTRUCTIONS,
-                    currentInstructions,
-                  ),
-                  summarizationInstructions,
-                  previousSummary: undefined,
-                });
+              signal,
+              reserveTokens,
+              maxChunkTokens,
+              contextWindow: contextWindowTokens,
+              customInstructions: composeSplitTurnInstructions(
+                TURN_PREFIX_INSTRUCTIONS,
+                currentInstructions,
+              ),
+              summarizationInstructions,
+              previousSummary: undefined,
+            });
             const splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
