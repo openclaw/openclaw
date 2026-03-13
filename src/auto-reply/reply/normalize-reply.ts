@@ -1,8 +1,10 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
+  ANNOUNCE_SKIP_TOKEN,
   HEARTBEAT_TOKEN,
   isSilentReplyText,
+  REPLY_SKIP_TOKEN,
   SILENT_REPLY_TOKEN,
   stripSilentToken,
 } from "../tokens.js";
@@ -42,6 +44,20 @@ export function normalizeReplyPayload(
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyText(text, silentToken)) {
+    if (!hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
+    text = "";
+  }
+  // Suppress agent-to-agent conversation stop tokens (ANNOUNCE_SKIP, REPLY_SKIP).
+  // These are internal protocol tokens the main session returns to opt out of
+  // rebroadcasting a subagent announce summary or ending a ping-pong exchange.
+  // They must never reach the end-user channel, matching the NO_REPLY contract.
+  if (
+    text &&
+    (isSilentReplyText(text, ANNOUNCE_SKIP_TOKEN) || isSilentReplyText(text, REPLY_SKIP_TOKEN))
+  ) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
       return null;

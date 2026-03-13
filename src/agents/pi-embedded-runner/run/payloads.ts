@@ -1,7 +1,12 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import {
+  ANNOUNCE_SKIP_TOKEN,
+  isSilentReplyText,
+  REPLY_SKIP_TOKEN,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -340,6 +345,13 @@ export function buildEmbeddedRunPayloads(params: {
         return false;
       }
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
+        return false;
+      }
+      if (
+        p.text &&
+        (isSilentReplyText(p.text, ANNOUNCE_SKIP_TOKEN) ||
+          isSilentReplyText(p.text, REPLY_SKIP_TOKEN))
+      ) {
         return false;
       }
       return true;
