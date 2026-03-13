@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
@@ -17,9 +18,15 @@ import {
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { parseFrontmatter } from "./skills/frontmatter.js";
 import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
+
+export type SubSkillInfo = {
+  name: string;
+  description: string;
+};
 
 export type SkillInstallOption = {
   id: string;
@@ -47,6 +54,7 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: SkillStatusConfigCheck[];
   install: SkillInstallOption[];
+  children?: SubSkillInfo[];
 };
 
 export type SkillStatusReport = {
@@ -167,6 +175,34 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
+const SKIP_DIRS = new Set(["node_modules", "references", "scripts", "_shared", "_template"]);
+
+function scanSubSkills(baseDir: string): SubSkillInfo[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results: SubSkillInfo[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) {
+      continue;
+    }
+    const indexMd = path.join(baseDir, entry.name, "index.md");
+    try {
+      const content = fs.readFileSync(indexMd, "utf-8");
+      const fm = parseFrontmatter(content);
+      if (fm.name) {
+        results.push({ name: fm.name, description: fm.description ?? "" });
+      }
+    } catch {
+      // skip directories without a valid index.md
+    }
+  }
+  return results;
+}
+
 function buildSkillStatus(
   entry: SkillEntry,
   config?: OpenClawConfig,
@@ -202,6 +238,7 @@ function buildSkillStatus(
       isConfigSatisfied,
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
+  const children = scanSubSkills(entry.skill.baseDir);
 
   return {
     name: entry.skill.name,
@@ -222,6 +259,7 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    ...(children.length > 0 ? { children } : {}),
   };
 }
 
