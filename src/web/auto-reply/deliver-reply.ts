@@ -104,6 +104,33 @@ export async function deliverWebReply(params: {
       }
     }
   };
+  const awaitSendWithAbort = async <T>(fn: () => Promise<T>): Promise<T> => {
+    throwIfAborted();
+    const sendPromise = Promise.resolve().then(fn);
+    if (!abortSignal) {
+      return await sendPromise;
+    }
+    let abortListener: (() => void) | undefined;
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortListener = () => {
+        reject(
+          abortSignal.reason instanceof Error
+            ? abortSignal.reason
+            : new Error(String(abortSignal.reason ?? "aborted")),
+        );
+      };
+      abortSignal.addEventListener("abort", abortListener, { once: true });
+    });
+    try {
+      // We cannot cancel the underlying provider send, but we can stop waiting on it so
+      // commentary delivery and final fallback behavior are not pinned behind a hung call.
+      return await Promise.race([sendPromise, abortPromise]);
+    } finally {
+      if (abortListener) {
+        abortSignal.removeEventListener("abort", abortListener);
+      }
+    }
+  };
   const convertedText = markdownToWhatsApp(
     convertMarkdownTables(replyResult.text || "", tableMode),
   );
@@ -119,7 +146,7 @@ export async function deliverWebReply(params: {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       throwIfAborted();
       try {
-        return await fn();
+        return await awaitSendWithAbort(fn);
       } catch (err) {
         lastErr = err;
         if (abortSignal?.aborted) {
@@ -268,7 +295,7 @@ export async function deliverWebReply(params: {
           if (fallbackText) {
             whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
             throwIfAborted();
-            await msg.reply(fallbackText);
+            await awaitSendWithAbort(() => msg.reply(fallbackText));
           }
         }
       }
@@ -277,7 +304,7 @@ export async function deliverWebReply(params: {
     // Remaining text chunks after media
     for (const chunk of remainingText) {
       throwIfAborted();
-      await msg.reply(chunk);
+      await awaitSendWithAbort(() => msg.reply(chunk));
     }
   } finally {
     if (timeoutHandle) {

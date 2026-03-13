@@ -257,6 +257,87 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     expect(subscription.deliveredCommentarySegmentIds()).toEqual([]);
   });
 
+  it("continues with later commentary after an earlier delivery times out", async () => {
+    vi.useFakeTimers();
+    const onCommentaryReply = vi
+      .fn()
+      .mockImplementationOnce(
+        (_payload, context?: { abortSignal?: AbortSignal; timeoutMs?: number }) =>
+          new Promise<void>((_, reject) => {
+            const timeoutMs = context?.timeoutMs ?? 0;
+            const timer = setTimeout(() => {
+              const err = new Error(`delivery timed out after ${timeoutMs}ms`);
+              err.name = "AbortError";
+              reject(err);
+            }, timeoutMs);
+            context?.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                reject(context.abortSignal?.reason ?? new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+      blockReplyTimeoutMs: 25,
+    });
+
+    emit({
+      type: "message_end",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "First step.",
+            textSignature: JSON.stringify({ id: "sig-1", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+    });
+
+    emit({
+      type: "message_end",
+      message: buildAssistantMessage({
+        id: "assistant-2",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Second step.",
+            textSignature: JSON.stringify({ id: "sig-2", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-2",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+    });
+
+    const waitPromise = subscription.waitForCommentaryDelivery();
+    await vi.advanceTimersByTimeAsync(25);
+    await waitPromise;
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-2"]);
+    vi.useRealTimers();
+  });
+
   it("keeps repeated identical unsigned commentary distinct across assistant turns", async () => {
     const onCommentaryReply = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({
