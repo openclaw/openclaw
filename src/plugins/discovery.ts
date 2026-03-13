@@ -513,11 +513,13 @@ function discoverInDirectory(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: deriveIdHint({
-          filePath: indexFile,
-          packageName: manifest?.name,
-          hasMultipleExtensions: false,
-        }),
+        idHint: manifest?.name
+          ? deriveIdHint({
+              filePath: indexFile,
+              packageName: manifest.name,
+              hasMultipleExtensions: false,
+            })
+          : entry.name,
         source: indexFile,
         rootDir: fullPath,
         origin: params.origin,
@@ -622,11 +624,13 @@ function discoverFromPath(params: {
         candidates: params.candidates,
         diagnostics: params.diagnostics,
         seen: params.seen,
-        idHint: deriveIdHint({
-          filePath: indexFile,
-          packageName: manifest?.name,
-          hasMultipleExtensions: false,
-        }),
+        idHint: manifest?.name
+          ? deriveIdHint({
+              filePath: indexFile,
+              packageName: manifest.name,
+              hasMultipleExtensions: false,
+            })
+          : path.basename(resolved),
         source: indexFile,
         rootDir: resolved,
         origin: params.origin,
