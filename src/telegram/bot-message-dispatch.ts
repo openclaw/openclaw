@@ -24,6 +24,7 @@ import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../conf
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -616,6 +617,7 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
+            deliveryState.markDelivered();
             return;
           }
           if (split.suppressedReasoningOnly) {
@@ -809,7 +811,7 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  const hasFinalResponse = queuedFinal || sentFallback || deliveryState.snapshot().delivered;
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
@@ -826,12 +828,27 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setDone().catch((err) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
+    if (removeAckAfterReply) {
+      void (async () => {
+        await sleep(2000);
+        await statusReactionController.clear();
+      })();
+    }
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,
       ackReactionValue: ackReactionPromise ? "ack" : null,
-      remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+      remove: () => {
+        const msgId = msg.message_id;
+        if (!msgId || msgId === 0) {
+          logVerbose(
+            `telegram: cannot remove ack - invalid message_id ${msgId} for chat ${chatId}`,
+          );
+          return Promise.resolve();
+        }
+        return reactionApi?.(chatId, msgId, []) ?? Promise.resolve();
+      },
       onError: (err) => {
         if (!msg.message_id) {
           return;

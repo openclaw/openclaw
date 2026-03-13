@@ -837,7 +837,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
-  if (!dispatchResult?.queuedFinal) {
+  if (
+    !(
+      dispatchResult?.queuedFinal ||
+      (dispatchResult?.counts?.block ?? 0) > 0 ||
+      (dispatchResult?.counts?.final ?? 0) > 0
+    )
+  ) {
     if (isGuildMessage) {
       clearHistoryEntriesIfEnabled({
         historyMap: guildHistories,
