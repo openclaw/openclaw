@@ -17,6 +17,7 @@ import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { flushBotHistoryToTranscript } from "./bot-history.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -172,6 +173,26 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  // Flush pending bot messages (e.g. cron deliveries) into the current
+  // session transcript so the LLM sees them as prior assistant messages.
+  // Only for group chats — DM cron runs share the main session, so the
+  // agent turn already writes to the same transcript.
+  if (
+    cfg.session?.cronHistoryFlush &&
+    isGroup &&
+    finalized.OriginatingChannel &&
+    finalized.OriginatingTo
+  ) {
+    await flushBotHistoryToTranscript({
+      channel: finalized.OriginatingChannel,
+      to: finalized.OriginatingTo,
+      accountId: finalized.AccountId,
+      threadId: finalized.MessageThreadId != null ? String(finalized.MessageThreadId) : undefined,
+      sessionKey,
+      agentId,
+    }).catch(() => {}); // best-effort
+  }
 
   await applyResetModelOverride({
     cfg,

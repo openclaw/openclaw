@@ -71,6 +71,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { buildOutputHistoryBlock } from "./output-history.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -479,6 +480,11 @@ export async function runCronIsolatedAgentTurn(params: {
     commandBody = `${base}\n${timeLine}`.trim();
   }
   commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+
+  const outputHistoryBlock = buildOutputHistoryBlock(params.job);
+  if (outputHistoryBlock) {
+    commandBody = `${commandBody}\n\n${outputHistoryBlock}`;
+  }
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({

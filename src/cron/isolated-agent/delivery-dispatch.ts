@@ -1,4 +1,8 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import {
+  appendBotHistoryEntry,
+  normalizeToForBotHistory,
+} from "../../auto-reply/reply/bot-history.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -373,6 +377,20 @@ export async function dispatchCronDelivery(
       delivered = deliveryResults.length > 0;
       if (delivered) {
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+      }
+      // Record delivered bot message for later flush into the target chat's
+      // session transcript. Other proactive outbound paths that bypass the
+      // `mirror` parameter should add their own appendBotHistoryEntry call.
+      if (delivered && synthesizedText?.trim() && params.cfg.session?.cronHistoryFlush) {
+        appendBotHistoryEntry({
+          channel: delivery.channel,
+          to: normalizeToForBotHistory(delivery.channel, delivery.to),
+          accountId: delivery.accountId,
+          threadId: delivery.threadId != null ? String(delivery.threadId) : undefined,
+          text: synthesizedText.trim(),
+          timestamp: Date.now(),
+          source: "cron",
+        }).catch(() => {}); // best-effort, don't block delivery
       }
       return null;
     } catch (err) {

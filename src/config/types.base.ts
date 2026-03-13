@@ -131,6 +131,11 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /**
+   * Flush cron-delivered bot messages into the chat session transcript so the
+   * LLM can recall what it previously sent via scheduled tasks. Default: false.
+   */
+  cronHistoryFlush?: boolean;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
 };
