@@ -84,6 +84,12 @@ type RequestBodyLimitValues = {
   timeoutMs: number;
 };
 
+type RequestBodyChunkProgress = {
+  buffer: Buffer;
+  totalBytes: number;
+  exceeded: boolean;
+};
+
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -96,6 +102,20 @@ function resolveRequestBodyLimitValues(options: {
       ? Math.max(1, Math.floor(options.timeoutMs))
       : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
   return { maxBytes, timeoutMs };
+}
+
+function advanceRequestBodyChunk(
+  chunk: Buffer | string,
+  totalBytes: number,
+  maxBytes: number,
+): RequestBodyChunkProgress {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  const nextTotalBytes = totalBytes + buffer.length;
+  return {
+    buffer,
+    totalBytes: nextTotalBytes,
+    exceeded: nextTotalBytes > maxBytes,
+  };
 }
 
 export async function readRequestBodyWithLimit(
@@ -155,9 +175,9 @@ export async function readRequestBodyWithLimit(
       if (done) {
         return;
       }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalBytes += buffer.length;
-      if (totalBytes > maxBytes) {
+      const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
+      totalBytes = progress.totalBytes;
+      if (progress.exceeded) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         if (!req.destroyed) {
           req.destroy();
@@ -165,7 +185,7 @@ export async function readRequestBodyWithLimit(
         fail(error);
         return;
       }
-      chunks.push(buffer);
+      chunks.push(progress.buffer);
     };
 
     const onEnd = () => {
@@ -313,9 +333,9 @@ export function installRequestBodyLimitGuard(
     if (done) {
       return;
     }
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-    if (totalBytes > maxBytes) {
+    const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
+    totalBytes = progress.totalBytes;
+    if (progress.exceeded) {
       trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
     }
   };
