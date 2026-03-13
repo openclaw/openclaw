@@ -265,33 +265,37 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
-async function extractEntryContent(params: {
+async function extractMultipleEntries(params: {
   archivePath: string;
-  entryPath: string;
-}): Promise<Buffer> {
-  let resultPromise: Promise<Buffer> | undefined;
+  entryPaths: Set<string>;
+}): Promise<Map<string, Buffer>> {
+  const results = new Map<string, Buffer>();
+  const pending: Promise<void>[] = [];
   await tar.t({
     file: params.archivePath,
     gzip: true,
     onentry: (entry) => {
-      if (entry.path !== params.entryPath) {
+      if (!params.entryPaths.has(entry.path)) {
         entry.resume();
         return;
       }
-      resultPromise = new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        entry.on("error", reject);
-        entry.on("end", () => resolve(Buffer.concat(chunks)));
-      });
+      pending.push(
+        new Promise<void>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          entry.on("data", (chunk: Buffer | string) => {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          });
+          entry.on("error", reject);
+          entry.on("end", () => {
+            results.set(entry.path, Buffer.concat(chunks));
+            resolve();
+          });
+        }),
+      );
     },
   });
-  if (!resultPromise) {
-    throw new Error(`Archive is missing entry: ${params.entryPath}`);
-  }
-  return resultPromise;
+  await Promise.all(pending);
+  return results;
 }
 
 async function verifyAssetChecksums(params: {
@@ -309,14 +313,21 @@ async function verifyAssetChecksums(params: {
     normalizedToRaw.set(normalized, entry.path);
   }
 
+  // Pre-compute which entries each asset needs and collect all raw paths
+  type AssetCheck = {
+    asset: BackupManifestAsset;
+    assetArchivePath: string;
+    entries: string[];
+  };
+  const checks: AssetCheck[] = [];
+  const allNeededRawPaths = new Set<string>();
+
   for (const asset of params.manifest.assets) {
     if (!asset.sha256) {
       continue;
     }
 
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Asset archive path");
-
-    // Collect all file entries that belong to this asset
     const assetEntries = [...normalizedToRaw.keys()]
       .filter((entry) => entry === assetArchivePath || isArchivePathWithin(entry, assetArchivePath))
       .toSorted();
@@ -327,13 +338,26 @@ async function verifyAssetChecksums(params: {
       );
     }
 
-    if (assetEntries.length === 1 && assetEntries[0] === assetArchivePath) {
-      // Single file asset: use raw path for extraction
-      const rawPath = normalizedToRaw.get(assetEntries[0])!;
-      const content = await extractEntryContent({
-        archivePath: params.archivePath,
-        entryPath: rawPath,
-      });
+    checks.push({ asset, assetArchivePath, entries: assetEntries });
+    for (const entry of assetEntries) {
+      allNeededRawPaths.add(normalizedToRaw.get(entry)!);
+    }
+  }
+
+  // Single-pass extraction of all needed entries
+  const extractedContent = await extractMultipleEntries({
+    archivePath: params.archivePath,
+    entryPaths: allNeededRawPaths,
+  });
+
+  // Verify checksums using extracted content
+  for (const { asset, assetArchivePath, entries } of checks) {
+    if (entries.length === 1 && entries[0] === assetArchivePath) {
+      const rawPath = normalizedToRaw.get(entries[0])!;
+      const content = extractedContent.get(rawPath);
+      if (!content) {
+        throw new Error(`Failed to extract entry for asset ${asset.kind} (${asset.sourcePath})`);
+      }
       const computed = createHash("sha256").update(content).digest("hex");
       if (computed !== asset.sha256) {
         throw new Error(
@@ -341,19 +365,17 @@ async function verifyAssetChecksums(params: {
         );
       }
     } else {
-      // Directory asset: compute Merkle-like hash from sorted file entries
       const fileHashes: Array<{ relativePath: string; sha256: string }> = [];
-
-      for (const entryPath of assetEntries) {
+      for (const entryPath of entries) {
         const relativePath = path.posix.relative(assetArchivePath, entryPath);
         if (!relativePath) {
           continue;
         }
         const rawPath = normalizedToRaw.get(entryPath)!;
-        const content = await extractEntryContent({
-          archivePath: params.archivePath,
-          entryPath: rawPath,
-        });
+        const content = extractedContent.get(rawPath);
+        if (!content) {
+          throw new Error(`Failed to extract entry for asset ${asset.kind} (${asset.sourcePath})`);
+        }
         const sha256 = createHash("sha256").update(content).digest("hex");
         fileHashes.push({ relativePath, sha256 });
       }
@@ -384,8 +406,10 @@ function formatResult(result: BackupVerifyResult): string {
   ];
   if (result.checksumsVerified) {
     lines.push("Content checksums: verified");
-  } else {
+  } else if (result.schemaVersion < 2) {
     lines.push("Content checksums: not present (schema v1 archive)");
+  } else {
+    lines.push("Content checksums: not present");
   }
   return lines.join("\n");
 }

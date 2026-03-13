@@ -267,12 +267,18 @@ function buildManifest(params: {
       oauthDir: params.oauthDir,
       workspaceDirs: params.workspaceDirs,
     },
-    assets: params.assets.map((asset) => ({
-      kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
-      sha256: params.assetChecksums.get(asset.sourcePath) ?? "",
-    })),
+    assets: params.assets.map((asset) => {
+      const sha256 = params.assetChecksums.get(asset.sourcePath);
+      if (sha256 === undefined) {
+        throw new Error(`Missing checksum for asset: ${asset.sourcePath}`);
+      }
+      return {
+        kind: asset.kind,
+        sourcePath: asset.sourcePath,
+        archivePath: asset.archivePath,
+        sha256,
+      };
+    }),
     skipped: params.skipped.map((entry) => ({
       kind: entry.kind,
       sourcePath: entry.sourcePath,
@@ -380,6 +386,11 @@ export async function createBackupArchive(
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {
+    // NOTE: Checksums are computed from the filesystem before tar.c() re-reads
+    // the files. A file modified between hashing and packing (TOCTOU) would
+    // produce a checksum that doesn't match the archived bytes. The window is
+    // very small in practice (state/config files rarely change during backup),
+    // and `--verify` catches any discrepancy by re-reading the written archive.
     const assetChecksums = new Map<string, string>();
     await Promise.all(
       result.assets.map(async (asset) => {
