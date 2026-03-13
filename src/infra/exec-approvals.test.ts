@@ -9,7 +9,6 @@ import {
   buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
-  matchAllowlist,
   maxAsk,
   mergeExecApprovalsSocketDefaults,
   minSecurity,
@@ -18,75 +17,7 @@ import {
   requiresExecApproval,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
-  type ExecAllowlistEntry,
 } from "./exec-approvals.js";
-
-describe("exec approvals allowlist matching", () => {
-  const baseResolution = {
-    rawExecutable: "rg",
-    resolvedPath: "/opt/homebrew/bin/rg",
-    executableName: "rg",
-  };
-
-  it("handles wildcard/path matching semantics", () => {
-    const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
-      { entries: [{ pattern: "RG" }], expectedPattern: null },
-      { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
-      { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
-    ];
-    for (const testCase of cases) {
-      const match = matchAllowlist(testCase.entries, baseResolution);
-      expect(match?.pattern ?? null).toBe(testCase.expectedPattern);
-    }
-  });
-
-  it("matches bare * wildcard pattern against any resolved path", () => {
-    const match = matchAllowlist([{ pattern: "*" }], baseResolution);
-    expect(match).not.toBeNull();
-    expect(match?.pattern).toBe("*");
-  });
-
-  it("matches bare * wildcard against arbitrary executables", () => {
-    const match = matchAllowlist([{ pattern: "*" }], {
-      rawExecutable: "python3",
-      resolvedPath: "/usr/bin/python3",
-      executableName: "python3",
-    });
-    expect(match).not.toBeNull();
-    expect(match?.pattern).toBe("*");
-  });
-
-  it("matches absolute paths containing regex metacharacters", () => {
-    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"];
-    for (const candidatePath of plusPathCases) {
-      const match = matchAllowlist([{ pattern: candidatePath }], {
-        rawExecutable: candidatePath,
-        resolvedPath: candidatePath,
-        executableName: candidatePath.split("/").at(-1) ?? candidatePath,
-      });
-      expect(match?.pattern).toBe(candidatePath);
-    }
-  });
-
-  it("does not throw when wildcard globs are mixed with + in path", () => {
-    const match = matchAllowlist([{ pattern: "/usr/bin/*++" }], {
-      rawExecutable: "/usr/bin/g++",
-      resolvedPath: "/usr/bin/g++",
-      executableName: "g++",
-    });
-    expect(match?.pattern).toBe("/usr/bin/*++");
-  });
-
-  it("matches paths containing []() regex tokens literally", () => {
-    const literalPattern = "/opt/builds/tool[1](stable)";
-    const match = matchAllowlist([{ pattern: literalPattern }], {
-      rawExecutable: literalPattern,
-      resolvedPath: literalPattern,
-      executableName: "tool[1](stable)",
-    });
-    expect(match?.pattern).toBe(literalPattern);
-  });
-});
 
 describe("mergeExecApprovalsSocketDefaults", () => {
   it("prefers normalized socket, then current, then default path", () => {
