@@ -288,6 +288,16 @@ export async function dispatchCronDelivery(
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
 
+  // Respect replyMode="tool-only": suppress text-only payloads from cron direct
+  // delivery, mirroring the suppression in dispatch-from-config.ts:415.
+  // Tool-triggered sends (messaging tools) are unaffected — they bypass this path
+  // via the skipMessagingToolDelivery early-exit in run.ts.
+  const isToolOnlyMode =
+    (params.cfgWithAgentDefaults.agents?.defaults?.replyMode ?? "auto") === "tool-only";
+  if (isToolOnlyMode) {
+    deliveryPayloads = deliveryPayloads.filter((p) => p.mediaUrl || (p.mediaUrls?.length ?? 0) > 0);
+  }
+
   // Shared callers can treat a matching message-tool send as the completed
   // delivery path. Cron-owned callers keep this false so direct cron delivery
   // remains the only source of delivered state.

@@ -28,9 +28,25 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
-let _currentListener: ActiveWebListener | null = null;
+// Use a globalThis-keyed registry so the singleton survives rolldown chunk
+// splitting: when multiple build chunks each inline a copy of this module,
+// they all read/write the same Map instead of diverging into separate Maps.
+const _LISTENERS_KEY = "__openclaw_active_web_listeners__";
+const _CURRENT_KEY = "__openclaw_active_web_listener_current__";
+if (!(globalThis as Record<string, unknown>)[_LISTENERS_KEY]) {
+  (globalThis as Record<string, unknown>)[_LISTENERS_KEY] = new Map<string, ActiveWebListener>();
+}
+if (!Object.prototype.hasOwnProperty.call(globalThis, _CURRENT_KEY)) {
+  (globalThis as Record<string, unknown>)[_CURRENT_KEY] = null;
+}
+const listeners = (globalThis as Record<string, unknown>)[_LISTENERS_KEY] as Map<
+  string,
+  ActiveWebListener
+>;
 
-const listeners = new Map<string, ActiveWebListener>();
+function setCurrentListener(l: ActiveWebListener | null): void {
+  (globalThis as Record<string, unknown>)[_CURRENT_KEY] = l;
+}
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
@@ -74,7 +90,7 @@ export function setActiveWebListener(
     listeners.set(id, listener);
   }
   if (id === DEFAULT_ACCOUNT_ID) {
-    _currentListener = listener;
+    setCurrentListener(listener);
   }
 }
 
