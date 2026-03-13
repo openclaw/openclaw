@@ -4,6 +4,7 @@ import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import type { ApiKeyStorageOptions } from "../../../onboard-auth.credentials.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
@@ -50,7 +51,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.exit(1);
     return null;
   }
-  const apiKeyStorageOptions = requestedSecretInputMode
+  const apiKeyStorageOptions: ApiKeyStorageOptions = requestedSecretInputMode
     ? { secretInputMode: requestedSecretInputMode, syncSiblingAgents: true }
     : { syncSiblingAgents: true };
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
