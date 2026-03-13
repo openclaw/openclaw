@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeProviderId } from "../model-selection.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -80,6 +81,19 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   openaiWsWarmup?: boolean;
 };
 
+function resolvePositiveAliasedParamValue(
+  source: Record<string, unknown> | undefined,
+  snakeCaseKey: string,
+  camelCaseKey: string,
+): number | undefined {
+  const rawValue = resolveAliasedParamValue([source], snakeCaseKey, camelCaseKey);
+  if (typeof rawValue !== "number" || !Number.isFinite(rawValue)) {
+    return undefined;
+  }
+  const floored = Math.floor(rawValue);
+  return floored > 0 ? floored : undefined;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -123,8 +137,9 @@ function createStreamFnWithExtraParams(
     typeof extraParams.provider === "object"
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
+  const explicitNumCtx = resolvePositiveAliasedParamValue(extraParams, "num_ctx", "numCtx");
 
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  if (Object.keys(streamParams).length === 0 && !providerRouting && explicitNumCtx === undefined) {
     return undefined;
   }
 
@@ -143,9 +158,28 @@ function createStreamFnWithExtraParams(
           compat: { ...model.compat, openRouterRouting: providerRouting },
         } as unknown as typeof model)
       : model;
+    const shouldInjectNativeOllamaNumCtx =
+      explicitNumCtx !== undefined &&
+      normalizeProviderId(provider) === "ollama" &&
+      effectiveModel.api === "ollama";
+    const originalOnPayload = options?.onPayload;
     return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,
+      ...(shouldInjectNativeOllamaNumCtx
+        ? {
+            onPayload: (payload: unknown) => {
+              if (payload && typeof payload === "object") {
+                const payloadRecord = payload as Record<string, unknown>;
+                if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+                  payloadRecord.options = {};
+                }
+                (payloadRecord.options as Record<string, unknown>).num_ctx = explicitNumCtx;
+              }
+              return originalOnPayload?.(payload, effectiveModel);
+            },
+          }
+        : {}),
     });
   };
 
