@@ -1585,6 +1585,50 @@ describe("drainFormattedSystemEvents", () => {
   });
 });
 
+describe("initSessionState preserves modelOverride for subagent sessions (#40159)", () => {
+  it("preserves modelOverride when a stale entry triggers a non-reset new session", async () => {
+    // Subagent sessions: sessions.patch writes modelOverride to the store entry
+    // before the first run. We must preserve it even when resetTriggered=false
+    // and the entry is stale (new-session path caused by freshness policy).
+    const storePath = await createStorePath("openclaw-subagent-model-");
+    const sessionKey = "agent:main:subagent:sub-model-test";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "pre-existing-subagent-session",
+        // Force stale so initSessionState goes through the new-session branch.
+        updatedAt: 0,
+        modelOverride: "anthropic/claude-sonnet-4-6",
+        providerOverride: "anthropic",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "do some work",
+        RawBody: "do some work",
+        CommandBody: "do some work",
+        From: "parent-agent",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "internal",
+        Surface: "internal",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Stale entry forces new session while resetTriggered stays false.
+    expect(result.sessionEntry.sessionId).not.toBe("pre-existing-subagent-session");
+    expect(result.sessionEntry.modelOverride).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.sessionEntry.providerOverride).toBe("anthropic");
+  });
+});
+
 describe("persistSessionUsageUpdate", () => {
   async function seedSessionStore(params: {
     storePath: string;

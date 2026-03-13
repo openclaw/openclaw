@@ -367,9 +367,16 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedLabel = entry.label;
+    }
+    // Model/provider overrides must be preserved for ALL new sessions with an
+    // existing entry, not just reset-triggered ones. Subagent sessions write
+    // modelOverride via sessions.patch before the first run, so the entry
+    // exists but resetTriggered is always false. Without this, the override
+    // is silently discarded and the subagent runs on the parent model. (#40159)
+    if (entry) {
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
-      persistedLabel = entry.label;
     }
   }
 
