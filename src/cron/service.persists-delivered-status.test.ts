@@ -189,6 +189,7 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
+<<<<<<< HEAD
   it("suppresses delivered=false when delivery.mode none opts out of delivery", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivery-none-delivered-false"),
