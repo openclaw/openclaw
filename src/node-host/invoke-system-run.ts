@@ -34,6 +34,7 @@ import {
 } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
+  ExecFinishedResult,
   ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
