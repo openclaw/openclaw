@@ -142,6 +142,47 @@ describe("loadHookEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].script).toBe("hooks/right-agent.cjs");
   });
+
+  it("excludes hooks with agentId filter when job has no agentId", () => {
+    const config: CronConfig = {
+      hooks: {
+        beforeRun: [
+          { script: "hooks/agent-only.cjs", filter: { agentId: ["some-agent"] } },
+          { script: "hooks/no-filter.cjs" },
+        ],
+      },
+    };
+    const job = stubJob({ agentId: undefined });
+    const entries = loadHookEntries("beforeRun", config, job);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].script).toBe("hooks/no-filter.cjs");
+  });
+
+  it("filters by workflow", () => {
+    const config: CronConfig = {
+      hooks: {
+        afterRun: [
+          { script: "hooks/pipeline-only.cjs", filter: { workflow: ["pipeline"] } },
+          { script: "hooks/cron-only.cjs", filter: { workflow: ["cron"] } },
+          { script: "hooks/all.cjs" },
+        ],
+      },
+    };
+    const entries = loadHookEntries("afterRun", config, stubJob(), "cron");
+    expect(entries).toHaveLength(2);
+    expect(entries[0].script).toBe("hooks/cron-only.cjs");
+    expect(entries[1].script).toBe("hooks/all.cjs");
+  });
+
+  it("excludes all hooks when workflow does not match", () => {
+    const config: CronConfig = {
+      hooks: {
+        beforeRun: [{ script: "hooks/pipeline-only.cjs", filter: { workflow: ["pipeline"] } }],
+      },
+    };
+    const entries = loadHookEntries("beforeRun", config, stubJob(), "cron");
+    expect(entries).toEqual([]);
+  });
 });
 
 describe("runCronHooks", () => {
