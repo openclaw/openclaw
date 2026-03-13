@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+- For Claude Code token efficiency patterns (diff-only output, context guardrails, model tiering, chunked refactoring): see `docs/claude-workflow.md`.
+- For a curated repo structure index: see `docs/repo-map.json` and `docs/architecture_summary.md`. Prefer these over directory scanning.
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
@@ -102,6 +104,9 @@
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
 - Written English: use American spelling and grammar in code, comments, docs, and UI strings (e.g. "color" not "colour", "behavior" not "behaviour", "analyze" not "analyse").
+- Descriptive identifiers carry free context for LLM readers: `pendingJobCount` > `pjc`. Abbreviations only when domain-standard (`req`, `res`, `ctx`, `msg`).
+- Comments: explain _why_, never _what_. Comment non-obvious intent, business rules, workarounds.
+- Error handling at boundaries only — validate external input (user data, API responses, file I/O). Trust internal function contracts.
 
 ## Release / Advisory Workflows
 

@@ -1,0 +1,36 @@
+# Authored by: cc (Claude Code) | 2026-03-13
+# Template: Write Test
+# Variables: {SOURCE_FILE}, {FUNCTION_NAMES}
+
+You are writing Vitest tests for the OpenClaw repo (TypeScript/ESM).
+
+## Setup
+1. Read {SOURCE_FILE} to understand the module's public API.
+2. Read docs/repo-map.json to understand its dependencies.
+3. Check if a test file already exists at the colocated path (same dir, *.test.ts suffix).
+
+## Test Conventions
+- Framework: Vitest (import { describe, it, expect, vi } from "vitest")
+- File naming: colocated *.test.ts (e.g., src/gateway/auth.ts -> src/gateway/auth.test.ts)
+- Coverage target: 70% lines/branches/functions/statements (V8)
+- Prefer per-instance stubs over prototype mutation
+- Use vi.fn() and vi.spyOn() for mocking — not jest globals
+
+## Functions to Test
+{FUNCTION_NAMES}
+
+## Output Format
+Return the complete test file content in a code fence.
+If the test file already exists, return a unified diff with new test cases appended.
+
+## Test Structure
+For each function:
+1. Happy path — expected input produces expected output
+2. Edge cases — empty input, boundary values, null/undefined where applicable
+3. Error cases — invalid input at system boundaries (not internal contracts)
+4. Integration points — mock external dependencies, verify call arguments
+
+## Constraints
+- Do not import from node_modules internals (only public package APIs).
+- Do not use @ts-nocheck or any type assertions to work around test types.
+- Keep test descriptions short and behavior-focused ("returns empty array for no matches").

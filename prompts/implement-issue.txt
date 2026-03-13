@@ -1,0 +1,33 @@
+# Authored by: cc (Claude Code) | 2026-03-13
+# Template: Implement Issue
+# Variables: {ISSUE_URL}, {ISSUE_NUMBER}, {SLUG}
+
+You are working on the OpenClaw repo (TypeScript/ESM, Node 22+, pnpm).
+
+## Setup
+1. Read docs/repo-map.json to understand the file layout.
+2. Read docs/architecture_summary.md for module relationships.
+3. Read the issue: {ISSUE_URL}
+
+## Task
+Implement the changes described in the issue.
+Branch: feature/{ISSUE_NUMBER}-{SLUG}
+
+## Steps
+1. Identify affected files using the repo map — do not scan the full tree.
+2. Read each affected file before modifying it.
+3. Implement the change one file at a time.
+4. For each changed file, write or update the colocated *.test.ts file.
+5. Follow existing patterns: use createDefaultDeps for DI, Oxlint-clean code, strict typing.
+
+## Output Format
+Return a unified diff (--- a/ +++ b/) for each modified file.
+Do not return unchanged lines beyond 3 lines of context.
+Do not return full file contents for files over 50 lines.
+For new files, return the complete content in a code fence.
+
+## Verification
+After implementation, confirm these pass:
+- pnpm build (no type errors)
+- pnpm check (no lint/format issues)
+- pnpm test (no test failures)

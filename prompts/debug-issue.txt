@@ -1,0 +1,30 @@
+# Authored by: cc (Claude Code) | 2026-03-13
+# Template: Debug Issue
+# Variables: {ERROR_TEXT}, {FILE_PATH}, {LINE_NUMBER}, {LOG_SNIPPET}
+
+You are debugging an issue in the OpenClaw repo (TypeScript/ESM).
+
+## Context
+Error: {ERROR_TEXT}
+Location: {FILE_PATH}:{LINE_NUMBER}
+Log output:
+```
+{LOG_SNIPPET}
+```
+
+## Steps
+1. Read docs/repo-map.json to understand the module relationships.
+2. Read {FILE_PATH} around line {LINE_NUMBER} (50-line window).
+3. Trace the call chain: find callers with `rg "functionName(" --type ts`.
+4. Identify the root cause — not just the symptom.
+5. Check if related test files exist: `rg -l "describe.*moduleName" --glob "*.test.ts"`.
+
+## Output Format
+1. **Root cause**: One sentence explaining why the error occurs.
+2. **Fix**: Unified diff (--- a/ +++ b/) for each modified file.
+3. **Regression test**: A new test case in the colocated *.test.ts that fails before the fix and passes after.
+
+## Constraints
+- Do not modify files outside the call chain of the error.
+- If the root cause is in a dependency, report it — do not patch node_modules.
+- If the fix requires a design change, describe it instead of implementing it.
