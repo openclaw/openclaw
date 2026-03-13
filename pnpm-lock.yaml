@@ -227,6 +227,9 @@ importers:
       jscpd:
         specifier: 4.0.8
         version: 4.0.8
+      jsdom:
+        specifier: ^28.1.0
+        version: 28.1.0(@noble/hashes@2.0.1)
       lit:
         specifier: ^3.3.2
         version: 3.3.2
