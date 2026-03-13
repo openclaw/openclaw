@@ -55,7 +55,9 @@ function createFakeSession() {
     },
     transport: { pid: 123 },
     ready: Promise.resolve(),
-  } as Awaited<ReturnType<NonNullable<Parameters<typeof setChromeMcpSessionFactoryForTest>[0]>>>;
+  } as unknown as Awaited<
+    ReturnType<NonNullable<Parameters<typeof setChromeMcpSessionFactoryForTest>[0]>>
+  >;
 }
 
 describe("chrome MCP page parsing", () => {

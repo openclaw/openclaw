@@ -433,6 +433,8 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "undici": "7.24.0",
+      "yauzl": "3.2.1",
       "hono": "4.12.7",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.3.8",
