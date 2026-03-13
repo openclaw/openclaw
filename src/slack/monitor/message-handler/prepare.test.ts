@@ -584,6 +584,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.ackReactionTiming = "run-start";
+    slackCtx.ackReactionScope = "direct";
 
     const prepared = await prepareMessageWith(
       slackCtx,
@@ -594,6 +596,36 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     expect(prepared!.ackReactionValue).toBe("eyes");
     expect(prepared!.ackReactionMessageTs).toBe("700.000");
+    expect(prepared!.ackReactionAllowed).toBe(true);
+    expect(prepared!.ackReactionPromise).toBeNull();
+  });
+
+  it("tracks deferred ack reactions as disallowed when the scope gate blocks them", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        messages: {
+          ackReaction: "eyes",
+          ackReactionTiming: "run-start",
+          ackReactionScope: "off",
+        },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.ackReactionTiming = "run-start";
+    slackCtx.ackReactionScope = "off";
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ ackReaction: "eyes" }),
+      createSlackMessage({ ts: "701.000" }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ackReactionValue).toBe("eyes");
+    expect(prepared!.ackReactionMessageTs).toBe("701.000");
+    expect(prepared!.ackReactionAllowed).toBe(false);
     expect(prepared!.ackReactionPromise).toBeNull();
   });
 });

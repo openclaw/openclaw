@@ -169,6 +169,7 @@ describe("dispatchPreparedSlackMessage", () => {
       preview: "hello",
       ackReactionMessageTs: "123.456",
       ackReactionValue: "eyes",
+      ackReactionAllowed: true,
       ackReactionPromise: null,
     } as never);
 
@@ -178,6 +179,56 @@ describe("dispatchPreparedSlackMessage", () => {
       token: "xoxb-test",
       client: {},
     });
+    expect(draftStreamClearMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start the Slack ack reaction on run start when the scope gate disallows it", async () => {
+    await dispatchPreparedSlackMessage({
+      ctx: {
+        cfg: {},
+        app: { client: {} },
+        runtime: { error: vi.fn() },
+        botToken: "xoxb-test",
+        teamId: "T1",
+        allowFrom: [],
+        textLimit: 4000,
+        typingReaction: "",
+        removeAckAfterReply: false,
+        ackReactionTiming: "run-start",
+        setSlackThreadStatus: async () => {},
+        channelHistories: new Map(),
+        historyLimit: 0,
+      },
+      account: {
+        accountId: "default",
+        config: {},
+      },
+      message: {
+        channel: "C123",
+        ts: "123.456",
+        user: "U123",
+      },
+      route: {
+        agentId: "knox",
+        accountId: "default",
+        mainSessionKey: "agent:knox:main",
+      },
+      channelConfig: null,
+      replyTarget: "user:U123",
+      ctxPayload: {},
+      replyToMode: "off",
+      isDirectMessage: false,
+      isRoomish: false,
+      historyKey: "slack:C123",
+      preview: "hello",
+      ackReactionMessageTs: "123.456",
+      ackReactionValue: "eyes",
+      ackReactionAllowed: false,
+      ackReactionPromise: null,
+    } as never);
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(reactSlackMessageMock).not.toHaveBeenCalled();
     expect(draftStreamClearMock).toHaveBeenCalledTimes(1);
   });
 });

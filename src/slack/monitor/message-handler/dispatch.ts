@@ -232,6 +232,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (ctx.ackReactionTiming !== "run-start") {
       return;
     }
+    if (!prepared.ackReactionAllowed) {
+      return;
+    }
     const ackMessageTs = prepared.ackReactionMessageTs?.trim();
     const ackReactionValue = prepared.ackReactionValue.trim();
     if (!ackMessageTs || !ackReactionValue) {
