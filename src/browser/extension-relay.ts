@@ -214,6 +214,9 @@ async function relayAuthTokenForUrl(url: string): Promise<string | null> {
     if (runtimeToken) {
       return runtimeToken;
     }
+    if (!relayRuntimeByPort.has(port)) {
+      return null;
+    }
     try {
       const derivedToken = await resolveRelayAuthTokenForPort(port);
       return derivedToken;
