@@ -100,7 +100,7 @@ Non-interactive local gateway health:
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
 - `--install-daemon` starts the managed gateway install path first. Without it, you must already have a local gateway running, for example `openclaw gateway run`.
 - If you only want config/workspace/bootstrap writes in automation, use `--skip-health`.
-- On native Windows, `--install-daemon` currently uses Scheduled Tasks and may require running PowerShell as Administrator.
+- On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
 Interactive onboarding behavior with reference mode:
 
