@@ -218,6 +218,7 @@ export async function tryDispatchAcpReply(params: {
   }
 
   let queuedFinal = false;
+  const acpDispatchStartedAt = Date.now();
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -229,6 +230,14 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    onFirstVisibleOutput: (info) => {
+      params.onLatencyStage?.({
+        stage: "acp_first_visible_output",
+        durationMs: Math.max(0, Date.now() - acpDispatchStartedAt),
+        firstVisibleKind: info.kind,
+        backend: "acp",
+      });
+    },
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
@@ -258,8 +267,6 @@ export async function tryDispatchAcpReply(params: {
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: params.ctx.AccountId,
   });
-
-  const acpDispatchStartedAt = Date.now();
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {

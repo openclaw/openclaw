@@ -23,6 +23,7 @@ type ToolMessageHandle = {
 
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
+  firstVisibleOutputEmitted: boolean;
   accumulatedBlockText: string;
   blockCount: number;
   routedCounts: Record<ReplyDispatchKind, number>;
@@ -53,14 +54,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  onFirstVisibleOutput?: (info: { kind: ReplyDispatchKind }) => void;
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
+    firstVisibleOutputEmitted: false,
     accumulatedBlockText: "",
     blockCount: 0,
     routedCounts: {
       tool: 0,
       block: 0,
+      status: 0,
       final: 0,
     },
     toolMessageByCallId: new Map(),
@@ -72,6 +76,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     state.startedReplyLifecycle = true;
     await params.onReplyStart?.();
+  };
+
+  const markFirstVisibleOutput = (kind: ReplyDispatchKind) => {
+    if (state.firstVisibleOutputEmitted) {
+      return;
+    }
+    state.firstVisibleOutputEmitted = true;
+    params.onFirstVisibleOutput?.({ kind });
   };
 
   const tryEditToolMessage = async (
@@ -174,16 +186,38 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         });
       }
       state.routedCounts[kind] += 1;
+      markFirstVisibleOutput(kind);
       return true;
     }
 
     if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
+      const delivered = params.dispatcher.sendToolResult(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
     }
     if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
+      const delivered = params.dispatcher.sendBlockReply(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
     }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    if (kind === "status") {
+      const delivered =
+        params.dispatcher.sendStatusReply?.(ttsPayload) ??
+        params.dispatcher.sendBlockReply(ttsPayload);
+      if (delivered) {
+        markFirstVisibleOutput(kind);
+      }
+      return delivered;
+    }
+    const delivered = params.dispatcher.sendFinalReply(ttsPayload);
+    if (delivered) {
+      markFirstVisibleOutput(kind);
+    }
+    return delivered;
   };
 
   return {
@@ -195,6 +229,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
+      counts.status += state.routedCounts.status;
       counts.final += state.routedCounts.final;
     },
   };

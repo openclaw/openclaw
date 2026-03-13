@@ -412,6 +412,45 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("records ACP first visible output separately from the first runtime event", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({
+        onEvent,
+        onLifecycleStage,
+      }: {
+        onEvent: (event: unknown) => Promise<void>;
+        onLifecycleStage?: (info: unknown) => Promise<void>;
+      }) => {
+        await onLifecycleStage?.({
+          stage: "acp_first_event",
+          durationMs: 12,
+          backend: "acpx",
+          eventType: "text_delta",
+        });
+        await onEvent({ type: "text_delta", text: "hello", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const onLatencyStage = vi.fn();
+    await runDispatch({
+      bodyForAgent: "hello",
+      onLatencyStage,
+    });
+
+    expect(onLatencyStage.mock.calls.map(([info]) => info.stage)).toEqual(
+      expect.arrayContaining(["acp_first_event", "acp_first_visible_output"]),
+    );
+    expect(onLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "acp_first_visible_output",
+        firstVisibleKind: "block",
+        backend: "acp",
+      }),
+    );
+  });
+
   it("forwards normalized image attachments into ACP turns", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));

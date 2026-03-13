@@ -32,7 +32,8 @@ export type TurnLatencyStage =
   | "acp_ensure_session_started"
   | "acp_ensure_session_completed"
   | "acp_run_started"
-  | "acp_first_event";
+  | "acp_first_event"
+  | "acp_first_visible_output";
 
 export type TurnLatencyStageInfo = {
   stage: TurnLatencyStage;

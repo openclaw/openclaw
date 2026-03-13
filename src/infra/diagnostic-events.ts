@@ -118,7 +118,8 @@ export type DiagnosticTurnLatencyStageEvent = DiagnosticBaseEvent & {
     | "acp_ensure_session_started"
     | "acp_ensure_session_completed"
     | "acp_run_started"
-    | "acp_first_event";
+    | "acp_first_event"
+    | "acp_first_visible_output";
   channel: string;
   messageId?: number | string;
   chatId?: number | string;
