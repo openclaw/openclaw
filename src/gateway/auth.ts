@@ -82,6 +82,16 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** Optional audit logger for recording auth outcomes. */
+  auditLogger?: {
+    log(entry: {
+      event: string;
+      clientIp?: string;
+      method?: string;
+      reason?: string;
+      user?: string;
+    }): void;
+  };
 };
 
 type TailscaleUser = {
@@ -422,7 +432,7 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
 export async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
-  const { auth, connectAuth, req, trustedProxies } = params;
+  const { auth, connectAuth, req, trustedProxies, auditLogger } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const authSurface = params.authSurface ?? "http";
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
@@ -447,8 +457,10 @@ export async function authorizeGatewayConnect(
     });
 
     if ("user" in result) {
+      auditLogger?.log({ event: "auth_success", method: "trusted-proxy", user: result.user });
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+    auditLogger?.log({ event: "auth_failure", reason: result.reason });
     return { ok: false, reason: result.reason };
   }
 
@@ -481,6 +493,12 @@ export async function authorizeGatewayConnect(
     });
     if (tailscaleCheck.ok) {
       limiter?.reset(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_success",
+        clientIp: ip,
+        method: "tailscale",
+        user: tailscaleCheck.user.login,
+      });
       return {
         ok: true,
         method: "tailscale",
@@ -501,9 +519,16 @@ export async function authorizeGatewayConnect(
     }
     if (!safeEqualSecret(connectAuth.token, auth.token)) {
       limiter?.recordFailure(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_failure",
+        clientIp: ip,
+        method: "token",
+        reason: "token_mismatch",
+      });
       return { ok: false, reason: "token_mismatch" };
     }
     limiter?.reset(ip, rateLimitScope);
+    auditLogger?.log({ event: "auth_success", clientIp: ip, method: "token" });
     return { ok: true, method: "token" };
   }
 
@@ -518,13 +543,21 @@ export async function authorizeGatewayConnect(
     }
     if (!safeEqualSecret(password, auth.password)) {
       limiter?.recordFailure(ip, rateLimitScope);
+      auditLogger?.log({
+        event: "auth_failure",
+        clientIp: ip,
+        method: "password",
+        reason: "password_mismatch",
+      });
       return { ok: false, reason: "password_mismatch" };
     }
     limiter?.reset(ip, rateLimitScope);
+    auditLogger?.log({ event: "auth_success", clientIp: ip, method: "password" });
     return { ok: true, method: "password" };
   }
 
   limiter?.recordFailure(ip, rateLimitScope);
+  auditLogger?.log({ event: "auth_failure", clientIp: ip, reason: "unauthorized" });
   return { ok: false, reason: "unauthorized" };
 }
 

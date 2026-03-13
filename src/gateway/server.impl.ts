@@ -1078,6 +1078,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       requestRateLimiter.dispose();
+      await authAuditLogger.flush();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);

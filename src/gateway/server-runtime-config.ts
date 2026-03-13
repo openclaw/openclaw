@@ -88,13 +88,14 @@ export async function resolveGatewayRuntimeConfig(params: {
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
-  const strictTransportSecurityHeader =
-    strictTransportSecurityConfig === false
-      ? undefined
-      : typeof strictTransportSecurityConfig === "string" &&
-          strictTransportSecurityConfig.trim().length > 0
-        ? strictTransportSecurityConfig.trim()
-        : undefined;
+  /** Whether the user explicitly opted out of HSTS via `strictTransportSecurity: false`. */
+  const hstsExplicitlyDisabled = strictTransportSecurityConfig === false;
+  const strictTransportSecurityHeader = hstsExplicitlyDisabled
+    ? undefined
+    : typeof strictTransportSecurityConfig === "string" &&
+        strictTransportSecurityConfig.trim().length > 0
+      ? strictTransportSecurityConfig.trim()
+      : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
   const controlUiRoot =
@@ -197,7 +198,7 @@ export async function resolveGatewayRuntimeConfig(params: {
 
   // Auto-set HSTS header when TLS is enabled and no explicit config is provided.
   let effectiveStrictTransportSecurity = strictTransportSecurityHeader;
-  if (tlsEnabled && !effectiveStrictTransportSecurity) {
+  if (tlsEnabled && !effectiveStrictTransportSecurity && !hstsExplicitlyDisabled) {
     effectiveStrictTransportSecurity = "max-age=31536000";
   }
 

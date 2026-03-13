@@ -733,12 +733,14 @@ function collectGatewayConfigFindings(
   if (bind !== "loopback" && !cfg.gateway?.requestRateLimit) {
     findings.push({
       checkId: "gateway.no_request_rate_limit",
-      severity: "warn",
-      title: "No per-IP request rate limiting configured",
+      severity: "info",
+      title: "Per-IP request rate limiting using defaults",
       detail:
-        "gateway.bind is not loopback but no gateway.requestRateLimit is configured. " +
-        "Without request rate limiting, the gateway is more vulnerable to abuse.",
-      remediation: "Set gateway.requestRateLimit (e.g. { maxRequests: 120, windowMs: 60000 }).",
+        "gateway.requestRateLimit is not explicitly configured. " +
+        "Default limits (120 req/min/IP, loopback exempt) are active. " +
+        "Set gateway.requestRateLimit explicitly to acknowledge and tune this behavior.",
+      remediation:
+        "Set gateway.requestRateLimit (e.g. { maxRequests: 120, windowMs: 60000 }) to make the configuration explicit.",
     });
   }
 

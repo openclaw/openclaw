@@ -209,6 +209,7 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      authAuditLogger: params.authAuditLogger,
     });
   }
 

@@ -979,8 +979,10 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional audit logger for recording security events. */
+  authAuditLogger?: AuthAuditLogger;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter, authAuditLogger } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       // IP access control for WebSocket upgrades.
@@ -998,6 +1000,7 @@ export function attachGatewayUpgradeHandler(opts: {
         blocklist: upgradeConfig.gateway?.ipBlocklist,
       });
       if (!wsIpCheck.allowed) {
+        authAuditLogger?.log({ event: "ip_blocked", clientIp: upgradeClientIp ?? undefined });
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;

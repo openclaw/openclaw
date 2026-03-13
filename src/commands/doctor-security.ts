@@ -160,8 +160,8 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       // Request rate limit check.
       if (!cfg.gateway?.requestRateLimit) {
         warnings.push(
-          `- WARNING: No per-IP request rate limiting configured for network-exposed gateway.`,
-          `  Fix: ${formatCliCommand("openclaw config set gateway.requestRateLimit.maxRequests 120")}`,
+          `- INFO: gateway.requestRateLimit uses default limits (120 req/min/IP). Set it explicitly to acknowledge and tune this behavior.`,
+          `  Recommended: ${formatCliCommand("openclaw config set gateway.requestRateLimit.maxRequests 120")}`,
         );
       }
     }
