@@ -9,7 +9,13 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { markBackgrounded } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  createSessionSlug,
+  markBackgrounded,
+  markExited,
+} from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -44,6 +50,11 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import {
+  openSandboxReadCommandOutput,
+  openSandboxReadCommandStatus,
+  openSandboxStartCommandSession,
+} from "./sandbox/opensandbox-command.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -468,6 +479,157 @@ export function createExecTool(
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
       await validateScriptFileForShellBleed({ command: params.command, workdir });
+
+      if (
+        sandbox?.backendKind === "opensandbox" &&
+        allowBackground &&
+        (backgroundRequested || yieldWindow !== null)
+      ) {
+        const baseUrl = sandbox.opensandboxBaseUrl?.trim();
+        const accessToken = sandbox.opensandboxAccessToken?.trim();
+        if (!baseUrl || !accessToken) {
+          throw new Error(
+            "OpenSandbox background exec requires OPEN_SANDBOX_EXECD_URL and OPEN_SANDBOX_EXECD_ACCESS_TOKEN.",
+          );
+        }
+        const remoteTimeoutSec =
+          explicitTimeoutSec ?? sandbox.opensandboxTimeoutSec ?? defaultTimeoutSec;
+        const commandSessionId = await openSandboxStartCommandSession({
+          baseUrl,
+          accessToken,
+          command: params.command,
+          workdir: containerWorkdir ?? sandbox.containerWorkdir,
+          timeoutSec: remoteTimeoutSec,
+        });
+        const sessionId = createSessionSlug();
+        const startedAt = Date.now();
+        const session = {
+          id: sessionId,
+          command: params.command,
+          scopeKey: defaults?.scopeKey,
+          sessionKey: notifySessionKey,
+          notifyOnExit,
+          notifyOnExitEmptySuccess,
+          exitNotified: false,
+          child: undefined,
+          stdin: undefined,
+          pid: undefined,
+          startedAt,
+          cwd: workdir,
+          maxOutputChars: maxOutput,
+          pendingMaxOutputChars: pendingMaxOutput,
+          totalOutputChars: 0,
+          pendingStdout: [],
+          pendingStderr: [],
+          pendingStdoutChars: 0,
+          pendingStderrChars: 0,
+          aggregated: "",
+          tail: "",
+          exited: false,
+          truncated: false,
+          backgrounded: backgroundRequested,
+          remote: {
+            provider: "opensandbox",
+            baseUrl,
+            accessToken,
+            commandSessionId,
+            outputCursor: 0,
+          },
+        };
+        addSession(session);
+        const syncRemoteSession = async () => {
+          const output = await openSandboxReadCommandOutput({
+            baseUrl,
+            accessToken,
+            sessionId: commandSessionId,
+          });
+          const cursor = Math.max(0, session.remote?.outputCursor ?? 0);
+          const incremental = output.length >= cursor ? output.slice(cursor) : [];
+          for (const item of incremental) {
+            const msg = typeof item.msg === "string" ? item.msg : "";
+            if (!msg) {
+              continue;
+            }
+            appendOutput(session, Number(item.fd) === 2 ? "stderr" : "stdout", msg);
+          }
+          if (session.remote) {
+            session.remote.outputCursor = output.length;
+          }
+          const remoteStatus = await openSandboxReadCommandStatus({
+            baseUrl,
+            accessToken,
+            sessionId: commandSessionId,
+          });
+          const exitCode = Number.isFinite(remoteStatus.exitCode) ? remoteStatus.exitCode : 0;
+          return {
+            exited: !remoteStatus.running,
+            exitCode,
+          };
+        };
+        if (!backgroundRequested && yieldWindow && yieldWindow > 0) {
+          const deadline = Date.now() + yieldWindow;
+          while (Date.now() < deadline) {
+            const remoteState = await syncRemoteSession();
+            if (remoteState.exited) {
+              markExited(
+                session,
+                remoteState.exitCode,
+                null,
+                remoteState.exitCode === 0 ? "completed" : "failed",
+              );
+              const durationMs = Date.now() - startedAt;
+              const aggregated = session.aggregated.trim();
+              if (remoteState.exitCode !== 0) {
+                throw new Error(
+                  aggregated
+                    ? `${aggregated}\n\nProcess exited with code ${remoteState.exitCode}.`
+                    : `Process exited with code ${remoteState.exitCode}.`,
+                );
+              }
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${getWarningText()}${aggregated || "(no output)"}`,
+                  },
+                ],
+                details: {
+                  status: "completed",
+                  exitCode: remoteState.exitCode,
+                  durationMs,
+                  aggregated,
+                  cwd: workdir,
+                },
+              };
+            }
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, Math.min(250, remaining)));
+          }
+          markBackgrounded(session);
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `${getWarningText()}Command still running (session ${sessionId}, pid n/a). ` +
+                "Use process (list/poll/log/kill/clear/remove) for follow-up.\n\n" +
+                "Note: OpenSandbox execd does not provide stdin write for running command sessions, " +
+                "so process write/send-keys/submit/paste are unavailable.",
+            },
+          ],
+          details: {
+            status: "running",
+            sessionId,
+            startedAt,
+            cwd: workdir,
+            tail: "",
+          },
+        };
+      }
 
       const run = await runExecProcess({
         command: params.command,

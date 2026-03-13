@@ -215,6 +215,32 @@ Common pitfalls:
 - Sandbox exec does **not** inherit host `process.env`. Use
   `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
 
+## OpenSandbox backend (exec-only)
+
+OpenClaw can route sandboxed `exec`/`process` command lifecycle to OpenSandbox
+execd by setting:
+
+- `OPENCLAW_SANDBOX_BACKEND=opensandbox`
+- `OPEN_SANDBOX_EXECD_URL` and `OPEN_SANDBOX_EXECD_ACCESS_TOKEN`
+
+Or use lifecycle discovery:
+
+- `OPEN_SANDBOX_LIFECYCLE_URL`
+- `OPEN_SANDBOX_API_KEY`
+- `OPEN_SANDBOX_SANDBOX_ID`
+- optional `OPEN_SANDBOX_EXECD_PORT` (default `44772`)
+
+Current short-term behavior:
+
+- Background/yield `exec` is supported through OpenSandbox command sessions.
+- `process` `list`/`poll`/`log`/`kill`/`remove` works for those sessions.
+- `process` `write`/`send-keys`/`submit`/`paste` is unavailable for OpenSandbox
+  sessions because current execd APIs do not expose stdin write for a running
+  command session.
+
+When using OpenSandbox backend, filesystem tools (`read`/`write`/`edit`) stay on
+host behavior unless you add a dedicated fs bridge integration.
+
 ## Tool policy + escape hatches
 
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied

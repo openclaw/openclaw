@@ -5,6 +5,7 @@ import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.j
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
+  appendOutput,
   type ProcessSession,
   deleteSession,
   drainSession,
@@ -18,6 +19,11 @@ import {
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import {
+  openSandboxKillCommandSession,
+  openSandboxReadCommandOutput,
+  openSandboxReadCommandStatus,
+} from "./sandbox/opensandbox-command.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -114,6 +120,43 @@ function resetPollRetrySuggestion(sessionId: string): void {
   } catch {
     // Ignore diagnostics state failures for process tool behavior.
   }
+}
+
+async function syncOpenSandboxRemoteSession(session: ProcessSession): Promise<{
+  exited: boolean;
+  exitCode?: number;
+}> {
+  const remote = session.remote;
+  if (!remote || remote.provider !== "opensandbox") {
+    return { exited: session.exited, exitCode: session.exitCode ?? undefined };
+  }
+  const output = await openSandboxReadCommandOutput({
+    baseUrl: remote.baseUrl,
+    accessToken: remote.accessToken,
+    sessionId: remote.commandSessionId,
+  });
+  const cursor = Math.max(0, remote.outputCursor ?? 0);
+  const incremental = output.length >= cursor ? output.slice(cursor) : [];
+  for (const item of incremental) {
+    const msg = typeof item.msg === "string" ? item.msg : "";
+    if (!msg) {
+      continue;
+    }
+    const stream = Number(item.fd) === 2 ? "stderr" : "stdout";
+    appendOutput(session, stream, msg);
+  }
+  remote.outputCursor = output.length;
+
+  const status = await openSandboxReadCommandStatus({
+    baseUrl: remote.baseUrl,
+    accessToken: remote.accessToken,
+    sessionId: remote.commandSessionId,
+  });
+  if (status.running) {
+    return { exited: false };
+  }
+  const exitCode = Number.isFinite(status.exitCode) ? status.exitCode : 0;
+  return { exited: true, exitCode };
 }
 
 export function createProcessTool(
@@ -326,8 +369,39 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          const isRemoteOpenSandbox =
+            scopedSession.remote?.provider === "opensandbox" && !scopedSession.exited;
           const pollWaitMs = resolvePollWaitMs(params.timeout);
-          if (pollWaitMs > 0 && !scopedSession.exited) {
+          if (isRemoteOpenSandbox) {
+            if (pollWaitMs > 0) {
+              const deadline = Date.now() + pollWaitMs;
+              while (!scopedSession.exited && Date.now() < deadline) {
+                const remoteState = await syncOpenSandboxRemoteSession(scopedSession);
+                if (remoteState.exited) {
+                  markExited(
+                    scopedSession,
+                    remoteState.exitCode ?? 0,
+                    null,
+                    (remoteState.exitCode ?? 0) === 0 ? "completed" : "failed",
+                  );
+                  break;
+                }
+                await new Promise((resolve) =>
+                  setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
+                );
+              }
+            } else {
+              const remoteState = await syncOpenSandboxRemoteSession(scopedSession);
+              if (remoteState.exited) {
+                markExited(
+                  scopedSession,
+                  remoteState.exitCode ?? 0,
+                  null,
+                  (remoteState.exitCode ?? 0) === 0 ? "completed" : "failed",
+                );
+              }
+            }
+          } else if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
               await new Promise((resolve) =>
@@ -398,6 +472,17 @@ export function createProcessTool(
                 details: { status: "failed" },
               };
             }
+            if (scopedSession.remote?.provider === "opensandbox" && !scopedSession.exited) {
+              const remoteState = await syncOpenSandboxRemoteSession(scopedSession);
+              if (remoteState.exited) {
+                markExited(
+                  scopedSession,
+                  remoteState.exitCode ?? 0,
+                  null,
+                  (remoteState.exitCode ?? 0) === 0 ? "completed" : "failed",
+                );
+              }
+            }
             const window = resolveLogSliceWindow(params.offset, params.limit);
             const { slice, totalLines, totalChars } = sliceLogLines(
               scopedSession.aggregated,
@@ -456,6 +541,11 @@ export function createProcessTool(
         }
 
         case "write": {
+          if (scopedSession?.remote?.provider === "opensandbox") {
+            return failedResult(
+              `Session ${params.sessionId} is an OpenSandbox remote session; interactive stdin is unavailable because execd does not expose a command-session stdin write endpoint.`,
+            );
+          }
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {
             return resolved.result;
@@ -473,6 +563,11 @@ export function createProcessTool(
         }
 
         case "send-keys": {
+          if (scopedSession?.remote?.provider === "opensandbox") {
+            return failedResult(
+              `Session ${params.sessionId} is an OpenSandbox remote session; send-keys is unavailable because execd does not expose a command-session stdin write endpoint.`,
+            );
+          }
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {
             return resolved.result;
@@ -502,6 +597,11 @@ export function createProcessTool(
         }
 
         case "submit": {
+          if (scopedSession?.remote?.provider === "opensandbox") {
+            return failedResult(
+              `Session ${params.sessionId} is an OpenSandbox remote session; submit is unavailable because execd does not expose a command-session stdin write endpoint.`,
+            );
+          }
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {
             return resolved.result;
@@ -514,6 +614,11 @@ export function createProcessTool(
         }
 
         case "paste": {
+          if (scopedSession?.remote?.provider === "opensandbox") {
+            return failedResult(
+              `Session ${params.sessionId} is an OpenSandbox remote session; paste is unavailable because execd does not expose a command-session stdin write endpoint.`,
+            );
+          }
           const resolved = resolveBackgroundedWritableStdin();
           if (!resolved.ok) {
             return resolved.result;
@@ -543,6 +648,27 @@ export function createProcessTool(
           }
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
+          }
+          if (scopedSession.remote?.provider === "opensandbox") {
+            await openSandboxKillCommandSession({
+              baseUrl: scopedSession.remote.baseUrl,
+              accessToken: scopedSession.remote.accessToken,
+              sessionId: scopedSession.remote.commandSessionId,
+            });
+            markExited(scopedSession, null, "SIGKILL", "failed");
+            resetPollRetrySuggestion(params.sessionId);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Termination requested for remote session ${params.sessionId}.`,
+                },
+              ],
+              details: {
+                status: "failed",
+                name: deriveSessionName(scopedSession.command),
+              },
+            };
           }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
@@ -593,6 +719,36 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (scopedSession.remote?.provider === "opensandbox") {
+              const exited = scopedSession.exited;
+              const exitCode = scopedSession.exitCode ?? 0;
+              const status =
+                exited && exitCode === 0 && scopedSession.exitSignal == null
+                  ? "completed"
+                  : "failed";
+              if (!exited) {
+                await openSandboxKillCommandSession({
+                  baseUrl: scopedSession.remote.baseUrl,
+                  accessToken: scopedSession.remote.accessToken,
+                  sessionId: scopedSession.remote.commandSessionId,
+                }).catch(() => undefined);
+              }
+              scopedSession.backgrounded = false;
+              deleteSession(params.sessionId);
+              resetPollRetrySuggestion(params.sessionId);
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Removed remote session ${params.sessionId}.`,
+                  },
+                ],
+                details: {
+                  status,
+                  name: deriveSessionName(scopedSession.command),
+                },
+              };
+            }
             const canceled = cancelManagedSession(scopedSession.id);
             if (canceled) {
               // Keep remove semantics deterministic: drop from process registry now.

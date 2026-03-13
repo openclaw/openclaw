@@ -37,6 +37,7 @@ export function createSandboxTestContext(params?: {
     tools: { allow: ["*"], deny: [] },
     browserAllowHostControl: false,
     ...sandboxOverrides,
+    backendKind: overrides?.backendKind ?? "docker",
     docker,
   };
 }

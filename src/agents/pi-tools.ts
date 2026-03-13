@@ -340,9 +340,10 @@ export function createOpenClawCodingTools(options?: {
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
   });
-  const sandboxRoot = sandbox?.workspaceDir;
-  const sandboxFsBridge = sandbox?.fsBridge;
-  const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
+  const sandboxExecOnly = sandbox?.backendKind === "opensandbox";
+  const sandboxRoot = sandboxExecOnly ? undefined : sandbox?.workspaceDir;
+  const sandboxFsBridge = sandboxExecOnly ? undefined : sandbox?.fsBridge;
+  const allowWorkspaceWrites = sandboxExecOnly ? true : sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsPolicy.workspaceOnly;
   const applyPatchConfig = execConfig.applyPatch;
@@ -375,7 +376,7 @@ export function createOpenClawCodingTools(options?: {
         return [
           workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                containerWorkdir: sandbox.containerWorkdir,
+                containerWorkdir: sandbox?.containerWorkdir,
               })
             : sandboxed,
         ];
@@ -435,6 +436,10 @@ export function createOpenClawCodingTools(options?: {
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
     sandbox: sandbox
       ? {
+          backendKind: sandbox.backendKind,
+          opensandboxBaseUrl: sandbox.opensandboxBaseUrl,
+          opensandboxAccessToken: sandbox.opensandboxAccessToken,
+          opensandboxTimeoutSec: sandbox.opensandboxTimeoutSec,
           containerName: sandbox.containerName,
           workspaceDir: sandbox.workspaceDir,
           containerWorkdir: sandbox.containerWorkdir,
@@ -467,7 +472,7 @@ export function createOpenClawCodingTools(options?: {
                   createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
                   {
-                    containerWorkdir: sandbox.containerWorkdir,
+                    containerWorkdir: sandbox?.containerWorkdir,
                   },
                 )
               : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
@@ -476,7 +481,7 @@ export function createOpenClawCodingTools(options?: {
                   createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
                   sandboxRoot,
                   {
-                    containerWorkdir: sandbox.containerWorkdir,
+                    containerWorkdir: sandbox?.containerWorkdir,
                   },
                 )
               : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),

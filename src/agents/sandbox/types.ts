@@ -71,6 +71,10 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  backendKind: "docker" | "opensandbox";
+  opensandboxBaseUrl?: string;
+  opensandboxAccessToken?: string;
+  opensandboxTimeoutSec?: number;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;

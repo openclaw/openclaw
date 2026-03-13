@@ -11,6 +11,7 @@ import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { resolveOpenSandboxExecdRuntimeFromEnv } from "./opensandbox-lifecycle.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
@@ -116,7 +117,11 @@ export async function resolveSandboxContext(params: {
   }
   const { rawSessionKey, cfg } = resolved;
 
-  await maybePruneSandboxes(cfg);
+  const sandboxBackendEnv = process.env.OPENCLAW_SANDBOX_BACKEND?.trim().toLowerCase();
+  const backendKind = sandboxBackendEnv === "opensandbox" ? "opensandbox" : "docker";
+  if (backendKind === "docker") {
+    await maybePruneSandboxes(cfg);
+  }
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
@@ -131,43 +136,74 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
-  const containerName = await ensureSandboxContainer({
-    sessionKey: rawSessionKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    cfg: resolvedCfg,
-  });
+  const containerName =
+    backendKind === "docker"
+      ? await ensureSandboxContainer({
+          sessionKey: rawSessionKey,
+          workspaceDir,
+          agentWorkspaceDir,
+          cfg: resolvedCfg,
+        })
+      : `opensandbox-${scopeKey}`;
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
-  const bridgeAuth = cfg.browser.enabled
-    ? await (async () => {
-        // Sandbox browser bridge server runs on a loopback TCP port; always wire up
-        // the same auth that loopback browser clients will send (token/password).
-        const cfgForAuth = params.config ?? loadConfig();
-        let browserAuth = resolveBrowserControlAuth(cfgForAuth);
-        try {
-          const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
-          browserAuth = ensured.auth;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : JSON.stringify(error);
-          defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
-        }
-        return browserAuth;
-      })()
-    : undefined;
-  const browser = await ensureSandboxBrowser({
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    cfg: resolvedCfg,
-    evaluateEnabled,
-    bridgeAuth,
-  });
+  const bridgeAuth =
+    backendKind === "docker" && cfg.browser.enabled
+      ? await (async () => {
+          // Sandbox browser bridge server runs on a loopback TCP port; always wire up
+          // the same auth that loopback browser clients will send (token/password).
+          const cfgForAuth = params.config ?? loadConfig();
+          let browserAuth = resolveBrowserControlAuth(cfgForAuth);
+          try {
+            const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
+            browserAuth = ensured.auth;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : JSON.stringify(error);
+            defaultRuntime.error?.(`Sandbox browser auth ensure failed: ${message}`);
+          }
+          return browserAuth;
+        })()
+      : undefined;
+  const browser =
+    backendKind === "docker"
+      ? await ensureSandboxBrowser({
+          scopeKey,
+          workspaceDir,
+          agentWorkspaceDir,
+          cfg: resolvedCfg,
+          evaluateEnabled,
+          bridgeAuth,
+        })
+      : null;
+
+  const opensandboxResolved =
+    backendKind === "opensandbox"
+      ? await resolveOpenSandboxExecdRuntimeFromEnv({
+          warn: (message) => defaultRuntime.error?.(message),
+        })
+      : { execdBaseUrl: undefined, sandboxId: undefined };
+  const opensandboxBaseUrl = opensandboxResolved.execdBaseUrl;
+  const opensandboxAccessToken = process.env.OPEN_SANDBOX_EXECD_ACCESS_TOKEN?.trim() || undefined;
+  const lifecycleApiKey = process.env.OPEN_SANDBOX_API_KEY?.trim() || undefined;
+  if (backendKind === "opensandbox" && !opensandboxAccessToken && lifecycleApiKey) {
+    defaultRuntime.error?.(
+      "OpenSandbox: OPEN_SANDBOX_API_KEY is for lifecycle endpoints only and cannot be used as an execd access token. Set OPEN_SANDBOX_EXECD_ACCESS_TOKEN.",
+    );
+  }
+  const opensandboxTimeoutRaw = process.env.OPEN_SANDBOX_EXECD_TIMEOUT_SEC?.trim();
+  const opensandboxTimeoutSec =
+    opensandboxTimeoutRaw && Number.isFinite(Number(opensandboxTimeoutRaw))
+      ? Number(opensandboxTimeoutRaw)
+      : undefined;
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    backendKind,
+    opensandboxBaseUrl,
+    opensandboxAccessToken,
+    opensandboxTimeoutSec,
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
@@ -180,7 +216,9 @@ export async function resolveSandboxContext(params: {
     browser: browser ?? undefined,
   };
 
-  sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+  if (backendKind === "docker") {
+    sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+  }
 
   return sandboxContext;
 }

@@ -26,13 +26,9 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
-import {
-  buildDockerExecArgs,
-  chunkString,
-  clampWithDefault,
-  readEnvInt,
-} from "./bash-tools.shared.js";
+import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { buildSandboxExecInvocation } from "./sandbox/backend-exec.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 // Sanitize inherited host env before merge so dangerous variables from process.env
@@ -391,6 +387,7 @@ export async function runExecProcess(opts: {
         argv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open" | "pipe-closed";
+        backendId: "exec-host" | "exec-sandbox" | "exec-sandbox-opensandbox";
       }
     | {
         mode: "pty";
@@ -398,22 +395,22 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
+        backendId: "exec-host";
       } = (() => {
     if (opts.sandbox) {
+      const sandboxExec = buildSandboxExecInvocation({
+        sandbox: opts.sandbox,
+        command: execCommand,
+        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+        env: shellRuntimeEnv,
+        tty: opts.usePty,
+      });
       return {
         mode: "child" as const,
-        argv: [
-          "docker",
-          ...buildDockerExecArgs({
-            containerName: opts.sandbox.containerName,
-            command: execCommand,
-            workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-            env: shellRuntimeEnv,
-            tty: opts.usePty,
-          }),
-        ],
-        env: process.env,
+        argv: sandboxExec.argv,
+        env: sandboxExec.env,
         stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        backendId: sandboxExec.backendId,
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -425,6 +422,7 @@ export async function runExecProcess(opts: {
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
+        backendId: "exec-host" as const,
       };
     }
     return {
@@ -432,6 +430,7 @@ export async function runExecProcess(opts: {
       argv: childArgv,
       env: shellRuntimeEnv,
       stdinMode: "pipe-closed" as const,
+      backendId: "exec-host" as const,
     };
   })();
 
@@ -457,7 +456,7 @@ export async function runExecProcess(opts: {
     const spawnBase = {
       runId: sessionId,
       sessionId: opts.sessionKey?.trim() || sessionId,
-      backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
+      backendId: spawnSpec.backendId,
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
       env: spawnSpec.env,

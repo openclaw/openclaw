@@ -52,6 +52,13 @@ export interface ProcessSession {
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  remote?: {
+    provider: "opensandbox";
+    baseUrl: string;
+    accessToken: string;
+    commandSessionId: string;
+    outputCursor?: number;
+  };
 }
 
 export interface FinishedSession {

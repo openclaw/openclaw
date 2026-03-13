@@ -517,6 +517,9 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled
       ? [
           "You are running in a sandboxed runtime (tools execute in Docker).",
+          params.sandboxInfo.backendKind === "opensandbox"
+            ? "Sandbox backend: OpenSandbox execd. Interactive stdin for running sessions is unavailable (process write/send-keys/submit/paste are not supported)."
+            : "",
           "Some tools may be unavailable due to sandbox policy.",
           "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
           hasSessionsSpawn && acpEnabled

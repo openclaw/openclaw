@@ -91,6 +91,7 @@ export type EmbeddedPiCompactResult = {
 
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
+  backendKind?: "docker" | "opensandbox";
   workspaceDir?: string;
   containerWorkspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";

@@ -5,6 +5,7 @@ import type { SandboxContext } from "./sandbox.js";
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
   const base = {
     enabled: true,
+    backendKind: "docker",
     sessionKey: "session:test",
     workspaceDir: "/tmp/openclaw-sandbox",
     agentWorkspaceDir: "/tmp/openclaw-workspace",
@@ -33,7 +34,7 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
       containerName: "openclaw-sbx-browser-test",
     },
   } satisfies SandboxContext;
-  return { ...base, ...overrides };
+  return { ...base, ...overrides, backendKind: overrides?.backendKind ?? "docker" };
 }
 
 describe("buildEmbeddedSandboxInfo", () => {

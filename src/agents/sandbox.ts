@@ -27,6 +27,11 @@ export {
 } from "./sandbox/runtime-status.js";
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export type {
+  SandboxBackend,
+  SandboxBackendHandle,
+  SandboxBackendKind,
+} from "./sandbox/backend.js";
 
 export type {
   SandboxBrowserConfig,

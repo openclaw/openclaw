@@ -12,6 +12,7 @@ export function buildEmbeddedSandboxInfo(
   const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
   return {
     enabled: true,
+    backendKind: sandbox.backendKind,
     workspaceDir: sandbox.workspaceDir,
     containerWorkspaceDir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,

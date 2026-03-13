@@ -8,6 +8,10 @@ import { assertSandboxPath } from "./sandbox-paths.js";
 const CHUNK_LIMIT = 8 * 1024;
 
 export type BashSandboxConfig = {
+  backendKind?: "docker" | "opensandbox";
+  opensandboxBaseUrl?: string;
+  opensandboxAccessToken?: string;
+  opensandboxTimeoutSec?: number;
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
