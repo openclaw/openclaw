@@ -203,6 +203,15 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded && params.service.repairNotLoaded) {
+    // Pre-flight config validation before attempting repair — don't re-register
+    // a service that will immediately crash due to invalid config.  (#35862)
+    const configError = await getConfigValidationError();
+    if (configError) {
+      fail(
+        `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+      );
+      return;
+    }
     // The service was previously installed but is no longer loaded (e.g.
     // macOS LaunchAgent silently unloaded after sleep/idle).  Attempt to
     // re-register the existing service definition before falling through
