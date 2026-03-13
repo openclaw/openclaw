@@ -32,6 +32,7 @@ import {
   extractMSTeamsConversationMessageId,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
+  extractMSTeamsQuoteInfo,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
@@ -103,6 +104,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
+
+    // Extract structured quote/reply context from HTML attachments.
+    const quoteInfo = extractMSTeamsQuoteInfo({ text, attachments });
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -505,9 +509,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : undefined;
     const commandBody = text.trim();
 
+    // When a quote is detected, build a structured reply annotation
+    // similar to how Telegram formats [Replying to ...] blocks.
+    // If cleanBody fell back to the raw text (no content after blockquote in HTML),
+    // skip the annotation to avoid duplicating quoted content.
+    // Also preserve the original rawBody for attachment-only replies so the
+    // attachment placeholder is not lost.
+    const agentBody =
+      quoteInfo && quoteInfo.cleanBody !== text
+        ? quoteInfo.cleanBody +
+          `\n\n[Replying to ${quoteInfo.quotedSender ?? "unknown"}]\n${quoteInfo.quotedBody ?? "(no text)"}\n[/Replying]`
+        : rawBody;
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: rawBody,
+      BodyForAgent: agentBody,
       InboundHistory: inboundHistory,
       RawBody: rawBody,
       CommandBody: commandBody,
@@ -524,6 +540,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Provider: "msteams" as const,
       Surface: "msteams" as const,
       MessageSid: activity.id,
+      ReplyToSender: quoteInfo?.quotedSender,
+      ReplyToBody: quoteInfo?.quotedBody,
       Timestamp: timestamp?.getTime() ?? Date.now(),
       WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
       CommandAuthorized: commandAuthorized,
