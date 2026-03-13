@@ -29,7 +29,7 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: mocks.setGlobalDispatcher,
 }));
 
-import { makeProxyFetch } from "./proxy.js";
+import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
 describe("makeProxyFetch", () => {
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
@@ -45,5 +45,12 @@ describe("makeProxyFetch", () => {
       expect.objectContaining({ dispatcher: mocks.getLastAgent() }),
     );
     expect(mocks.setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("attaches proxy metadata for resolver transport handling", () => {
+    const proxyUrl = "http://proxy.test:8080";
+    const proxyFetch = makeProxyFetch(proxyUrl);
+
+    expect(getProxyUrlFromFetch(proxyFetch)).toBe(proxyUrl);
   });
 });

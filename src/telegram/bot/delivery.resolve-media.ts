@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
@@ -92,27 +93,46 @@ async function resolveTelegramFileWithRetry(
   }
 }
 
-function resolveRequiredFetchImpl(proxyFetch?: typeof fetch): typeof fetch {
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
-  if (!fetchImpl) {
+function resolveRequiredTelegramTransport(transport?: TelegramTransport): TelegramTransport {
+  if (transport) {
+    return transport;
+  }
+  const resolvedFetch = globalThis.fetch;
+  if (!resolvedFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  return fetchImpl;
+  return {
+    fetch: resolvedFetch,
+    sourceFetch: resolvedFetch,
+  };
 }
+
+function resolveOptionalTelegramTransport(transport?: TelegramTransport): TelegramTransport | null {
+  try {
+    return resolveRequiredTelegramTransport(transport);
+  } catch {
+    return null;
+  }
+}
+
+/** Default idle timeout for Telegram media downloads (30 seconds). */
+const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
-  fetchImpl: typeof fetch;
+  transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
 }) {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: params.fetchImpl,
+    fetchImpl: params.transport.sourceFetch,
+    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
+    readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
@@ -130,7 +150,7 @@ async function resolveStickerMedia(params: {
   ctx: TelegramContext;
   maxBytes: number;
   token: string;
-  proxyFetch?: typeof fetch;
+  transport?: TelegramTransport;
 }): Promise<
   | {
       path: string;
@@ -141,7 +161,7 @@ async function resolveStickerMedia(params: {
   | null
   | undefined
 > {
-  const { msg, ctx, maxBytes, token, proxyFetch } = params;
+  const { msg, ctx, maxBytes, token, transport } = params;
   if (!msg.sticker) {
     return undefined;
   }
@@ -161,15 +181,15 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
-    const fetchImpl = proxyFetch ?? globalThis.fetch;
-    if (!fetchImpl) {
+    const resolvedTransport = resolveOptionalTelegramTransport(transport);
+    if (!resolvedTransport) {
       logVerbose("telegram: fetch not available for sticker download");
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      fetchImpl,
+      transport: resolvedTransport,
       maxBytes,
     });
 
@@ -225,7 +245,7 @@ export async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
   token: string,
-  proxyFetch?: typeof fetch,
+  transport?: TelegramTransport,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -238,7 +258,7 @@ export async function resolveMedia(
     ctx,
     maxBytes,
     token,
-    proxyFetch,
+    transport,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
@@ -259,7 +279,7 @@ export async function resolveMedia(
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    fetchImpl: resolveRequiredFetchImpl(proxyFetch),
+    transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
     telegramFileName: resolveTelegramFileName(msg),
   });

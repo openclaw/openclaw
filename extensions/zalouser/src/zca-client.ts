@@ -28,6 +28,39 @@ export const Reactions = ReactionsRuntime as Record<string, string> & {
   NONE: string;
 };
 
+// Mirror zca-js sendMessage style constants locally because the package root
+// typing surface does not consistently expose TextStyle/Style to tsgo.
+export const TextStyle = {
+  Bold: "b",
+  Italic: "i",
+  Underline: "u",
+  StrikeThrough: "s",
+  Red: "c_db342e",
+  Orange: "c_f27806",
+  Yellow: "c_f7b503",
+  Green: "c_15a85f",
+  Small: "f_13",
+  Big: "f_18",
+  UnorderedList: "lst_1",
+  OrderedList: "lst_2",
+  Indent: "ind_$",
+} as const;
+
+type TextStyleValue = (typeof TextStyle)[keyof typeof TextStyle];
+
+export type Style =
+  | {
+      start: number;
+      len: number;
+      st: Exclude<TextStyleValue, typeof TextStyle.Indent>;
+    }
+  | {
+      start: number;
+      len: number;
+      st: typeof TextStyle.Indent;
+      indentSize?: number;
+    };
+
 export type Credentials = {
   imei: string;
   cookie: unknown;
@@ -126,6 +159,20 @@ export type Listener = {
   stop(): void;
 };
 
+type DeliveryEventMessage = {
+  msgId: string;
+  cliMsgId: string;
+  uidFrom: string;
+  idTo: string;
+  msgType: string;
+  st: number;
+  at: number;
+  cmd: number;
+  ts: string | number;
+};
+
+type DeliveryEventMessages = DeliveryEventMessage | DeliveryEventMessage[];
+
 export type API = {
   listener: Listener;
   getContext(): {
@@ -138,7 +185,7 @@ export type API = {
       cookies: unknown[];
     };
   };
-  fetchAccountInfo(): Promise<{ profile: User } | User>;
+  fetchAccountInfo(): Promise<User | { profile: User }>;
   getAllFriends(): Promise<User[]>;
   getOwnId(): string;
   getAllGroups(): Promise<{
@@ -163,9 +210,53 @@ export type API = {
     threadId: string,
     type?: number,
   ): Promise<{
+    msgId?: string | number;
     message?: { msgId?: string | number } | null;
     attachment?: Array<{ msgId?: string | number }>;
   }>;
+  uploadAttachment(
+    sources:
+      | string
+      | {
+          data: Buffer;
+          filename: `${string}.${string}`;
+          metadata: {
+            totalSize: number;
+            width?: number;
+            height?: number;
+          };
+        }
+      | Array<
+          | string
+          | {
+              data: Buffer;
+              filename: `${string}.${string}`;
+              metadata: {
+                totalSize: number;
+                width?: number;
+                height?: number;
+              };
+            }
+        >,
+    threadId: string,
+    type?: number,
+  ): Promise<
+    Array<{
+      fileType: "image" | "video" | "others";
+      fileUrl?: string;
+      msgId?: string | number;
+      fileId?: string;
+      fileName?: string;
+    }>
+  >;
+  sendVoice(
+    options: {
+      voiceUrl: string;
+      ttl?: number;
+    },
+    threadId: string,
+    type?: number,
+  ): Promise<{ msgId?: string | number }>;
   sendLink(
     payload: { link: string; msg?: string },
     threadId: string,
@@ -185,57 +276,10 @@ export type API = {
   ): Promise<unknown>;
   sendDeliveredEvent(
     isSeen: boolean,
-    messages:
-      | {
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }
-      | Array<{
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }>,
+    messages: DeliveryEventMessages,
     type?: number,
   ): Promise<unknown>;
-  sendSeenEvent(
-    messages:
-      | {
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }
-      | Array<{
-          msgId: string;
-          cliMsgId: string;
-          uidFrom: string;
-          idTo: string;
-          msgType: string;
-          st: number;
-          at: number;
-          cmd: number;
-          ts: string | number;
-        }>,
-    type?: number,
-  ): Promise<unknown>;
+  sendSeenEvent(messages: DeliveryEventMessages, type?: number): Promise<unknown>;
 };
 
 type ZaloCtor = new (options?: { logging?: boolean; selfListen?: boolean }) => {

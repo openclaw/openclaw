@@ -1,19 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-
-const ZERO_USAGE: AssistantMessage["usage"] = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
 
 export function makeAssistantMessageFixture(
   overrides: Partial<AssistantMessage> = {},
@@ -24,7 +10,7 @@ export function makeAssistantMessageFixture(
     api: "openai-responses",
     provider: "openai",
     model: "test-model",
-    usage: ZERO_USAGE,
+    usage: ZERO_USAGE_FIXTURE,
     timestamp: 0,
     stopReason: "error",
     errorMessage: errorText,

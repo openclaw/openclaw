@@ -125,7 +125,7 @@ describe("buildGatewayInstallPlan", () => {
       config: {
         env: {
           vars: {
-            GOOGLE_API_KEY: "test-key",
+            GOOGLE_API_KEY: "test-key", // pragma: allowlist secret
           },
           CUSTOM_VAR: "custom-value",
         },
@@ -236,7 +236,8 @@ describe("buildGatewayInstallPlan", () => {
 
 describe("gatewayInstallErrorHint", () => {
   it("returns platform-specific hints", () => {
-    expect(gatewayInstallErrorHint("win32")).toContain("Run as administrator");
+    expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
+    expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
     expect(gatewayInstallErrorHint("linux")).toMatch(
       /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
     );

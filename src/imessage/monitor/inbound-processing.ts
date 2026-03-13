@@ -24,12 +24,15 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,
 } from "../../security/dm-policy-shared.js";
+import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
+import { detectReflectedContent } from "./reflection-guard.js";
+import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
@@ -100,6 +103,7 @@ export function resolveIMessageInboundDecision(params: {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: { has: (scope: string, lookup: { text?: string; messageId?: string }) => boolean };
+  selfChatCache?: SelfChatCache;
   logVerbose?: (msg: string) => void;
 }): IMessageInboundDecision {
   const senderRaw = params.message.sender ?? "";
@@ -108,13 +112,10 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "missing sender" };
   }
   const senderNormalized = normalizeIMessageHandle(sender);
-  if (params.message.is_from_me) {
-    return { kind: "drop", reason: "from me" };
-  }
-
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -137,6 +138,18 @@ export function resolveIMessageInboundDecision(params: {
     groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
   );
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
+  const selfChatLookup = {
+    accountId: params.accountId,
+    isGroup,
+    chatId,
+    sender,
+    text: params.bodyText,
+    createdAt,
+  };
+  if (params.message.is_from_me) {
+    params.selfChatCache?.remember(selfChatLookup);
+    return { kind: "drop", reason: "from me" };
+  }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
   }
@@ -214,7 +227,18 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "empty body" };
   }
 
-  // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+  if (
+    params.selfChatCache?.has({
+      ...selfChatLookup,
+      text: bodyText,
+    })
+  ) {
+    const preview = sanitizeTerminalText(truncateUtf16Safe(bodyText, 50));
+    params.logVerbose?.(`imessage: dropping self-chat reflected duplicate: "${preview}"`);
+    return { kind: "drop", reason: "self-chat echo" };
+  }
+
+  // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
   if (params.echoCache && (messageText || inboundMessageId)) {
@@ -237,8 +261,18 @@ export function resolveIMessageInboundDecision(params: {
     }
   }
 
+  // Reflection guard: drop inbound messages that contain assistant-internal
+  // metadata markers. These indicate outbound content was reflected back as
+  // inbound, which causes recursive echo amplification.
+  const reflection = detectReflectedContent(messageText);
+  if (reflection.isReflection) {
+    params.logVerbose?.(
+      `imessage: dropping reflected assistant content (markers: ${reflection.matchedLabels.join(", ")})`,
+    );
+    return { kind: "drop", reason: "reflected assistant content" };
+  }
+
   const replyContext = describeReplyContext(params.message);
-  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const historyKey = isGroup
     ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
     : undefined;
