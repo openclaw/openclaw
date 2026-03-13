@@ -46,7 +46,7 @@ describe("extractTextCached", () => {
   it("skips malformed content blocks when extracting text", () => {
     const message = {
       role: "assistant",
-      content: [null, undefined, { type: "text", text: "Hello there" }],
+      content: [null, undefined, ["nested"], { type: "text", text: "Hello there" }],
     };
 
     expect(extractText(message)).toBe("Hello there");
@@ -75,7 +75,7 @@ describe("extractThinkingCached", () => {
   it("skips malformed content blocks when extracting thinking", () => {
     const message = {
       role: "assistant",
-      content: [null, { type: "thinking", thinking: "Plan A" }, undefined],
+      content: [null, ["nested"], { type: "thinking", thinking: "Plan A" }, undefined],
     };
 
     expect(extractThinking(message)).toBe("Plan A");

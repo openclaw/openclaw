@@ -62,7 +62,7 @@ describe("message-normalizer", () => {
     it("skips malformed content blocks without throwing", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: [null, undefined, { type: "text", text: "Recovered text" }],
+        content: [null, undefined, ["nested"], { type: "text", text: "Recovered text" }],
       });
 
       expect(result.role).toBe("assistant");

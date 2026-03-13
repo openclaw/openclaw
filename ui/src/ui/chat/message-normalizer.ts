@@ -6,7 +6,9 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 /**
