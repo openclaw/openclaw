@@ -129,6 +129,28 @@ function mockRunOnceAndAbort(abort: AbortController) {
   runSpy.mockImplementationOnce(() => makeAbortRunner(abort));
 }
 
+function mockRunOnceWithStalledPollingRunner(): {
+  stop: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
+} {
+  let running = true;
+  let releaseTask: (() => void) | undefined;
+  const stop = vi.fn(async () => {
+    running = false;
+    releaseTask?.();
+  });
+  runSpy.mockImplementationOnce(() =>
+    makeRunnerStub({
+      task: () =>
+        new Promise<void>((resolve) => {
+          releaseTask = resolve;
+        }),
+      stop,
+      isRunning: () => running,
+    }),
+  );
+  return { stop };
+}
+
 function expectRecoverableRetryState(expectedRunCalls: number) {
   expect(computeBackoff).toHaveBeenCalled();
   expect(sleepWithAbort).toHaveBeenCalled();
@@ -434,31 +456,8 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("force-restarts polling when unhandled network rejection stalls runner", async () => {
     const abort = new AbortController();
-    let running = true;
-    let releaseTask: (() => void) | undefined;
-    const stop = vi.fn(async () => {
-      running = false;
-      releaseTask?.();
-    });
-
-    runSpy
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: () =>
-            new Promise<void>((resolve) => {
-              releaseTask = resolve;
-            }),
-          stop,
-          isRunning: () => running,
-        }),
-      )
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: async () => {
-            abort.abort();
-          },
-        }),
-      );
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
@@ -474,31 +473,8 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
     const abort = new AbortController();
-    let running = true;
-    let releaseTask: (() => void) | undefined;
-    const stop = vi.fn(async () => {
-      running = false;
-      releaseTask?.();
-    });
-
-    runSpy
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: () =>
-            new Promise<void>((resolve) => {
-              releaseTask = resolve;
-            }),
-          stop,
-          isRunning: () => running,
-        }),
-      )
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: async () => {
-            abort.abort();
-          },
-        }),
-      );
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
@@ -515,23 +491,7 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   it("ignores unrelated process-level network errors while telegram polling is active", async () => {
     const abort = new AbortController();
-    let running = true;
-    let releaseTask: (() => void) | undefined;
-    const stop = vi.fn(async () => {
-      running = false;
-      releaseTask?.();
-    });
-
-    runSpy.mockImplementationOnce(() =>
-      makeRunnerStub({
-        task: () =>
-          new Promise<void>((resolve) => {
-            releaseTask = resolve;
-          }),
-        stop,
-        isRunning: () => running,
-      }),
-    );
+    const { stop } = mockRunOnceWithStalledPollingRunner();
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
@@ -600,31 +560,8 @@ describe("monitorTelegramProvider (grammY)", () => {
   it("force-restarts polling when getUpdates stalls (watchdog)", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
-    let running = true;
-    let releaseTask: (() => void) | undefined;
-    const stop = vi.fn(async () => {
-      running = false;
-      releaseTask?.();
-    });
-
-    runSpy
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: () =>
-            new Promise<void>((resolve) => {
-              releaseTask = resolve;
-            }),
-          stop,
-          isRunning: () => running,
-        }),
-      )
-      .mockImplementationOnce(() =>
-        makeRunnerStub({
-          task: async () => {
-            abort.abort();
-          },
-        }),
-      );
+    const { stop } = mockRunOnceWithStalledPollingRunner();
+    mockRunOnceAndAbort(abort);
 
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await vi.waitFor(() => expect(runSpy).toHaveBeenCalledTimes(1));
