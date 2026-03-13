@@ -995,6 +995,7 @@ SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
+FORCE_INSTALL=${OPENCLAW_FORCE_INSTALL:-0}
 OPENCLAW_BIN=""
 PNPM_CMD=()
 HELP=0
@@ -1018,6 +1019,7 @@ Options:
   --no-prompt                           Disable prompts (required in CI/automation)
   --dry-run                             Print what would happen (no changes)
   --verbose                             Print debug output (set -x, npm verbose)
+  --force, -f                            Force reinstall even if already up to date
   --help, -h                            Show this help
 
 Environment variables:
@@ -1029,6 +1031,7 @@ Environment variables:
   OPENCLAW_NO_PROMPT=1
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
+  OPENCLAW_FORCE_INSTALL=0|1
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
@@ -1093,6 +1096,10 @@ parse_args() {
                 ;;
             --no-git-update)
                 GIT_UPDATE=0
+                shift
+                ;;
+            --force|-f)
+                FORCE_INSTALL=1
                 shift
                 ;;
             *)
@@ -1976,6 +1983,16 @@ install_openclaw() {
 
     local resolved_version=""
     resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
+    # Skip install if already up to date (unless --force)
+    if [[ -n "$resolved_version" && "$FORCE_INSTALL" != "1" ]]; then
+        local current_version=""
+        current_version="$(resolve_openclaw_version)"
+        if semver_equal "$current_version" "$resolved_version"; then
+            ui_success "OpenClaw is already up to date (v${resolved_version}). Use --force to reinstall."
+            return 0
+        fi
+    fi
+
     if [[ -n "$resolved_version" ]]; then
         ui_info "Installing OpenClaw v${resolved_version}"
     else
@@ -2141,6 +2158,12 @@ resolve_openclaw_version() {
         fi
     fi
     echo "$version"
+}
+
+semver_equal() {
+    local a="${1:-}"
+    local b="${2:-}"
+    [[ -n "$a" && -n "$b" && "$a" == "$b" ]]
 }
 
 is_gateway_daemon_loaded() {
