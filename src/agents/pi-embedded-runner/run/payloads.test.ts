@@ -91,3 +91,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 });
+
+describe("buildEmbeddedRunPayloads ANNOUNCE_SKIP / REPLY_SKIP suppression (#45084)", () => {
+  it("drops payloads whose text is exactly ANNOUNCE_SKIP", () => {
+    const payloads = buildPayloads({ assistantTexts: ["ANNOUNCE_SKIP"] });
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("drops payloads whose text is exactly REPLY_SKIP", () => {
+    const payloads = buildPayloads({ assistantTexts: ["REPLY_SKIP"] });
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("drops ANNOUNCE_SKIP even with surrounding whitespace", () => {
+    const payloads = buildPayloads({ assistantTexts: ["  ANNOUNCE_SKIP  "] });
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not suppress substantive text that happens to contain ANNOUNCE_SKIP", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Task done. ANNOUNCE_SKIP"],
+    });
+    // The text is not an exact-match token, so the payload should pass through
+    expect(payloads).not.toHaveLength(0);
+  });
+});

@@ -2,6 +2,18 @@ import { escapeRegExp } from "../utils.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+/**
+ * Agent-to-agent token: main session opts out of rebroadcasting a subagent
+ * announce summary.  When delivered with `deliver:true` the agent returns this
+ * token to signal silence; the outbound pipeline must suppress it just like
+ * NO_REPLY so the token never reaches the end-user channel.
+ */
+export const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
+/**
+ * Agent-to-agent token: signals the end of a ping-pong conversation turn.
+ * Same suppression requirement as ANNOUNCE_SKIP_TOKEN.
+ */
+export const REPLY_SKIP_TOKEN = "REPLY_SKIP";
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
