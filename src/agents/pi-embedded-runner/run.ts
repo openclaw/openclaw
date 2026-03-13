@@ -46,6 +46,9 @@ import {
   isBillingAssistantError,
   isCompactionFailureError,
   isLikelyContextOverflowError,
+  isLikelyContextOverflowByStatus,
+  containsBinaryContent,
+  sanitizeErrorText,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   parseImageSizeError,
@@ -971,9 +974,28 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = describeUnknownError(promptError);
+                  let errorText = describeUnknownError(promptError);
+                  // Sanitize binary error bodies (e.g. gzip-compressed 400).
+                  const httpStatus = (promptError as { status?: number })?.status;
+                  if (containsBinaryContent(errorText)) {
+                    errorText = sanitizeErrorText(errorText, httpStatus);
+                  }
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
+                  }
+                  // Fallback: if text matching fails (binary body, empty, etc.),
+                  // use HTTP status + context utilization as heuristic.
+                  if (
+                    isLikelyContextOverflowByStatus(
+                      httpStatus,
+                      lastTurnTotal,
+                      ctxInfo.tokens,
+                    )
+                  ) {
+                    return {
+                      text: errorText || `HTTP ${httpStatus} near context limit`,
+                      source: "promptError" as const,
+                    };
                   }
                   // Prompt submission failed with a non-overflow error. Do not
                   // inspect prior assistant errors from history for this attempt.
@@ -1546,6 +1568,91 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTargets: attempt.messagingToolSentTargets,
               successfulCronAdds: attempt.successfulCronAdds,
             };
+          }
+
+          // ── Proactive compaction ───────────────────────────────────────
+          // If context usage exceeds 85% of budget after a successful turn,
+          // compact now (targeting 60% of budget) to prevent overflow on the
+          // next turn.  This is a non-fatal best-effort operation.
+          const PROACTIVE_THRESHOLD = 0.85;
+          const PROACTIVE_TARGET = 0.60;
+          if (
+            lastTurnTotal &&
+            lastTurnTotal > 0 &&
+            ctxInfo.tokens > 0 &&
+            !aborted &&
+            lastTurnTotal / ctxInfo.tokens >= PROACTIVE_THRESHOLD
+          ) {
+            const utilPct = ((lastTurnTotal / ctxInfo.tokens) * 100).toFixed(1);
+            log.info(
+              `[proactive-compaction] Context at ${utilPct}% ` +
+                `(${lastTurnTotal}/${ctxInfo.tokens} tokens); compacting to ~${(PROACTIVE_TARGET * 100).toFixed(0)}%`,
+            );
+            try {
+              const proactiveEngineOwns = contextEngine.info.ownsCompaction === true;
+              const proactiveHookRunner = proactiveEngineOwns ? hookRunner : null;
+              if (proactiveHookRunner?.hasHooks("before_compaction")) {
+                try {
+                  await proactiveHookRunner.runBeforeCompaction(
+                    { messageCount: -1, sessionFile: params.sessionFile },
+                    hookCtx,
+                  );
+                } catch (hookErr) {
+                  log.warn(`[proactive-compaction] before_compaction hook failed: ${String(hookErr)}`);
+                }
+              }
+              const proactiveResult = await contextEngine.compact({
+                sessionId: params.sessionId,
+                sessionFile: params.sessionFile,
+                tokenBudget: Math.floor(ctxInfo.tokens * PROACTIVE_TARGET),
+                force: true,
+                compactionTarget: "budget",
+                currentTokenCount: lastTurnTotal,
+                runtimeContext: {
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  workspaceDir: resolvedWorkspace,
+                  agentDir,
+                  config: params.config,
+                  provider,
+                  model: modelId,
+                  trigger: "proactive",
+                } as Record<string, unknown>,
+              });
+              if (proactiveResult.compacted) {
+                autoCompactionCount += 1;
+                if (
+                  proactiveResult.ok &&
+                  proactiveHookRunner?.hasHooks("after_compaction")
+                ) {
+                  try {
+                    await proactiveHookRunner.runAfterCompaction(
+                      {
+                        messageCount: -1,
+                        compactedCount: -1,
+                        tokenCount: proactiveResult.result?.tokensAfter,
+                        sessionFile: params.sessionFile,
+                      },
+                      hookCtx,
+                    );
+                  } catch (hookErr) {
+                    log.warn(`[proactive-compaction] after_compaction hook failed: ${String(hookErr)}`);
+                  }
+                }
+                log.info(
+                  `[proactive-compaction] Succeeded — reduced to ~${proactiveResult.result?.tokensAfter ?? "?"} tokens`,
+                );
+              } else {
+                log.debug(
+                  `[proactive-compaction] Skipped: ${proactiveResult.reason ?? "nothing to compact"}`,
+                );
+              }
+            } catch (compactErr) {
+              log.warn(
+                `[proactive-compaction] Failed (non-fatal): ${String(compactErr)}`,
+              );
+            }
           }
 
           log.debug(

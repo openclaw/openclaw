@@ -43,6 +43,9 @@ export {
   isTimeoutErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,
+  containsBinaryContent,
+  isLikelyContextOverflowByStatus,
+  sanitizeErrorText,
 } from "./pi-embedded-helpers/errors.js";
 export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 

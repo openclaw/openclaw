@@ -1037,3 +1037,73 @@ export function isFailoverAssistantError(msg: AssistantMessage | undefined): boo
   }
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }
+
+/**
+ * Detect binary (non-printable) content in a string — typically from
+ * gzip-compressed HTTP error bodies that were not decompressed.
+ */
+export function containsBinaryContent(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  // Count non-printable characters (excluding common whitespace).
+  let binaryCount = 0;
+  const sampleLen = Math.min(text.length, 512);
+  for (let i = 0; i < sampleLen; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
+      binaryCount++;
+    }
+    if (code > 126 && code < 160) {
+      binaryCount++;
+    }
+  }
+  return binaryCount / sampleLen > 0.1;
+}
+
+/**
+ * Status-code-based fallback for context overflow detection.  When the error
+ * body is binary (gzip-compressed) or empty, text-based matching in
+ * `isLikelyContextOverflowError` fails.  This function checks HTTP status +
+ * context utilization as a heuristic.
+ */
+export function isLikelyContextOverflowByStatus(
+  httpStatus: number | undefined,
+  estimatedTokens: number | undefined,
+  tokenBudget: number | undefined,
+): boolean {
+  if (httpStatus !== 400) {
+    return false;
+  }
+  if (!estimatedTokens || !tokenBudget || tokenBudget <= 0) {
+    return false;
+  }
+  return estimatedTokens / tokenBudget >= 0.8;
+}
+
+/**
+ * Sanitize error text for display.  If the text contains binary content
+ * (e.g. from a gzip-compressed response body), attempt gzip decompression
+ * or replace with a human-readable placeholder.
+ */
+export function sanitizeErrorText(text: string, httpStatus?: number): string {
+  if (!text) {
+    return text;
+  }
+  if (!containsBinaryContent(text)) {
+    return text;
+  }
+  // Attempt gzip decompression as a best-effort recovery.
+  try {
+    const { gunzipSync } = require("node:zlib") as typeof import("node:zlib");
+    const buf = Buffer.from(text, "binary");
+    const decompressed = gunzipSync(buf).toString("utf8");
+    if (decompressed && !containsBinaryContent(decompressed)) {
+      return decompressed;
+    }
+  } catch {
+    // Not valid gzip — fall through to placeholder.
+  }
+  const statusLabel = httpStatus ? ` ${httpStatus}` : "";
+  return `API returned error${statusLabel} (response body not decodable)`;
+}
