@@ -50,6 +50,27 @@ function stubJsonFetchOk() {
   return fetchMock;
 }
 
+async function expectThrownBrowserFetchError(
+  request: () => Promise<unknown>,
+  params: {
+    contains: string[];
+    omits?: string[];
+  },
+) {
+  const thrown = await request().catch((err: unknown) => err);
+  expect(thrown).toBeInstanceOf(Error);
+  if (!(thrown instanceof Error)) {
+    throw new Error(`Expected Error, got ${String(thrown)}`);
+  }
+  for (const snippet of params.contains) {
+    expect(thrown.message).toContain(snippet);
+  }
+  for (const snippet of params.omits ?? []) {
+    expect(thrown.message).not.toContain(snippet);
+  }
+  return thrown;
+}
+
 describe("fetchBrowserJson loopback auth", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -127,15 +148,10 @@ describe("fetchBrowserJson loopback auth", () => {
   it("preserves dispatcher error context while keeping no-retry hint", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs").catch((err: unknown) => err);
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("Chrome CDP handshake timeout");
-    expect(thrown.message).toContain("Do NOT retry the browser tool");
-    expect(thrown.message).not.toContain("Can't reach the OpenClaw browser control service");
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: ["Chrome CDP handshake timeout", "Do NOT retry the browser tool"],
+      omits: ["Can't reach the OpenClaw browser control service"],
+    });
   });
 
   it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
@@ -147,17 +163,13 @@ describe("fetchBrowserJson loopback auth", () => {
       vi.fn(async () => response),
     );
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/").catch(
-      (err: unknown) => err,
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
+      {
+        contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+        omits: ["max concurrent sessions exceeded"],
+      },
     );
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("Browser service rate limit reached");
-    expect(thrown.message).toContain("Do NOT retry the browser tool");
-    expect(thrown.message).not.toContain("max concurrent sessions exceeded");
     expect(text).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -168,16 +180,12 @@ describe("fetchBrowserJson loopback auth", () => {
       vi.fn(async () => new Response("", { status: 429 })),
     );
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/").catch(
-      (err: unknown) => err,
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
+      {
+        contains: ["rate limit reached", "Do NOT retry the browser tool"],
+      },
     );
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("rate limit reached");
-    expect(thrown.message).toContain("Do NOT retry the browser tool");
   });
 
   it("keeps Browserbase-specific wording for Browserbase 429 responses", async () => {
@@ -186,17 +194,13 @@ describe("fetchBrowserJson loopback auth", () => {
       vi.fn(async () => new Response("max concurrent sessions exceeded", { status: 429 })),
     );
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>(
-      "https://connect.browserbase.com/session",
-    ).catch((err: unknown) => err);
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("Browserbase rate limit reached");
-    expect(thrown.message).toContain("upgrade your plan");
-    expect(thrown.message).not.toContain("max concurrent sessions exceeded");
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("https://connect.browserbase.com/session"),
+      {
+        contains: ["Browserbase rate limit reached", "upgrade your plan"],
+        omits: ["max concurrent sessions exceeded"],
+      },
+    );
   });
 
   it("non-429 errors still produce generic messages", async () => {
@@ -205,16 +209,13 @@ describe("fetchBrowserJson loopback auth", () => {
       vi.fn(async () => new Response("internal error", { status: 500 })),
     );
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/").catch(
-      (err: unknown) => err,
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
+      {
+        contains: ["internal error"],
+        omits: ["rate limit"],
+      },
     );
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("internal error");
-    expect(thrown.message).not.toContain("rate limit");
   });
 
   it("surfaces 429 from dispatcher path as rate-limit error", async () => {
@@ -223,15 +224,10 @@ describe("fetchBrowserJson loopback auth", () => {
       body: { error: "too many sessions" },
     });
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("/tabs").catch((err: unknown) => err);
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("Browser service rate limit reached");
-    expect(thrown.message).toContain("Do NOT retry the browser tool");
-    expect(thrown.message).not.toContain("too many sessions");
+    await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
+      contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+      omits: ["too many sessions"],
+    });
   });
 
   it("keeps absolute URL failures wrapped as reachability errors", async () => {
@@ -242,15 +238,14 @@ describe("fetchBrowserJson loopback auth", () => {
       }),
     );
 
-    const thrown = await fetchBrowserJson<{ ok: boolean }>("http://example.com/").catch(
-      (err: unknown) => err,
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://example.com/"),
+      {
+        contains: [
+          "Can't reach the OpenClaw browser control service",
+          "Do NOT retry the browser tool",
+        ],
+      },
     );
-
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) {
-      throw new Error(`Expected Error, got ${String(thrown)}`);
-    }
-    expect(thrown.message).toContain("Can't reach the OpenClaw browser control service");
-    expect(thrown.message).toContain("Do NOT retry the browser tool");
   });
 });
