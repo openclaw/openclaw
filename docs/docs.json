@@ -1111,7 +1111,7 @@
                   "providers/litellm",
                   "providers/glm",
                   "providers/minimax",
-                  "providers/mdelscope",
+                  "providers/modelscope",
                   "providers/moonshot",
                   "providers/mistral",
                   "providers/nvidia",

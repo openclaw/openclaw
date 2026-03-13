@@ -498,7 +498,7 @@ function buildSimpleApiKeyAuthChoices(params: { opts: OnboardOptions }): SimpleA
       provider: "modelscope",
       flagValue: params.opts.modelscopeApiKey,
       flagName: "--modelscope-api-key",
-      envVar: "HF_TOKEN",
+      envVar: "MODELSCOPE_API_KEY",
       profileId: "modelscope:default",
       setCredential: withStorage(setModelScopeApiKey),
       applyConfig: (cfg) =>
