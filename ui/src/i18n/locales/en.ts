@@ -118,6 +118,25 @@ export const en: TranslationMap = {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
     },
+    docs: {
+      devicePairing: "Docs: Device pairing",
+      controlUiAuth: "Docs: Control UI auth",
+      tailscaleServe: "Docs: Tailscale Serve",
+      insecureHttp: "Docs: Insecure HTTP",
+    },
+    placeholders: {
+      password: "system or shared password",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "Hide token",
+      showToken: "Show token",
+      toggleToken: "Toggle token visibility",
+      hidePassword: "Hide password",
+      showPassword: "Show password",
+      togglePassword: "Toggle password visibility",
+    },
     connection: {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",

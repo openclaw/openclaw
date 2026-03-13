@@ -116,6 +116,25 @@ export const zh_TW: TranslationMap = {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",
       stayHttp: "如果您必須保持 HTTP，請設置 {config} (僅限令牌)。",
     },
+    docs: {
+      devicePairing: "文件：裝置配對",
+      controlUiAuth: "文件：Control UI 身份驗證",
+      tailscaleServe: "文件：Tailscale Serve",
+      insecureHttp: "文件：不安全 HTTP",
+    },
+    placeholders: {
+      password: "系統或共享密碼",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "隱藏令牌",
+      showToken: "顯示令牌",
+      toggleToken: "切換令牌可見性",
+      hidePassword: "隱藏密碼",
+      showPassword: "顯示密碼",
+      togglePassword: "切換密碼可見性",
+    },
     connection: {
       title: "如何連接",
       step1: "在主機上啟動閘道：",

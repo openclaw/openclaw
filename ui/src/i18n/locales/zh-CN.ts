@@ -116,6 +116,25 @@ export const zh_CN: TranslationMap = {
       hint: "此页面为 HTTP，因此浏览器阻止设备标识。请使用 HTTPS (Tailscale Serve) 或在网关主机上打开 {url}。",
       stayHttp: "如果您必须保持 HTTP，请设置 {config} (仅限令牌)。",
     },
+    docs: {
+      devicePairing: "文档：设备配对",
+      controlUiAuth: "文档：Control UI 身份验证",
+      tailscaleServe: "文档：Tailscale Serve",
+      insecureHttp: "文档：不安全 HTTP",
+    },
+    placeholders: {
+      password: "系统或共享密码",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "隐藏令牌",
+      showToken: "显示令牌",
+      toggleToken: "切换令牌可见性",
+      hidePassword: "隐藏密码",
+      showPassword: "显示密码",
+      togglePassword: "切换密码可见性",
+    },
     connection: {
       title: "如何连接",
       step1: "在主机上启动网关：",

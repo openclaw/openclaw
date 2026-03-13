@@ -107,6 +107,25 @@ export const es: TranslationMap = {
       hint: "Esta página es HTTP, por lo que el navegador bloquea el acceso a la identidad del dispositivo. Usa HTTPS (Tailscale Serve) o abre {url} en el equipo host.",
       stayHttp: "Si debes permanecer en HTTP, utiliza {config} (solo token).",
     },
+    docs: {
+      devicePairing: "Docs: Emparejamiento de dispositivos",
+      controlUiAuth: "Docs: Autenticación de Control UI",
+      tailscaleServe: "Docs: Tailscale Serve",
+      insecureHttp: "Docs: HTTP inseguro",
+    },
+    placeholders: {
+      password: "contraseña del sistema o compartida",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "Ocultar token",
+      showToken: "Mostrar token",
+      toggleToken: "Alternar visibilidad del token",
+      hidePassword: "Ocultar contraseña",
+      showPassword: "Mostrar contraseña",
+      togglePassword: "Alternar visibilidad de la contraseña",
+    },
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",

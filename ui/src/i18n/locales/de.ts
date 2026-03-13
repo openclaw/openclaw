@@ -108,6 +108,25 @@ export const de: TranslationMap = {
       hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
       stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
     },
+    docs: {
+      devicePairing: "Docs: Gerätekopplung",
+      controlUiAuth: "Docs: Control-UI-Authentifizierung",
+      tailscaleServe: "Docs: Tailscale Serve",
+      insecureHttp: "Docs: Unsicheres HTTP",
+    },
+    placeholders: {
+      password: "System- oder gemeinsames Passwort",
+      wsUrl: "ws://100.x.y.z:18789",
+      token: "OPENCLAW_GATEWAY_TOKEN",
+    },
+    accessibility: {
+      hideToken: "Token ausblenden",
+      showToken: "Token anzeigen",
+      toggleToken: "Token-Sichtbarkeit umschalten",
+      hidePassword: "Passwort ausblenden",
+      showPassword: "Passwort anzeigen",
+      togglePassword: "Passwortsichtbarkeit umschalten",
+    },
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
