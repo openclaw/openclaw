@@ -55,11 +55,12 @@ describe("sanitizeSessionHistory", () => {
   const sanitizeAnthropicHistory = async (params: {
     messages: AgentMessage[];
     provider?: string;
+    modelApi?: string;
     modelId?: string;
   }) =>
     sanitizeSessionHistory({
       messages: params.messages,
-      modelApi: "anthropic-messages",
+      modelApi: params.modelApi ?? "anthropic-messages",
       provider: params.provider ?? "anthropic",
       modelId: params.modelId ?? "claude-opus-4-6",
       sessionManager: makeMockSessionManager(),
@@ -780,6 +781,21 @@ describe("sanitizeSessionHistory", () => {
     const messages = makeThinkingAndTextAssistantMessages();
 
     const result = await sanitizeAnthropicHistory({ messages });
+
+    const assistant = getAssistantMessage(result);
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("drops assistant thinking blocks for amazon-bedrock replay", async () => {
+    setNonGoogleModelApi();
+
+    const messages = makeThinkingAndTextAssistantMessages();
+
+    const result = await sanitizeAnthropicHistory({
+      messages,
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+    });
 
     const assistant = getAssistantMessage(result);
     expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
