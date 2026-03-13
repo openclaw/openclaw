@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import type { PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -13,6 +15,7 @@ import {
 import { backupCreateCommand } from "./backup.js";
 
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
+const execFileAsync = promisify(execFile);
 
 vi.mock("./backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
@@ -387,6 +390,51 @@ describe("backup commands", () => {
       await fs.rm(externalWorkspace, { recursive: true, force: true });
       await fs.rm(backupDir, { recursive: true, force: true });
       await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects backup sources that contain fifo special files before writing an archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const configPath = path.join(tempHome.home, "custom-config.json");
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const fifoPath = path.join(externalWorkspace, "workspace.pipe");
+    try {
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              workspace: externalWorkspace,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+      await execFileAsync("mkfifo", [fifoPath]);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        backupCreateCommand(runtime, {
+          output: backupDir,
+          includeWorkspace: true,
+        }),
+      ).rejects.toThrow(/unsupported special file/i);
+    } finally {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await fs.rm(externalWorkspace, { recursive: true, force: true });
+      await fs.rm(backupDir, { recursive: true, force: true });
     }
   });
 

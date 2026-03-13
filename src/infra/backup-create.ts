@@ -304,6 +304,10 @@ async function assertPathTreeHasNoSymlinks(rootPath: string): Promise<void> {
         }
         if (entryStat.isDirectory()) {
           pending.push(entryPath);
+          continue;
+        }
+        if (!entryStat.isFile()) {
+          throw new Error(`Backup source contains unsupported special file: ${entryPath}`);
         }
       }
     }
