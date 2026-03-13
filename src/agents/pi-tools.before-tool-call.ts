@@ -13,6 +13,11 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** Channel routing context — available when the turn originated from a messaging surface. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -21,6 +26,9 @@ const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+const EXTERNAL_DATA_SOURCE_TOOL_NAMES = new Set(["web_fetch", "web_search", "browser"]);
+const MAX_TRACKED_EXTERNAL_DATA_SCOPES = 1024;
+const externalDataSourcesByScope = new Map<string, Set<string>>();
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 let beforeToolCallRuntimePromise: Promise<
@@ -37,6 +45,50 @@ function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }):
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+function buildHookContextScopeKey(ctx?: HookContext): string | undefined {
+  const sessionId = ctx?.sessionId?.trim();
+  if (sessionId) {
+    return `session:${sessionId}`;
+  }
+  const sessionKey = ctx?.sessionKey?.trim();
+  if (sessionKey) {
+    return `session_key:${sessionKey}`;
+  }
+  const runId = ctx?.runId?.trim();
+  if (runId) {
+    return `run:${runId}`;
+  }
+  return undefined;
+}
+
+function hasTrackedExternalDataForContext(ctx?: HookContext): boolean {
+  const scopeKey = buildHookContextScopeKey(ctx);
+  if (!scopeKey) {
+    return false;
+  }
+  const sources = externalDataSourcesByScope.get(scopeKey);
+  return (sources?.size ?? 0) > 0;
+}
+
+function trackExternalDataSourceForContext(ctx: HookContext | undefined, toolName: string): void {
+  if (!EXTERNAL_DATA_SOURCE_TOOL_NAMES.has(toolName)) {
+    return;
+  }
+  const scopeKey = buildHookContextScopeKey(ctx);
+  if (!scopeKey) {
+    return;
+  }
+  const sources = externalDataSourcesByScope.get(scopeKey) ?? new Set<string>();
+  sources.add(toolName);
+  externalDataSourcesByScope.set(scopeKey, sources);
+  if (externalDataSourcesByScope.size > MAX_TRACKED_EXTERNAL_DATA_SCOPES) {
+    const oldest = externalDataSourcesByScope.keys().next().value;
+    if (oldest) {
+      externalDataSourcesByScope.delete(oldest);
+    }
+  }
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -160,6 +212,15 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
       ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
       ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+      hasExternalData: hasTrackedExternalDataForContext(args.ctx),
+      ...(args.ctx?.turnSourceChannel ? { turnSourceChannel: args.ctx.turnSourceChannel } : {}),
+      ...(args.ctx?.turnSourceTo ? { turnSourceTo: args.ctx.turnSourceTo } : {}),
+      ...(args.ctx?.turnSourceAccountId
+        ? { turnSourceAccountId: args.ctx.turnSourceAccountId }
+        : {}),
+      ...(args.ctx?.turnSourceThreadId !== undefined
+        ? { turnSourceThreadId: args.ctx.turnSourceThreadId }
+        : {}),
       ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -227,6 +288,7 @@ export function wrapToolWithBeforeToolCallHook(
       const normalizedToolName = normalizeToolName(toolName || "tool");
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        trackExternalDataSourceForContext(ctx, normalizedToolName);
         await recordLoopOutcome({
           ctx,
           toolName: normalizedToolName,
@@ -269,7 +331,10 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
+  buildHookContextScopeKey,
   adjustedParamsByToolCallId,
+  externalDataSourcesByScope,
+  MAX_TRACKED_EXTERNAL_DATA_SCOPES,
   runBeforeToolCallHook,
   isPlainObject,
 };

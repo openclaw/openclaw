@@ -702,6 +702,13 @@ export type PluginHookToolContext = {
   /** Stable run identifier for this agent invocation. */
   runId?: string;
   toolName: string;
+  /** True when the session has consumed data from external sources (web_fetch, web_search, browser). */
+  hasExternalData?: boolean;
+  /** Channel routing context — available when the turn originated from a messaging surface. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
 };
