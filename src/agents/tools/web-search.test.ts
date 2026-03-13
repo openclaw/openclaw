@@ -22,6 +22,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveTavilyApiKey,
+  resolveTavilyBaseUrl,
+  resolveSearchProvider,
   resolveBraveMode,
   mapBraveLlmContextResults,
 } = __testing;
@@ -30,6 +33,7 @@ const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
+const tavilyApiKeyEnv = ["TAVILY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
 const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
@@ -466,5 +470,141 @@ describe("mapBraveLlmContextResults", () => {
       },
     });
     expect(results[0].siteName).toBeUndefined();
+  });
+});
+
+describe("web_search tavily config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveTavilyApiKey({ apiKey: "tvly-test-key" })).toBe("tvly-test-key"); // pragma: allowlist secret
+  });
+
+  it("falls back to TAVILY_API_KEY env var", () => {
+    const envValue = "tvly-env-key"; // pragma: allowlist secret
+    withEnv({ [tavilyApiKeyEnv]: envValue }, () => {
+      expect(resolveTavilyApiKey({})).toBe(envValue);
+    });
+  });
+
+  it("prefers config apiKey over env var", () => {
+    const envValue = "tvly-env-key"; // pragma: allowlist secret
+    withEnv({ [tavilyApiKeyEnv]: envValue }, () => {
+      expect(resolveTavilyApiKey({ apiKey: "tvly-config-key" })).toBe("tvly-config-key"); // pragma: allowlist secret
+    });
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ [tavilyApiKeyEnv]: undefined }, () => {
+      expect(resolveTavilyApiKey({})).toBeUndefined();
+      expect(resolveTavilyApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("returns default baseUrl when not configured", () => {
+    expect(resolveTavilyBaseUrl({})).toBe("https://api.tavily.com");
+    expect(resolveTavilyBaseUrl(undefined)).toBe("https://api.tavily.com");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveTavilyBaseUrl({ baseUrl: "https://custom.tavily.example.com" })).toBe(
+      "https://custom.tavily.example.com",
+    );
+  });
+
+  it("ignores blank baseUrl and returns default", () => {
+    expect(resolveTavilyBaseUrl({ baseUrl: "  " })).toBe("https://api.tavily.com");
+    expect(resolveTavilyBaseUrl({ baseUrl: "" })).toBe("https://api.tavily.com");
+  });
+});
+
+describe("web_search resolveSearchProvider tavily", () => {
+  it("returns tavily when explicitly configured", () => {
+    expect(resolveSearchProvider({ provider: "tavily" })).toBe("tavily");
+    expect(resolveSearchProvider({ provider: "Tavily" })).toBe("tavily");
+    expect(resolveSearchProvider({ provider: " TAVILY " })).toBe("tavily");
+  });
+
+  it("auto-detects tavily from TAVILY_API_KEY env var", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+        [perplexityApiKeyEnv]: undefined,
+        [openRouterApiKeyEnv]: undefined,
+        [tavilyApiKeyEnv]: "tvly-auto-detect", // pragma: allowlist secret
+      },
+      () => {
+        expect(resolveSearchProvider({})).toBe("tavily");
+      },
+    );
+  });
+
+  it("does not auto-detect tavily when higher-priority provider key is present", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: "brave-key", // pragma: allowlist secret
+        [tavilyApiKeyEnv]: "tvly-key", // pragma: allowlist secret
+      },
+      () => {
+        expect(resolveSearchProvider({})).toBe("brave");
+      },
+    );
+  });
+
+  it("falls back to brave when no keys are available", () => {
+    withEnv(
+      {
+        BRAVE_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        XAI_API_KEY: undefined,
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+        [perplexityApiKeyEnv]: undefined,
+        [openRouterApiKeyEnv]: undefined,
+        [tavilyApiKeyEnv]: undefined,
+      },
+      () => {
+        expect(resolveSearchProvider({})).toBe("brave");
+      },
+    );
+  });
+});
+
+describe("web_search freshness normalization for tavily", () => {
+  it("accepts standard recency values and returns them as-is", () => {
+    expect(normalizeFreshness("day", "tavily")).toBe("day");
+    expect(normalizeFreshness("week", "tavily")).toBe("week");
+    expect(normalizeFreshness("month", "tavily")).toBe("month");
+    expect(normalizeFreshness("year", "tavily")).toBe("year");
+  });
+
+  it("accepts Brave shortcuts and maps to recency values", () => {
+    expect(normalizeFreshness("pd", "tavily")).toBe("day");
+    expect(normalizeFreshness("pw", "tavily")).toBe("week");
+    expect(normalizeFreshness("pm", "tavily")).toBe("month");
+    expect(normalizeFreshness("py", "tavily")).toBe("year");
+  });
+
+  it("is case-insensitive", () => {
+    expect(normalizeFreshness("DAY", "tavily")).toBe("day");
+    expect(normalizeFreshness("Week", "tavily")).toBe("week");
+    expect(normalizeFreshness("PD", "tavily")).toBe("day");
+  });
+
+  it("rejects invalid values", () => {
+    expect(normalizeFreshness("yesterday", "tavily")).toBeUndefined();
+    expect(normalizeFreshness("hour", "tavily")).toBeUndefined();
+  });
+
+  it("rejects Brave date ranges", () => {
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "tavily")).toBeUndefined();
+  });
+
+  it("returns undefined for empty/blank input", () => {
+    expect(normalizeFreshness("", "tavily")).toBeUndefined();
+    expect(normalizeFreshness("  ", "tavily")).toBeUndefined();
+    expect(normalizeFreshness(undefined, "tavily")).toBeUndefined();
   });
 });

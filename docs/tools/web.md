@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Gemini, Grok, Kimi, Perplexity, and Tavily providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Gemini with Google Search grounding, Grok, Kimi, Perplexity Search API, or Tavily.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -25,7 +25,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` is enabled by default (unless explicitly disabled).
 
-See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexity) for provider-specific details.
+See [Brave Search setup](/brave-search), [Perplexity Search setup](/perplexity), and [Tavily Search setup](/tavily) for provider-specific details.
 
 ## Choosing a search provider
 
@@ -36,6 +36,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Grok**                  | AI-synthesized answers + citations | —                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter` | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| **Tavily**                | Structured results with snippets   | `domain_filter`, time, `search_depth`        | Optional AI answer summary; basic or advanced search depth                     | `TAVILY_API_KEY`                            |
 
 ### Auto-detection
 
@@ -46,6 +47,7 @@ The table above is alphabetical. If no `provider` is explicitly set, runtime aut
 3. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
 4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
 5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey` config
+6. **Tavily** — `TAVILY_API_KEY` env var or `tools.web.search.tavily.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -90,6 +92,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 - Grok: `tools.web.search.grok.apiKey`
 - Kimi: `tools.web.search.kimi.apiKey`
 - Perplexity: `tools.web.search.perplexity.apiKey`
+- Tavily: `tools.web.search.tavily.apiKey`
 
 All of these fields also support SecretRef objects.
 
@@ -100,6 +103,7 @@ All of these fields also support SecretRef objects.
 - Grok: `XAI_API_KEY`
 - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
 - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+- Tavily: `TAVILY_API_KEY`
 
 For a gateway install, put these in `~/.openclaw/.env` (or your service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
@@ -182,6 +186,32 @@ In this mode, `country` and `language` / `search_lang` still work, but `ui_lang`
 }
 ```
 
+**Tavily Search:**
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "tavily",
+        tavily: {
+          apiKey: "tvly-...", // optional if TAVILY_API_KEY is set
+        },
+      },
+    },
+  },
+}
+```
+
+### Tavily Search
+
+1. Create a Tavily account at [app.tavily.com](https://app.tavily.com/)
+2. Generate an API key in the dashboard
+3. Run `openclaw configure --section web` to store the key in config, or set `TAVILY_API_KEY` in your environment.
+
+Tavily supports domain include/exclude filters, time range filtering, configurable search depth (basic/advanced), and an optional AI-generated answer summary. See [Tavily API Docs](https://docs.tavily.com) for more details.
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -238,6 +268,7 @@ Search the web using your configured provider.
   - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
   - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
   - **Perplexity**: `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Tavily**: `TAVILY_API_KEY` or `tools.web.search.tavily.apiKey`
 - All provider key fields above support SecretRef objects.
 
 ### Config
@@ -260,24 +291,26 @@ Search the web using your configured provider.
 
 ### Tool parameters
 
-All parameters work for Brave and for native Perplexity Search API unless noted.
+All parameters work for Brave, Tavily, and native Perplexity Search API unless noted.
 
 Perplexity's OpenRouter / Sonar compatibility path supports only `query` and `freshness`.
 If you set `tools.web.search.perplexity.baseUrl` / `model`, use `OPENROUTER_API_KEY`, or configure an `sk-or-...` key, Search API-only filters return explicit errors.
 
-| Parameter             | Description                                           |
-| --------------------- | ----------------------------------------------------- |
-| `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
-| `country`             | 2-letter ISO country code (e.g., "US", "DE")          |
-| `language`            | ISO 639-1 language code (e.g., "en", "de")            |
-| `freshness`           | Time filter: `day`, `week`, `month`, or `year`        |
-| `date_after`          | Results after this date (YYYY-MM-DD)                  |
-| `date_before`         | Results before this date (YYYY-MM-DD)                 |
-| `ui_lang`             | UI language code (Brave only)                         |
-| `domain_filter`       | Domain allowlist/denylist array (Perplexity only)     |
-| `max_tokens`          | Total content budget, default 25000 (Perplexity only) |
-| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)  |
+| Parameter             | Description                                             |
+| --------------------- | ------------------------------------------------------- |
+| `query`               | Search query (required)                                 |
+| `count`               | Results to return (1-10, default: 5; Tavily max: 20)    |
+| `country`             | 2-letter ISO country code (Brave and Perplexity only)   |
+| `language`            | ISO 639-1 language code (Brave and Perplexity only)     |
+| `freshness`           | Time filter: `day`, `week`, `month`, or `year`          |
+| `date_after`          | Results after this date (YYYY-MM-DD)                    |
+| `date_before`         | Results before this date (YYYY-MM-DD)                   |
+| `ui_lang`             | UI language code (Brave only)                           |
+| `search_depth`        | Search depth: basic or advanced (Tavily only)           |
+| `include_answer`      | Include AI-generated answer summary (Tavily only)       |
+| `domain_filter`       | Domain allowlist/denylist array (Tavily and Perplexity) |
+| `max_tokens`          | Total content budget, default 25000 (Perplexity only)   |
+| `max_tokens_per_page` | Per-page token limit, default 2048 (Perplexity only)    |
 
 **Examples:**
 
