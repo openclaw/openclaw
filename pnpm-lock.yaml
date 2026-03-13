@@ -444,7 +444,11 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/ollama: {}
+
   extensions/open-prose: {}
+
+  extensions/sglang: {}
 
   extensions/signal: {}
 
@@ -487,6 +491,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/vllm: {}
 
   extensions/voice-call:
     dependencies:
