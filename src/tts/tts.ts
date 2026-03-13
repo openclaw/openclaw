@@ -953,6 +953,10 @@ export async function maybeApplyTtsToPayload(params: {
     if (needsVoiceBubble && !voiceCompatible) {
       try {
         const converted = await ensureVoiceFormat(audioPath);
+        if (converted.cleanup) {
+          // Schedule cleanup of the transcoded temp dir (same pattern as TTS providers).
+          scheduleCleanup(path.dirname(converted.path));
+        }
         audioPath = converted.path;
         voiceCompatible = true;
       } catch (err) {
