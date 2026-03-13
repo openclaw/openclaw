@@ -13,6 +13,7 @@ export type HeartbeatWakeHandler = (opts: {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string };
 }) => Promise<HeartbeatRunResult>;
 
 let heartbeatsEnabled = true;
@@ -32,6 +33,7 @@ type PendingWakeReason = {
   requestedAt: number;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string };
 };
 
 let handler: HeartbeatWakeHandler | null = null;
@@ -86,6 +88,7 @@ function queuePendingWakeReason(params?: {
   requestedAt?: number;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string };
 }) {
   const requestedAt = params?.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params?.reason);
@@ -101,18 +104,23 @@ function queuePendingWakeReason(params?: {
     requestedAt,
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    ...(params?.heartbeat ? { heartbeat: params.heartbeat } : {}),
   };
   const previous = pendingWakes.get(wakeTargetKey);
   if (!previous) {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
-  if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, next);
+  // Preserve the previous heartbeat override unless the replacing wake explicitly sets a new one.
+  // This prevents a subsequent unscoped wake from silently dropping a cron target="last" override
+  // that was queued in the same coalescing window.
+  const mergedNext = next.heartbeat ? next : { ...next, heartbeat: previous.heartbeat };
+  if (mergedNext.priority > previous.priority) {
+    pendingWakes.set(wakeTargetKey, mergedNext);
     return;
   }
-  if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, next);
+  if (mergedNext.priority === previous.priority && mergedNext.requestedAt >= previous.requestedAt) {
+    pendingWakes.set(wakeTargetKey, mergedNext);
   }
 }
 
@@ -161,25 +169,30 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           reason: pendingWake.reason ?? undefined,
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+          ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
         };
         const res = await active(wakeOpts);
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // The main lane is busy; retry this wake target soon.
+          // Preserve the heartbeat override so cron target=last is not lost on retry.
           queuePendingWakeReason({
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
+            heartbeat: pendingWake.heartbeat,
           });
           schedule(DEFAULT_RETRY_MS, "retry");
         }
       }
     } catch {
       // Error is already logged by the heartbeat runner; schedule a retry.
+      // Preserve the heartbeat override so cron target=last is not lost on retry.
       for (const pendingWake of pendingBatch) {
         queuePendingWakeReason({
           reason: pendingWake.reason ?? "retry",
           agentId: pendingWake.agentId,
           sessionKey: pendingWake.sessionKey,
+          heartbeat: pendingWake.heartbeat,
         });
       }
       schedule(DEFAULT_RETRY_MS, "retry");
@@ -240,11 +253,13 @@ export function requestHeartbeatNow(opts?: {
   coalesceMs?: number;
   agentId?: string;
   sessionKey?: string;
+  heartbeat?: { target?: string };
 }) {
   queuePendingWakeReason({
     reason: opts?.reason,
     agentId: opts?.agentId,
     sessionKey: opts?.sessionKey,
+    ...(opts?.heartbeat ? { heartbeat: opts.heartbeat } : {}),
   });
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }
