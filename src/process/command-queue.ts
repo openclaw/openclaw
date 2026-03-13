@@ -270,7 +270,7 @@ export type ResetLaneResult = {
  */
 export function resetLane(lane: string, opts?: ResetLaneOptions): ResetLaneResult {
   const cleaned = lane.trim() || CommandLane.Main;
-  const state = lanes.get(cleaned);
+  const state = queueState.lanes.get(cleaned);
   if (!state) {
     return { lane: cleaned, reset: false, activeBefore: 0, droppedQueued: 0 };
   }
