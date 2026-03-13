@@ -244,6 +244,21 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
   });
 
+  it("writes base64 payloads using actual decoded byte length", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+    await writeFileWithinRoot({
+      rootDir: root,
+      relativePath: "nested/base64.bin",
+      data: "YQ==\n",
+      encoding: "base64",
+    });
+
+    await expect(fs.readFile(path.join(root, "nested", "base64.bin"))).resolves.toEqual(
+      Buffer.from("a"),
+    );
+  });
+
   it("appends to a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const targetPath = path.join(root, "nested", "out.txt");

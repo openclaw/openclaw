@@ -23,6 +23,7 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "basename = sys.argv[3]",
   'mkdir_enabled = sys.argv[4] == "1"',
   "file_mode = int(sys.argv[5], 8)",
+  "expected_size = int(sys.argv[6])",
   "",
   "DIR_FLAGS = os.O_RDONLY",
   "if hasattr(os, 'O_DIRECTORY'):",
@@ -68,32 +69,82 @@ const LOCAL_PINNED_WRITE_PYTHON = [
   "            continue",
   "    raise RuntimeError('failed to allocate pinned temp file')",
   "",
+  "def create_backup_name(parent_fd, basename):",
+  "    prefix = '.' + basename + '.backup.'",
+  "    for _ in range(128):",
+  "        candidate = prefix + secrets.token_hex(6) + '.tmp'",
+  "        try:",
+  "            os.lstat(candidate, dir_fd=parent_fd)",
+  "        except FileNotFoundError:",
+  "            return candidate",
+  "    raise RuntimeError('failed to allocate pinned backup file')",
+  "",
+  "def restore_backup(parent_fd, basename, backup_name):",
+  "    try:",
+  "        os.unlink(basename, dir_fd=parent_fd)",
+  "    except FileNotFoundError:",
+  "        pass",
+  "    os.rename(backup_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "",
   "root_fd = open_dir(root_path)",
   "parent_fd = None",
   "temp_fd = None",
   "temp_name = None",
+  "backup_name = None",
   "try:",
   "    parent_fd = walk_parent(root_fd, relative_parent, mkdir_enabled)",
   "    temp_name, temp_fd = create_temp_file(parent_fd, basename, file_mode)",
+  "    bytes_written = 0",
   "    while True:",
   "        chunk = sys.stdin.buffer.read(65536)",
   "        if not chunk:",
   "            break",
-  "        os.write(temp_fd, chunk)",
+  "        bytes_written += os.write(temp_fd, chunk)",
   "    os.fsync(temp_fd)",
   "    os.close(temp_fd)",
   "    temp_fd = None",
+  "    try:",
+  "        os.lstat(basename, dir_fd=parent_fd)",
+  "        backup_name = create_backup_name(parent_fd, basename)",
+  "        os.rename(basename, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+  "    except FileNotFoundError:",
+  "        backup_name = None",
   "    os.replace(temp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
   "    temp_name = None",
-  "    os.fsync(parent_fd)",
   "    result_stat = os.stat(basename, dir_fd=parent_fd, follow_symlinks=False)",
-  "    print(f'{result_stat.st_dev}|{result_stat.st_ino}')",
+  "    if result_stat.st_size != expected_size:",
+  "        if backup_name is not None:",
+  "            restore_backup(parent_fd, basename, backup_name)",
+  "            backup_name = None",
+  "        else:",
+  "            os.unlink(basename, dir_fd=parent_fd)",
+  "        os.fsync(parent_fd)",
+  "        raise RuntimeError(f'write size mismatch: expected {expected_size}, got {result_stat.st_size}')",
+  "    if backup_name is not None:",
+  "        os.unlink(backup_name, dir_fd=parent_fd)",
+  "        backup_name = None",
+  "    os.fsync(parent_fd)",
+  "    print(f'{result_stat.st_dev}|{result_stat.st_ino}|{result_stat.st_size}')",
+  "except Exception:",
+  "    if backup_name is not None and parent_fd is not None:",
+  "        try:",
+  "            restore_backup(parent_fd, basename, backup_name)",
+  "            os.fsync(parent_fd)",
+  "            backup_name = None",
+  "        except FileNotFoundError:",
+  "            pass",
+  "    raise",
   "finally:",
   "    if temp_fd is not None:",
   "        os.close(temp_fd)",
   "    if temp_name is not None and parent_fd is not None:",
   "        try:",
   "            os.unlink(temp_name, dir_fd=parent_fd)",
+  "        except FileNotFoundError:",
+  "            pass",
+  "    if backup_name is not None and parent_fd is not None:",
+  "        try:",
+  "            os.unlink(backup_name, dir_fd=parent_fd)",
   "        except FileNotFoundError:",
   "            pass",
   "    if parent_fd is not None:",
@@ -133,7 +184,7 @@ function resolvePinnedWritePython(): string {
   return cachedPinnedWritePython;
 }
 
-function parsePinnedIdentity(stdout: string): FileIdentityStat {
+function parsePinnedIdentity(stdout: string): FileIdentityStat & { size: number } {
   const line = stdout
     .trim()
     .split(/\r?\n/)
@@ -143,13 +194,14 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
   if (!line) {
     throw new Error("Pinned write helper returned no identity");
   }
-  const [devRaw, inoRaw] = line.split("|");
+  const [devRaw, inoRaw, sizeRaw] = line.split("|");
   const dev = Number.parseInt(devRaw ?? "", 10);
   const ino = Number.parseInt(inoRaw ?? "", 10);
-  if (!Number.isFinite(dev) || !Number.isFinite(ino)) {
+  const size = Number.parseInt(sizeRaw ?? "", 10);
+  if (!Number.isFinite(dev) || !Number.isFinite(ino) || !Number.isFinite(size)) {
     throw new Error(`Pinned write helper returned invalid identity: ${line}`);
   }
-  return { dev, ino };
+  return { dev, ino, size };
 }
 
 export async function runPinnedWriteHelper(params: {
@@ -159,7 +211,8 @@ export async function runPinnedWriteHelper(params: {
   mkdir: boolean;
   mode: number;
   input: PinnedWriteInput;
-}): Promise<FileIdentityStat> {
+  expectedSize: number;
+}): Promise<FileIdentityStat & { size: number }> {
   const child = spawn(
     resolvePinnedWritePython(),
     [
@@ -170,6 +223,7 @@ export async function runPinnedWriteHelper(params: {
       params.basename,
       params.mkdir ? "1" : "0",
       (params.mode || 0o600).toString(8),
+      String(params.expectedSize),
     ],
     {
       stdio: ["pipe", "pipe", "pipe"],
@@ -231,7 +285,8 @@ async function runPinnedWriteFallback(params: {
   mkdir: boolean;
   mode: number;
   input: PinnedWriteInput;
-}): Promise<FileIdentityStat> {
+  expectedSize: number;
+}): Promise<FileIdentityStat & { size: number }> {
   const parentPath = params.relativeParentPath
     ? path.join(params.rootPath, ...params.relativeParentPath.split("/"))
     : params.rootPath;
@@ -240,6 +295,8 @@ async function runPinnedWriteFallback(params: {
   }
   const targetPath = path.join(parentPath, params.basename);
   const tempPath = path.join(parentPath, `.${params.basename}.fallback.tmp`);
+  const backupPath = path.join(parentPath, `.${params.basename}.fallback.backup.tmp`);
+  let hadExistingTarget = false;
   if (params.input.kind === "buffer") {
     if (typeof params.input.data === "string") {
       await fs.writeFile(tempPath, params.input.data, {
@@ -257,7 +314,44 @@ async function runPinnedWriteFallback(params: {
       await handle.close().catch(() => {});
     }
   }
-  await fs.rename(tempPath, targetPath);
-  const stat = await fs.stat(targetPath);
-  return { dev: stat.dev, ino: stat.ino };
+  try {
+    await fs.stat(targetPath);
+    hadExistingTarget = true;
+    await fs.rm(backupPath, { force: true }).catch(() => {});
+    await fs.rename(targetPath, backupPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+  try {
+    await fs.rename(tempPath, targetPath);
+    const stat = await fs.stat(targetPath);
+    if (stat.size !== params.expectedSize) {
+      await fs.rm(targetPath, { force: true }).catch(() => {});
+      if (hadExistingTarget) {
+        await fs.rename(backupPath, targetPath);
+      }
+      throw new Error(`write size mismatch: expected ${params.expectedSize}, got ${stat.size}`);
+    }
+    if (hadExistingTarget) {
+      await fs.rm(backupPath, { force: true }).catch(() => {});
+    }
+    return { dev: stat.dev, ino: stat.ino, size: stat.size };
+  } catch (error) {
+    if (hadExistingTarget) {
+      try {
+        await fs.stat(targetPath);
+        await fs.rm(targetPath, { force: true }).catch(() => {});
+      } catch {}
+      await fs.rename(backupPath, targetPath).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    if (hadExistingTarget) {
+      await fs.rm(backupPath, { force: true }).catch(() => {});
+    }
+  }
 }

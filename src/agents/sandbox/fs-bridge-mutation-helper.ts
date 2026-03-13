@@ -82,19 +82,22 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            continue",
   "    raise RuntimeError('failed to allocate sandbox temp directory')",
   "",
-  "def write_atomic(parent_fd, basename, stdin_buffer):",
+  "def write_atomic(parent_fd, basename, stdin_buffer, expected_size):",
   "    temp_fd = None",
   "    temp_name = None",
   "    try:",
   "        temp_name, temp_fd = create_temp_file(parent_fd, basename)",
+  "        bytes_written = 0",
   "        while True:",
   "            chunk = stdin_buffer.read(65536)",
   "            if not chunk:",
   "                break",
-  "            os.write(temp_fd, chunk)",
+  "            bytes_written += os.write(temp_fd, chunk)",
   "        os.fsync(temp_fd)",
   "        os.close(temp_fd)",
   "        temp_fd = None",
+  "        if bytes_written != expected_size:",
+  "            raise RuntimeError(f'write size mismatch: expected {expected_size}, got {bytes_written}')",
   "        os.replace(temp_name, basename, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
   "        temp_name = None",
   "        os.fsync(parent_fd)",
@@ -193,7 +196,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    parent_fd = None",
   "    try:",
   "        parent_fd = walk_dir(root_fd, sys.argv[3], sys.argv[5] == '1')",
-  "        write_atomic(parent_fd, sys.argv[4], sys.stdin.buffer)",
+  "        write_atomic(parent_fd, sys.argv[4], sys.stdin.buffer, int(sys.argv[6]))",
   "    finally:",
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
@@ -272,6 +275,7 @@ export function buildPinnedWritePlan(params: {
   check: PathSafetyCheck;
   pinned: PinnedSandboxEntry;
   mkdir: boolean;
+  expectedSize: number;
 }): SandboxFsCommandPlan {
   return buildPinnedMutationPlan({
     checks: [params.check],
@@ -281,6 +285,7 @@ export function buildPinnedWritePlan(params: {
       params.pinned.relativeParentPath,
       params.pinned.basename,
       params.mkdir ? "1" : "0",
+      String(params.expectedSize),
     ],
   });
 }
