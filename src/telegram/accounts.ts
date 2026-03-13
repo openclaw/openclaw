@@ -223,7 +223,7 @@ export function resolveTelegramReplyToMode(
   const normalized = normalizeChatType(chatType ?? undefined);
   // Per-chat-type override takes priority.
   if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
-    return account.replyToModeByChatType[normalized] ?? "off";
+    return account.replyToModeByChatType[normalized]!;
   }
   // Global account-level override.
   if (account.replyToMode !== undefined) {

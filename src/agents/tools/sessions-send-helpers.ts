@@ -60,12 +60,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     }
     return kind === "channel" ? `channel:${id}` : `group:${id}`;
   })();
-  const normalized =
-    normalizedChannel === "telegram"
-      ? id
-      : normalizedChannel
-        ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
-        : undefined;
+  const normalized = normalizedChannel
+    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
+    : undefined;
   return {
     channel,
     to: normalized ?? kindTarget,

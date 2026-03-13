@@ -26,6 +26,7 @@ import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
+import { resolveTelegramReplyToMode } from "./accounts.js";
 import { deliverReplies } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -112,13 +113,15 @@ type DispatchTelegramMessageParams = {
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 function resolveTelegramReplyToModeForContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
   configuredReplyToMode?: ReplyToMode;
-  isGroup: boolean;
+  chatType?: string | null;
 }): ReplyToMode {
   if (params.configuredReplyToMode) {
     return params.configuredReplyToMode;
   }
-  return params.isGroup ? "all" : "off";
+  return resolveTelegramReplyToMode(params.cfg, params.accountId, params.chatType);
 }
 
 function resolveTelegramReasoningLevel(params: {
@@ -200,8 +203,10 @@ export const dispatchTelegramMessage = async ({
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
   const effectiveReplyToMode = resolveTelegramReplyToModeForContext({
+    cfg,
+    accountId: route.accountId,
     configuredReplyToMode: replyToMode,
-    isGroup,
+    chatType: isGroup ? "group" : (ctxPayload.Chat?.Type ?? undefined),
   });
   const draftReplyToMessageId =
     effectiveReplyToMode !== "off" && typeof msg.message_id === "number"

@@ -667,7 +667,7 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const explicitReplyOverride =
-        Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent) || Boolean(reply.replyToId);
+        Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent);
       const replyToId =
         effectiveReplyToMode === "off" && !explicitReplyOverride
           ? undefined
