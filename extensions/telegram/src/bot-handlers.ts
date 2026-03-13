@@ -1028,8 +1028,7 @@ export const registerTelegramHandlers = ({
       // messages) to mirror the actual mention gate in bot-message-context.body.ts.
       const botUsername = ctx.me?.username;
       const botId = ctx.me?.id;
-      const replyToBotMessage =
-        botId != null && msg.reply_to_message?.from?.id === botId;
+      const replyToBotMessage = botId != null && msg.reply_to_message?.from?.id === botId;
       const wouldSkipMention =
         groupConfig?.requireMention === true &&
         botUsername != null &&
