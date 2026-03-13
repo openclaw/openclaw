@@ -199,6 +199,11 @@ export class GatewayChatClient {
     this.client.stop();
   }
 
+  /** Force an immediate reconnect, resetting the exponential backoff. */
+  reconnect() {
+    this.client.reconnect();
+  }
+
   async waitForReady() {
     await this.readyPromise;
   }

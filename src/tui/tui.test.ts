@@ -161,11 +161,28 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.pairingHint).toContain("openclaw devices list");
   });
 
-  it("falls back to idle for generic disconnect reasons", () => {
+  it("falls back to reconnecting hint for generic disconnect reasons", () => {
     const state = resolveGatewayDisconnectState("network timeout");
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
-    expect(state.activityStatus).toBe("idle");
+    expect(state.activityStatus).toBe("reconnecting… ctrl+r to retry now");
     expect(state.pairingHint).toBeUndefined();
+    expect(state.suppressReconnectHint).toBeUndefined();
+  });
+
+  it("suppresses auto-reconnect hint for auth failures that pause reconnect", () => {
+    const authReasons = [
+      "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)",
+      "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
+      "unauthorized: too many failed authentication attempts (retry later)",
+      "unauthorized: device token mismatch (rotate/reissue device token)",
+    ];
+    for (const reason of authReasons) {
+      const state = resolveGatewayDisconnectState(reason);
+      expect(state.connectionStatus).toContain("unauthorized");
+      expect(state.activityStatus).toBe("check credentials — ctrl+r to retry");
+      expect(state.pairingHint).toBeUndefined();
+      expect(state.suppressReconnectHint).toBe(true);
+    }
   });
 });
 

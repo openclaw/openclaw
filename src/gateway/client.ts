@@ -123,6 +123,7 @@ export class GatewayClient {
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
   private closed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectSent = false;
@@ -269,6 +270,10 @@ export class GatewayClient {
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
     this.ws?.close();
     this.ws = null;
@@ -617,9 +622,41 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.start();
+    }, delay);
+    this.reconnectTimer.unref?.();
+  }
+
+  /**
+   * Force an immediate reconnect attempt, resetting the exponential backoff.
+   * Safe to call while disconnected or while a reconnect attempt is in progress.
+   * Has no effect if the client has been stopped.
+   */
+  reconnect() {
+    if (this.closed) {
+      return;
+    }
+    // Cancel any pending scheduled reconnect so we don't get a double-connect.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    // Reset backoff so the next auto-reconnect after this also starts fast.
+    this.backoffMs = 1000;
+    if (this.ws) {
+      // Currently connected or mid-handshake: close to trigger scheduleReconnect.
+      this.ws.close(1000, "manual reconnect");
+    } else {
+      // Already disconnected: attempt immediately.
+      this.start();
+    }
   }
 
   private flushPendingErrors(err: Error) {

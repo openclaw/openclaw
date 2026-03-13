@@ -234,6 +234,7 @@ export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
   pairingHint?: string;
+  suppressReconnectHint?: boolean;
 } {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
   if (/pairing required/i.test(reasonLabel)) {
@@ -244,9 +245,16 @@ export function resolveGatewayDisconnectState(reason?: string): {
         "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
     };
   }
+  if (/^unauthorized/i.test(reasonLabel)) {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "check credentials — ctrl+r to retry",
+      suppressReconnectHint: true,
+    };
+  }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: "idle",
+    activityStatus: "reconnecting… ctrl+r to retry now",
   };
 }
 
@@ -343,6 +351,7 @@ export async function runTui(opts: TuiOptions) {
   let toolsExpanded = false;
   let showThinking = false;
   let pairingHintShown = false;
+  let disconnectHintShown = false;
   const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
@@ -913,6 +922,13 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlP = () => {
     void openSessionSelector();
   };
+  editor.onCtrlR = () => {
+    if (!isConnected) {
+      setActivityStatus("reconnecting…");
+      client.reconnect();
+      tui.requestRender();
+    }
+  };
   editor.onCtrlT = () => {
     showThinking = !showThinking;
     void loadHistory();
@@ -930,9 +946,11 @@ export async function runTui(opts: TuiOptions) {
   client.onConnected = () => {
     isConnected = true;
     pairingHintShown = false;
+    disconnectHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     setConnectionStatus("connected");
+    setActivityStatus("idle");
     void (async () => {
       await refreshAgents();
       updateHeader();
@@ -958,6 +976,16 @@ export async function runTui(opts: TuiOptions) {
     if (disconnectState.pairingHint && !pairingHintShown) {
       pairingHintShown = true;
       chatLog.addSystem(disconnectState.pairingHint);
+    } else if (
+      !disconnectHintShown &&
+      !disconnectState.pairingHint &&
+      !disconnectState.suppressReconnectHint
+    ) {
+      disconnectHintShown = true;
+      chatLog.addSystem(
+        "Gateway disconnected. Auto-reconnecting… press ctrl+r to retry immediately.\n" +
+          "If the problem persists, restart the TUI with: openclaw tui",
+      );
     }
     updateFooter();
     tui.requestRender();

@@ -104,18 +104,26 @@ describe("DiffArtifactStore", () => {
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {
+    // Use a dedicated store with no automatic cleanup (cleanupIntervalMs: Infinity)
+    // so scheduleCleanup() never fires a background sweep. This makes the test
+    // fully deterministic with fake timers: only the explicit cleanupExpired()
+    // call below is responsible for deletion, with no concurrent background sweep
+    // that could race against vi.setSystemTime() and produce non-deterministic
+    // results (fake Date.now() vs real stat.mtimeMs in the fallback path).
+    const testStore = new DiffArtifactStore({ rootDir, cleanupIntervalMs: Infinity });
+
     vi.useFakeTimers();
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
 
-    const standalone = await store.createStandaloneFileArtifact({
+    const standalone = await testStore.createStandaloneFileArtifact({
       format: "png",
       ttlMs: 1_000,
     });
     await fs.writeFile(standalone.filePath, Buffer.from("png"));
 
     vi.setSystemTime(new Date(now.getTime() + 2_000));
-    await store.cleanupExpired();
+    await testStore.cleanupExpired();
 
     await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
       code: "ENOENT",

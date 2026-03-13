@@ -38,7 +38,7 @@ export class DiffArtifactStore {
   private readonly logger?: PluginLogger;
   private readonly cleanupIntervalMs: number;
   private cleanupInFlight: Promise<void> | null = null;
-  private nextCleanupAt = 0;
+  private nextCleanupAt: number;
 
   constructor(params: { rootDir: string; logger?: PluginLogger; cleanupIntervalMs?: number }) {
     this.rootDir = path.resolve(params.rootDir);
@@ -47,6 +47,10 @@ export class DiffArtifactStore {
       params.cleanupIntervalMs === undefined
         ? DEFAULT_CLEANUP_INTERVAL_MS
         : Math.max(0, Math.floor(params.cleanupIntervalMs));
+    // When cleanupIntervalMs is Infinity (disabled), start at MAX_SAFE_INTEGER so
+    // scheduleCleanup() never fires automatically. Otherwise start at 0 so the
+    // first createArtifact/createStandaloneFileArtifact eagerly triggers a sweep.
+    this.nextCleanupAt = Number.isFinite(this.cleanupIntervalMs) ? 0 : Number.MAX_SAFE_INTEGER;
   }
 
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
