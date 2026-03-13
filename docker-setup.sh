@@ -160,7 +160,7 @@ validate_mount_spec() {
     fail "OPENCLAW_EXTRA_MOUNTS entries cannot contain control characters."
   fi
   # Relaxed to allow whitespace in paths (e.g., Windows usernames like "C:\Users\John Doe").
-  # YAML output is quoted to handle spaces correctly.
+  # YAML output uses single-quoted scalars to handle spaces and backslashes correctly.
   # Expected format: source:target[:options] (colons and commas still disallowed in path components)
   if [[ ! "$mount" =~ ^[^,:]+:[^,:]+(:[^,:]+)?$ ]]; then
     fail "Invalid mount format '$mount'. Expected source:target[:options] (colons and commas not allowed in paths)."
@@ -278,14 +278,14 @@ YAML
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
-    printf '      - "%s"\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - "%s"\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - "%s"\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - "%s"\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -294,14 +294,14 @@ YAML
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - "%s"\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - "%s"\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - "%s"\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - "%s"\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf "      - '%s'\n" "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
