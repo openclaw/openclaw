@@ -71,14 +71,16 @@ struct ExecCommandResolution {
         let resolvedPath: String? = {
             if hasPathSeparator {
                 if expanded.hasPrefix("/") {
-                    return expanded
+                    return self.canonicalizePath(expanded)
                 }
                 let base = cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let root = (base?.isEmpty == false) ? base! : FileManager().currentDirectoryPath
-                return URL(fileURLWithPath: root).appendingPathComponent(expanded).path
+                let absolutePath = URL(fileURLWithPath: root).appendingPathComponent(expanded).path
+                return self.canonicalizePath(absolutePath)
             }
             let searchPaths = self.searchPaths(from: env)
-            return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+            let found = CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
+            return found.flatMap { self.canonicalizePath($0) }
         }()
         let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
         return ExecCommandResolution(
@@ -86,6 +88,13 @@ struct ExecCommandResolution {
             resolvedPath: resolvedPath,
             executableName: name,
             cwd: cwd)
+    }
+
+    private static func canonicalizePath(_ path: String) -> String? {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard !resolved.isEmpty else { return nil }
+        // Verify the file exists (resolvingSymlinksInPath doesn't fail on non-existent targets)
+        return FileManager.default.fileExists(atPath: resolved) ? resolved : nil
     }
 
     private static func parseFirstToken(_ command: String) -> String? {
