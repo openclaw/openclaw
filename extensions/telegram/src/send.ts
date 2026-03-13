@@ -895,7 +895,11 @@ export async function sendMessageTelegram(
           api.sendDocument(
             chatId,
             file,
-            effectiveParams as Parameters<typeof api.sendDocument>[2],
+            // disable_content_type_detection=true prevents Telegram from re-interpreting
+            // the file type (e.g. treating a .png as a photo). Required for --force-document to work correctly.
+            { disable_content_type_detection: true, ...effectiveParams } as Parameters<
+              typeof api.sendDocument
+            >[2],
           ) as Promise<TelegramMessageLike>,
       };
     })();
