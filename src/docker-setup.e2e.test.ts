@@ -205,6 +205,22 @@ describe("docker-setup.sh", () => {
     expect(identityDirStat.isDirectory()).toBe(true);
   });
 
+  it("accepts OPENCLAW_CONFIG_DIR paths with spaces", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config with spaces");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace with spaces");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const configDirStat = await stat(configDir);
+    expect(configDirStat.isDirectory()).toBe(true);
+  });
+
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
