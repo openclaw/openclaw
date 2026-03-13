@@ -10,6 +10,7 @@ import {
   renderChatControls,
   renderChatSessionSelect,
   renderTab,
+  renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -437,9 +438,7 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">
-              ${renderTopbarThemeModeToggle(state)}
-            </div>
+            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
           </div>
         </div>
       </header>
@@ -543,9 +542,10 @@ export function renderApp(state: AppViewState) {
                               ? html`
                                   <span class="sidebar-version__label">${t("common.version")}</span>
                                   <span class="sidebar-version__text">v${version}</span>
+                                  ${renderSidebarConnectionStatus(state)}
                                 `
                               : html`
-                                  <span class="sidebar-version__dot"></span>
+                                  ${renderSidebarConnectionStatus(state)}
                                 `
                           }
                         </div>
@@ -924,8 +924,20 @@ export function renderApp(state: AppViewState) {
                       state.agentsList?.defaultId ??
                       state.agentsList?.agents?.[0]?.id ??
                       null;
+                    if (state.agentsPanel === "files" && refreshedAgentId) {
+                      void loadAgentFiles(state, refreshedAgentId);
+                    }
+                    if (state.agentsPanel === "skills" && refreshedAgentId) {
+                      void loadAgentSkills(state, refreshedAgentId);
+                    }
                     if (state.agentsPanel === "tools" && refreshedAgentId) {
                       void loadToolsCatalog(state, refreshedAgentId);
+                    }
+                    if (state.agentsPanel === "channels") {
+                      void loadChannels(state, false);
+                    }
+                    if (state.agentsPanel === "cron") {
+                      void state.loadCron();
                     }
                   },
                   onSelectAgent: (agentId) => {
