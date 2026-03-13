@@ -139,7 +139,7 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
 }
 
 function normalizeAnthropicModelId(model: string): string {
-  const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+  const anthropicModelAliases: Record<string, string> = {
     "opus-4.6": "claude-opus-4-6",
     "opus-4.5": "claude-opus-4-5",
     "sonnet-4.6": "claude-sonnet-4-6",
@@ -150,7 +150,7 @@ function normalizeAnthropicModelId(model: string): string {
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  return ANTHROPIC_MODEL_ALIASES[lower] ?? trimmed;
+  return anthropicModelAliases[lower] ?? trimmed;
 }
 
 function normalizeProviderModelId(provider: string, model: string): string {
