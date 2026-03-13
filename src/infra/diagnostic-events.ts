@@ -202,6 +202,18 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   };
   latency?: {
     sampleCount: number;
+    dominant?: Array<{
+      segment:
+        | "dispatchToQueue"
+        | "queueToRun"
+        | "acpEnsureToRun"
+        | "runToFirstEvent"
+        | "firstEventToFirstVisible"
+        | "runToFirstVisible"
+        | "firstVisibleToFinal"
+        | "endToEnd";
+      count: number;
+    }>;
     segments: Partial<
       Record<
         | "dispatchToQueue"

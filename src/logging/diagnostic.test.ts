@@ -153,6 +153,7 @@ describe("stuck session diagnostics threshold", () => {
       };
       latency?: {
         sampleCount: number;
+        dominant?: Array<{ segment: string; count: number }>;
         segments?: Record<string, { avgMs: number; p95Ms: number; maxMs: number }>;
       };
     }> = [];
@@ -297,6 +298,7 @@ describe("stuck session diagnostics threshold", () => {
       type: "diagnostic.heartbeat",
       latency: {
         sampleCount: 1,
+        dominant: [{ segment: "runToFirstVisible", count: 1 }],
         segments: {
           dispatchToQueue: { avgMs: 100, p95Ms: 100, maxMs: 100 },
           queueToRun: { avgMs: 300, p95Ms: 300, maxMs: 300 },
@@ -324,6 +326,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(
       __testing.formatLatencyHeartbeatSummary({
         sampleCount: 2,
+        dominant: [{ segment: "runToFirstVisible", count: 2 }],
         segments: {
           dispatchToQueue: { avgMs: 100, p95Ms: 120, maxMs: 140 },
           runToFirstVisible: { avgMs: 900, p95Ms: 1100, maxMs: 1300 },
@@ -331,7 +334,7 @@ describe("stuck session diagnostics threshold", () => {
         },
       }),
     ).toBe(
-      " latency=2 queue=100/120/140ms | run->visible=900/1100/1300ms | endToEnd=2200/2600/3000ms",
+      " latency=2 queue=100/120/140ms | run->visible=900/1100/1300ms | endToEnd=2200/2600/3000ms | dominant=runToFirstVisiblex2",
     );
   });
 });

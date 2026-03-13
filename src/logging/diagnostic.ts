@@ -48,6 +48,7 @@ const latencySamples: Record<LatencySegmentName, number[]> = {
   firstVisibleToFinal: [],
   endToEnd: [],
 };
+const latencyDominantCounts: Partial<Record<LatencySegmentName, number>> = {};
 const turnLatencySnapshots = new Map<string, TurnLatencySnapshot>();
 
 let lastActivityAt = 0;
@@ -112,6 +113,10 @@ function recordLatencySample(segment: LatencySegmentName, durationMs: number) {
 function buildLatencySummary():
   | {
       sampleCount: number;
+      dominant?: Array<{
+        segment: LatencySegmentName;
+        count: number;
+      }>;
       segments: Partial<
         Record<
           LatencySegmentName,
@@ -143,12 +148,18 @@ function buildLatencySummary():
     };
     return acc;
   }, {});
+  const dominant = Object.entries(latencyDominantCounts)
+    .filter((entry): entry is [LatencySegmentName, number] => typeof entry[1] === "number")
+    .toSorted((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([segment, count]) => ({ segment, count }));
   const sampleCount = latencySamples.endToEnd.length;
-  if (sampleCount === 0 && Object.keys(segments).length === 0) {
+  if (sampleCount === 0 && Object.keys(segments).length === 0 && dominant.length === 0) {
     return undefined;
   }
   return {
     sampleCount,
+    ...(dominant.length > 0 ? { dominant } : {}),
     segments,
   };
 }
@@ -157,6 +168,10 @@ function formatLatencyHeartbeatSummary(
   latency:
     | {
         sampleCount: number;
+        dominant?: Array<{
+          segment: LatencySegmentName;
+          count: number;
+        }>;
         segments: Partial<
           Record<
             LatencySegmentName,
@@ -197,6 +212,11 @@ function formatLatencyHeartbeatSummary(
   append("run->visible", latency.segments.runToFirstVisible);
   append("visible->final", latency.segments.firstVisibleToFinal);
   append("endToEnd", latency.segments.endToEnd);
+  if (latency.dominant && latency.dominant.length > 0) {
+    parts.push(
+      `dominant=${latency.dominant.map((entry) => `${entry.segment}x${entry.count}`).join(",")}`,
+    );
+  }
   if (parts.length === 0) {
     return "";
   }
@@ -225,30 +245,50 @@ function recordTurnLatencyStageSample(params: {
   const firstVisibleAt = snapshot.first_visible_emitted;
   const finalAt = snapshot.final_dispatched;
   const completedAt = snapshot.completed;
+  const turnSegments: Partial<Record<LatencySegmentName, number>> = {};
 
   if (typeof queueAt === "number") {
     recordLatencySample("dispatchToQueue", queueAt);
+    turnSegments.dispatchToQueue = queueAt;
   }
   if (typeof runAt === "number") {
-    recordLatencySample("queueToRun", runAt - (queueAt ?? 0));
+    const value = runAt - (queueAt ?? 0);
+    recordLatencySample("queueToRun", value);
+    turnSegments.queueToRun = value;
   }
   if (typeof runAt === "number" && typeof acpEnsureAt === "number") {
-    recordLatencySample("acpEnsureToRun", runAt - acpEnsureAt);
+    const value = runAt - acpEnsureAt;
+    recordLatencySample("acpEnsureToRun", value);
+    turnSegments.acpEnsureToRun = value;
   }
   if (typeof runAt === "number" && typeof acpFirstEventAt === "number") {
-    recordLatencySample("runToFirstEvent", acpFirstEventAt - runAt);
+    const value = acpFirstEventAt - runAt;
+    recordLatencySample("runToFirstEvent", value);
+    turnSegments.runToFirstEvent = value;
   }
   if (typeof acpFirstEventAt === "number" && typeof acpFirstVisibleAt === "number") {
-    recordLatencySample("firstEventToFirstVisible", acpFirstVisibleAt - acpFirstEventAt);
+    const value = acpFirstVisibleAt - acpFirstEventAt;
+    recordLatencySample("firstEventToFirstVisible", value);
+    turnSegments.firstEventToFirstVisible = value;
   }
   if (typeof runAt === "number" && typeof firstVisibleAt === "number") {
-    recordLatencySample("runToFirstVisible", firstVisibleAt - runAt);
+    const value = firstVisibleAt - runAt;
+    recordLatencySample("runToFirstVisible", value);
+    turnSegments.runToFirstVisible = value;
   }
   if (typeof firstVisibleAt === "number" && typeof finalAt === "number") {
-    recordLatencySample("firstVisibleToFinal", finalAt - firstVisibleAt);
+    const value = finalAt - firstVisibleAt;
+    recordLatencySample("firstVisibleToFinal", value);
+    turnSegments.firstVisibleToFinal = value;
   }
   if (typeof completedAt === "number") {
     recordLatencySample("endToEnd", completedAt);
+  }
+  const dominant = Object.entries(turnSegments)
+    .filter((entry): entry is [LatencySegmentName, number] => typeof entry[1] === "number")
+    .toSorted((left, right) => right[1] - left[1])[0];
+  if (dominant) {
+    latencyDominantCounts[dominant[0]] = (latencyDominantCounts[dominant[0]] ?? 0) + 1;
   }
   turnLatencySnapshots.delete(params.turnLatencyId);
 }
@@ -782,6 +822,9 @@ export function resetDiagnosticStateForTest(): void {
   firstVisibleTimeoutCount = 0;
   for (const segment of Object.keys(latencySamples) as LatencySegmentName[]) {
     latencySamples[segment].length = 0;
+  }
+  for (const segment of Object.keys(latencyDominantCounts) as LatencySegmentName[]) {
+    delete latencyDominantCounts[segment];
   }
   turnLatencySnapshots.clear();
   lastActivityAt = 0;
