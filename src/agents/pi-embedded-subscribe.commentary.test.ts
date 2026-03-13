@@ -153,6 +153,57 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-1"]);
   });
 
+  it("delivers finalized tool-use commentary on message_end", async () => {
+    const onCommentaryReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_start",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [],
+      }),
+    });
+    emit({
+      type: "message_end",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Checking the repo state now.",
+            textSignature: JSON.stringify({ id: "sig-tool", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+    });
+
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(1);
+    expect(onCommentaryReply).toHaveBeenCalledWith({
+      text: "Checking the repo state now.",
+    });
+    expect(subscription.assistantOutputs).toEqual([
+      {
+        segmentId: "sig-tool",
+        text: "Checking the repo state now.",
+        phase: "commentary",
+      },
+    ]);
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-tool"]);
+  });
+
   it("does not mark commentary as delivered when the callback fails", async () => {
     const onCommentaryReply = vi.fn(async () => {
       throw new Error("send failed");

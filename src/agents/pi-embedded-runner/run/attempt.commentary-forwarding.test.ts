@@ -2,18 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type {
-  AuthStorage,
-  ExtensionContext,
-  ModelRegistry,
-  ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
+import type { AuthStorage, ModelRegistry, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "../../test-helpers/pi-tools-sandbox-context.js";
 
 const hoisted = vi.hoisted(() => {
-  const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
@@ -27,7 +21,6 @@ const hoisted = vi.hoisted(() => {
     appendCustomEntry: vi.fn(),
   };
   return {
-    spawnSubagentDirectMock,
     createAgentSessionMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
@@ -51,11 +44,6 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
     } as unknown as typeof actual.SessionManager,
   };
 });
-
-vi.mock("../../subagent-spawn.js", () => ({
-  SUBAGENT_SPAWN_MODES: ["run", "session"],
-  spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
-}));
 
 vi.mock("../../sandbox.js", () => ({
   resolveSandboxContext: (...args: unknown[]) => hoisted.resolveSandboxContextMock(...args),
@@ -243,15 +231,10 @@ function createSubscriptionMock() {
   };
 }
 
-describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
+describe("runEmbeddedAttempt live commentary forwarding", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
-    hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:child",
-      runId: "run-child",
-    });
     hoisted.createAgentSessionMock.mockReset();
     hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
     hoisted.resolveSandboxContextMock.mockReset();
@@ -275,27 +258,22 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
     }
   });
 
-  it("passes the real workspace to sessions_spawn when workspaceAccess is ro", async () => {
-    const realWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-real-workspace-"));
-    const sandboxWorkspace = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-sandbox-workspace-"),
-    );
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-dir-"));
-    tempPaths.push(realWorkspace, sandboxWorkspace, agentDir);
+  it("passes onCommentaryReply into subscribeEmbeddedPiSession", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commentary-agent-"));
+    tempPaths.push(workspaceDir, agentDir);
 
     hoisted.resolveSandboxContextMock.mockResolvedValue(
       createPiToolsSandboxContext({
-        workspaceDir: sandboxWorkspace,
-        agentWorkspaceDir: realWorkspace,
-        workspaceAccess: "ro",
-        fsBridge: createHostSandboxFsBridge(sandboxWorkspace),
-        tools: { allow: ["sessions_spawn"], deny: [] },
+        workspaceDir,
+        fsBridge: createHostSandboxFsBridge(workspaceDir),
+        tools: { allow: [], deny: [] },
         sessionKey: "agent:main:main",
       }),
     );
 
     hoisted.createAgentSessionMock.mockImplementation(
-      async (params: { customTools: ToolDefinition[] }) => {
+      async (_params: { customTools: ToolDefinition[] }) => {
         const session: MutableSession = {
           sessionId: "embedded-session",
           messages: [],
@@ -306,20 +284,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
               session.messages = [...messages];
             },
           },
-          prompt: async () => {
-            const spawnTool = params.customTools.find((tool) => tool.name === "sessions_spawn");
-            expect(spawnTool).toBeDefined();
-            if (!spawnTool) {
-              throw new Error("missing sessions_spawn tool");
-            }
-            await spawnTool.execute(
-              "call-sessions-spawn",
-              { task: "inspect workspace" },
-              undefined,
-              undefined,
-              {} as unknown as ExtensionContext,
-            );
-          },
+          prompt: async () => {},
           abort: async () => {},
           dispose: () => {},
           steer: async () => {},
@@ -336,17 +301,18 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       contextWindow: 8192,
       input: ["text"],
     } as unknown as Model<Api>;
+    const onCommentaryReply = vi.fn();
 
     const result = await runEmbeddedAttempt({
       sessionId: "embedded-session",
       sessionKey: "agent:main:main",
-      sessionFile: path.join(realWorkspace, "session.jsonl"),
-      workspaceDir: realWorkspace,
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
       agentDir,
       config: {},
-      prompt: "spawn a child session",
+      prompt: "check live commentary forwarding",
       timeoutMs: 10_000,
-      runId: "run-1",
+      runId: "run-commentary",
       provider: "openai",
       modelId: "gpt-test",
       model,
@@ -355,22 +321,13 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
       thinkLevel: "off",
       senderIsOwner: true,
       disableMessageTool: true,
+      onCommentaryReply,
     });
 
     expect(result.promptError).toBeNull();
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        task: "inspect workspace",
-      }),
-      expect.objectContaining({
-        workspaceDir: realWorkspace,
-      }),
-    );
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        workspaceDir: sandboxWorkspace,
+        onCommentaryReply,
       }),
     );
   });
