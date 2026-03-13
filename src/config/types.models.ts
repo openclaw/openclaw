@@ -20,6 +20,7 @@ export type ModelCompatConfig = {
   supportsUsageInStreaming?: boolean;
   supportsTools?: boolean;
   supportsStrictMode?: boolean;
+  supportsXHighThinking?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   thinkingFormat?: "openai" | "zai" | "qwen";
   requiresToolResultName?: boolean;

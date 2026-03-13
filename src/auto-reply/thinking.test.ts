@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatXHighModelHint,
   listThinkingLevelLabels,
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
+  supportsXHighThinking,
 } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
@@ -66,6 +68,51 @@ describe("listThinkingLevels", () => {
 
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+  });
+
+  it("allows config-defined custom models to opt in to xhigh", () => {
+    const source = {
+      config: {
+        models: {
+          providers: {
+            robot: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  compat: { supportsXHighThinking: true },
+                },
+              ],
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(supportsXHighThinking("robot", "gpt-5.4", source)).toBe(true);
+    expect(listThinkingLevels("robot", "gpt-5.4", source)).toContain("xhigh");
+    expect(formatXHighModelHint(source)).toContain("robot/gpt-5.4");
+  });
+
+  it("allows config to explicitly disable xhigh for an otherwise supported ref", () => {
+    const source = {
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  compat: { supportsXHighThinking: false },
+                },
+              ],
+            },
+          },
+        },
+      },
+    } as const;
+
+    expect(supportsXHighThinking("openai", "gpt-5.4", source)).toBe(false);
+    expect(listThinkingLevels("openai", "gpt-5.4", source)).not.toContain("xhigh");
   });
 
   it("always includes adaptive", () => {
