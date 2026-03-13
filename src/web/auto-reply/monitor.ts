@@ -215,6 +215,10 @@ export async function monitorWebChannel(
     status.lastError = null;
     emitStatus();
 
+    // Register the outbound listener immediately so proactive sends (cron
+    // announce, message tool) can use it as soon as status reports "connected".
+    setActiveWebListener(account.accountId, listener);
+
     // Surface a concise connection event for the next main-session turn/heartbeat.
     const { e164: selfE164 } = readWebSelfId(account.authDir);
     const connectRoute = resolveAgentRoute({
@@ -225,8 +229,6 @@ export async function monitorWebChannel(
     enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
       sessionKey: connectRoute.sessionKey,
     });
-
-    setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;
