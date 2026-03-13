@@ -55,6 +55,8 @@ import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queu
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { emitSupervisorStatusForActiveRun } from "./supervisor/status-runtime.js";
+import { decideTruthfulEarlyStatus } from "./supervisor/truthful-status-policy.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -69,6 +71,7 @@ export async function runReplyAgent(params: {
   shouldFollowup: boolean;
   isActive: boolean;
   isStreaming: boolean;
+  laneSize?: number;
   opts?: GetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
@@ -100,6 +103,7 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     isActive,
     isStreaming,
+    laneSize = 0,
     opts,
     typing,
     sessionEntry,
@@ -210,18 +214,73 @@ export async function runReplyAgent(params: {
     queueMode: resolvedQueue.mode,
   });
 
+  const emitSupervisorStatusIfNeeded = async () => {
+    if (!opts?.onStatusReply || !isActive || isHeartbeat) {
+      return;
+    }
+    const truthfulStatusDecision = decideTruthfulEarlyStatus({
+      queueMode: resolvedQueue.mode,
+      isActive,
+      isHeartbeat,
+      isExternallyRoutable: Boolean(
+        resolveOriginMessageTo({
+          originatingTo: sessionCtx.OriginatingTo,
+          to: sessionCtx.To,
+        }),
+      ),
+      isStreaming,
+    });
+    if (!truthfulStatusDecision.shouldEmit) {
+      return;
+    }
+    if (
+      resolvedQueue.mode !== "interrupt" &&
+      resolvedQueue.mode !== "steer" &&
+      resolvedQueue.mode !== "steer-backlog" &&
+      resolvedQueue.mode !== "followup" &&
+      resolvedQueue.mode !== "collect"
+    ) {
+      return;
+    }
+    opts.onLatencyStage?.({
+      stage: "first_visible_scheduled",
+      firstVisibleKind: "status",
+      queueModeFinal: resolvedQueue.mode,
+      durationMs: 0,
+    });
+    await emitSupervisorStatusForActiveRun({
+      sessionFile: followupRun.run.sessionFile,
+      sessionKey: queueKey,
+      sessionId: followupRun.run.sessionId,
+      queueMode: resolvedQueue.mode,
+      source: sessionCtx.OriginatingChannel ?? sessionCtx.Provider ?? "unknown",
+      bodyText: followupRun.summaryLine || commandBody,
+      isStreaming,
+      laneSize,
+      sendStatus: opts.onStatusReply,
+    });
+  };
+
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    await emitSupervisorStatusIfNeeded();
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
   }
 
+  await emitSupervisorStatusIfNeeded();
+  opts?.onLatencyStage?.({
+    stage: "run_started",
+    provider: followupRun.run.provider,
+    model: followupRun.run.model,
+    durationMs: 0,
+  });
   await typingSignals.signalRunStart();
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
