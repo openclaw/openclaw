@@ -20,6 +20,20 @@ type TargetOpts = {
   cdpUrl: string;
   targetId?: string;
 };
+const MAX_CLICK_DELAY_MS = 5_000;
+const MAX_WAIT_TIME_MS = 30_000;
+const MAX_BATCH_ACTIONS = 100;
+
+function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
+  const normalized = Math.floor(value ?? 0);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    throw new Error(`${label} must be >= 0`);
+  }
+  if (normalized > maxMs) {
+    throw new Error(`${label} exceeds maximum of ${maxMs}ms`);
+  }
+  return normalized;
+}
 
 async function getRestoredPageForTarget(opts: TargetOpts) {
   const page = await getPageForTargetId(opts);
@@ -81,9 +95,10 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   try {
-    if (opts.delayMs) {
+    const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
+    if (delayMs > 0) {
       await locator.hover({ timeout });
-      await new Promise((r) => setTimeout(r, opts.delayMs));
+      await new Promise((r) => setTimeout(r, delayMs));
     }
     if (opts.doubleClick) {
       await locator.dblclick({
@@ -439,7 +454,7 @@ export async function waitForViaPlaywright(opts: {
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
   if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-    await page.waitForTimeout(Math.max(0, opts.timeMs));
+    await page.waitForTimeout(resolveBoundedDelayMs(opts.timeMs, "wait timeMs", MAX_WAIT_TIME_MS));
   }
   if (opts.text) {
     await page.getByText(opts.text).first().waitFor({
@@ -855,6 +870,9 @@ export async function batchViaPlaywright(opts: {
   const depth = opts.depth ?? 0;
   if (depth > MAX_BATCH_DEPTH) {
     throw new Error(`Batch nesting depth exceeds maximum of ${MAX_BATCH_DEPTH}`);
+  }
+  if (opts.actions.length > MAX_BATCH_ACTIONS) {
+    throw new Error(`Batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
   }
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
