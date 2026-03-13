@@ -606,13 +606,16 @@ export class AcpxRuntime implements AcpRuntime {
 
     if (!result.ok) {
       this.healthy = false;
+      const failure = result.failure;
       return {
         ok: false,
         code: "ACP_BACKEND_UNAVAILABLE",
         message:
-          result.failure.error instanceof Error
-            ? result.failure.error.message
-            : String(result.failure.error),
+          failure.kind === "exception"
+            ? failure.error instanceof Error
+              ? failure.error.message
+              : String(failure.error)
+            : "acpx backend unavailable",
       };
     }
 
