@@ -80,8 +80,20 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 | Data       | Upstream HEAD | Commits incorporados            | Conflitos manuais | Responsável |
 | ---------- | ------------- | ------------------------------- | ----------------- | ----------- |
+| 13/03/2026 | `3cf06f793`   | 379 commits (desde `0ff184397`) | 5 arquivos        | Iris 🌈     |
 | 06/03/2026 | `d6d21b3ab`   | 171 commits (desde `49acb07f9`) | 3 arquivos        | Iris 🌈     |
 | 26/02/2026 | `85b075d0c`   | 192 commits (desde `a898acbd5`) | 0 — auto-merge    | Iris 🌈     |
+
+**Notas do merge 13/03/2026:**
+
+- `src/agents/pi-embedded-runner/run/attempt.ts`: upstream removeu bloco `replyMode tool-only` e adicionou comentário sobre compaction count — mantido bloco Iris + adicionado comentário upstream
+- `ui/src/i18n/locales/en.ts` e `pt-BR.ts`: upstream reestruturou grupos de navegação (removeu `conversations`, adicionou `communications/appearance/automation/infrastructure/aiAgents`) — aceito THEIRS
+- `ui/src/styles/base.css`: upstream atualizou CSS massivamente (dashboard-v2) e voltou ao vermelho — mantido OURS (roxo Iris #7c3aed, dark e light mode)
+- `ui/src/ui/app-render.ts`: upstream adicionou `dashboard-header` component e botão de busca (⌘K) no topbar — mantido brand Iris + adicionado botão busca; nova `sidebar-brand` corrigida de "OpenClaw" → "Iris"
+- `pnpm install` necessário após merge: upstream adicionou `jsdom` como dep de testes (commit `0c8ea8d98`)
+- Build: passou (`pnpm build` + `node scripts/ui.js build`) sem erros
+- Testes: 7495 passaram (baseline subiu de 6769); 5 falhas pré-existentes (`manifest-registry` dedup)
+- `--no-verify` no commit do merge: limitação Windows com `Argument list too long` ao passar centenas de arquivos para o hook (build e testes validados antes)
 
 **Notas do merge 06/03/2026:**
 
