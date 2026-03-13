@@ -929,3 +929,35 @@
   background: var(--panel-strong);
   border-color: var(--accent);
 }
+
+.context-notice-wrapper {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.context-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(90%, 320px);
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background-color: var(--ctx-bg);
+  border: 1px solid var(--ctx-color);
+  color: var(--ctx-color);
+}
+
+.context-notice__icon {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.context-notice__detail {
+  font-size: 0.875rem;
+  opacity: 0.8;
+}
