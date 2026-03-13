@@ -33,6 +33,22 @@ function resolveStoredCredentialLabel(params: {
   return "missing";
 }
 
+function formatExpirationLabel(
+  expires: unknown,
+  now: number,
+  formatUntil: (timestampMs: number) => string,
+  compactExpiredPrefix = " expired",
+) {
+  if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0) {
+    return "";
+  }
+  return expires <= now ? compactExpiredPrefix : ` exp ${formatUntil(expires)}`;
+}
+
+function formatFlagsSuffix(flags: string[]) {
+  return flags.length > 0 ? ` (${flags.join(", ")})` : "";
+}
+
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
@@ -89,14 +105,7 @@ export const resolveAuthLabel = async (
           refValue: profile.tokenRef,
           mode,
         });
-        const exp =
-          typeof profile.expires === "number" &&
-          Number.isFinite(profile.expires) &&
-          profile.expires > 0
-            ? profile.expires <= now
-              ? " expired"
-              : ` exp ${formatUntil(profile.expires)}`
-            : "";
+        const exp = formatExpirationLabel(profile.expires, now, formatUntil);
         return {
           label: `${profileId} token ${tokenLabel}${exp}${more}`,
           source: "",
@@ -104,14 +113,7 @@ export const resolveAuthLabel = async (
       }
       const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
       const label = display === profileId ? profileId : display;
-      const exp =
-        typeof profile.expires === "number" &&
-        Number.isFinite(profile.expires) &&
-        profile.expires > 0
-          ? profile.expires <= now
-            ? " expired"
-            : ` exp ${formatUntil(profile.expires)}`
-          : "";
+      const exp = formatExpirationLabel(profile.expires, now, formatUntil);
       return { label: `${label} oauth${exp}${more}`, source: "" };
     }
 
@@ -140,7 +142,7 @@ export const resolveAuthLabel = async (
           configProfile.mode !== profile.type &&
           !(configProfile.mode === "oauth" && profile.type === "token"))
       ) {
-        const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+        const suffix = formatFlagsSuffix(flags);
         return `${profileId}=missing${suffix}`;
       }
       if (profile.type === "api_key") {
@@ -149,7 +151,7 @@ export const resolveAuthLabel = async (
           refValue: profile.keyRef,
           mode,
         });
-        const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+        const suffix = formatFlagsSuffix(flags);
         return `${profileId}=${keyLabel}${suffix}`;
       }
       if (profile.type === "token") {
@@ -158,14 +160,11 @@ export const resolveAuthLabel = async (
           refValue: profile.tokenRef,
           mode,
         });
-        if (
-          typeof profile.expires === "number" &&
-          Number.isFinite(profile.expires) &&
-          profile.expires > 0
-        ) {
-          flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
+        const expirationFlag = formatExpirationLabel(profile.expires, now, formatUntil, "expired");
+        if (expirationFlag) {
+          flags.push(expirationFlag);
         }
-        const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+        const suffix = formatFlagsSuffix(flags);
         return `${profileId}=token:${tokenLabel}${suffix}`;
       }
       const display = resolveAuthProfileDisplayLabel({
@@ -179,15 +178,12 @@ export const resolveAuthLabel = async (
           : display.startsWith(profileId)
             ? display.slice(profileId.length).trim()
             : `(${display})`;
-      if (
-        typeof profile.expires === "number" &&
-        Number.isFinite(profile.expires) &&
-        profile.expires > 0
-      ) {
-        flags.push(profile.expires <= now ? "expired" : `exp ${formatUntil(profile.expires)}`);
+      const expirationFlag = formatExpirationLabel(profile.expires, now, formatUntil, "expired");
+      if (expirationFlag) {
+        flags.push(expirationFlag);
       }
       const suffixLabel = suffix ? ` ${suffix}` : "";
-      const suffixFlags = flags.length > 0 ? ` (${flags.join(", ")})` : "";
+      const suffixFlags = formatFlagsSuffix(flags);
       return `${profileId}=OAuth${suffixLabel}${suffixFlags}`;
     });
     return {
