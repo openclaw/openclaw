@@ -96,6 +96,22 @@ describe("isBotMentionedFromTargets", () => {
     });
     expectMentioned(msg, { mentionRegexes: [] }, true);
   });
+
+  it("treats explicit JID mention as valid when selfChatMode is disabled", () => {
+    const cfg = {
+      mentionRegexes: [/\bopenclaw\b/i],
+      allowFrom: ["+999"],
+      selfChatMode: false,
+    };
+    const msg = makeMsg({
+      body: "@owner ping",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+    });
+    const targets = resolveMentionTargets(msg);
+    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(true);
+  });
 });
 
 describe("resolveMentionTargets with @lid mapping", () => {
