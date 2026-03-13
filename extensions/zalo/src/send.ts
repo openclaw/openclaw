@@ -77,21 +77,14 @@ function resolveValidatedSendContext(
   return { ok: true, chatId: trimmedChatId, token, fetcher };
 }
 
-function toInvalidContextResult(
-  context: ReturnType<typeof resolveValidatedSendContext>,
-): ZaloSendResult | null {
-  return context.ok ? null : { ok: false, error: context.error };
-}
-
 export async function sendMessageZalo(
   chatId: string,
   text: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
   const context = resolveValidatedSendContext(chatId, options);
-  const invalidResult = toInvalidContextResult(context);
-  if (invalidResult) {
-    return invalidResult;
+  if (!context.ok) {
+    return { ok: false, error: context.error };
   }
 
   if (options.mediaUrl) {
@@ -120,9 +113,8 @@ export async function sendPhotoZalo(
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
   const context = resolveValidatedSendContext(chatId, options);
-  const invalidResult = toInvalidContextResult(context);
-  if (invalidResult) {
-    return invalidResult;
+  if (!context.ok) {
+    return { ok: false, error: context.error };
   }
 
   if (!photoUrl?.trim()) {

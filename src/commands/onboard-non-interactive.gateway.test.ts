@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
@@ -408,11 +409,17 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       }));
 
       let capturedError = "";
-      const runtimeWithCapture = {
+      const runtimeWithCapture: RuntimeEnv = {
         log: () => {},
-        error: (message: string) => {
-          capturedError = message;
-          throw new Error(message);
+        error: (...args: unknown[]) => {
+          const firstArg = args[0];
+          capturedError =
+            typeof firstArg === "string"
+              ? firstArg
+              : firstArg instanceof Error
+                ? firstArg.message
+                : (JSON.stringify(firstArg) ?? "");
+          throw new Error(capturedError);
         },
         exit: (_code: number) => {
           throw new Error("exit should not be reached after runtime.error");
