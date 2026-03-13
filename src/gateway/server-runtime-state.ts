@@ -188,7 +188,10 @@ export async function createGatewayRuntimeState(params: {
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
-  const voiceConnectWss = createVoiceConnectWss({ maxPayloadBytes: MAX_PAYLOAD_BYTES }).wss;
+  const voiceConnectWss = createVoiceConnectWss({
+    maxPayloadBytes: MAX_PAYLOAD_BYTES,
+    resolvedAuth: params.resolvedAuth,
+  }).wss;
 
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
