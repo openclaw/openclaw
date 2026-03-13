@@ -197,13 +197,13 @@ const INITIAL_COMPONENTS: Partial<Components> = {
       return null;
     }
     return (
-      <span className="block my-4">
-        <img
-          src={src}
-          alt={alt ?? ""}
-          style={{ maxWidth: "100%", height: "auto", display: "block" }}
-        />
-      </span>
+      <img
+        src={src}
+        alt={alt ?? ""}
+        className="my-4 rounded-lg border border-border"
+        style={{ maxWidth: "100%", height: "auto", display: "block" }}
+        loading="eager"
+      />
     );
   },
 
@@ -235,7 +235,15 @@ const INITIAL_COMPONENTS: Partial<Components> = {
   },
 
   // ── Paragraphs ──
-  p: function P({ children }) {
+  // If a paragraph contains an image, render as <div> to avoid invalid
+  // HTML nesting (block <img> inside <p> causes browser to break the DOM).
+  p: function P({ children, node }) {
+    const hasImage = node?.children?.some(
+      (child) => child.type === "element" && child.tagName === "img",
+    );
+    if (hasImage) {
+      return <div className="my-2.5 leading-relaxed first:mt-0 last:mb-0">{children}</div>;
+    }
     return <p className="my-2.5 leading-relaxed first:mt-0 last:mb-0">{children}</p>;
   },
 

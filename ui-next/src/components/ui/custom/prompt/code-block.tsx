@@ -149,6 +149,21 @@ function useDarkMode(): boolean {
   return dark;
 }
 
+// ── Mermaid render queue — serializes renders to avoid mermaid singleton races ─
+// Mermaid is a global singleton; concurrent render() calls corrupt shared state.
+
+let mermaidRenderQueue: Promise<void> = Promise.resolve();
+
+function cleanupMermaidOrphans(id: string) {
+  // Mermaid v11 injects temp SVG + error elements directly into document.body
+  document.getElementById(id)?.remove();
+  document.getElementById(`d${id}`)?.remove();
+  // Sweep any orphan mermaid error/render containers left in body
+  for (const el of document.querySelectorAll("body > [id^='mermaid-'], body > [id^='dmermaid-']")) {
+    el.remove();
+  }
+}
+
 // ── Mermaid diagram renderer (T7: theme sync + zoom) ─────────────────────────
 
 function MermaidBlock({ code }: { code: string }) {
@@ -159,8 +174,11 @@ function MermaidBlock({ code }: { code: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    async function render() {
-      if (!code.trim()) {
+    const id = `mermaid-${Math.random().toString(36).slice(2)}`;
+
+    // Queue this render behind any in-flight renders to avoid singleton races
+    mermaidRenderQueue = mermaidRenderQueue.then(async () => {
+      if (cancelled || !code.trim()) {
         return;
       }
       try {
@@ -170,7 +188,6 @@ function MermaidBlock({ code }: { code: string }) {
           theme: isDark ? "dark" : "default",
           securityLevel: "loose",
         });
-        const id = `mermaid-${Math.random().toString(36).slice(2)}`;
         const { svg } = await mermaid.render(id, code.trim());
         if (!cancelled) {
           setSvgContent(svg);
@@ -180,9 +197,11 @@ function MermaidBlock({ code }: { code: string }) {
         if (!cancelled) {
           setError(String(e));
         }
+      } finally {
+        cleanupMermaidOrphans(id);
       }
-    }
-    void render();
+    });
+
     return () => {
       cancelled = true;
     };

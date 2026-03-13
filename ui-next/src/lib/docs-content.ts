@@ -1,5 +1,6 @@
 import { loader } from "fumadocs-core/source";
 import type { MetaData, PageData } from "fumadocs-core/source";
+import docsDates from "./docs-dates.generated.json";
 
 // Build-time import of all operator1 docs as raw markdown strings
 const rawDocs = import.meta.glob("../../../docs/operator1/*.md", {
@@ -186,7 +187,7 @@ for (const cat of CATEGORY_ORDER) {
         title: extractTitle(raw) || "Overview",
         description: extractDescription(raw),
         content: rewriteOperator1Links(stripFrontmatter(raw)),
-        updated: extractUpdated(raw),
+        updated: extractUpdated(raw) ?? (docsDates as Record<string, string>)["index"],
       } satisfies DocsPageData,
     });
   } else {
@@ -218,7 +219,7 @@ for (const cat of CATEGORY_ORDER) {
           title: extractTitle(raw) || virtualName,
           description: extractDescription(raw),
           content: rewriteOperator1Links(stripFrontmatter(raw)),
-          updated: extractUpdated(raw),
+          updated: extractUpdated(raw) ?? (docsDates as Record<string, string>)[slug],
         } satisfies DocsPageData,
       });
     }

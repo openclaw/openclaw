@@ -7,6 +7,11 @@ title: "Agent Hierarchy"
 
 The Operator1 system organizes 34 agents into three tiers across three departments. Each agent has a defined role, dedicated workspace, and specific capabilities.
 
+## Visual Overview
+
+![Operator1 Agent Hierarchy](/images/agent-hierarchy-infographic.png)
+_The 34-agent Matrix hierarchy organized into three tiers across Engineering, Marketing, and Finance departments_
+
 ## Full agent tree
 
 ```

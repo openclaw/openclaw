@@ -7,6 +7,11 @@ title: "Configuration"
 
 The Operator1 system is configured through JSON files that define the agent hierarchy, gateway behavior, channel integrations, and memory settings.
 
+## Visual Overview
+
+![Operator1 Configuration System](/images/config-system-infographic.png)
+_The configuration system architecture showing how openclaw.json, $include directives, and agent workspaces combine to create the running multi-agent system_
+
 ## Config file layout
 
 ```
