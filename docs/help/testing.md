@@ -48,6 +48,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
   - Deterministic regressions for known bugs
+  - Cross-channel outbound message smoke coverage via test plugins (for example `src/infra/outbound/message.channels.test.ts` covers direct/gateway routing across Telegram, Discord, Signal, iMessage, and WhatsApp without real credentials)
 - Expectations:
   - Runs in CI
   - No real keys required

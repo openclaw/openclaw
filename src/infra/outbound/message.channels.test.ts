@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
+import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
+import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
+import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createMSTeamsTestPlugin,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { sendMessage, sendPoll } from "./message.js";
@@ -147,6 +155,149 @@ describe("sendMessage channel normalization", () => {
 
     expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
     expect(result.channel).toBe("imessage");
+  });
+});
+
+describe("sendMessage cross-channel smoke", () => {
+  it("routes telegram sends through the direct adapter", async () => {
+    const sendTelegram = vi.fn(async () => ({ messageId: "tg-1", chatId: "123" }));
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+        },
+      ]),
+    );
+
+    const telegramResult = await sendMessage({
+      cfg: {},
+      to: "123",
+      content: "hi telegram",
+      channel: "telegram",
+      deps: { sendTelegram },
+    });
+    expect(telegramResult.channel).toBe("telegram");
+    expect(telegramResult.via).toBe("direct");
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi telegram",
+      expect.objectContaining({ textMode: "html", verbose: false }),
+    );
+  });
+
+  it("routes discord sends through the direct adapter", async () => {
+    const sendDiscord = vi.fn(async () => ({ messageId: "dc-1", channelId: "456" }));
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound }),
+        },
+      ]),
+    );
+
+    const discordResult = await sendMessage({
+      cfg: {},
+      to: "channel:456",
+      content: "hi discord",
+      channel: "discord",
+      deps: { sendDiscord },
+    });
+    expect(discordResult.channel).toBe("discord");
+    expect(discordResult.via).toBe("direct");
+    expect(sendDiscord).toHaveBeenCalledWith(
+      "channel:456",
+      "hi discord",
+      expect.objectContaining({ verbose: false }),
+    );
+  });
+
+  it("routes signal sends through the direct adapter", async () => {
+    const sendSignal = vi.fn(async () => ({ messageId: "sg-1" }));
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "signal",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound }),
+        },
+      ]),
+    );
+
+    const signalResult = await sendMessage({
+      cfg: {},
+      to: "+15551234567",
+      content: "hi signal",
+      channel: "signal",
+      deps: { sendSignal },
+    });
+    expect(signalResult.channel).toBe("signal");
+    expect(signalResult.via).toBe("direct");
+    expect(sendSignal).toHaveBeenCalledWith("+15551234567", "hi signal", expect.any(Object));
+  });
+
+  it("routes imessage sends through the direct adapter", async () => {
+    const sendIMessage = vi.fn(async () => ({ messageId: "im-1" }));
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
+
+    const imessageResult = await sendMessage({
+      cfg: {},
+      to: "someone@example.com",
+      content: "hi imessage",
+      channel: "imessage",
+      deps: { sendIMessage },
+    });
+    expect(imessageResult.channel).toBe("imessage");
+    expect(imessageResult.via).toBe("direct");
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "someone@example.com",
+      "hi imessage",
+      expect.any(Object),
+    );
+  });
+
+  it("routes whatsapp sends through the gateway path with normalized params", async () => {
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: createOutboundTestPlugin({ id: "whatsapp", outbound: whatsappOutbound }),
+        },
+      ]),
+    );
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "wa-1" });
+    const result = await sendMessage({
+      cfg: {},
+      to: "+15551234567",
+      content: "hi whatsapp",
+      channel: "whatsapp",
+    });
+
+    expect(result.channel).toBe("whatsapp");
+    expect(result.via).toBe("gateway");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          channel: "whatsapp",
+          to: "+15551234567",
+          message: "hi whatsapp",
+        }),
+      }),
+    );
   });
 });
 

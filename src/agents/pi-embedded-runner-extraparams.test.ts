@@ -279,7 +279,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { model: "deepseek/deepseek-r1" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -311,7 +311,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -335,7 +335,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -360,7 +360,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning: { max_tokens: 256 } };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -384,7 +384,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { reasoning_effort: "medium" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -591,7 +591,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -622,7 +622,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { thinking: "off" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -653,7 +653,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -677,7 +677,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { tool_choice: "required" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -704,7 +704,7 @@ describe("applyExtraParamsToAgent", () => {
       const payload: Record<string, unknown> = {
         tool_choice: { type: "tool", name: "read" },
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -729,7 +729,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -766,7 +766,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = { tool_choice: "required" };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -791,7 +791,7 @@ describe("applyExtraParamsToAgent", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -817,7 +817,7 @@ describe("applyExtraParamsToAgent", () => {
       const payload: Record<string, unknown> = {
         tool_choice: { type: "function", function: { name: "read" } },
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -858,7 +858,7 @@ describe("applyExtraParamsToAgent", () => {
         ],
         tool_choice: { type: "tool", name: "read" },
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -902,7 +902,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         ],
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -941,7 +941,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         ],
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -1005,7 +1005,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         },
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
@@ -1052,7 +1052,7 @@ describe("applyExtraParamsToAgent", () => {
           },
         },
       };
-      options?.onPayload?.(payload, _model);
+      options?.onPayload?.(payload, model);
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
