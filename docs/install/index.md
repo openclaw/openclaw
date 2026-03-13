@@ -115,8 +115,8 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
         pnpm install
-        pnpm ui:build
         pnpm build
+        pnpm ui:build
         ```
       </Step>
       <Step title="Link the CLI">
