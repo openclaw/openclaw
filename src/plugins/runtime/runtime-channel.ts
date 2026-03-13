@@ -96,7 +96,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
   listLineAccountIds,
   normalizeAccountId as normalizeLineAccountId,
@@ -132,7 +131,6 @@ import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   return {
-    bindings: getSessionBindingService(),
     text: {
       chunkByNewline,
       chunkMarkdownText,

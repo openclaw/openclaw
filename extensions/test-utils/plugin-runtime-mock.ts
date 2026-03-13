@@ -69,19 +69,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       registerMemoryCli: vi.fn() as unknown as PluginRuntime["tools"]["registerMemoryCli"],
     },
     channel: {
-      bindings: {
-        bind: vi.fn(),
-        getCapabilities: vi.fn(() => ({
-          adapterAvailable: true,
-          bindSupported: true,
-          unbindSupported: true,
-          placements: ["current", "child"] as Array<"current" | "child">,
-        })),
-        listBySession: vi.fn(() => []),
-        resolveByConversation: vi.fn(() => null),
-        touch: vi.fn(),
-        unbind: vi.fn(() => Promise.resolve([])),
-      },
       text: {
         chunkByNewline: vi.fn((text: string) => (text ? [text] : [])),
         chunkMarkdownText: vi.fn((text: string) => [text]),

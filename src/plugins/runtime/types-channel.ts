@@ -2,8 +2,6 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
-type SessionBindingService =
-  typeof import("../../infra/outbound/session-binding-service.js").getSessionBindingService;
 
 type ReadChannelAllowFromStoreForAccount = (params: {
   channel: Parameters<ReadChannelAllowFromStore>[0];
@@ -16,7 +14,6 @@ type UpsertChannelPairingRequestForAccount = (
 ) => ReturnType<UpsertChannelPairingRequest>;
 
 export type PluginRuntimeChannel = {
-  bindings: ReturnType<SessionBindingService>;
   text: {
     chunkByNewline: typeof import("../../auto-reply/chunk.js").chunkByNewline;
     chunkMarkdownText: typeof import("../../auto-reply/chunk.js").chunkMarkdownText;

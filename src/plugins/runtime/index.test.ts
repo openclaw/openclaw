@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -48,11 +47,6 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     expect(runtime.events.onAgentEvent).toBe(onAgentEvent);
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
-  });
-
-  it("exposes runtime.channel.bindings", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.channel.bindings).toBe(getSessionBindingService());
   });
 
   it("exposes runtime.system.requestHeartbeatNow", () => {
