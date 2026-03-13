@@ -258,14 +258,18 @@ export class GatewayBrowserClient {
       }
     }
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
-    const authToken = selectedAuth.authToken;
+    const explicitPassword = this.opts.password?.trim() || undefined;
+    // In insecure contexts selectConnectAuth() is skipped (no WebCrypto),
+    // so fall back to the explicit token/password from the login form.
+    const authToken = selectedAuth.authToken ?? explicitGatewayToken;
     const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
+    const authPassword = selectedAuth.authPassword ?? explicitPassword;
     const auth =
-      authToken || selectedAuth.authPassword
+      authToken || authPassword
         ? {
             token: authToken,
             deviceToken,
-            password: selectedAuth.authPassword,
+            password: authPassword,
           }
         : undefined;
 
