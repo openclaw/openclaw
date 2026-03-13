@@ -46,6 +46,21 @@ async function resetTempDir(name: string): Promise<string> {
   return dir;
 }
 
+async function getConfigHash() {
+  const current = await rpcReq<{
+    hash?: string;
+  }>(requireWs(), "config.get", {});
+  expect(current.ok).toBe(true);
+  expect(typeof current.payload?.hash).toBe("string");
+  return String(current.payload?.hash);
+}
+
+async function expectSchemaLookupInvalid(path: unknown) {
+  const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", { path });
+  expect(res.ok).toBe(false);
+  expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+}
+
 describe("gateway config methods", () => {
   it("round-trips config.set and returns the live config path", async () => {
     const { createConfigIO } = await import("../config/config.js");
@@ -73,12 +88,6 @@ describe("gateway config methods", () => {
   });
 
   it("returns config.set validation details in the top-level error message", async () => {
-    const current = await rpcReq<{
-      hash?: string;
-    }>(requireWs(), "config.get", {});
-    expect(current.ok).toBe(true);
-    expect(typeof current.payload?.hash).toBe("string");
-
     const res = await rpcReq<{
       ok?: boolean;
       error?: {
@@ -86,7 +95,7 @@ describe("gateway config methods", () => {
       };
     }>(requireWs(), "config.set", {
       raw: JSON.stringify({ gateway: { bind: 123 } }),
-      baseHash: current.payload?.hash,
+      baseHash: await getConfigHash(),
     });
     const error = res.error as
       | {
@@ -135,31 +144,22 @@ describe("gateway config methods", () => {
     expect(res.error?.message).toBe("config schema path not found");
   });
 
-  it("rejects config.schema.lookup when the path is only whitespace", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
-      path: "   ",
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
-  });
-
-  it("rejects config.schema.lookup when the path exceeds the protocol limit", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+  it.each([
+    { name: "rejects config.schema.lookup when the path is only whitespace", path: "   " },
+    {
+      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
       path: `gateway.${"a".repeat(1020)}`,
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
-  });
-
-  it("rejects config.schema.lookup when the path contains invalid characters", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+    },
+    {
+      name: "rejects config.schema.lookup when the path contains invalid characters",
       path: "gateway.auth\nspoof",
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
+    },
+    {
+      name: "rejects config.schema.lookup when the path is not a string",
+      path: 42,
+    },
+  ])("$name", async ({ path }) => {
+    await expectSchemaLookupInvalid(path);
   });
 
   it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
@@ -171,9 +171,10 @@ describe("gateway config methods", () => {
     expect(res.error?.message).toBe("config schema path not found");
   });
 
-  it("rejects config.patch when raw is not an object", async () => {
+  it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
-      raw: "[]",
+      raw: "null",
+      baseHash: await getConfigHash(),
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");

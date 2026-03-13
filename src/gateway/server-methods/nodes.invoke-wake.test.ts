@@ -195,24 +195,28 @@ async function invokeNode(params: {
   return respond;
 }
 
+function createNodeClient(nodeId: string) {
+  return {
+    connect: {
+      role: "node" as const,
+      client: {
+        id: nodeId,
+        mode: "node" as const,
+        name: "ios-test",
+        platform: "iOS 26.4.0",
+        version: "test",
+      },
+    },
+  };
+}
+
 async function pullPending(nodeId: string) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
   });
@@ -225,18 +229,7 @@ async function ackPending(nodeId: string, ids: string[]) {
     params: { ids },
     respond: respond as never,
     context: {} as never,
-    client: {
-      connect: {
-        role: "node",
-        client: {
-          id: nodeId,
-          mode: "node",
-          name: "ios-test",
-          platform: "iOS 26.4.0",
-          version: "test",
-        },
-      },
-    } as never,
+    client: createNodeClient(nodeId) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });

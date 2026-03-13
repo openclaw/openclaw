@@ -106,7 +106,7 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
-  it("falls back to thinking when content is empty", () => {
+  it("drops thinking-only output when content is empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -119,10 +119,10 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Thinking output" }]);
+    expect(result.content).toEqual([]);
   });
 
-  it("falls back to reasoning when content and thinking are empty", () => {
+  it("drops reasoning-only output when content and thinking are empty", () => {
     const response = {
       model: "qwen3:32b",
       created_at: "2026-01-01T00:00:00Z",
@@ -135,7 +135,7 @@ describe("buildAssistantMessage", () => {
     };
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+    expect(result.content).toEqual([]);
   });
 
   it("builds response with tool calls", () => {
@@ -485,7 +485,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("accumulates thinking chunks when content is empty", async () => {
+  it("drops thinking chunks when no final content is emitted", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","thinking":"reasoned"},"done":false}',
@@ -501,7 +501,7 @@ describe("createOllamaStreamFn", () => {
           throw new Error("Expected done event");
         }
 
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+        expect(doneEvent.message.content).toEqual([]);
       },
     );
   });
@@ -528,7 +528,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("accumulates reasoning chunks when thinking is absent", async () => {
+  it("drops reasoning chunks when no final content is emitted", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
@@ -544,7 +544,7 @@ describe("createOllamaStreamFn", () => {
           throw new Error("Expected done event");
         }
 
-        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+        expect(doneEvent.message.content).toEqual([]);
       },
     );
   });

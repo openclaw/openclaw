@@ -29,9 +29,13 @@ vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: (...args: unknown[]) => killProcessTree(...args),
 }));
 
-vi.mock("node:child_process", () => ({
-  spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn,
+  };
+});
 
 const {
   installScheduledTask,
@@ -39,6 +43,7 @@ const {
   readScheduledTaskRuntime,
   restartScheduledTask,
   resolveTaskScriptPath,
+  stopScheduledTask,
 } = await import("./schtasks.js");
 
 function resolveStartupEntryPath(env: Record<string, string>) {
@@ -68,6 +73,21 @@ async function withWindowsEnv(
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+async function writeGatewayScript(env: Record<string, string>, port = 18789) {
+  const scriptPath = resolveTaskScriptPath(env);
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(
+    scriptPath,
+    [
+      "@echo off",
+      `set "OPENCLAW_GATEWAY_PORT=${port}"`,
+      `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${port}`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
 }
 
 beforeEach(() => {
@@ -205,6 +225,41 @@ describe("Windows startup fallback", () => {
         ["/d", "/s", "/c", quoteCmdScriptArg(resolveTaskScriptPath(env))],
         expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
       );
+    });
+  });
+
+  it("kills the Startup fallback runtime even when the CLI env omits the gateway port", async () => {
+    await withWindowsEnv(async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      await writeGatewayScript(env);
+      await fs.mkdir(path.dirname(resolveStartupEntryPath(env)), { recursive: true });
+      await fs.writeFile(resolveStartupEntryPath(env), "@echo off\r\n", "utf8");
+      inspectPortUsage
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5151, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: 5151, command: "node.exe" }],
+          hints: [],
+        })
+        .mockResolvedValueOnce({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+
+      const stdout = new PassThrough();
+      const envWithoutPort = { ...env };
+      delete envWithoutPort.OPENCLAW_GATEWAY_PORT;
+      await stopScheduledTask({ env: envWithoutPort, stdout });
+
+      expect(killProcessTree).toHaveBeenCalledWith(5151, { graceMs: 300 });
     });
   });
 });
