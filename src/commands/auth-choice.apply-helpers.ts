@@ -8,6 +8,8 @@ import {
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
@@ -20,7 +22,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
-type SecretRefChoice = "env" | "provider";
+type SecretRefChoice = "env" | "provider"; // pragma: allowlist secret
 
 export type SecretInputModePromptCopy = {
   modeMessage?: string;
@@ -101,7 +103,7 @@ export async function promptSecretRefForOnboarding(params: {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
   const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
-  let sourceChoice: SecretRefChoice = "env";
+  let sourceChoice: SecretRefChoice = "env"; // pragma: allowlist secret
 
   while (true) {
     const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
@@ -237,6 +239,9 @@ export async function promptSecretRefForOnboarding(params: {
           candidate !== "value"
         ) {
           return 'singleValue mode expects id "value".';
+        }
+        if (providerEntry.source === "exec" && !isValidExecSecretRefId(candidate)) {
+          return formatExecSecretRefIdValidationMessage();
         }
         return undefined;
       },

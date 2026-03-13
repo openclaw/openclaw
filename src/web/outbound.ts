@@ -8,6 +8,7 @@ import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
+import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
@@ -25,13 +26,21 @@ export async function sendMessageWhatsApp(
     accountId?: string;
   },
 ): Promise<{ messageId: string; toJid: string }> {
-  let text = body;
+  let text = body.trimStart();
+  const jid = toWhatsappJid(to);
+  if (!text && !options.mediaUrl) {
+    return { messageId: "", toJid: jid };
+  }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
     options.accountId,
   );
   const cfg = options.cfg ?? loadConfig();
+  const account = resolveWhatsAppAccount({
+    cfg,
+    accountId: resolvedAccountId ?? options.accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
@@ -46,13 +55,13 @@ export async function sendMessageWhatsApp(
     to: redactedTo,
   });
   try {
-    const jid = toWhatsappJid(to);
     const redactedJid = redactIdentifier(jid);
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl, {
+        maxBytes: resolveWhatsAppMediaMaxBytes(account),
         localRoots: options.mediaLocalRoots,
       });
       const caption = text || undefined;

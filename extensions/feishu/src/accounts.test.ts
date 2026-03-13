@@ -9,6 +9,35 @@ import type { FeishuConfig } from "./types.js";
 
 const asConfig = (value: Partial<FeishuConfig>) => value as FeishuConfig;
 
+function withEnvVar(key: string, value: string | undefined, run: () => void) {
+  const prev = process.env[key];
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+  try {
+    run();
+  } finally {
+    if (prev === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prev;
+    }
+  }
+}
+
+function expectUnresolvedEnvSecretRefError(key: string) {
+  expect(() =>
+    resolveFeishuCredentials(
+      asConfig({
+        appId: "cli_123",
+        appSecret: { source: "env", provider: "default", id: key } as never,
+      }),
+    ),
+  ).toThrow(/unresolved SecretRef/i);
+}
+
 describe("resolveDefaultFeishuAccountId", () => {
   it("prefers channels.feishu.defaultAccount when configured", () => {
     const cfg = {
@@ -16,8 +45,8 @@ describe("resolveDefaultFeishuAccountId", () => {
         feishu: {
           defaultAccount: "router-d",
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
-            "router-d": { appId: "cli_router", appSecret: "secret_router" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
           },
         },
       },
@@ -32,7 +61,7 @@ describe("resolveDefaultFeishuAccountId", () => {
         feishu: {
           defaultAccount: "Router D",
           accounts: {
-            "router-d": { appId: "cli_router", appSecret: "secret_router" },
+            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
           },
         },
       },
@@ -47,8 +76,8 @@ describe("resolveDefaultFeishuAccountId", () => {
         feishu: {
           defaultAccount: "router-d",
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
-            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" }, // pragma: allowlist secret
           },
         },
       },
@@ -62,8 +91,8 @@ describe("resolveDefaultFeishuAccountId", () => {
       channels: {
         feishu: {
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
-            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" }, // pragma: allowlist secret
           },
         },
       },
@@ -90,7 +119,7 @@ describe("resolveDefaultFeishuAccountId", () => {
       channels: {
         feishu: {
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
           },
         },
       },
@@ -128,24 +157,9 @@ describe("resolveFeishuCredentials", () => {
 
   it("throws unresolved SecretRef error when env SecretRef points to missing env var", () => {
     const key = "FEISHU_APP_SECRET_MISSING_TEST";
-    const prev = process.env[key];
-    delete process.env[key];
-    try {
-      expect(() =>
-        resolveFeishuCredentials(
-          asConfig({
-            appId: "cli_123",
-            appSecret: { source: "env", provider: "default", id: key } as never,
-          }),
-        ),
-      ).toThrow(/unresolved SecretRef/i);
-    } finally {
-      if (prev === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = prev;
-      }
-    }
+    withEnvVar(key, undefined, () => {
+      expectUnresolvedEnvSecretRefError(key);
+    });
   });
 
   it("resolves env SecretRef objects when unresolved refs are allowed", () => {
@@ -164,7 +178,7 @@ describe("resolveFeishuCredentials", () => {
 
       expect(creds).toEqual({
         appId: "cli_123",
-        appSecret: "secret_from_env",
+        appSecret: "secret_from_env", // pragma: allowlist secret
         encryptKey: undefined,
         verificationToken: undefined,
         domain: "feishu",
@@ -204,24 +218,9 @@ describe("resolveFeishuCredentials", () => {
 
   it("preserves unresolved SecretRef diagnostics for env refs in default mode", () => {
     const key = "FEISHU_APP_SECRET_POLICY_TEST";
-    const prev = process.env[key];
-    process.env[key] = "secret_from_env";
-    try {
-      expect(() =>
-        resolveFeishuCredentials(
-          asConfig({
-            appId: "cli_123",
-            appSecret: { source: "env", provider: "default", id: key } as never,
-          }),
-        ),
-      ).toThrow(/unresolved SecretRef/i);
-    } finally {
-      if (prev === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = prev;
-      }
-    }
+    withEnvVar(key, "secret_from_env", () => {
+      expectUnresolvedEnvSecretRefError(key);
+    });
   });
 
   it("trims and returns credentials when values are valid strings", () => {
@@ -236,9 +235,28 @@ describe("resolveFeishuCredentials", () => {
 
     expect(creds).toEqual({
       appId: "cli_123",
-      appSecret: "secret_456",
+      appSecret: "secret_456", // pragma: allowlist secret
       encryptKey: "enc",
       verificationToken: "vt",
+      domain: "feishu",
+    });
+  });
+
+  it("does not resolve encryptKey SecretRefs outside webhook mode", () => {
+    const creds = resolveFeishuCredentials(
+      asConfig({
+        connectionMode: "websocket",
+        appId: "cli_123",
+        appSecret: "secret_456",
+        encryptKey: { source: "file", provider: "default", id: "path/to/secret" } as never,
+      }),
+    );
+
+    expect(creds).toEqual({
+      appId: "cli_123",
+      appSecret: "secret_456", // pragma: allowlist secret
+      encryptKey: undefined,
+      verificationToken: undefined,
       domain: "feishu",
     });
   });
@@ -251,9 +269,9 @@ describe("resolveFeishuAccount", () => {
         feishu: {
           defaultAccount: "router-d",
           appId: "top_level_app",
-          appSecret: "top_level_secret",
+          appSecret: "top_level_secret", // pragma: allowlist secret
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
           },
         },
       },
@@ -273,7 +291,7 @@ describe("resolveFeishuAccount", () => {
           defaultAccount: "router-d",
           accounts: {
             default: { enabled: true },
-            "router-d": { appId: "cli_router", appSecret: "secret_router", enabled: true },
+            "router-d": { appId: "cli_router", appSecret: "secret_router", enabled: true }, // pragma: allowlist secret
           },
         },
       },
@@ -292,8 +310,8 @@ describe("resolveFeishuAccount", () => {
         feishu: {
           defaultAccount: "router-d",
           accounts: {
-            default: { appId: "cli_default", appSecret: "secret_default" },
-            "router-d": { appId: "cli_router", appSecret: "secret_router" },
+            default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
+            "router-d": { appId: "cli_router", appSecret: "secret_router" }, // pragma: allowlist secret
           },
         },
       },
@@ -335,7 +353,7 @@ describe("resolveFeishuAccount", () => {
                 main: {
                   name: { bad: true },
                   appId: "cli_123",
-                  appSecret: "secret_456",
+                  appSecret: "secret_456", // pragma: allowlist secret
                 } as never,
               },
             },
