@@ -53,4 +53,16 @@ describe("stripPluginOnlyAllowlist", () => {
     expect(policy.policy?.allow).toEqual(["read", "lobster"]);
     expect(policy.unknownAllowlist).toEqual(["lobster"]);
   });
+
+  it("reports known core tools that are unavailable in the active runtime toolset", () => {
+    const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
+    const policy = stripPluginOnlyAllowlist(
+      { allow: ["read", "apply_patch", "cron"] },
+      emptyPlugins,
+      coreTools,
+    );
+    expect(policy.policy?.allow).toEqual(["read", "apply_patch", "cron"]);
+    expect(policy.unknownAllowlist).toEqual([]);
+    expect(policy.unavailableCoreAllowlist).toEqual(["apply_patch", "cron"]);
+  });
 });
