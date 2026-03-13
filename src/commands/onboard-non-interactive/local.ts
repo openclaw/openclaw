@@ -19,6 +19,9 @@ import { logNonInteractiveOnboardingJson } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
 import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
+const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
+const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
+
 export async function runNonInteractiveOnboardingLocal(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -107,7 +110,9 @@ export async function runNonInteractiveOnboardingLocal(params: {
     const probe = await waitForGatewayReachable({
       url: links.wsUrl,
       token: gatewayResult.gatewayToken,
-      deadlineMs: 15_000,
+      deadlineMs: opts.installDaemon
+        ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
+        : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
     });
     if (!probe.ok) {
       const message = [

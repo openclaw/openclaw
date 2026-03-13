@@ -250,7 +250,7 @@ describe("launchd install", () => {
     };
   }
 
-  it("enables service before bootstrap (clears persisted disabled state)", async () => {
+  it("enables service before bootstrap without self-restarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -269,9 +269,13 @@ describe("launchd install", () => {
     const bootstrapIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
     );
+    const installKickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[2] === serviceId,
+    );
     expect(enableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(enableIndex).toBeLessThan(bootstrapIndex);
+    expect(installKickstartIndex).toBe(-1);
   });
 
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
