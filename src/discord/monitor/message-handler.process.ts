@@ -145,6 +145,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channel: "discord",
     accountId,
   });
+  const ackReactionTiming = cfg.messages?.ackReactionTiming ?? "received";
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const shouldAckReaction = () =>
@@ -191,8 +192,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     },
   });
-  if (statusReactionsEnabled) {
-    void statusReactions.setQueued();
+  let statusReactionLifecycleStarted = false;
+  const ensureStatusReactionLifecycleStarted = async (): Promise<void> => {
+    if (!statusReactionsEnabled || statusReactionLifecycleStarted) {
+      return;
+    }
+    statusReactionLifecycleStarted = true;
+    await statusReactions.setQueued();
+  };
+  if (ackReactionTiming === "received") {
+    void ensureStatusReactionLifecycleStarted();
   }
 
   const fromLabel = isDirectMessage
@@ -759,6 +768,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               draftChunker?.reset();
             }
           : undefined,
+        onAgentRunStart: () => {
+          void ensureStatusReactionLifecycleStarted();
+        },
         onModelSelected,
         onReasoningStream: async () => {
           await statusReactions.setThinking();
@@ -809,7 +821,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       markRunComplete();
       markDispatchIdle();
     }
-    if (statusReactionsEnabled) {
+    if (statusReactionLifecycleStarted) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();

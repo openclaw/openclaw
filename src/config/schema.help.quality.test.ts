@@ -245,6 +245,7 @@ const TARGET_KEYS = [
   "messages.queue.drop",
   "messages.inbound",
   "messages.inbound.byChannel",
+  "messages.ackReactionTiming",
   "messages.removeAckAfterReply",
   "messages.tts",
   "channels",

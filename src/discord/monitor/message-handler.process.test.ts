@@ -44,6 +44,7 @@ type DispatchInboundParams = {
     }) => boolean | Promise<boolean>;
   };
   replyOptions?: {
+    onAgentRunStart?: (runId: string) => void;
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
@@ -251,6 +252,61 @@ describe("processDiscordMessage ack reactions", () => {
     await processDiscordMessage(ctx as any);
 
     expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+  });
+
+  it("defers ack reactions until agent run start when configured", async () => {
+    let startRun!: () => void;
+    const runStarted = new Promise<void>((resolve) => {
+      startRun = resolve;
+    });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await runStarted;
+      params?.replyOptions?.onAgentRunStart?.("run-1");
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionTiming: "run-start",
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+
+    startRun();
+    await runPromise;
+
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+  });
+
+  it("keeps deferred ack reactions gated by scope", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      params?.replyOptions?.onAgentRunStart?.("run-1");
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionTiming: "run-start",
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {

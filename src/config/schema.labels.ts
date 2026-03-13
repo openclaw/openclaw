@@ -684,6 +684,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.inbound": "Inbound Debounce",
   "messages.suppressToolErrors": "Suppress Tool Error Warnings",
   "messages.ackReaction": "Ack Reaction Emoji",
+  "messages.ackReactionTiming": "Ack Reaction Timing",
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.removeAckAfterReply": "Remove Ack Reaction After Reply",
   "messages.statusReactions": "Status Reactions",
