@@ -57,6 +57,21 @@ describe("telegram bot message processor", () => {
     );
   }
 
+  function createDispatchFailureHarness(
+    context: Record<string, unknown>,
+    sendMessage: ReturnType<typeof vi.fn>,
+  ) {
+    const runtimeError = vi.fn();
+    buildTelegramMessageContext.mockResolvedValue(context);
+    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    return { processMessage, runtimeError };
+  }
+
   it("dispatches when context is available", async () => {
     buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
@@ -75,19 +90,14 @@ describe("telegram bot message processor", () => {
 
   it("sends user-visible fallback when dispatch throws", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const runtimeError = vi.fn();
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      threadSpec: { id: 456 },
-      route: { sessionKey: "agent:main:main" },
-    });
-    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
-
-    const processMessage = createTelegramMessageProcessor({
-      ...baseDeps,
-      bot: { api: { sendMessage } },
-      runtime: { error: runtimeError },
-    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    const { processMessage, runtimeError } = createDispatchFailureHarness(
+      {
+        chatId: 123,
+        threadSpec: { id: 456 },
+        route: { sessionKey: "agent:main:main" },
+      },
+      sendMessage,
+    );
     await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
 
     expect(sendMessage).toHaveBeenCalledWith(
@@ -100,18 +110,13 @@ describe("telegram bot message processor", () => {
 
   it("swallows fallback delivery failures after dispatch throws", async () => {
     const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
-    const runtimeError = vi.fn();
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      route: { sessionKey: "agent:main:main" },
-    });
-    dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
-
-    const processMessage = createTelegramMessageProcessor({
-      ...baseDeps,
-      bot: { api: { sendMessage } },
-      runtime: { error: runtimeError },
-    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    const { processMessage, runtimeError } = createDispatchFailureHarness(
+      {
+        chatId: 123,
+        route: { sessionKey: "agent:main:main" },
+      },
+      sendMessage,
+    );
     await expect(processSampleMessage(processMessage)).resolves.toBeUndefined();
 
     expect(sendMessage).toHaveBeenCalledWith(
