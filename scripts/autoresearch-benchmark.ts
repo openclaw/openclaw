@@ -149,6 +149,10 @@ const primaryPatterns: Array<{ label: string; pattern: RegExp }> = [
   // ttsHint: voice TTS config — changes when voice assistant is enabled/disabled or reconfigured.
   // Appears in ## Voice (TTS) section in the stable boilerplate.
   { label: "tts-hint", pattern: /^## Voice \(TTS\)$/m },
+  // Inline buttons status text: changes between channels (supported on Telegram, not on WhatsApp)
+  // The text "Inline buttons supported" OR "Inline buttons not enabled" is conditional on
+  // inlineButtonsEnabled which depends on capabilities — a per-conversation value.
+  { label: "inline-buttons-status", pattern: /^- Inline buttons (supported|not enabled)/m },
   // channel= and capabilities= change per conversation in multi-channel deployments
   { label: "channel-runtime", pattern: /\bchannel=\w/m },
   { label: "capabilities-runtime", pattern: /\bcapabilities=\w/m },
