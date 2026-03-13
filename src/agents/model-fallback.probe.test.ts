@@ -46,6 +46,20 @@ function expectFallbackUsed(
   expect(result.attempts[0]?.reason).toBe("rate_limit");
 }
 
+function expectPrimarySkippedForReason(
+  result: { result: unknown; attempts: Array<{ reason?: string }> },
+  run: {
+    (...args: unknown[]): unknown;
+    mock: { calls: unknown[][] };
+  },
+  reason: string,
+) {
+  expect(result.result).toBe("ok");
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(result.attempts[0]?.reason).toBe(reason);
+}
+
 function expectPrimaryProbeSuccess(
   result: { result: unknown },
   run: {
@@ -183,11 +197,7 @@ describe("runWithModelFallback – probe logic", () => {
     const run = vi.fn().mockResolvedValue("ok");
 
     const result = await runPrimaryCandidate(cfg, run);
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-    expect(result.attempts[0]?.reason).toBe("billing");
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -540,10 +550,6 @@ describe("runWithModelFallback – probe logic", () => {
     const run = vi.fn().mockResolvedValue("ok");
 
     const result = await runPrimaryCandidate(cfg, run);
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-    expect(result.attempts[0]?.reason).toBe("billing");
+    expectPrimarySkippedForReason(result, run, "billing");
   });
 });
