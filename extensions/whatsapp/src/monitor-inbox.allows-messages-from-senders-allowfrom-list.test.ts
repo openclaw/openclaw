@@ -252,7 +252,7 @@ describe("web monitor inbox", () => {
     });
   });
 
-  it("handles append messages by marking them read and forwarding them inbound", async () => {
+  it("handles append DM messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
@@ -284,13 +284,7 @@ describe("web monitor inbox", () => {
       },
     ]);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "old message",
-        from: "+999",
-        senderE164: "+999",
-      }),
-    );
+    expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();
   });

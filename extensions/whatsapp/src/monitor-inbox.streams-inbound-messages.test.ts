@@ -326,7 +326,6 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
-
   it("does not block follow-up messages when handler is pending", async () => {
     let resolveFirst: (() => void) | null = null;
     const onMessage = vi.fn(async () => {
