@@ -144,6 +144,7 @@ async function resolveSlackConversationContext(params: {
         channels: ctx.channelsConfig,
         channelKeys: ctx.channelsConfigKeys,
         defaultRequireMention: ctx.defaultRequireMention,
+        allowNameMatching: ctx.allowNameMatching,
       })
     : null;
   const allowBots =
@@ -727,6 +728,7 @@ export async function prepareSlackMessage(params: {
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
+    NativeChannelId: message.channel,
   }) satisfies FinalizedMsgContext;
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({

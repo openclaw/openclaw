@@ -57,6 +57,26 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+
+function formatAttachmentKindCount(kind: string, count: number): string {
+  if (kind === "attachment") {
+    return `${count} file${count > 1 ? "s" : ""}`;
+  }
+  return `${count} ${kind}${count > 1 ? "s" : ""}`;
+}
+
+function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefined>): string {
+  const kindCounts = new Map<string, number>();
+  for (const contentType of contentTypes) {
+    const kind = kindFromMime(contentType) ?? "attachment";
+    kindCounts.set(kind, (kindCounts.get(kind) ?? 0) + 1);
+  }
+  const parts = [...kindCounts.entries()].map(([kind, count]) =>
+    formatAttachmentKindCount(kind, count),
+  );
+  return `[${parts.join(" + ")} attached]`;
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -72,6 +92,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     messageId?: string;
     mediaPath?: string;
     mediaType?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
   };
@@ -171,6 +193,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      MediaPaths: entry.mediaPaths,
+      MediaUrls: entry.mediaPaths,
+      MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
@@ -312,7 +337,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return shouldDebounceTextInbound({
         text: entry.bodyText,
         cfg: deps.cfg,
-        hasMedia: Boolean(entry.mediaPath || entry.mediaType),
+        hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
     onFlush: async (entries) => {
@@ -336,6 +361,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         bodyText: combinedText,
         mediaPath: undefined,
         mediaType: undefined,
+        mediaPaths: undefined,
+        mediaTypes: undefined,
       });
     },
     onError: (err) => {
@@ -634,6 +661,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         if (deps.ignoreAttachments) {
           return "<media:attachment>";
         }
+        const attachmentTypes = (dataMessage.attachments ?? []).map((attachment) =>
+          typeof attachment?.contentType === "string" ? attachment.contentType : undefined,
+        );
+        if (attachmentTypes.length > 1) {
+          return formatAttachmentSummaryPlaceholder(attachmentTypes);
+        }
         const firstContentType = dataMessage.attachments?.[0]?.contentType;
         const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
@@ -657,32 +690,49 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    const mediaPaths: string[] = [];
+    const mediaTypes: string[] = [];
     let placeholder = "";
-    const firstAttachment = dataMessage.attachments?.[0];
-    if (firstAttachment?.id && !deps.ignoreAttachments) {
-      try {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: firstAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
+    const attachments = dataMessage.attachments ?? [];
+    if (!deps.ignoreAttachments) {
+      for (const attachment of attachments) {
+        if (!attachment?.id) {
+          continue;
         }
-      } catch (err) {
-        deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+        try {
+          const fetched = await deps.fetchAttachment({
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            attachment,
+            sender: senderRecipient,
+            groupId,
+            maxBytes: deps.mediaMaxBytes,
+          });
+          if (fetched) {
+            mediaPaths.push(fetched.path);
+            mediaTypes.push(
+              fetched.contentType ?? attachment.contentType ?? "application/octet-stream",
+            );
+            if (!mediaPath) {
+              mediaPath = fetched.path;
+              mediaType = fetched.contentType ?? attachment.contentType ?? undefined;
+            }
+          }
+        } catch (err) {
+          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+        }
       }
     }
 
-    const kind = kindFromMime(mediaType ?? undefined);
-    if (kind) {
-      placeholder = `<media:${kind}>`;
-    } else if (dataMessage.attachments?.length) {
-      placeholder = "<media:attachment>";
+    if (mediaPaths.length > 1) {
+      placeholder = formatAttachmentSummaryPlaceholder(mediaTypes);
+    } else {
+      const kind = kindFromMime(mediaType ?? undefined);
+      if (kind) {
+        placeholder = `<media:${kind}>`;
+      } else if (attachments.length) {
+        placeholder = "<media:attachment>";
+      }
     }
 
     const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
@@ -732,6 +782,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageId,
       mediaPath,
       mediaType,
+      mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
     });

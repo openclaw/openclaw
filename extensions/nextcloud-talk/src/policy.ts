@@ -3,15 +3,16 @@ import type {
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import {
   buildChannelKeyCandidates,
+  evaluateMatchedGroupAccessForPolicy,
   normalizeChannelSlug,
   normalizeNonTelegramGroupPolicy,
   resolveChannelEntryMatchWithFallback,
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/nextcloud-talk";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
@@ -131,19 +132,8 @@ export function resolveNextcloudTalkGroupAllow(params: {
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
   // "members" is Telegram-only; normalize to "open" for Nextcloud Talk
   const groupPolicy = normalizeNonTelegramGroupPolicy(params.groupPolicy);
-  if (groupPolicy === "disabled") {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
-  }
-  if (groupPolicy === "open") {
-    return { allowed: true, outerMatch: { allowed: true }, innerMatch: { allowed: true } };
-  }
-
   const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
   const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
-  if (outerAllow.length === 0 && innerAllow.length === 0) {
-    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
-  }
-
   const outerMatch = resolveNextcloudTalkAllowlistMatch({
     allowFrom: params.outerAllowFrom,
     senderId: params.senderId,
@@ -152,14 +142,32 @@ export function resolveNextcloudTalkGroupAllow(params: {
     allowFrom: params.innerAllowFrom,
     senderId: params.senderId,
   });
-  const allowed = resolveNestedAllowlistDecision({
-    outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
-    outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
-    innerConfigured: innerAllow.length > 0,
-    innerMatched: innerMatch.allowed,
+  const access = evaluateMatchedGroupAccessForPolicy({
+    groupPolicy,
+    allowlistConfigured: outerAllow.length > 0 || innerAllow.length > 0,
+    allowlistMatched: resolveNestedAllowlistDecision({
+      outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
+      outerMatched: outerAllow.length > 0 ? outerMatch.allowed : true,
+      innerConfigured: innerAllow.length > 0,
+      innerMatched: innerMatch.allowed,
+    }),
   });
 
-  return { allowed, outerMatch, innerMatch };
+  return {
+    allowed: access.allowed,
+    outerMatch:
+      groupPolicy === "open"
+        ? { allowed: true }
+        : groupPolicy === "disabled"
+          ? { allowed: false }
+          : outerMatch,
+    innerMatch:
+      groupPolicy === "open"
+        ? { allowed: true }
+        : groupPolicy === "disabled"
+          ? { allowed: false }
+          : innerMatch,
+  };
 }
 
 export function resolveNextcloudTalkMentionGate(params: {
