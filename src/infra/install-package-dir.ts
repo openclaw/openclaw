@@ -189,7 +189,9 @@ export async function installPackageDir(params: {
     await sanitizeManifestForNpmInstall(stageDir);
     params.logger?.info?.(params.depsLogMessage);
     const npmRes = await runCommandWithTimeout(
-      ["npm", "install", "--omit=dev", "--omit=peer", "--silent", "--ignore-scripts"],
+      // Plugins install into isolated directories, so omitting peer deps can strip
+      // runtime requirements that npm would otherwise materialize for the package.
+      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
       {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         cwd: stageDir,
