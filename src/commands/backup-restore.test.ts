@@ -15,6 +15,8 @@ const { serviceIsLoaded, serviceStop } = vi.hoisted(() => ({
   serviceStop: vi.fn(async (_args?: { stdout: NodeJS.WritableStream }) => undefined),
 }));
 const RESTORE_EXTRACT_LIMIT_MIN_BYTES = 1 * 1024 * 1024;
+const RESTORE_EXTRACT_LIMIT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+const RESTORE_ENTRY_LIMIT_MAX_BYTES = 1 * 1024 * 1024 * 1024;
 const { extractArchiveSpy } = vi.hoisted(() => ({
   extractArchiveSpy: vi.fn(),
 }));
@@ -1424,8 +1426,52 @@ describe("backup restore", () => {
       expect(extractCall?.limits).toEqual({
         maxArchiveBytes: verified.archiveBytes,
         maxEntries: verified.entryCount,
-        maxExtractedBytes: Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.totalEntryBytes * 2),
-        maxEntryBytes: Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.maxEntryBytes * 2),
+        maxExtractedBytes: Math.min(
+          RESTORE_EXTRACT_LIMIT_MAX_BYTES,
+          Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.totalEntryBytes * 2),
+        ),
+        maxEntryBytes: Math.min(
+          RESTORE_ENTRY_LIMIT_MAX_BYTES,
+          Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, verified.maxEntryBytes * 2),
+        ),
+      });
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps restore extraction budgets to fixed maxima", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restore-limit-cap-"));
+    try {
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
+
+      const created = await backupCreateCommand(runtime, {
+        output: archiveDir,
+        includeWorkspace: false,
+      });
+      const verified = await backupVerifyCommand(runtime, { archive: created.archivePath });
+      vi.mocked(backupVerifyCommand).mockResolvedValueOnce({
+        ...verified,
+        totalEntryBytes: RESTORE_EXTRACT_LIMIT_MAX_BYTES,
+        maxEntryBytes: RESTORE_ENTRY_LIMIT_MAX_BYTES,
+      });
+
+      extractArchiveSpy.mockClear();
+      await backupRestoreCommand(runtime, {
+        archive: created.archivePath,
+        mode: "config-only",
+      });
+
+      const extractCall = extractArchiveSpy.mock.calls.at(-1)?.[0] as
+        | Parameters<typeof extractArchiveFn>[0]
+        | undefined;
+      expect(extractCall?.limits).toEqual({
+        maxArchiveBytes: verified.archiveBytes,
+        maxEntries: verified.entryCount,
+        maxExtractedBytes: RESTORE_EXTRACT_LIMIT_MAX_BYTES,
+        maxEntryBytes: RESTORE_ENTRY_LIMIT_MAX_BYTES,
       });
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });

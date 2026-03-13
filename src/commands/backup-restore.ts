@@ -64,6 +64,8 @@ type PreparedRestoreArchive = {
 
 const RESTORE_EXTRACT_TIMEOUT_MS = 60_000;
 const RESTORE_EXTRACT_LIMIT_MIN_BYTES = 1 * 1024 * 1024;
+const RESTORE_EXTRACT_LIMIT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+const RESTORE_ENTRY_LIMIT_MAX_BYTES = 1 * 1024 * 1024 * 1024;
 
 function workspacePathKey(value: string): string {
   const resolved = path.resolve(value);
@@ -79,11 +81,11 @@ function isManifestPathCoveredByState(params: {
   return Boolean(stateDir && targetPath && isPathWithin(targetPath, stateDir));
 }
 
-function resolveRestoreExtractLimit(bytes: number): number {
+function resolveRestoreExtractLimit(bytes: number, maxBytes: number): number {
   const bounded = Math.max(0, Math.floor(bytes));
   // Tar extraction budgets header sizes up front and still counts streamed bytes,
   // so restore needs a little headroom above the verified payload byte totals.
-  return Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, bounded * 2);
+  return Math.min(Math.max(RESTORE_EXTRACT_LIMIT_MIN_BYTES, bounded * 2), maxBytes);
 }
 
 async function canonicalizePathForContainment(inputPath: string): Promise<string> {
@@ -895,8 +897,14 @@ export async function backupRestoreCommand(
       limits: {
         maxArchiveBytes: Math.max(verified.archiveBytes, 1),
         maxEntries: Math.max(verified.entryCount, 1),
-        maxExtractedBytes: resolveRestoreExtractLimit(verified.totalEntryBytes),
-        maxEntryBytes: resolveRestoreExtractLimit(verified.maxEntryBytes),
+        maxExtractedBytes: resolveRestoreExtractLimit(
+          verified.totalEntryBytes,
+          RESTORE_EXTRACT_LIMIT_MAX_BYTES,
+        ),
+        maxEntryBytes: resolveRestoreExtractLimit(
+          verified.maxEntryBytes,
+          RESTORE_ENTRY_LIMIT_MAX_BYTES,
+        ),
       },
     });
 
