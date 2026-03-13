@@ -37,8 +37,22 @@ export async function writeTextAtomic(
     mkdirOptions.mode = options.ensureDirMode;
   }
   await fs.mkdir(path.dirname(filePath), mkdirOptions);
+  // On macOS and some Linux configurations, fs.mkdir({ recursive: true }) may
+  // ignore the mode option.  Explicitly chmod the directory afterward to ensure
+  // it carries the requested permissions regardless of platform behavior.
+  if (typeof options?.ensureDirMode === "number") {
+    try {
+      await fs.chmod(path.dirname(filePath), options.ensureDirMode);
+    } catch {
+      // best-effort; ignore on platforms without chmod
+    }
+  }
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   try {
+    // Create the temp file with the target mode so the payload is never
+    // visible with permissive permissions, even briefly.  The subsequent
+    // chmod is kept as a best-effort safety net for platforms that apply
+    // umask to the open(2) call (e.g. some Linux configurations).
     await fs.writeFile(tmp, payload, { encoding: "utf8", mode });
     try {
       await fs.chmod(tmp, mode);

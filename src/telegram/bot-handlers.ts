@@ -1,6 +1,7 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -10,13 +11,16 @@ import {
   buildModelsProviderData,
   formatModelsAvailableHeader,
 } from "../auto-reply/reply/commands-models.js";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
 import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
 import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -30,14 +34,17 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import { writePendingInbound } from "../infra/pending-inbound-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { isGatewayDraining } from "../process/command-queue.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  firstDefined,
   isSenderAllowed,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
@@ -56,6 +63,7 @@ import {
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  hasBotMention,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
@@ -65,6 +73,7 @@ import {
   isTelegramExecApprovalClientEnabled,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -134,6 +143,8 @@ export const registerTelegramHandlers = ({
   groupAllowFrom,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
+  resolveGroupRequireMention,
+  resolveGroupActivation,
   shouldSkipUpdate,
   processMessage,
   logger,
@@ -1585,6 +1596,192 @@ export const registerTelegramHandlers = ({
         if (!dmAuthorized) {
           return;
         }
+      }
+
+      // For DMs that carry only text (no media), enforceTelegramDmAccess did
+      // not run above (it is scoped to media messages).  Apply an equivalent
+      // inline auth gate here so that unauthorized plain-text DM senders are
+      // filtered before we reach the drain guard — they must not be persisted
+      // to the pending-inbound store.  This mirrors the check that
+      // buildTelegramMessageContext performs in the normal (non-drain) path.
+      if (!event.isGroup && !hasInboundMedia(event.msg) && !hasReplyTargetMedia(event.msg)) {
+        if (dmPolicy === "disabled") {
+          return;
+        }
+        if (
+          dmPolicy !== "open" &&
+          !isAllowlistAuthorized(effectiveDmAllow, event.senderId, event.senderUsername)
+        ) {
+          return;
+        }
+      }
+
+      // requireTopic gate: mirror buildTelegramMessageContext — DMs without a topic are
+      // blocked when requireTopic=true.  Apply before the drain guard so that messages
+      // that would be dropped in the normal path are never persisted to the pending store.
+      const requireTopicConfig = (groupConfig as TelegramDirectConfig | undefined)?.requireTopic;
+      if (!event.isGroup && requireTopicConfig === true && dmThreadId == null) {
+        logVerbose(`Blocked telegram DM ${event.chatId}: requireTopic=true but no topic present`);
+        return;
+      }
+
+      // Drain guard: only persist messages that passed the auth checks above.
+      // Moved after authorization context, group policy, and DM access checks
+      // so that unauthorized messages are never written to the pending store.
+      if (isGatewayDraining()) {
+        const stateDir = resolveStateDir(process.env);
+        // Resolve the session key now so replay routes to the correct agent-scoped session.
+        // Pass replyThreadId and topicAgentId so topic conversation bindings are applied,
+        // matching the routing parameters used in the normal (non-drain) message path.
+        const drainReplyThreadId = resolvedThreadId ?? dmThreadId;
+        const { route: drainRoute } = resolveTelegramConversationRoute({
+          cfg,
+          accountId,
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          resolvedThreadId,
+          replyThreadId: drainReplyThreadId,
+          senderId: event.senderId,
+          topicAgentId: topicConfig?.agentId,
+        });
+
+        // Named-account gate: groups with a non-default account require an explicit binding.
+        // Without one, the message would be dropped in buildTelegramMessageContext — mirror
+        // that check here so we never persist messages the session would discard anyway.
+        // DMs use a per-account fallback session key (not dropped), so this is groups-only.
+        const drainIsNamedAccountFallback =
+          drainRoute.accountId !== DEFAULT_ACCOUNT_ID && drainRoute.matchedBy === "default";
+        if (drainIsNamedAccountFallback && event.isGroup) {
+          logVerbose(
+            `Blocked drain: non-default account requires explicit binding for group ${event.chatId}`,
+          );
+          return;
+        }
+
+        // Apply thread-scoped session key for DM topics — mirrors resolveTelegramSessionState.
+        // dmThreadId is already resolved from eventAuthContext above.
+        const drainBaseSessionKey = drainRoute.sessionKey;
+        const drainThreadKeys =
+          dmThreadId != null
+            ? resolveThreadSessionKeys({
+                baseSessionKey: drainBaseSessionKey,
+                threadId: `${event.chatId}:${dmThreadId}`,
+              })
+            : null;
+        const drainSessionKey = drainThreadKeys?.sessionKey ?? drainBaseSessionKey;
+
+        // Mention gate: if the group requires a bot mention, verify the message contains one.
+        // This prevents flooding the pending-inbound store with messages the session would
+        // skip due to mention gating (mirrors buildTelegramMessageContext + resolveTelegramInboundBody).
+        if (event.isGroup) {
+          const activationOverride = resolveGroupActivation({
+            chatId: event.chatId,
+            messageThreadId: resolvedThreadId,
+            sessionKey: drainSessionKey,
+            agentId: drainRoute.agentId,
+          });
+          const baseRequireMention = resolveGroupRequireMention(event.chatId);
+          const drainRequireMention = firstDefined(
+            activationOverride,
+            topicConfig?.requireMention,
+            (groupConfig as TelegramGroupConfig | undefined)?.requireMention,
+            baseRequireMention,
+          );
+          if (drainRequireMention) {
+            const mentionRegexes = buildMentionRegexes(cfg, drainRoute.agentId);
+            const botUsername = event.ctx.me?.username?.toLowerCase();
+            const botId = event.ctx.me?.id;
+            const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+
+            // Voice preflight: mirror the audio-preflight path from resolveTelegramInboundBody.
+            // In normal processing, a voice-only group message with requireMention=true is
+            // transcribed before mention checking so that a spoken "@bot" can satisfy the gate.
+            // At drain time we cannot transcribe — defer the check to replay by letting the
+            // message through unconditionally when audio preflight would normally apply.
+            const drainHasAudio = Boolean(event.msg.voice ?? event.msg.audio);
+            const drainHasUserText = Boolean(event.msg.text ?? event.msg.caption);
+            const drainDisableAudioPreflight =
+              (topicConfig?.disableAudioPreflight ??
+                (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
+            const drainNeedsPreflightTranscription =
+              drainHasAudio &&
+              !drainHasUserText &&
+              mentionRegexes.length > 0 &&
+              !drainDisableAudioPreflight;
+            if (drainNeedsPreflightTranscription) {
+              // Cannot transcribe at drain time — pass through so that replay can do
+              // the audio preflight and apply the mention gate with the transcript.
+              logVerbose(
+                `Drain: deferring mention check for voice-only message in group ${event.chatId} (audio preflight needed)`,
+              );
+            } else {
+              // Mirror the implicit-mention logic from resolveTelegramInboundBody:
+              // a reply to a (non-service) bot message counts as an implicit mention,
+              // matching the normal (non-drain) message processing path.
+              const replyFromId = event.msg.reply_to_message?.from?.id;
+              const replyToBotMessage = botId != null && replyFromId === botId;
+              const isReplyToServiceMessage =
+                replyToBotMessage && isTelegramForumServiceMessage(event.msg.reply_to_message);
+              const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
+              const messageText = event.msg.text ?? event.msg.caption ?? "";
+              const entities = event.msg.entities ?? event.msg.caption_entities ?? [];
+              const hasAnyMention = entities.some((e) => e.type === "mention");
+              const explicitlyMentioned = botUsername
+                ? hasBotMention(event.msg, botUsername)
+                : false;
+              const wasMentioned = matchesMentionWithExplicit({
+                text: messageText,
+                mentionRegexes,
+                explicit: {
+                  hasAnyMention,
+                  isExplicitlyMentioned: explicitlyMentioned,
+                  canResolveExplicit: Boolean(botUsername),
+                },
+              });
+              // Use resolveMentionGatingWithBypass so that slash commands (e.g. /status)
+              // bypass the mention gate even when the bot is not mentioned — matching the
+              // command bypass path in the normal (non-drain) message processing flow.
+              // The sender has already passed group access checks above, so commandAuthorized=true.
+              const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
+                botUsername,
+              });
+              const mentionGate = resolveMentionGatingWithBypass({
+                isGroup: true,
+                requireMention: true,
+                canDetectMention,
+                wasMentioned,
+                implicitMention,
+                hasAnyMention,
+                allowTextCommands: true,
+                hasControlCommand: hasControlCommandInMessage,
+                commandAuthorized: true, // sender passed group access checks above
+              });
+              if (mentionGate.shouldSkip) {
+                logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
+                return;
+              }
+            }
+          }
+        }
+
+        await writePendingInbound(stateDir, {
+          channel: "telegram",
+          // Prefix with accountId to prevent collisions in multi-account deployments where two
+          // bot accounts in the same chat can see the same message_id.
+          id: `${accountId}::${event.chatId}:${event.msg.message_id ?? Date.now()}`,
+          payload: {
+            chatId: event.chatId,
+            messageId: event.msg.message_id,
+            text: event.msg.text ?? event.msg.caption ?? "",
+            senderId: event.senderId,
+            senderUsername: event.senderUsername,
+            isGroup: event.isGroup,
+            date: event.msg.date,
+          },
+          capturedAt: Date.now(),
+          sessionKey: drainSessionKey,
+        });
+        return; // provider already got 200, no retry needed
       }
 
       await processInboundMessage({

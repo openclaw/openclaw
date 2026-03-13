@@ -813,7 +813,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("routes non-default account DMs without explicit bindings using per-account session key", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -842,7 +842,13 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Named-account DMs without explicit bindings are allowed through,
+    // routed to a per-account isolated session key (not the agent main key).
+    // Behaviour restored by fix(telegram): restore named-account DM fallback routing.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.AccountId).toBe("opie");
+    expect(payload.SessionKey).toBe("agent:main:telegram:opie:direct:999");
   });
 
   it("applies group mention overrides and fallback behavior", async () => {

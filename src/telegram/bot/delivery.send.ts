@@ -1,13 +1,14 @@
 import { type Bot, GrammyError } from "grammy";
+import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
+import { EMPTY_TEXT_ERR_RE } from "../network-errors.js";
 import { buildInlineKeyboard } from "../send.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const THREAD_NOT_FOUND_RE = /message thread not found/i;
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
@@ -102,7 +103,7 @@ export async function sendTelegramText(
     linkPreview?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
-): Promise<number> {
+): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
@@ -134,7 +135,8 @@ export async function sendTelegramText(
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
   if (!htmlText.trim()) {
     if (!hasFallbackText) {
-      throw new Error("telegram sendMessage failed: empty formatted text and empty plain fallback");
+      logVerbose("telegram sendMessage skipped: empty formatted text and empty plain fallback");
+      return undefined;
     }
     return await sendPlainFallback();
   }
@@ -162,7 +164,10 @@ export async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
-        throw err;
+        logVerbose(
+          "telegram sendMessage skipped: Telegram rejected text as empty and no plain fallback available",
+        );
+        return undefined;
       }
       runtime.log?.(`telegram formatted send failed; retrying without formatting: ${errText}`);
       return await sendPlainFallback();

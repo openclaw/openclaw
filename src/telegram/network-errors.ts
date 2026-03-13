@@ -7,6 +7,8 @@ import {
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
+export const EMPTY_TEXT_ERR_RE = /message text is empty|text must be non-empty/i;
+
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -164,6 +166,18 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const message = formatErrorMessage(candidate).trim();
+    // Telegram 429 rate-limit: the server explicitly rejected the request before
+    // delivering it; retry_after signals it is safe to retry after the delay.
+    if (/^429\b/.test(message)) {
+      return true;
+    }
+    // grammY envelope error: "Network request for '…' failed after N attempts"
+    // All internal grammY retries failed at the network layer — the message was
+    // never delivered, so retrying from our side is safe.
+    if (GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message.toLowerCase())) {
       return true;
     }
   }

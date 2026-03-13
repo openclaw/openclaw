@@ -24,10 +24,13 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { writePendingInbound } from "../../infra/pending-inbound-store.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { isGatewayDraining } from "../../process/command-queue.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
@@ -50,7 +53,11 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
+import {
+  resolveDiscordAutoThreadContext,
+  resolveDiscordAutoThreadReplyPlan,
+  resolveDiscordThreadStarter,
+} from "./threading.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -113,6 +120,67 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     abortSignal,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
+    return;
+  }
+
+  // Resolve the session key using the same chain as normal message routing so
+  // that drain-captured entries replay into the correct session after restart.
+  // threadKeys and autoThreadContext are computed synchronously here; since
+  // autoThreadContext requires an async Discord API call (thread creation) that
+  // we cannot make during drain, it evaluates to null and its SessionKey slot
+  // falls through to threadKeys.sessionKey ?? baseSessionKey.
+  const drainParentSessionKey = threadParentId
+    ? buildAgentSessionKey({
+        agentId: route.agentId,
+        channel: route.channel,
+        peer: { kind: "channel", id: threadParentId },
+      })
+    : undefined;
+  const drainThreadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: threadChannel ? messageChannelId : undefined,
+    parentSessionKey: drainParentSessionKey,
+    useSuffix: false,
+  });
+  const drainAutoThreadContext = resolveDiscordAutoThreadContext({
+    agentId: route.agentId,
+    channel: route.channel,
+    messageChannelId,
+    // No createdThreadId at drain time — thread creation is skipped during drain.
+    createdThreadId: undefined,
+  });
+
+  // Drain guard: persist authorized messages for replay after restart.
+  // Auth was already verified in the preflight step (message-handler.preflight.ts) —
+  // unauthorized messages return null from preflight and never reach this function.
+  // Only messages that passed DM policy, guild allowlist, channel config, and
+  // member access checks are persisted here.
+  if (isGatewayDraining()) {
+    if (!messageText) {
+      logVerbose("discord: skip drain capture for message " + message.id + " (no routable text)");
+      return;
+    }
+    const stateDir = resolveStateDir(process.env);
+    await writePendingInbound(stateDir, {
+      channel: "discord",
+      id: String(message.id ?? Date.now()),
+      accountId,
+      payload: {
+        channelId: messageChannelId,
+        messageId: message.id,
+        text: baseText ?? "",
+        senderId: sender.id,
+        senderName: sender.name ?? author.username,
+        isGuild: isGuildMessage,
+        isDirect: isDirectMessage,
+      },
+      capturedAt: Date.now(),
+      sessionKey:
+        boundSessionKey ??
+        drainAutoThreadContext?.SessionKey ??
+        drainThreadKeys.sessionKey ??
+        baseSessionKey,
+    });
     return;
   }
 
