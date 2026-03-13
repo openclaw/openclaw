@@ -46,6 +46,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Suppress message:* hook emission for this routed send. */
+  skipMessageHooks?: boolean;
   /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
@@ -151,6 +153,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      skipMessageHooks: params.skipMessageHooks,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
