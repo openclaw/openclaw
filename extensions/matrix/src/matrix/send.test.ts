@@ -1,5 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../runtime.js";
 
 const resolveMatrixClientMock = vi.hoisted(() => vi.fn());
@@ -357,6 +357,44 @@ describe("sendMessageMatrix media", () => {
     expect(matrixLogWarnMock).not.toHaveBeenCalled();
   });
 
+  it("does not replay already-sent chunks when a later Matrix user-target send fails", async () => {
+    const userId = "@user:example.org";
+    const staleRoom = "!stale:example.org";
+    const activeRoom = "!active:example.org";
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce("evt1")
+      .mockRejectedValueOnce(makeMatrixSendError("second chunk failed", 404, "M_NOT_FOUND"));
+    const { client } = makeUserTargetClient({
+      directContent: {
+        [userId]: [staleRoom],
+      },
+      joinedRooms: [staleRoom],
+      membersByRoom: {
+        [staleRoom]: ["@bot:example.org", userId],
+        [activeRoom]: ["@bot:example.org", userId],
+      },
+      roomStateEvents: {
+        [`${staleRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${staleRoom}|m.room.member|@bot:example.org`]: {},
+        [`${activeRoom}|m.room.member|${userId}`]: { is_direct: true },
+        [`${activeRoom}|m.room.member|@bot:example.org`]: {},
+      },
+      sendMessage,
+    });
+
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = () => ["hello", "again"];
+
+    await expect(sendMessageMatrix(userId, "hello again", { client })).rejects.toThrow(
+      "second chunk failed",
+    );
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(staleRoom);
+    expect(sendMessage.mock.calls[1]?.[0]).toBe(staleRoom);
+    expect(matrixLogWarnMock).not.toHaveBeenCalled();
+  });
+
   it("logs and clears cache again when self-heal still fails, then re-resolves on the next invocation", async () => {
     const userId = "@user:example.org";
     const staleRoom = "!stale:example.org";
@@ -408,6 +446,10 @@ describe("sendMessageMatrix media", () => {
 
     expect(recovered.roomId).toBe(recoveredRoom);
     expect(sendMessage.mock.calls[2]?.[0]).toBe(recoveredRoom);
+  });
+
+  afterEach(() => {
+    runtimeStub.channel.text.chunkMarkdownTextWithMode = (text: string) => (text ? [text] : []);
   });
 });
 
