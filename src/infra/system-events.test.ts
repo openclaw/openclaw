@@ -3,7 +3,12 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
@@ -54,6 +59,31 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("preserves runtime overrides on queued events", () => {
+    const key = "agent:main:runtime-overrides";
+    enqueueSystemEvent("cron run", {
+      sessionKey: key,
+      contextKey: "cron:job-123",
+      runtimeOverrides: {
+        model: "openai-codex/gpt-5.4",
+        thinking: "low",
+        timeoutSeconds: 600,
+      },
+    });
+
+    expect(peekSystemEventEntries(key)).toEqual([
+      expect.objectContaining({
+        text: "cron run",
+        contextKey: "cron:job-123",
+        runtimeOverrides: {
+          model: "openai-codex/gpt-5.4",
+          thinking: "low",
+          timeoutSeconds: 600,
+        },
+      }),
+    ]);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {

@@ -40,6 +40,8 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** Optional one-off thinking override for the current run. */
+  heartbeatThinkingOverride?: string;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */

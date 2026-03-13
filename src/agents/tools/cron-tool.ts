@@ -248,7 +248,7 @@ ISO timestamps without an explicit timezone are treated as UTC.
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
   { "kind": "systemEvent", "text": "<message>" }
-- "agentTurn": Runs agent with message (isolated sessions only)
+- "agentTurn": Runs agent with message
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
@@ -259,10 +259,10 @@ DELIVERY (top-level):
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
-- sessionTarget="main" REQUIRES payload.kind="systemEvent"
+- sessionTarget="main" supports payload.kind="systemEvent" and "agentTurn"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+Default: prefer main for agentTurn jobs that should reuse the agent's normal main-session execution path; use isolated when you explicitly want a fresh cron run session.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat

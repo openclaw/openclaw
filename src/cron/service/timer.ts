@@ -1047,7 +1047,7 @@ export async function executeJobCore(
         error:
           kind === "systemEvent"
             ? "main job requires non-empty systemEvent text"
-            : 'main job requires payload.kind="systemEvent"',
+            : "main agentTurn job requires a non-empty message",
       };
     }
     // Preserve the job session namespace for main-target reminders so heartbeat
@@ -1058,6 +1058,14 @@ export async function executeJobCore(
       agentId: job.agentId,
       sessionKey: targetMainSessionKey,
       contextKey: `cron:${job.id}`,
+      runtimeOverrides:
+        job.payload.kind === "agentTurn"
+          ? {
+              model: job.payload.model,
+              thinking: job.payload.thinking,
+              timeoutSeconds: job.payload.timeoutSeconds,
+            }
+          : undefined,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;

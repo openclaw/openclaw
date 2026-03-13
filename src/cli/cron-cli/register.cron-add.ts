@@ -188,7 +188,7 @@ export function registerCronAddCommand(cron: Command) {
               : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
-          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const inferredSessionTarget = "main";
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
           if (sessionTarget !== "main" && sessionTarget !== "isolated") {
@@ -199,8 +199,12 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("Choose --delete-after-run or --keep-after-run, not both");
           }
 
-          if (sessionTarget === "main" && payload.kind !== "systemEvent") {
-            throw new Error("Main jobs require --system-event (systemEvent).");
+          if (
+            sessionTarget === "main" &&
+            payload.kind !== "systemEvent" &&
+            payload.kind !== "agentTurn"
+          ) {
+            throw new Error("Main jobs require --system-event or --message.");
           }
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");

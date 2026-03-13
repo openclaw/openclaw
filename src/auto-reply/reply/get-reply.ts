@@ -15,6 +15,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
+import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
@@ -110,6 +111,7 @@ export async function getReplyFromConfig(
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
+  const heartbeatThinkingOverride = opts?.heartbeatThinkingOverride?.trim() || undefined;
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
@@ -280,6 +282,9 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+  if (heartbeatThinkingOverride) {
+    resolvedThinkLevel = normalizeThinkLevel(heartbeatThinkingOverride) ?? resolvedThinkLevel;
+  }
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
