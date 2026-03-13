@@ -63,6 +63,13 @@ describe("config plugin validation", () => {
 
   const validateInSuite = (raw: unknown) =>
     validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+  const warmPluginManifestCache = () =>
+    validateInSuite({
+      plugins: {
+        enabled: false,
+        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
+      },
+    });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
@@ -125,12 +132,7 @@ describe("config plugin validation", () => {
     clearPluginManifestRegistryCache();
     // Warm the plugin manifest cache once so path-based validations can reuse
     // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
-      },
-    });
+    warmPluginManifestCache();
   });
 
   afterAll(async () => {
@@ -220,29 +222,67 @@ describe("config plugin validation", () => {
     const emptyBundledDir = path.join(suiteHome, "empty-bundled");
     await mkdirSafe(emptyBundledDir);
     clearPluginManifestRegistryCache();
-
-    const res = validateConfigObjectWithPlugins(
-      {
-        agents: { list: [{ id: "pi" }] },
-        plugins: {
-          enabled: true,
+    try {
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "pi" }] },
+          plugins: {
+            enabled: true,
+          },
         },
-      },
-      {
-        env: {
-          ...suiteEnv(),
-          OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundledDir,
+        {
+          env: {
+            ...suiteEnv(),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundledDir,
+          },
         },
-      },
-    );
+      );
 
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.warnings).toContainEqual({
-        path: "plugins.slots.memory",
-        message:
-          "default bundled memory slot unavailable: memory-core (continuing without fatal validation; check packaged plugin installation)",
-      });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.warnings).toContainEqual({
+          path: "plugins.slots.memory",
+          message:
+            "default bundled memory slot unavailable: memory-core (continuing without fatal validation; check packaged plugin installation)",
+        });
+      }
+    } finally {
+      clearPluginManifestRegistryCache();
+      warmPluginManifestCache();
+    }
+  });
+
+  it("fails when an explicit default memory slot is undiscoverable", async () => {
+    const emptyBundledDir = path.join(suiteHome, "empty-bundled-explicit");
+    await mkdirSafe(emptyBundledDir);
+    clearPluginManifestRegistryCache();
+    try {
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "pi" }] },
+          plugins: {
+            enabled: true,
+            slots: { memory: "memory-core" },
+          },
+        },
+        {
+          env: {
+            ...suiteEnv(),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundledDir,
+          },
+        },
+      );
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues).toContainEqual({
+          path: "plugins.slots.memory",
+          message: "plugin not found: memory-core",
+        });
+      }
+    } finally {
+      clearPluginManifestRegistryCache();
+      warmPluginManifestCache();
     }
   });
 

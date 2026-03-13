@@ -8,6 +8,9 @@ export type NormalizedPluginsConfig = {
   allow: string[];
   deny: string[];
   loadPaths: string[];
+  defaultedSlots: {
+    memory: boolean;
+  };
   slots: {
     memory?: string | null;
   };
@@ -99,6 +102,9 @@ export const normalizePluginsConfig = (
     allow: normalizeList(config?.allow),
     deny: normalizeList(config?.deny),
     loadPaths: normalizeList(config?.load?.paths),
+    defaultedSlots: {
+      memory: memorySlot === undefined,
+    },
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
     },

@@ -531,7 +531,7 @@ function validateConfigObjectWithPluginsBase(
 
   const memorySlot = normalizedPlugins.slots.memory;
   if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
-    if (memorySlot === defaultSlotIdForKey("memory")) {
+    if (normalizedPlugins.defaultedSlots.memory && memorySlot === defaultSlotIdForKey("memory")) {
       // Keep the default bundled memory slot from aborting update/startup flows
       // when packaged plugin discovery is temporarily unavailable.
       warnings.push({
