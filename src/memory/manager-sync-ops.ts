@@ -5,7 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
+import { type ResolvedMemorySearchConfig, getFallbackProviderId } from "../agents/memory-search.js";
 import { type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -1090,7 +1090,8 @@ export abstract class MemoryManagerSyncOps {
 
   private async activateFallbackProvider(reason: string): Promise<boolean> {
     const fallback = this.settings.fallback;
-    if (!fallback || fallback === "none" || !this.provider || fallback === this.provider.id) {
+    const fbProviderId = getFallbackProviderId(fallback);
+    if (!fbProviderId || !this.provider || fbProviderId === this.provider.id) {
       return false;
     }
     if (this.fallbackFrom) {
@@ -1104,24 +1105,32 @@ export abstract class MemoryManagerSyncOps {
       | "mistral"
       | "ollama";
 
+    // Use explicit model from fallback config, or default for the provider
+    const fbObj = typeof fallback === "object" ? fallback : undefined;
     const fallbackModel =
-      fallback === "gemini"
+      fbObj?.model ??
+      (fbProviderId === "gemini"
         ? DEFAULT_GEMINI_EMBEDDING_MODEL
-        : fallback === "openai"
+        : fbProviderId === "openai"
           ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : fallback === "voyage"
+          : fbProviderId === "voyage"
             ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : fallback === "mistral"
+            : fbProviderId === "mistral"
               ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : fallback === "ollama"
+              : fbProviderId === "ollama"
                 ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+                : this.settings.model);
+
+    // Use explicit remote from fallback config, or shared remote
+    const fallbackRemote = fbObj?.remote
+      ? { ...this.settings.remote, ...fbObj.remote }
+      : this.settings.remote;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
       agentDir: resolveAgentDir(this.cfg, this.agentId),
-      provider: fallback,
-      remote: this.settings.remote,
+      provider: fbProviderId,
+      remote: fallbackRemote,
       model: fallbackModel,
       outputDimensionality: this.settings.outputDimensionality,
       fallback: "none",
@@ -1138,7 +1147,7 @@ export abstract class MemoryManagerSyncOps {
     this.ollama = fallbackResult.ollama;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
-    log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
+    log.warn(`memory embeddings: switched to fallback provider (${fbProviderId})`, { reason });
     return true;
   }
 

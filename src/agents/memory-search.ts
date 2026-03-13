@@ -12,6 +12,26 @@ import {
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
+export type EmbeddingProviderIdType =
+  | "openai"
+  | "gemini"
+  | "local"
+  | "voyage"
+  | "mistral"
+  | "ollama";
+
+/** Resolved fallback: normalized to object form internally, but "none" stays as string. */
+export type ResolvedMemorySearchFallback =
+  | "none"
+  | {
+      provider: EmbeddingProviderIdType;
+      model?: string;
+      remote?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+      };
+    };
+
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
@@ -33,7 +53,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback: ResolvedMemorySearchFallback;
   model: string;
   outputDimensionality?: number;
   local: {
@@ -141,6 +161,29 @@ function resolveStorePath(agentId: string, raw?: string): string {
   return resolveUserPath(withToken);
 }
 
+/** Normalize fallback config: string becomes object form, "none"/undefined stays as "none". */
+function normalizeFallback(
+  raw: MemorySearchConfig["fallback"] | undefined,
+): ResolvedMemorySearchFallback {
+  if (!raw || raw === "none") {
+    return "none";
+  }
+  if (typeof raw === "string") {
+    return { provider: raw };
+  }
+  return raw;
+}
+
+/** Extract the provider id from a resolved fallback (or undefined for "none"). */
+export function getFallbackProviderId(
+  fallback: ResolvedMemorySearchFallback,
+): EmbeddingProviderIdType | undefined {
+  if (fallback === "none") {
+    return undefined;
+  }
+  return fallback.provider;
+}
+
 function mergeConfig(
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
@@ -188,7 +231,7 @@ function mergeConfig(
         batch,
       }
     : undefined;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallback = normalizeFallback(overrides?.fallback ?? defaults?.fallback);
   const modelDefault =
     provider === "gemini"
       ? DEFAULT_GEMINI_MODEL

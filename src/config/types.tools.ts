@@ -353,7 +353,22 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  fallback?:
+    | "openai"
+    | "gemini"
+    | "local"
+    | "voyage"
+    | "mistral"
+    | "ollama"
+    | "none"
+    | {
+        provider: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+        model?: string;
+        remote?: {
+          baseUrl?: string;
+          apiKey?: SecretInput;
+        };
+      };
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**

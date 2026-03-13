@@ -37,7 +37,17 @@ export type EmbeddingProvider = {
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
-export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+export type EmbeddingProviderFallback =
+  | EmbeddingProviderId
+  | "none"
+  | {
+      provider: EmbeddingProviderId;
+      model?: string;
+      remote?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+      };
+    };
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
@@ -171,28 +181,32 @@ export async function createEmbeddingProvider(
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: EmbeddingProviderId) => {
+  const createProvider = async (
+    id: EmbeddingProviderId,
+    overrideOptions?: EmbeddingProviderOptions,
+  ) => {
+    const opts = overrideOptions ?? options;
     if (id === "local") {
-      const provider = await createLocalEmbeddingProvider(options);
+      const provider = await createLocalEmbeddingProvider(opts);
       return { provider };
     }
     if (id === "ollama") {
-      const { provider, client } = await createOllamaEmbeddingProvider(options);
+      const { provider, client } = await createOllamaEmbeddingProvider(opts);
       return { provider, ollama: client };
     }
     if (id === "gemini") {
-      const { provider, client } = await createGeminiEmbeddingProvider(options);
+      const { provider, client } = await createGeminiEmbeddingProvider(opts);
       return { provider, gemini: client };
     }
     if (id === "voyage") {
-      const { provider, client } = await createVoyageEmbeddingProvider(options);
+      const { provider, client } = await createVoyageEmbeddingProvider(opts);
       return { provider, voyage: client };
     }
     if (id === "mistral") {
-      const { provider, client } = await createMistralEmbeddingProvider(options);
+      const { provider, client } = await createMistralEmbeddingProvider(opts);
       return { provider, mistral: client };
     }
-    const { provider, client } = await createOpenAiEmbeddingProvider(options);
+    const { provider, client } = await createOpenAiEmbeddingProvider(opts);
     return { provider, openAi: client };
   };
 
@@ -244,9 +258,26 @@ export async function createEmbeddingProvider(
     return { ...primary, requestedProvider };
   } catch (primaryErr) {
     const reason = formatPrimaryError(primaryErr, requestedProvider);
-    if (fallback && fallback !== "none" && fallback !== requestedProvider) {
+    // Normalize fallback to { provider, model?, remote? } or skip if "none"/unset
+    const fb =
+      typeof fallback === "string"
+        ? fallback !== "none"
+          ? { provider: fallback }
+          : null
+        : fallback;
+    if (fb && fb.provider !== requestedProvider) {
+      // Build override options when fallback specifies its own remote or model
+      const fbOptions =
+        fb.remote || fb.model
+          ? {
+              ...options,
+              ...(fb.remote ? { remote: { ...options.remote, ...fb.remote } } : {}),
+              ...(fb.model ? { model: fb.model } : {}),
+              fallback: "none" as const,
+            }
+          : undefined;
       try {
-        const fallbackResult = await createProvider(fallback);
+        const fallbackResult = await createProvider(fb.provider, fbOptions);
         return {
           ...fallbackResult,
           requestedProvider,
@@ -256,7 +287,7 @@ export async function createEmbeddingProvider(
       } catch (fallbackErr) {
         // Both primary and fallback failed - check if it's auth-related
         const fallbackReason = formatErrorMessage(fallbackErr);
-        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
+        const combinedReason = `${reason}\n\nFallback to ${fb.provider} failed: ${fallbackReason}`;
         if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
           // Both failed due to missing API keys - return null for FTS-only mode
           return {
