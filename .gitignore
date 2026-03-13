@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+docker-compose.override.yml
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml
@@ -123,3 +124,12 @@ dist/protocol.schema.json
 # Synthing
 **/.stfolder/
 .dev-state
+docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
+docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
+.gitignore
+test/config-form.analyze.telegram.test.ts
+ui/src/ui/theme-variants.browser.test.ts
+ui/src/ui/__screenshots__
+ui/src/ui/views/__screenshots__
+ui/.vitest-attachments
+docs/superpowers

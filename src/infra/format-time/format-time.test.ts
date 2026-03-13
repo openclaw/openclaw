@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatUtcTimestamp, formatZonedTimestamp, resolveTimezone } from "./format-datetime.js";
 import {
   formatDurationCompact,
@@ -188,6 +188,15 @@ describe("format-relative", () => {
   });
 
   describe("formatRelativeTimestamp", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-02-10T12:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("returns fallback for invalid timestamp input", () => {
       for (const value of [null, undefined]) {
         expect(formatRelativeTimestamp(value)).toBe("n/a");
@@ -197,21 +206,39 @@ describe("format-relative", () => {
 
     it.each([
       { offsetMs: -10000, expected: "just now" },
+      { offsetMs: -30000, expected: "just now" },
       { offsetMs: -300000, expected: "5m ago" },
       { offsetMs: -7200000, expected: "2h ago" },
+      { offsetMs: -(47 * 3600000), expected: "47h ago" },
+      { offsetMs: -(48 * 3600000), expected: "2d ago" },
       { offsetMs: 30000, expected: "in <1m" },
       { offsetMs: 300000, expected: "in 5m" },
       { offsetMs: 7200000, expected: "in 2h" },
     ])("formats relative timestamp for offset $offsetMs", ({ offsetMs, expected }) => {
-      const now = Date.now();
-      expect(formatRelativeTimestamp(now + offsetMs)).toBe(expected);
+      expect(formatRelativeTimestamp(Date.now() + offsetMs)).toBe(expected);
     });
 
-    it("falls back to date for old timestamps when enabled", () => {
-      const oldDate = Date.now() - 30 * 24 * 3600000; // 30 days ago
-      const result = formatRelativeTimestamp(oldDate, { dateFallback: true });
-      // Should be a short date like "Jan 9" not "30d ago"
-      expect(result).toMatch(/[A-Z][a-z]{2} \d{1,2}/);
+    it.each([
+      {
+        name: "keeps 7-day-old timestamps relative",
+        offsetMs: -7 * 24 * 3600000,
+        options: { dateFallback: true, timezone: "UTC" },
+        expected: "7d ago",
+      },
+      {
+        name: "falls back to a short date once the timestamp is older than 7 days",
+        offsetMs: -8 * 24 * 3600000,
+        options: { dateFallback: true, timezone: "UTC" },
+        expected: "Feb 2",
+      },
+      {
+        name: "keeps relative output when date fallback is disabled",
+        offsetMs: -8 * 24 * 3600000,
+        options: { timezone: "UTC" },
+        expected: "8d ago",
+      },
+    ])("$name", ({ offsetMs, options, expected }) => {
+      expect(formatRelativeTimestamp(Date.now() + offsetMs, options)).toBe(expected);
     });
   });
 });
