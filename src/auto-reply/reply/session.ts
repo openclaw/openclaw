@@ -34,11 +34,12 @@ import { resolveConversationIdFromTargets } from "../../infra/outbound/conversat
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -69,19 +70,6 @@ export type SessionInitResult = {
   bodyStripped?: string;
   triggerBodyNormalized: string;
 };
-
-function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = normalizeConversationText(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
-  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey.toLowerCase();
-  const match = scoped.match(/(?:^|:)channel:([^:]+)$/);
-  if (!match?.[1]) {
-    return undefined;
-  }
-  return match[1];
-}
 
 function resolveAcpResetBindingContext(ctx: MsgContext): {
   channel: string;

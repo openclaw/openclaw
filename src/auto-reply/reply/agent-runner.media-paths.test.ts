@@ -2,7 +2,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -72,32 +72,15 @@ describe("runReplyAgent media path normalization", () => {
 
     const result = await runReplyAgent({
       commandBody: "generate",
-      followupRun: {
+      followupRun: createMockFollowupRun({
         prompt: "generate",
-        enqueuedAt: Date.now(),
         run: {
           agentId: "main",
           agentDir: "/tmp/agent",
-          sessionId: "session",
-          sessionKey: "main",
           messageProvider: "telegram",
-          sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/tmp/workspace",
-          config: {},
-          provider: "anthropic",
-          model: "claude",
-          thinkLevel: "low",
-          verboseLevel: "off",
-          elevatedLevel: "off",
-          bashElevated: {
-            enabled: false,
-            allowed: false,
-            defaultLevel: "off",
-          },
-          timeoutMs: 1_000,
-          blockReplyBreak: "message_end",
         },
-      } as unknown as FollowupRun,
+      }) as unknown as FollowupRun,
       queueKey: "main",
       resolvedQueue: { mode: "interrupt" } as QueueSettings,
       shouldSteer: false,
