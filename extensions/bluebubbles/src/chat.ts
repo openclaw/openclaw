@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { postMultipartFormData } from "./multipart.js";
+import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
@@ -24,14 +24,6 @@ function assertPrivateApiEnabled(accountId: string, feature: string): void {
       `BlueBubbles ${feature} requires Private API, but it is disabled on the BlueBubbles server.`,
     );
   }
-}
-
-async function assertBlueBubblesActionOk(response: Response, action: string): Promise<void> {
-  if (response.ok) {
-    return;
-  }
-  const errorText = await response.text().catch(() => "");
-  throw new Error(`BlueBubbles ${action} failed (${response.status}): ${errorText || "unknown"}`);
 }
 
 function resolvePartIndex(partIndex: number | undefined): number {
@@ -63,7 +55,7 @@ async function sendBlueBubblesChatEndpointRequest(params: {
     { method: params.method },
     params.opts.timeoutMs,
   );
-  await assertBlueBubblesActionOk(res, params.action);
+  await assertMultipartActionOk(res, params.action);
 }
 
 async function sendPrivateApiJsonRequest(params: {
@@ -89,7 +81,7 @@ async function sendPrivateApiJsonRequest(params: {
   }
 
   const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
-  await assertBlueBubblesActionOk(res, params.action);
+  await assertMultipartActionOk(res, params.action);
 }
 
 export async function markBlueBubblesChatRead(
@@ -327,8 +319,5 @@ export async function setGroupIconBlueBubbles(
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
   });
 
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`BlueBubbles setGroupIcon failed (${res.status}): ${errorText || "unknown"}`);
-  }
+  await assertMultipartActionOk(res, "setGroupIcon");
 }
