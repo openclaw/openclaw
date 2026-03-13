@@ -99,42 +99,19 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = readFileSync(wrapperPath, "utf8");
     const candidates: string[] = [];
-
-    const considerToken = (token: string) => {
+    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
+      const token = match[1] ?? "";
       const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
       const relative = relMatch?.[1]?.trim();
       if (!relative) {
-        return;
+        continue;
       }
-      const normalizedRelative = relative
-        .replace(/^["']+|["']+$/g, "")
-        .replace(/\s+%\*\s*$/i, "")
-        .replace(/[\\/]+/g, path.sep)
-        .replace(/^[\\/]+/, "");
-      if (!normalizedRelative) {
-        return;
-      }
+      const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
       const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
       if (isFilePath(candidate)) {
         candidates.push(candidate);
       }
-    };
-
-    // npm/pnpm cmd shims often quote `%~dp0` references.
-    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
-      const token = match[1] ?? "";
-      considerToken(token);
     }
-
-    // Some wrappers use unquoted `%~dp0\\..\\pkg\\...` tokens.
-    for (const match of content.matchAll(/%~?dp0%?[^\r\n]*/gi)) {
-      const token = (match[0] ?? "").trim();
-      if (!token) {
-        continue;
-      }
-      considerToken(token);
-    }
-
     const nonNode = candidates.find((candidate) => {
       const base = path.basename(candidate).toLowerCase();
       return base !== "node.exe" && base !== "node";
