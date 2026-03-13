@@ -52,7 +52,7 @@ import {
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
+import { applyBeforeToolsResolveHook, createOpenClawCodingTools } from "../pi-tools.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -548,8 +548,16 @@ export async function compactEmbeddedPiSessionDirect(
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
+    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, {
+      agentId: resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+        .sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      messageProvider: params.messageChannel ?? params.messageProvider,
+      senderIsOwner: params.senderIsOwner,
+    });
     const tools = sanitizeToolsForGoogle({
-      tools: supportsModelTools(model) ? toolsRaw : [],
+      tools: supportsModelTools(model) ? toolsAfterHook : [],
       provider,
     });
     const allowedToolNames = collectAllowedToolNames({ tools });
