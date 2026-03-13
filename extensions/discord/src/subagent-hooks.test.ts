@@ -321,9 +321,9 @@ describe("discord subagent hook handlers", () => {
   });
 
   it("resolves delivery target from matching bound thread", () => {
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-    ]);
+    hookMocks.listThreadBindingsBySessionKey
+      .mockReturnValueOnce([{ accountId: "work", threadId: "777" }])
+      .mockReturnValueOnce([]);
     const handlers = registerHandlersForTest();
     const handler = getRequiredHandler(handlers, "subagent_delivery_target");
 
@@ -344,10 +344,15 @@ describe("discord subagent hook handlers", () => {
       {},
     );
 
-    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenCalledWith({
+    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenNthCalledWith(1, {
       targetSessionKey: "agent:main:subagent:child",
       accountId: "work",
       targetKind: "subagent",
+    });
+    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenNthCalledWith(2, {
+      targetSessionKey: "agent:main:subagent:child",
+      accountId: "work",
+      targetKind: "acp",
     });
     expect(result).toEqual({
       origin: {
@@ -359,11 +364,57 @@ describe("discord subagent hook handlers", () => {
     });
   });
 
+  it("resolves delivery target from acp thread bindings", () => {
+    hookMocks.listThreadBindingsBySessionKey
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ accountId: "work", threadId: "999" }]);
+    const handlers = registerHandlersForTest();
+    const handler = getRequiredHandler(handlers, "subagent_delivery_target");
+
+    const result = handler(
+      {
+        childSessionKey: "agent:main:acp:child",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "work",
+          to: "channel:123",
+          threadId: "999",
+        },
+        childRunId: "run-1",
+        spawnMode: "session",
+        expectsCompletionMessage: true,
+      },
+      {},
+    );
+
+    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenNthCalledWith(1, {
+      targetSessionKey: "agent:main:acp:child",
+      accountId: "work",
+      targetKind: "subagent",
+    });
+    expect(hookMocks.listThreadBindingsBySessionKey).toHaveBeenNthCalledWith(2, {
+      targetSessionKey: "agent:main:acp:child",
+      accountId: "work",
+      targetKind: "acp",
+    });
+    expect(result).toEqual({
+      origin: {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:999",
+        threadId: "999",
+      },
+    });
+  });
+
   it("keeps original routing when delivery target is ambiguous", () => {
-    hookMocks.listThreadBindingsBySessionKey.mockReturnValueOnce([
-      { accountId: "work", threadId: "777" },
-      { accountId: "work", threadId: "888" },
-    ]);
+    hookMocks.listThreadBindingsBySessionKey
+      .mockReturnValueOnce([
+        { accountId: "work", threadId: "777" },
+        { accountId: "work", threadId: "888" },
+      ])
+      .mockReturnValueOnce([]);
     const handlers = registerHandlersForTest();
     const handler = getRequiredHandler(handlers, "subagent_delivery_target");
 
