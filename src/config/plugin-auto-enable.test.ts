@@ -473,5 +473,77 @@ describe("applyPluginAutoEnable", () => {
       expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.apn).toBeUndefined();
     });
+
+    it("skips feishu auto-enable when openclaw-lark is configured", () => {
+      // Reproduces: https://github.com/openclaw/openclaw/issues/44722
+      // When both feishu (built-in) and openclaw-lark (official Lark plugin)
+      // are configured, feishu's preferOver: ["openclaw-lark"] causes it to
+      // skip auto-enable since openclaw-lark takes precedence.
+      const stateDir = makeTempDir();
+      const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+      mkdirSafe(path.dirname(catalogPath));
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          entries: [
+            {
+              name: "openclaw-lark",
+              openclaw: {
+                channel: {
+                  id: "feishu",
+                  label: "Lark",
+                  selectionLabel: "Lark",
+                  docsPath: "/channels/feishu",
+                  blurb: "Official Lark plugin by Lark team.",
+                  aliases: ["lark"],
+                },
+                install: {
+                  npmSpec: "openclaw-lark",
+                },
+              },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            feishu: { appId: "test-app", appSecret: "test-secret" },
+          },
+        },
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+        },
+        manifestRegistry: makeRegistry([
+          { id: "feishu", channels: ["feishu"] },
+          { id: "openclaw-lark", channels: ["feishu"] },
+        ]),
+      });
+
+      // feishu should NOT be auto-enabled since openclaw-lark is also configured
+      // and feishu has preferOver: ["openclaw-lark"]
+      expect(result.config.channels?.feishu?.enabled).toBeUndefined();
+      expect(result.changes.join("\n")).not.toContain("Feishu configured, enabled automatically.");
+    });
+
+    it("auto-enables feishu when openclaw-lark is not present", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            feishu: { appId: "test-app", appSecret: "test-secret" },
+          },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "feishu", channels: ["feishu"] }]),
+      });
+
+      // feishu is an extension, so it goes into plugins.entries
+      expect(result.config.plugins?.entries?.feishu?.enabled).toBe(true);
+      expect(result.changes.join("\n")).toContain("feishu configured, enabled automatically.");
+    });
   });
 });
