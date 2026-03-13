@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { GatewayRequestHandler } from "./types.js";
 
 export function createActiveRun(
   sessionKey: string,
@@ -37,14 +38,7 @@ export function createChatAbortContext(overrides: Record<string, unknown> = {}) 
 }
 
 export async function invokeChatAbortHandler(params: {
-  handler: (args: {
-    params: { sessionKey: string; runId?: string };
-    respond: never;
-    context: never;
-    req: never;
-    client: never;
-    isWebchatConnect: () => boolean;
-  }) => Promise<void>;
+  handler: GatewayRequestHandler;
   context: ReturnType<typeof createChatAbortContext>;
   request: { sessionKey: string; runId?: string };
   client?: {
