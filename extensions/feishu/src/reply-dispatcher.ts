@@ -144,6 +144,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamText = "";
   let lastPartial = "";
   const deliveredFinalTexts = new Set<string>();
+  // Track whether streaming was already closed for a final payload in this dispatch.
+  // When true, subsequent final payloads skip streaming and send as standalone cards
+  // to avoid creating duplicate streaming cards (#XXXX).
+  let streamingClosedForFinal = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
@@ -231,6 +235,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: () => {
         deliveredFinalTexts.clear();
+        streamingClosedForFinal = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -269,7 +274,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
+          if (info?.kind === "final" && streamingEnabled && useCard && !streamingClosedForFinal) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -285,6 +290,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
+              streamingClosedForFinal = true;
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
