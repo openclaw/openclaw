@@ -98,6 +98,7 @@ function makeBaseParams(overrides: { synthesizedText?: string; deliveryRequested
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    executionSessionKey: "agent:main:cron:test-job:run:run-123",
     runSessionId: "run-123",
     runStartedAt: Date.now(),
     runEndedAt: Date.now(),
@@ -163,6 +164,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // No announce should have been attempted (subagents still running)
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(countActiveDescendantRuns).toHaveBeenCalledWith("agent:main:cron:test-job:run:run-123");
   });
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {

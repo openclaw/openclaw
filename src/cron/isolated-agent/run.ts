@@ -576,7 +576,10 @@ export async function runCronIsolatedAgentTurn(params: {
               : getCliSessionId(cronSession.sessionEntry, providerOverride);
             const result = await runCliAgent({
               sessionId: cronSession.sessionEntry.sessionId,
-              sessionKey: agentSessionKey,
+              // Use the per-run session key for execution so each isolated cron
+              // run gets its own session lane instead of queueing behind stale
+              // work on the stable job-scoped key.
+              sessionKey: runSessionKey,
               agentId,
               sessionFile,
               workspaceDir,
@@ -598,7 +601,10 @@ export async function runCronIsolatedAgentTurn(params: {
           }
           const result = await runEmbeddedPiAgent({
             sessionId: cronSession.sessionEntry.sessionId,
-            sessionKey: agentSessionKey,
+            // Use the per-run session key for execution so each isolated cron
+            // run gets its own session lane instead of queueing behind stale
+            // work on the stable job-scoped key.
+            sessionKey: runSessionKey,
             agentId,
             trigger: "cron",
             // Cron jobs are trusted local automation, so isolated runs should
@@ -667,7 +673,7 @@ export async function runCronIsolatedAgentTurn(params: {
         (interimDeliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
         Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
-      const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
+      const hasDescendantsSinceRunStart = listDescendantRunsForRequester(runSessionKey).some(
         (entry) => {
           const descendantStartedAt =
             typeof entry.startedAt === "number" ? entry.startedAt : entry.createdAt;
@@ -679,7 +685,7 @@ export async function runCronIsolatedAgentTurn(params: {
         !interimRunResult.didSendViaMessagingTool &&
         !interimPayloadHasStructuredContent &&
         !interimPayloads.some((payload) => payload?.isError === true) &&
-        countActiveDescendantRuns(agentSessionKey) === 0 &&
+        countActiveDescendantRuns(runSessionKey) === 0 &&
         !hasDescendantsSinceRunStart &&
         isLikelyInterimCronMessage(interimText);
 
@@ -849,6 +855,7 @@ export async function runCronIsolatedAgentTurn(params: {
     timeoutMs,
     resolvedDelivery,
     deliveryRequested,
+    executionSessionKey: runSessionKey,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
     deliveryBestEffort,
