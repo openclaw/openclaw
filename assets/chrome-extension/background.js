@@ -369,7 +369,7 @@ async function setLockOnRelay(locked, tabId = null) {
         'Content-Type': 'application/json',
         'x-openclaw-relay-token': relayToken,
       },
-      body: JSON.stringify({ lockTab: locked }),
+      body: JSON.stringify({ lockTab: locked, tabId }),
       signal: AbortSignal.timeout(3000),
     })
     if (resp.ok) {
@@ -1204,8 +1204,11 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenRe
 // When user switches tabs:
 // Sync all overlays globally. The broadcast logic handles showing/hiding on correct tabs.
 chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
-  if (!relayIsLocked && tabs.has(tabId) && tabs.get(tabId).state === 'connected') {
+  const tab = tabs.get(tabId)
+  if (!relayIsLocked && tab && tab.state === 'connected') {
     lockedTabId = tabId
+    // Sync the preferred tab to the gateway logs even in "ON" mode
+    void setLockOnRelay(false, tabId).catch(() => {})
   }
   updateAllBadges() // Ensure the newly activated tab has the correct badge set if local overriding applies
   await syncAllOverlays()

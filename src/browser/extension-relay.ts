@@ -637,8 +637,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
               const data = JSON.parse(body);
               if (typeof data.lockTab === "boolean") {
                 currentLockTab = data.lockTab;
+                const tabIdHint = typeof data.tabId === "string" ? ` (preferred tab: ${data.tabId})` : "";
                 console.log(
-                  `[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}`,
+                  `[browser/extension-relay] Relay on ${info.port} lockTab updated to: ${currentLockTab}${tabIdHint}`,
                 );
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ ok: true, lockTab: currentLockTab }));
