@@ -212,21 +212,12 @@ async function relayAuthTokenForUrl(url: string): Promise<string | null> {
     }
     const runtimeToken = relayRuntimeByPort.get(port)?.relayAuthToken;
     if (runtimeToken) {
-      console.log(
-        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning runtimeToken=${runtimeToken}`,
-      );
       return runtimeToken;
     }
     try {
       const derivedToken = await resolveRelayAuthTokenForPort(port);
-      console.log(
-        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> returning dynamically derivedToken=${derivedToken}`,
-      );
       return derivedToken;
     } catch {
-      console.log(
-        `[browser/extension-relay] relayAuthTokenForUrl(${url}) -> dynamically driving failed`,
-      );
       return null;
     }
   } catch {

@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -7,9 +9,6 @@ import { resolveSecretRefValues } from "../secrets/resolve.js";
 const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v1";
 const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 const OPENCLAW_RELAY_BROWSER = "OpenClaw/extension-relay";
-
-import fs from "node:fs";
-import path from "node:path";
 
 class SecretRefUnavailableError extends Error {
   readonly isSecretRefUnavailable = true;
