@@ -28,7 +28,9 @@ type CacheEntry = { value: UsageSummary; expiresAt: number };
 const usageCache = new Map<string, CacheEntry>();
 
 function cacheKey(opts: UsageSummaryOptions): string {
-  return opts.agentDir ?? "";
+  // Include sorted providers list to prevent cross-caller key collisions.
+  const providers = (opts.providers ?? usageProviders).slice().toSorted().join(",");
+  return `${opts.agentDir ?? ""}|${providers}`;
 }
 
 function getCached(key: string, now: number, ttlMs: number): UsageSummary | undefined {
@@ -42,11 +44,12 @@ function getCached(key: string, now: number, ttlMs: number): UsageSummary | unde
   return entry.value;
 }
 
-function setCached(key: string, value: UsageSummary, ttlMs: number): void {
+function setCached(key: string, value: UsageSummary, now: number, ttlMs: number): void {
   if (ttlMs <= 0) {
     return;
   }
-  usageCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+  // Use the same `now` as getCached to keep clocks consistent.
+  usageCache.set(key, { value, expiresAt: now + ttlMs });
 }
 
 type UsageSummaryOptions = {
@@ -148,7 +151,7 @@ export async function loadProviderUsageSummary(
 
   const result = { updatedAt: now, providers };
   if (key !== null) {
-    setCached(key, result, ttlMs);
+    setCached(key, result, now, ttlMs);
   }
   return result;
 }
