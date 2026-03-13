@@ -9,7 +9,7 @@ const listSystemPresenceMock = vi.hoisted(() => vi.fn());
 const resolveGatewayAuthMock = vi.hoisted(() => vi.fn());
 const getUpdateAvailableMock = vi.hoisted(() => vi.fn());
 const resolveAgentCortexConfigMock = vi.hoisted(() => vi.fn());
-const getLatestCortexCaptureHistoryEntrySyncMock = vi.hoisted(() => vi.fn());
+const getCachedLatestCortexCaptureHistoryEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   STATE_DIR: "/tmp/openclaw-state",
@@ -51,7 +51,7 @@ vi.mock("../../agents/cortex.js", () => ({
 }));
 
 vi.mock("../../agents/cortex-history.js", () => ({
-  getLatestCortexCaptureHistoryEntrySync: getLatestCortexCaptureHistoryEntrySyncMock,
+  getCachedLatestCortexCaptureHistoryEntry: getCachedLatestCortexCaptureHistoryEntryMock,
 }));
 
 import { buildGatewaySnapshot } from "./health-state.js";
@@ -78,7 +78,7 @@ describe("buildGatewaySnapshot", () => {
       maxChars: 1500,
       graphPath: ".cortex/context.json",
     });
-    getLatestCortexCaptureHistoryEntrySyncMock.mockReturnValue({
+    getCachedLatestCortexCaptureHistoryEntryMock.mockReturnValue({
       agentId: "main",
       captured: true,
       score: 0.7,
