@@ -49,6 +49,14 @@ export const FeishuCalendarSchema = Type.Object({
       { description: "List of attendees to add (for add_attendees)" },
     ),
   ),
+  attendee_ability: Type.Optional(
+    Type.Unsafe<"none" | "can_see_others" | "can_invite_others" | "can_modify_event">({
+      type: "string",
+      enum: ["none", "can_see_others", "can_invite_others", "can_modify_event"],
+      description:
+        "Attendee ability for create_event: none | can_see_others | can_invite_others | can_modify_event",
+    }),
+  ),
   need_notification: Type.Optional(
     Type.Boolean({ description: "Whether to send notification (default true)" }),
   ),

@@ -2,17 +2,39 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuCalendarSchema, type FeishuCalendarParams } from "./calendar-schema.js";
-import { createFeishuClient } from "./client.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import {
+  jsonToolResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
+/**
+ * Resolved calendar ID cache.  Tenant tokens cannot use the literal
+ * "primary" alias — we must first list calendars and locate the one
+ * whose type is "primary", then use its real calendar_id for all
+ * subsequent requests.
+ */
+let resolvedCalendarId: string | null = null;
+
+async function resolvePrimaryCalendarId(client: Lark.Client): Promise<string> {
+  if (resolvedCalendarId) return resolvedCalendarId;
+
+  const res = await client.calendar.calendar.list({});
+  if (res.code !== 0) {
+    throw new Error(`Failed to list calendars: ${res.msg}`);
+  }
+
+  // SDK types don't include the "type" field on calendar items, so we cast to any.
+  const primary = res.data?.calendar_list?.find((c) => (c as any).type === "primary");
+
+  if (!primary?.calendar_id) {
+    throw new Error("No primary calendar found for this app. Ensure the bot has a calendar.");
+  }
+
+  resolvedCalendarId = primary.calendar_id;
+  return resolvedCalendarId;
 }
-
-const PRIMARY_CALENDAR_ID = "primary";
 
 /**
  * Convert an ISO 8601 string or numeric timestamp string to a Unix timestamp string (seconds).
@@ -42,12 +64,14 @@ async function createEvent(client: Lark.Client, params: FeishuCalendarParams) {
     ? toUnixTimestamp(params.end_time)
     : String(Number(startTimestamp) + 3600);
 
+  const calendarId = await resolvePrimaryCalendarId(client);
   const res = await client.calendar.calendarEvent.create({
-    path: { calendar_id: PRIMARY_CALENDAR_ID },
+    path: { calendar_id: calendarId },
     data: {
       summary: params.summary,
       description: params.description,
       need_notification: params.need_notification,
+      attendee_ability: params.attendee_ability,
       start_time: { timestamp: startTimestamp },
       end_time: { timestamp: endTimestamp },
     },
@@ -74,10 +98,12 @@ async function addAttendees(client: Lark.Client, params: FeishuCalendarParams) {
     throw new Error("attendees array is required for add_attendees");
   }
 
-  // The Lark SDK types don't expose the attendees sub-resource; cast to any to access it.
-  const res = await (client.calendar.calendarEvent as any).attendees.create({
+  const calendarId = await resolvePrimaryCalendarId(client);
+  // SDK types for calendarEventAttendee.create may not match the actual API shape,
+  // so we use a type assertion here.
+  const res = await client.calendar.calendarEventAttendee.create({
     path: {
-      calendar_id: PRIMARY_CALENDAR_ID,
+      calendar_id: calendarId,
       event_id: params.event_id,
     },
     data: {
@@ -118,8 +144,10 @@ async function listEvents(client: Lark.Client, params: FeishuCalendarParams) {
     queryParams.page_token = params.page_token;
   }
 
+  const calendarId = await resolvePrimaryCalendarId(client);
+  // SDK types for list params are incomplete, so we cast to any.
   const res = await client.calendar.calendarEvent.list({
-    path: { calendar_id: PRIMARY_CALENDAR_ID },
+    path: { calendar_id: calendarId },
     params: queryParams as any,
   });
 
@@ -147,9 +175,10 @@ async function getEvent(client: Lark.Client, params: FeishuCalendarParams) {
     throw new Error("event_id is required for get_event");
   }
 
+  const calendarId = await resolvePrimaryCalendarId(client);
   const res = await client.calendar.calendarEvent.get({
     path: {
-      calendar_id: PRIMARY_CALENDAR_ID,
+      calendar_id: calendarId,
       event_id: params.event_id,
     },
   });
@@ -176,9 +205,11 @@ async function deleteEvent(client: Lark.Client, params: FeishuCalendarParams) {
     throw new Error("event_id is required for delete_event");
   }
 
+  const calendarId = await resolvePrimaryCalendarId(client);
+  // SDK types for delete params don't include need_notification, so we cast to any.
   const res = await client.calendar.calendarEvent.delete({
     path: {
-      calendar_id: PRIMARY_CALENDAR_ID,
+      calendar_id: calendarId,
       event_id: params.event_id,
     },
     params: {
@@ -208,46 +239,50 @@ export function registerFeishuCalendarTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.calendar) {
     api.logger.debug?.("feishu_calendar: calendar tool disabled in config");
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
+  type FeishuCalendarExecuteParams = FeishuCalendarParams & { accountId?: string };
 
   api.registerTool(
-    {
-      name: "feishu_calendar",
-      label: "Feishu Calendar",
-      description:
-        "Feishu calendar operations. Actions: create_event, add_attendees, list_events, get_event, delete_event",
-      parameters: FeishuCalendarSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuCalendarParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "create_event":
-              return json(await createEvent(client, p));
-            case "add_attendees":
-              return json(await addAttendees(client, p));
-            case "list_events":
-              return json(await listEvents(client, p));
-            case "get_event":
-              return json(await getEvent(client, p));
-            case "delete_event":
-              return json(await deleteEvent(client, p));
-            default:
-              return json({ error: `Unknown action: ${String(p.action)}` });
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_calendar",
+        label: "Feishu Calendar",
+        description:
+          "Feishu calendar operations. Actions: create_event, add_attendees, list_events, get_event, delete_event",
+        parameters: FeishuCalendarSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuCalendarExecuteParams;
+          try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
+            switch (p.action) {
+              case "create_event":
+                return jsonToolResult(await createEvent(client, p));
+              case "add_attendees":
+                return jsonToolResult(await addAttendees(client, p));
+              case "list_events":
+                return jsonToolResult(await listEvents(client, p));
+              case "get_event":
+                return jsonToolResult(await getEvent(client, p));
+              case "delete_event":
+                return jsonToolResult(await deleteEvent(client, p));
+              default:
+                return unknownToolActionResult((p as { action?: unknown }).action);
+            }
+          } catch (err) {
+            return toolExecutionErrorResult(err);
           }
-        } catch (err) {
-          return json({
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_calendar" },
   );
