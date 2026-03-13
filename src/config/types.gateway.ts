@@ -186,7 +186,7 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** Enables or disables remote gateway credential surfaces. Default: true when absent. */
+  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
   enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
@@ -347,6 +347,21 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayPushApnsRelayConfig = {
+  /** Base HTTPS URL for the external iOS APNs relay service. */
+  baseUrl?: string;
+  /** Timeout in milliseconds for relay send requests (default: 10000). */
+  timeoutMs?: number;
+};
+
+export type GatewayPushApnsConfig = {
+  relay?: GatewayPushApnsRelayConfig;
+};
+
+export type GatewayPushConfig = {
+  apns?: GatewayPushApnsConfig;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -395,6 +410,7 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection

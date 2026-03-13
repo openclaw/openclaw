@@ -233,6 +233,40 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
+  compat-node22:
+    name: "compat-node22"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node 22 compatibility environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "22.x"
+          cache-key-suffix: "node22"
+          install-bun: "false"
+          use-sticky-disk: "true"
+
+      - name: Configure Node 22 test resources
+        run: |
+          # Keep the compatibility lane aligned with the default Node test lane.
+          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+
+      - name: Build under Node 22
+        run: pnpm build
+
+      - name: Run tests under Node 22
+        run: pnpm test
+
+      - name: Verify npm pack under Node 22
+        run: pnpm release:check
+
   skills-python:
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true' || needs.changed-scope.outputs.run_skills_python == 'true')
@@ -401,14 +435,14 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.x
+          node-version: 24.x
           check-latest: false
 
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           pnpm-version: "10.23.0"
-          cache-key-suffix: "node22"
+          cache-key-suffix: "node24"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.
           # Try exact-key actions/cache restores instead to recover store reuse

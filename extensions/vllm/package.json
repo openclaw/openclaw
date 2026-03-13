@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/vllm",
+  "version": "2026.3.11",
+  "private": true,
+  "description": "OpenClaw vLLM provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
