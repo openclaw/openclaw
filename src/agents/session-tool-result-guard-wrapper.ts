@@ -1,4 +1,5 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { redactSensitiveText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -12,6 +13,29 @@ export type GuardedSessionManager = SessionManager & {
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
+
+// oxlint-disable-next-line typescript/no-explicit-any
+function redactMessageContent(message: any): any {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+  const copy = { ...message };
+  if (typeof copy.content === "string") {
+    copy.content = redactSensitiveText(copy.content);
+  } else if (Array.isArray(copy.content)) {
+    // oxlint-disable-next-line typescript/no-explicit-any
+    copy.content = copy.content.map((block: any) => {
+      if (block.type === "text" && typeof block.text === "string") {
+        return { ...block, text: redactSensitiveText(block.text) };
+      }
+      if (block.type === "thinking" && typeof block.thinking === "string") {
+        return { ...block, thinking: redactSensitiveText(block.thinking) };
+      }
+      return block;
+    });
+  }
+  return copy;
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -63,8 +87,10 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      return redactMessageContent(withProvenance);
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,
