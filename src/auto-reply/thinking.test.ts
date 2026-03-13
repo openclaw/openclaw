@@ -222,6 +222,17 @@ describe("resolveThinkingCapabilities", () => {
       }),
     ).toEqual({ binaryThinking: false });
   });
+
+  it("treats Bedrock provider aliases as native adaptive for Claude 4.6", () => {
+    expect(supportsNativeAdaptiveThinking("bedrock", "claude-sonnet-4-6")).toBe(true);
+    expect(supportsNativeAdaptiveThinking("aws-bedrock", "claude-sonnet-4-6")).toBe(true);
+    expect(
+      resolveThinkingCapabilities({
+        provider: "bedrock",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toEqual({ binaryThinking: false, nativeAdaptive: true });
+  });
 });
 
 describe("normalizeReasoningLevel", () => {

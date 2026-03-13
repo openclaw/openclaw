@@ -206,6 +206,37 @@ describe("set_thinking_level tool", () => {
     ).rejects.toThrow(/turn scope requires an active run thinking state/i);
   });
 
+  it("rejects invalid scope values before mutating thinking state", async () => {
+    const fixture = await createSessionFixture();
+    tempRoots.push(fixture.root);
+    const thinking = createThinkingState({ defaultLevel: "off", sessionLevel: "low" });
+    const applied: string[] = [];
+    const tool = createSetThinkingLevelTool({
+      agentSessionKey: fixture.sessionKey,
+      config: fixture.cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      getRequestedThinkingLevel: thinking.getCurrent,
+      setRequestedThinkingLevelForScope: thinking.setForScope,
+      applyEffectiveThinkingLevel: (level) => applied.push(level),
+      reasoningSupported: true,
+    });
+
+    await expect(
+      tool.execute("call-invalid-scope", {
+        level: "high",
+        scope: "current",
+      }),
+    ).rejects.toThrow(/invalid scope/i);
+
+    expect(thinking.state.sessionLevel).toBe("low");
+    expect(thinking.state.turnLevel).toBeUndefined();
+    expect(applied).toEqual([]);
+    expect(
+      loadSessionStore(fixture.storePath, { skipCache: true })[fixture.sessionKey]?.thinkingLevel,
+    ).toBe("low");
+  });
+
   it("persists the requested level but applies effective off when reasoning is unsupported", async () => {
     const fixture = await createSessionFixture();
     tempRoots.push(fixture.root);
