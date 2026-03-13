@@ -343,6 +343,7 @@ export async function handleBashChatCommand(params: {
       sessionKey: params.sessionKey,
       notifyOnExit,
       notifyOnExitEmptySuccess,
+      commandSecurity: params.cfg.tools?.exec?.commandSecurity,
       elevated: {
         enabled: params.elevated.enabled,
         allowed: params.elevated.allowed,

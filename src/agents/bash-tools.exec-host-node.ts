@@ -16,8 +16,13 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import {
+  getShellPathFromLoginShell,
+  resolveShellEnvFallbackTimeoutMs,
+} from "../infra/shell-env.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
+import { checkCommandSecurity } from "../security/command-security.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalRequesterContext,
@@ -37,6 +42,7 @@ import {
   normalizeNotifyOutput,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { coerceEnv } from "./bash-tools.shared.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
@@ -61,6 +67,12 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   notifySessionKey?: string;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  commandSecurityConfig?: {
+    enabled?: boolean;
+    failOpen?: boolean;
+    timeoutMs?: number;
+    tirithPath?: string;
+  };
 };
 
 export async function executeNodeHostCommand(
@@ -102,6 +114,33 @@ export async function executeNodeHostCommand(
     throw new Error(
       "exec host=node requires a node that supports system.run (companion app or node host).",
     );
+  }
+  let securityWarning = false;
+  if (params.commandSecurityConfig?.enabled !== false) {
+    const shell = String(nodeInfo?.platform ?? "")
+      .toLowerCase()
+      .startsWith("win")
+      ? "cmd"
+      : "posix";
+    const tirithExecEnv: Record<string, string> = { ...coerceEnv(process.env) };
+    const hostShellPath = getShellPathFromLoginShell({
+      env: process.env,
+      timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+    });
+    if (hostShellPath) {
+      tirithExecEnv.PATH = hostShellPath;
+    }
+    const securityCheck = await checkCommandSecurity(params.command, params.commandSecurityConfig, {
+      shell,
+      env: tirithExecEnv,
+    });
+    if (securityCheck.action === "block") {
+      throw new Error(`exec denied: command blocked by security scan.\n${securityCheck.summary}`);
+    }
+    if (securityCheck.action === "warn" && securityCheck.findings.length > 0) {
+      securityWarning = true;
+      params.warnings.push(`Security: ${securityCheck.summary}`);
+    }
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
   const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
@@ -189,7 +228,9 @@ export async function executeNodeHostCommand(
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
-    }) || obfuscation.detected;
+    }) ||
+    obfuscation.detected ||
+    securityWarning;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
@@ -293,6 +334,7 @@ export async function executeNodeHostCommand(
         decision,
         askFallback,
         obfuscationDetected: obfuscation.detected,
+        securityWarning,
       });
       let approvedByAsk = baseDecision.approvedByAsk;
       let approvalDecision: "allow-once" | "allow-always" | null = null;

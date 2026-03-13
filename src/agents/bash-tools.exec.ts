@@ -9,6 +9,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { checkCommandSecurity } from "../security/command-security.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -399,6 +400,45 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      let securityWarning = false;
+      const commandSecurityConfig = defaults?.commandSecurity;
+      if (host !== "node" && commandSecurityConfig?.enabled !== false) {
+        const shell =
+          host === "sandbox" ? "posix" : process.platform === "win32" ? "powershell" : "posix";
+
+        // tirith runs locally -- build full host env with resolved PATH.
+        // Use login-shell PATH directly (not env.PATH which includes pathPrepend).
+        // pathPrepend may contain workspace-local directories where a spoofed
+        // tirith binary could be placed to bypass the security scanner.
+        const tirithExecEnv: Record<string, string> = { ...coerceEnv(process.env) };
+        const hostShellPath = getShellPathFromLoginShell({
+          env: process.env,
+          timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+        });
+        if (hostShellPath) {
+          tirithExecEnv.PATH = hostShellPath;
+        }
+
+        const securityCheck = await checkCommandSecurity(params.command, commandSecurityConfig, {
+          shell,
+          env: tirithExecEnv,
+        });
+        if (securityCheck.action === "block") {
+          throw new Error(
+            `exec denied: command blocked by security scan.\n${securityCheck.summary}`,
+          );
+        }
+        if (securityCheck.action === "warn" && securityCheck.findings.length > 0) {
+          if (bypassApprovals || host === "sandbox") {
+            throw new Error(
+              `exec denied: command flagged by security scan (warn escalated because approval is unavailable).\n${securityCheck.summary}`,
+            );
+          }
+          securityWarning = true;
+          warnings.push(`Security: ${securityCheck.summary}`);
+        }
+      }
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -421,6 +461,7 @@ export function createExecTool(
           warnings,
           notifySessionKey,
           trustedSafeBinDirs,
+          commandSecurityConfig: defaults?.commandSecurity,
         });
       }
 
@@ -449,6 +490,7 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          securityWarning,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;

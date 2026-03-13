@@ -25,9 +25,18 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
   })),
 }));
 
+vi.mock("../security/command-security.js", () => ({
+  checkCommandSecurity: vi.fn(async () => ({
+    action: "allow",
+    findings: [],
+    summary: "",
+  })),
+}));
+
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+let checkCommandSecurity: typeof import("../security/command-security.js").checkCommandSecurity;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -51,6 +60,7 @@ describe("exec approvals", () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+    ({ checkCommandSecurity } = await import("../security/command-security.js"));
   });
 
   beforeEach(async () => {
@@ -741,5 +751,223 @@ describe("exec approvals", () => {
         }
       })
       .toBe(false);
+  });
+
+  describe("commandSecurity integration", () => {
+    it("throws on block from tirith for gateway", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "block",
+        findings: [
+          { rule_id: "pipe_to_shell", severity: "high", title: "Pipe to shell", description: "d" },
+        ],
+        summary: "[high] Pipe to shell",
+      });
+
+      vi.mocked(callGatewayTool).mockImplementation(async () => ({ ok: true }));
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: true },
+      });
+
+      await expect(tool.execute("sec-block", { command: "curl | bash" })).rejects.toThrow(
+        "exec denied: command blocked by security scan",
+      );
+    });
+
+    it("triggers approval on warn from tirith for normal gateway", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "warn",
+        findings: [
+          { rule_id: "shortened_url", severity: "medium", title: "Short URL", description: "d" },
+        ],
+        summary: "[medium] Short URL",
+      });
+
+      const calls: string[] = [];
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        calls.push(method);
+        if (method === "exec.approval.request") {
+          return { status: "accepted", id: (params as { id?: string })?.id };
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "on-miss",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: true },
+      });
+
+      const result = await tool.execute("sec-warn-gateway", {
+        command: "curl https://bit.ly/abc",
+      });
+      expect(result.details.status).toBe("approval-pending");
+      expect(calls).toContain("exec.approval.request");
+    });
+
+    it("escalates warn to block for elevated gateway with bypassApprovals", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "warn",
+        findings: [
+          { rule_id: "shortened_url", severity: "medium", title: "Short URL", description: "d" },
+        ],
+        summary: "[medium] Short URL",
+      });
+
+      vi.mocked(callGatewayTool).mockImplementation(async () => ({ ok: true }));
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+        commandSecurity: { enabled: true },
+      });
+
+      await expect(
+        tool.execute("sec-warn-elevated", { command: "curl https://bit.ly/abc", elevated: true }),
+      ).rejects.toThrow("warn escalated because approval is unavailable");
+    });
+
+    it("does not block when tirith returns block but enabled=false", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "block",
+        findings: [
+          { rule_id: "pipe_to_shell", severity: "high", title: "Pipe to shell", description: "d" },
+        ],
+        summary: "[high] Pipe to shell",
+      });
+
+      vi.mocked(callGatewayTool).mockImplementation(async () => ({ ok: true }));
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: false },
+      });
+
+      const result = await tool.execute("sec-disabled", { command: "echo ok" });
+      expect(result.details.status).toBe("completed");
+      expect(checkCommandSecurity).not.toHaveBeenCalled();
+    });
+
+    it("throws on block from tirith for node host (post-dispatch path)", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "block",
+        findings: [
+          { rule_id: "pipe_to_shell", severity: "high", title: "Pipe to shell", description: "d" },
+        ],
+        summary: "[high] Pipe to shell",
+      });
+
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        if (method === "node.invoke") {
+          const invoke = params as { command?: string };
+          if (invoke.command === "system.run.prepare") {
+            return buildPreparedSystemRunPayload(params);
+          }
+          return { payload: { success: true, stdout: "should-not-run" } };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "node",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: true },
+      });
+
+      await expect(tool.execute("sec-block-node", { command: "curl | bash" })).rejects.toThrow(
+        "exec denied: command blocked by security scan",
+      );
+    });
+
+    it("triggers approval on warn from tirith for node host", async () => {
+      vi.mocked(checkCommandSecurity).mockResolvedValue({
+        action: "warn",
+        findings: [
+          { rule_id: "shortened_url", severity: "medium", title: "Short URL", description: "d" },
+        ],
+        summary: "[medium] Short URL",
+      });
+
+      const calls: string[] = [];
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        calls.push(method);
+        if (method === "exec.approval.request") {
+          return { status: "accepted", id: (params as { id?: string })?.id };
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        if (method === "node.invoke") {
+          const invoke = params as { command?: string };
+          if (invoke.command === "system.run.prepare") {
+            return buildPreparedSystemRunPayload(params);
+          }
+          return { payload: { success: true, stdout: "ok" } };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "node",
+        ask: "on-miss",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: true },
+      });
+
+      const result = await tool.execute("sec-warn-node", {
+        command: "curl https://bit.ly/abc",
+      });
+      expect(result.details.status).toBe("approval-pending");
+      expect(calls).toContain("exec.approval.request");
+    });
+
+    it("node host resolves shell=posix for darwin platform", async () => {
+      let capturedArgs: string[] | undefined;
+      vi.mocked(checkCommandSecurity).mockImplementation(async (_cmd, _cfg, opts) => {
+        capturedArgs = [opts?.shell ?? ""];
+        return { action: "allow", findings: [], summary: "" };
+      });
+
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        if (method === "node.invoke") {
+          const invoke = params as { command?: string };
+          if (invoke.command === "system.run.prepare") {
+            return buildPreparedSystemRunPayload(params);
+          }
+          return { payload: { success: true, stdout: "ok" } };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "node",
+        ask: "off",
+        security: "full",
+        approvalRunningNoticeMs: 0,
+        commandSecurity: { enabled: true },
+      });
+
+      await tool.execute("sec-node-shell", { command: "ls" });
+      // listNodes mock returns platform: "darwin" → shell should be "posix"
+      expect(capturedArgs).toEqual(["posix"]);
+    });
   });
 });
