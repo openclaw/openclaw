@@ -175,14 +175,14 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dynamic-require",
     severity: "critical",
     message: "Dynamic require() with variable argument detected",
-    pattern: /\brequire\s*\(\s*(?!['"`])(?!\s*['"`])/,
+    pattern: /\brequire\s*\(\s*(?!['"])/,
   },
-  // R6: détecter l'import() dynamique (expression non-littérale)
+  // R7: détecter l'import() dynamique (expression non-littérale ou template literal dynamique)
   {
     ruleId: "dynamic-import",
     severity: "critical",
     message: "Dynamic import() with non-literal argument detected",
-    pattern: /\bimport\s*\(\s*(?!['"`])(?!\s*['"`])/,
+    pattern: /\bimport\s*\(\s*(?!['"])/,
   },
 ];
 
