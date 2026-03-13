@@ -57,13 +57,17 @@ function sanitizeFilename(name: string): string {
   return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
 }
 
+function basenameAcrossSeparators(filePath: string): string {
+  return path.win32.basename(path.posix.basename(filePath));
+}
+
 /**
  * Extract original filename from path if it matches the embedded format.
  * Pattern: {original}---{uuid}.{ext} → returns "{original}.{ext}"
  * Falls back to basename if no pattern match, or "file.bin" if empty.
  */
 export function extractOriginalFilename(filePath: string): string {
-  const basename = path.basename(filePath);
+  const basename = basenameAcrossSeparators(filePath);
   if (!basename) {
     return "file.bin";
   } // Fallback for empty input
@@ -363,7 +367,7 @@ export async function saveMediaBuffer(
   let id: string;
   if (originalFilename) {
     // Embed original name: {sanitized}---{uuid}.ext
-    const base = path.parse(originalFilename).name;
+    const base = path.parse(basenameAcrossSeparators(originalFilename)).name;
     const sanitized = sanitizeFilename(base);
     id = sanitized ? `${sanitized}---${uuid}${ext}` : `${uuid}${ext}`;
   } else {

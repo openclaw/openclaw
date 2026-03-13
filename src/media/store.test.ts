@@ -383,6 +383,14 @@ describe("media store", () => {
         expect(result).toBe("报告_2024.pdf");
       });
     });
+
+    it("normalizes Windows path separators when extracting original names", async () => {
+      await withTempStore(async (store) => {
+        const filename = "voice-note---a1b2c3d4-e5f6-7890-abcd-ef1234567890.m4a";
+        const result = store.extractOriginalFilename(`..\\private\\${filename}`);
+        expect(result).toBe("voice-note.m4a");
+      });
+    });
   });
 
   describe("saveMediaBuffer with originalFilename", () => {
@@ -421,6 +429,22 @@ describe("media store", () => {
 
         // Unsafe chars should be replaced with underscores
         expect(saved.id).toMatch(/^my_file_test---[a-f0-9-]{36}\.txt$/);
+      });
+    });
+
+    it("strips Windows path segments from original filenames", async () => {
+      await withTempStore(async (store) => {
+        const buf = Buffer.from("test");
+        const saved = await store.saveMediaBuffer(
+          buf,
+          "audio/mp4",
+          "inbound",
+          5 * 1024 * 1024,
+          "..\\private\\voice-note.m4a",
+        );
+
+        expect(saved.id).toMatch(/^voice-note---[a-f0-9-]{36}\.m4a$/);
+        expect(saved.id).not.toContain("private");
       });
     });
 
