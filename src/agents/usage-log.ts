@@ -92,10 +92,32 @@ async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<
     }
   }
 
-  // Timeout: remove a potentially stale lock and make one final attempt.
+  // Timed out waiting for the lock. Remove a potentially stale lock file
+  // (left behind by a crashed process) and make one final attempt to acquire
+  // it through the normal O_EXCL path. This ensures the write is always
+  // serialised: if the stale file is gone another waiter that also timed out
+  // concurrently will race on O_EXCL and only one of them will win.
   await fs.unlink(lockPath).catch(() => {});
-  const records = await fn();
-  return records;
+
+  // Re-enter the acquisition loop for a single attempt (deadline already
+  // passed so the while condition is false; open directly instead).
+  let fh: fs.FileHandle | undefined;
+  try {
+    fh = await fs.open(lockPath, "wx");
+    await fh.close();
+    fh = undefined;
+    try {
+      return await fn();
+    } finally {
+      await fs.unlink(lockPath).catch(() => {});
+    }
+  } catch (err) {
+    await fh?.close().catch(() => {});
+    throw Object.assign(
+      new Error(`Could not acquire lock ${lockPath} within ${LOCK_TIMEOUT_MS}ms`),
+      { code: "ERR_LOCK_TIMEOUT", cause: err },
+    );
+  }
 }
 
 async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void> {
