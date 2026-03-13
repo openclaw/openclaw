@@ -1,1 +1,5 @@
-- Fix `autoresearch.sh` to benchmark the real assembled system prompt again (tsdown now emits hashed chunks, so the old `dist/agents/pi-embedded-helpers/bootstrap.js` path always falls back to `0`).
+- Cross-session mtime-gated bootstrap cache: track file mtimes, skip re-reading unchanged files on new session. Reduces build time but doesn't change stable_chars metric.
+- Skills hash-gated regeneration: cache skills prompt by content hash, only regenerate when any SKILL.md or skills directory changes.
+- Further benchmark scenario modeling: test case where SOUL.md also changes (both SOUL.md + AGENTS.md updated). Would show stable prefix = boilerplate only (~10,987). Then optimize by separating rarely-changed identity from frequently-changed AGENTS.md guidelines.
+- Separate AGENTS.md into base (rarely changes) + overlay (frequently changes): e.g., AGENTS.md for global protocol, PROJECT_AGENTS.md for project-specific notes injected last. Requires user-facing design.
+- Remove per-file object allocation in trimBootstrapContent for non-truncated files (return original string reference) — performance micro-optimization, no metric impact.
