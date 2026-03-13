@@ -65,7 +65,8 @@ function normalizeSafeBinName(raw: string): string {
     return "";
   }
   const tail = trimmed.split(/[\\/]/).at(-1);
-  return tail ?? trimmed;
+  const normalized = tail ?? trimmed;
+  return normalized.replace(/\.(?:exe|cmd|bat|com)$/i, "");
 }
 
 export function isInterpreterLikeSafeBin(raw: string): boolean {
