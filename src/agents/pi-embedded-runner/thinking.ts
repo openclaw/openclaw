@@ -81,6 +81,7 @@ export function assertReplayProtectionIntact(
   if (
     !transformedLatestAssistant ||
     !isAssistantMessageWithContent(transformedLatestAssistant) ||
+    !isAssistantMessageWithContent(originalLatestAssistant) ||
     JSON.stringify(transformedLatestAssistant.content) !==
       JSON.stringify(originalLatestAssistant.content)
   ) {
