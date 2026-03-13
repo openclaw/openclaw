@@ -5,10 +5,13 @@ describe("shared/model-param-b", () => {
   it("extracts the largest valid b-sized parameter token", () => {
     expect(inferParamBFromIdOrName("llama-8b mixtral-22b")).toBe(22);
     expect(inferParamBFromIdOrName("Qwen 0.5B Instruct")).toBe(0.5);
+    expect(inferParamBFromIdOrName("prefix M7B and q4_32b")).toBe(32);
   });
 
   it("ignores malformed, zero, and non-delimited matches", () => {
     expect(inferParamBFromIdOrName("abc70beta 0b x70b2")).toBeNull();
     expect(inferParamBFromIdOrName("model 0b")).toBeNull();
+    expect(inferParamBFromIdOrName("model b5")).toBeNull();
+    expect(inferParamBFromIdOrName("foo70bbar")).toBeNull();
   });
 });
