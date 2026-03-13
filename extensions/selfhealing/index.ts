@@ -103,18 +103,29 @@ export default function register(api: OpenClawPluginApi) {
     }
   });
 
-  // After every model response — detect success claims and verify
-  api.on("llm_output", (_event, ctx) => {
+  // Block messages that contain unverified success claims
+  // Everything is sync (regex + execFileSync) so this works in the sync-only hook
+  api.on("before_message_write", (event, ctx) => {
+    const msg = event.message;
+    if (msg.role !== "assistant") return;
+
+    // Extract text from message content
+    const content = msg.content;
+    const text = Array.isArray(content)
+      ? content
+          .filter((c: Record<string, unknown>) => c.type === "text")
+          .map((c: Record<string, unknown>) => String(c.text ?? ""))
+          .join(" ")
+      : typeof content === "string"
+        ? content
+        : "";
+
+    if (!detectClaim(text)) return;
+
     const key = resolveKey(ctx);
-    const text = _event.assistantTexts.join(" ");
-
-    const isClaim = detectClaim(text);
-    if (!isClaim) return;
-
-    api.logger.info(`[selfhealing] claim detected. key=${key}`);
+    api.logger.info(`[selfhealing] claim detected in before_message_write. key=${key}`);
 
     const tracked = processCache.get(key) ?? [];
-    // Only verify if there are exec processes — subagents can't be ps-checked
     const execProcesses = tracked.filter((t) => t.kind === "exec");
 
     if (tracked.length === 0) {
@@ -122,19 +133,18 @@ export default function register(api: OpenClawPluginApi) {
         key,
         "You claimed success but no background processes or subagents were tracked. Verify the task is actually running before claiming completion.",
       );
-      api.logger.info("[selfhealing] correction set — no processes tracked");
-      return;
+      api.logger.info("[selfhealing] BLOCKED — no processes tracked");
+      return { block: true };
     }
 
-    if (execProcesses.length === 0) {
-      // Only subagents tracked — can't verify via OS, skip
-      return;
-    }
+    if (execProcesses.length === 0) return;
 
     const result = verifyAll(tracked);
     api.logger.info(`[selfhealing] verifyAll: passed=${result.passed} reason=${result.reason}`);
     if (!result.passed) {
       correctionCache.set(key, result.reason);
+      api.logger.info("[selfhealing] BLOCKED — verification failed");
+      return { block: true };
     }
   });
 
