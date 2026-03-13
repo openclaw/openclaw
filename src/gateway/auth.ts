@@ -440,7 +440,7 @@ export async function authorizeGatewayConnect(
     }
   }
 
-  if (auth.mode === "token" || (auth.mode === "trusted-proxy" && localDirect && auth.token)) {
+  if (auth.mode === "token" || (auth.mode === "trusted-proxy" && localDirect)) {
     if (!auth.token) {
       return { ok: false, reason: "token_missing_config" };
     }
