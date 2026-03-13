@@ -471,6 +471,66 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("bridges output deltas with explicit or missing stream and ignores non-output deltas", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "text_delta",
+          text: "alpha",
+          stream: "output",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: " beta",
+          tag: "agent_message_chunk",
+        });
+        await onEvent({
+          type: "text_delta",
+          text: "ignored thought",
+          stream: "thought",
+          tag: "agent_thought_chunk",
+        });
+        await onEvent({ type: "done", stopReason: "end_turn" });
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      runId: "run-acp-output-streams",
+    });
+
+    const assistantEvents = agentEventMocks.emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) => event?.runId === "run-acp-output-streams" && event?.stream === "assistant",
+      );
+
+    expect(assistantEvents).toEqual([
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha",
+          delta: "alpha",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-acp-output-streams",
+        stream: "assistant",
+        data: expect.objectContaining({
+          text: "alpha beta",
+          delta: " beta",
+          tag: "agent_message_chunk",
+          source: "acp",
+        }),
+      }),
+    ]);
+  });
+
   it("emits ACP lifecycle errors into agent events", async () => {
     setReadyAcpResolution();
     managerMocks.runTurn.mockRejectedValueOnce(

@@ -202,7 +202,7 @@ function emitAcpRuntimeAgentEvent(params: {
 
   const { event } = params;
   if (event.type === "text_delta") {
-    if (event.stream !== "output" || !event.text) {
+    if ((event.stream && event.stream !== "output") || !event.text) {
       return;
     }
     params.bridgeState.assistantText += event.text;
