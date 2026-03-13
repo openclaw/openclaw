@@ -7,7 +7,13 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/feishu";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type CardState = {
+  cardId: string;
+  messageId: string;
+  nativeThreadId?: string;
+  sequence: number;
+  currentText: string;
+};
 
 /** Optional header for streaming cards (title bar with color template) */
 export type StreamingCardHeader = {
@@ -94,6 +100,13 @@ function truncateSummary(text: string, max = 50): string {
   }
   const clean = text.replace(/\n/g, " ").trim();
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
+}
+
+function resolveNativeThreadId(response: unknown): string | undefined {
+  const nativeThreadId = (response as { data?: { thread_id?: unknown } } | null)?.data?.thread_id;
+  return typeof nativeThreadId === "string" && nativeThreadId.trim()
+    ? nativeThreadId.trim()
+    : undefined;
 }
 
 export function mergeStreamingText(
@@ -257,7 +270,13 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
+    this.state = {
+      cardId,
+      messageId: sendRes.data.message_id,
+      nativeThreadId: resolveNativeThreadId(sendRes),
+      sequence: 1,
+      currentText: "",
+    };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
@@ -370,5 +389,9 @@ export class FeishuStreamingSession {
 
   isActive(): boolean {
     return this.state !== null && !this.closed;
+  }
+
+  getNativeThreadId(): string | undefined {
+    return this.state?.nativeThreadId;
   }
 }

@@ -103,6 +103,23 @@ function createTelegramTopicCommandParams(commandBody: string) {
   return params;
 }
 
+function createFeishuTopicCommandParams(commandBody: string) {
+  const params = buildCommandTestParams(commandBody, baseCfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "chat:oc-group",
+    To: "chat:oc-group",
+    AccountId: "default",
+    MessageThreadId: "om_topic_root_1",
+    RootMessageId: "om_topic_root_1",
+    ThreadParentId: "oc-group",
+    NativeChannelId: "oc-group:thread:om_topic_root_1",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 function createSessionBindingRecord(
   overrides?: Partial<SessionBindingRecord>,
 ): SessionBindingRecord {
@@ -220,6 +237,28 @@ describe("/focus, /unfocus, /agents", () => {
     );
   });
 
+  it("/focus binds Feishu topics as current conversations", async () => {
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] as const,
+    });
+
+    const result = await focusCodexAcp(createFeishuTopicCommandParams("/focus codex-acp"));
+
+    expect(result?.reply?.text).toContain("bound this topic");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          conversationId: "oc-group:thread:om_topic_root_1",
+        }),
+      }),
+    );
+  });
+
   it("/focus includes ACP session identifiers in intro text when available", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
@@ -279,6 +318,29 @@ describe("/focus, /unfocus, /agents", () => {
     expect(result?.reply?.text).toContain("Thread unfocused");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
       bindingId: "default:thread-1",
+      reason: "manual",
+    });
+  });
+
+  it("/unfocus removes an active Feishu topic binding for the binding owner", async () => {
+    const params = createFeishuTopicCommandParams("/unfocus");
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createSessionBindingRecord({
+        bindingId: "default:oc-group:thread:om_topic_root_1",
+        conversation: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc-group:thread:om_topic_root_1",
+        },
+        metadata: { boundBy: "user-1" },
+      }),
+    );
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Topic unfocused");
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
+      bindingId: "default:oc-group:thread:om_topic_root_1",
       reason: "manual",
     });
   });
@@ -360,6 +422,58 @@ describe("/focus, /unfocus, /agents", () => {
     expect(text).not.toContain("default:tg-1");
   });
 
+  it("/agents formats Feishu topic bindings on the current channel/account", async () => {
+    addSubagentRunForTests({
+      runId: "run-feishu-1",
+      childSessionKey: "agent:main:subagent:feishu-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "feishu task",
+      cleanup: "keep",
+      label: "feishu-1",
+      createdAt: Date.now(),
+    });
+
+    hoisted.sessionBindingListBySessionMock.mockImplementation((sessionKey: string) => {
+      if (sessionKey === "agent:main:subagent:feishu-1") {
+        return [
+          createSessionBindingRecord({
+            bindingId: "default:oc-group:thread:om_topic_root_1",
+            targetSessionKey: sessionKey,
+            targetKind: "subagent",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "oc-group:thread:om_topic_root_1",
+            },
+          }),
+        ];
+      }
+      if (sessionKey === "agent:main:main") {
+        return [
+          createSessionBindingRecord({
+            bindingId: "default:oc-group:thread:om_topic_root_2",
+            targetSessionKey: sessionKey,
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "oc-group:thread:om_topic_root_2",
+            },
+            metadata: { label: "main-session" },
+          }),
+        ];
+      }
+      return [];
+    });
+
+    const result = await handleSubagentsCommand(createFeishuTopicCommandParams("/agents"), true);
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain("topic:oc-group:thread:om_topic_root_1");
+    expect(text).toContain("topic:oc-group:thread:om_topic_root_2");
+  });
+
   it("/agents keeps finished session-mode runs visible while binding remains", async () => {
     addSubagentRunForTests({
       runId: "run-session-1",
@@ -401,6 +515,24 @@ describe("/focus, /unfocus, /agents", () => {
   it("/focus rejects unsupported channels", async () => {
     const params = buildCommandTestParams("/focus codex-acp", baseCfg);
     const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
+    expect(result?.reply?.text).toContain("only available on Discord, Telegram, and Feishu");
+  });
+
+  it("/focus rejects Feishu messages outside an existing topic", async () => {
+    const params = buildCommandTestParams("/focus codex-acp", baseCfg, {
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc-group",
+      To: "chat:oc-group",
+      AccountId: "default",
+    });
+    params.command.senderId = "user-1";
+
+    const result = await handleSubagentsCommand(params, true);
+
+    expect(result?.reply?.text).toContain(
+      "/focus on Feishu requires an existing group topic with a canonical root message",
+    );
   });
 });

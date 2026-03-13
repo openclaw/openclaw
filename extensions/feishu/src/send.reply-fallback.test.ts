@@ -63,6 +63,28 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(result.messageId).toBe("om_new");
   });
 
+  it("returns native thread ids from thread replies", async () => {
+    replyMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_reply", thread_id: "omt_thread_1" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "user:ou_target",
+      text: "hello",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_reply",
+        nativeThreadId: "omt_thread_1",
+      }),
+    );
+  });
+
   it("falls back to create for withdrawn card replies", async () => {
     replyMock.mockResolvedValue({
       code: 231003,

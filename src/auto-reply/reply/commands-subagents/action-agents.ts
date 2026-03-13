@@ -15,6 +15,9 @@ function formatConversationBindingText(params: {
   if (params.channel === "discord") {
     return `thread:${params.conversationId}`;
   }
+  if (params.channel === "feishu") {
+    return `topic:${params.conversationId}`;
+  }
   if (params.channel === "telegram") {
     return `conversation:${params.conversationId}`;
   }
@@ -64,7 +67,7 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
             channel,
             conversationId: binding.conversation.conversationId,
           })
-        : channel === "discord" || channel === "telegram"
+        : channel === "discord" || channel === "telegram" || channel === "feishu"
           ? "unbound"
           : "bindings available on discord/telegram";
       lines.push(`${index}. ${formatRunLabel(entry)} (${bindingText})`);

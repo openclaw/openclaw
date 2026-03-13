@@ -173,6 +173,46 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: "hello",
         replyToMessageId: "om_thread_2",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("parses bound Feishu thread targets into chat target plus reply thread root", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "channel:oc_thread_chat:thread:om_root_3",
+      text: "hello",
+      accountId: "main",
+    } as any);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_thread_chat",
+        text: "hello",
+        replyToMessageId: "om_root_3",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("normalizes canonical thread targets before explicit threadId sends", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat:oc_thread_chat:thread:om_root_3",
+      threadId: "om_root_explicit",
+      text: "hello",
+      accountId: "main",
+    } as any);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_thread_chat",
+        text: "hello",
+        replyToMessageId: "om_root_explicit",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -346,6 +386,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         mediaUrl: "https://example.com/image.png",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -354,6 +395,28 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         text: "caption",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("normalizes canonical thread targets before explicit threadId media sends", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat:oc_thread_chat:thread:om_root_media_old",
+      text: "",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_root_media_explicit",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_thread_chat",
+        mediaUrl: "https://example.com/image.png",
+        replyToMessageId: "om_root_media_explicit",
+        replyInThread: true,
         accountId: "main",
       }),
     );

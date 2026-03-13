@@ -93,6 +93,10 @@ export type SessionBindingAdapter = {
   unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
+type RegisteredSessionBindingAdapter = SessionBindingAdapter & {
+  ownerToken?: symbol;
+};
+
 function normalizeConversationRef(ref: ConversationRef): ConversationRef {
   return {
     channel: ref.channel.trim().toLowerCase(),
@@ -145,9 +149,33 @@ function resolveAdapterCapabilities(
   };
 }
 
-const ADAPTERS_BY_CHANNEL_ACCOUNT = new Map<string, SessionBindingAdapter>();
+const SESSION_BINDING_ADAPTERS_KEY = Symbol.for("openclaw.sessionBindingAdapters");
 
-export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
+function resolveSharedAdapterRegistry(): Map<string, RegisteredSessionBindingAdapter> {
+  // Plugin channels can register adapters through a different module graph than
+  // the core ACP spawn path (for example jiti-loaded extension code vs bundled
+  // core imports). Keep the registry on globalThis so both sides observe the
+  // same adapter set instead of silently diverging into per-module Maps.
+  const globalRegistry = globalThis as typeof globalThis & {
+    [SESSION_BINDING_ADAPTERS_KEY]?: Map<string, RegisteredSessionBindingAdapter>;
+  };
+  const existing = globalRegistry[SESSION_BINDING_ADAPTERS_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, RegisteredSessionBindingAdapter>();
+  globalRegistry[SESSION_BINDING_ADAPTERS_KEY] = created;
+  return created;
+}
+
+const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveSharedAdapterRegistry();
+
+export function registerSessionBindingAdapter(
+  adapter: SessionBindingAdapter,
+  options: {
+    ownerToken?: symbol;
+  } = {},
+): void {
   const key = toAdapterKey({
     channel: adapter.channel,
     accountId: adapter.accountId,
@@ -156,14 +184,24 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
     ...adapter,
     channel: adapter.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(adapter.accountId),
+    ownerToken: options.ownerToken,
   });
 }
 
 export function unregisterSessionBindingAdapter(params: {
   channel: string;
   accountId: string;
+  ownerToken?: symbol;
 }): void {
-  ADAPTERS_BY_CHANNEL_ACCOUNT.delete(toAdapterKey(params));
+  const key = toAdapterKey(params);
+  const existing = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
+  if (!existing) {
+    return;
+  }
+  if (params.ownerToken && existing.ownerToken !== params.ownerToken) {
+    return;
+  }
+  ADAPTERS_BY_CHANNEL_ACCOUNT.delete(key);
 }
 
 function resolveAdapterForConversation(ref: ConversationRef): SessionBindingAdapter | null {

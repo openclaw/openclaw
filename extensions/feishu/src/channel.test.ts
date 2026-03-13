@@ -46,3 +46,31 @@ describe("feishuPlugin.status.probeAccount", () => {
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
   });
 });
+
+describe("feishuPlugin.configSchema", () => {
+  it("exposes threadBindings at the root and account levels", () => {
+    const schema = feishuPlugin.configSchema?.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const rootThreadBindings = schema.properties?.threadBindings as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const accounts = schema.properties?.accounts as
+      | {
+          additionalProperties?: {
+            properties?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    const accountThreadBindings = accounts?.additionalProperties?.properties?.threadBindings as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+
+    expect(rootThreadBindings?.properties?.spawnAcpSessions).toEqual({ type: "boolean" });
+    expect(rootThreadBindings?.properties?.spawnSubagentSessions).toEqual({ type: "boolean" });
+    expect(accountThreadBindings?.properties?.spawnAcpSessions).toEqual({ type: "boolean" });
+    expect(accountThreadBindings?.properties?.spawnSubagentSessions).toEqual({
+      type: "boolean",
+    });
+  });
+});

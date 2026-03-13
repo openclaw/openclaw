@@ -118,7 +118,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "telegram";
+    channel: "discord" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -163,6 +163,12 @@ const baseCfg = {
   },
   channels: {
     discord: {
+      threadBindings: {
+        enabled: true,
+        spawnAcpSessions: true,
+      },
+    },
+    feishu: {
       threadBindings: {
         enabled: true,
         spawnAcpSessions: true,
@@ -243,7 +249,7 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "telegram";
+    channel?: "discord" | "telegram" | "feishu";
     accountId: string;
     conversationId: string;
   };
@@ -266,13 +272,39 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
             conversationId: nextConversationId,
             parentConversationId: "parent-1",
           }
-        : {
-            channel: "telegram",
-            accountId: input.conversation.accountId,
-            conversationId: nextConversationId,
-          },
+        : channel === "telegram"
+          ? {
+              channel: "telegram",
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            }
+          : {
+              channel: "feishu",
+              accountId: input.conversation.accountId,
+              conversationId: nextConversationId,
+            },
     metadata: { boundBy, webhookId: "wh-1" },
   });
+}
+
+function createFeishuTopicParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: "feishu",
+    Surface: "feishu",
+    OriginatingChannel: "feishu",
+    OriginatingTo: "chat:oc_topic_group",
+    AccountId: "default",
+    NativeChannelId: "oc_topic_group:thread:om_root_498",
+    MessageThreadId: "om_root_498",
+    RootMessageId: "om_root_498",
+    ThreadParentId: "oc_topic_group",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
+async function runFeishuAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(createFeishuTopicParams(commandBody, cfg), true);
 }
 
 function expectBoundIntroTextToExclude(match: string): void {
@@ -548,6 +580,29 @@ describe("/acp command", () => {
           channel: "telegram",
           accountId: "default",
           conversationId: "123456789",
+        }),
+      }),
+    );
+  });
+
+  it("binds Feishu topic ACP spawns to the current topic conversation", async () => {
+    hoisted.sessionBindingCapabilitiesMock.mockReturnValue({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] as const,
+    });
+    const result = await runFeishuAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_topic_group:thread:om_root_498",
         }),
       }),
     );

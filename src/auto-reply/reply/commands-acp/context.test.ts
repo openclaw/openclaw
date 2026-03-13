@@ -126,4 +126,26 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
+
+  it("prefers a thread-scoped Feishu NativeChannelId for topic bindings", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc_topic_group",
+      AccountId: "work",
+      NativeChannelId: "oc_topic_group:thread:om_root_42",
+      MessageThreadId: "om_root_42",
+      ThreadParentId: "oc_topic_group",
+      RootMessageId: "om_root_42",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "feishu",
+      accountId: "work",
+      threadId: "om_root_42",
+      conversationId: "oc_topic_group:thread:om_root_42",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("oc_topic_group:thread:om_root_42");
+  });
 });

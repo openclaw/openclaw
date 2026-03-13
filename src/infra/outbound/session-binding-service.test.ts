@@ -4,6 +4,7 @@ import {
   getSessionBindingService,
   isSessionBindingError,
   registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
 } from "./session-binding-service.js";
@@ -197,5 +198,65 @@ describe("session binding service", () => {
       unbindSupported: false,
       placements: [],
     });
+  });
+
+  it("does not unregister a newer adapter when owner tokens do not match", () => {
+    const olderToken = Symbol("older");
+    const newerToken = Symbol("newer");
+    const olderResolve = vi.fn(() => null);
+    const newerResolve = vi.fn((ref) => ({
+      bindingId: `default:${ref.conversationId}`,
+      targetSessionKey: "agent:codex:acp:newer",
+      targetKind: "session" as const,
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: ref.conversationId,
+      },
+      status: "active" as const,
+      boundAt: 1,
+    }));
+
+    registerSessionBindingAdapter(
+      {
+        channel: "discord",
+        accountId: "default",
+        bind: async (input) => createRecord(input),
+        listBySession: () => [],
+        resolveByConversation: olderResolve,
+      },
+      { ownerToken: olderToken },
+    );
+    registerSessionBindingAdapter(
+      {
+        channel: "discord",
+        accountId: "default",
+        bind: async (input) => createRecord(input),
+        listBySession: () => [],
+        resolveByConversation: newerResolve,
+      },
+      { ownerToken: newerToken },
+    );
+
+    unregisterSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      ownerToken: olderToken,
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-42",
+      }),
+    ).toMatchObject({
+      targetSessionKey: "agent:codex:acp:newer",
+      conversation: {
+        conversationId: "thread-42",
+      },
+    });
+    expect(olderResolve).not.toHaveBeenCalled();
+    expect(newerResolve).toHaveBeenCalledTimes(1);
   });
 });

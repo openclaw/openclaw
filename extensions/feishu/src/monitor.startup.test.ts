@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { getSessionBindingService } from "openclaw/plugin-sdk/feishu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -57,6 +58,91 @@ afterEach(() => {
 });
 
 describe("Feishu monitor startup preflight", () => {
+  it("registers the Feishu thread binding adapter during startup", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_default" });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: "secret_default", // pragma: allowlist secret
+            connectionMode: "websocket",
+          },
+        },
+      } as ClawdbotConfig,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      expect(
+        getSessionBindingService().getCapabilities({
+          channel: "feishu",
+          accountId: "default",
+        }),
+      ).toMatchObject({
+        adapterAvailable: true,
+        bindSupported: true,
+        placements: ["current"],
+      });
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("stops thread binding adapters for all accounts on global shutdown", async () => {
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => ({
+      ok: true,
+      botOpenId: `bot_${account.accountId}`,
+    }));
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(
+        getSessionBindingService().getCapabilities({
+          channel: "feishu",
+          accountId: "alpha",
+        }).adapterAvailable,
+      ).toBe(true);
+      expect(
+        getSessionBindingService().getCapabilities({
+          channel: "feishu",
+          accountId: "beta",
+        }).adapterAvailable,
+      ).toBe(true);
+    } finally {
+      abortController.abort();
+      await monitorPromise;
+    }
+
+    stopFeishuMonitor();
+
+    expect(
+      getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "alpha",
+      }).adapterAvailable,
+    ).toBe(false);
+    expect(
+      getSessionBindingService().getCapabilities({
+        channel: "feishu",
+        accountId: "beta",
+      }).adapterAvailable,
+    ).toBe(false);
+  });
+
   it("starts account probes sequentially to avoid startup bursts", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

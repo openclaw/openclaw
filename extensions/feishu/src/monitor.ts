@@ -12,6 +12,10 @@ import {
   isWebhookRateLimitedForTest,
   stopFeishuMonitorState,
 } from "./monitor.state.js";
+import {
+  ensureFeishuThreadBindingManagerForAccount,
+  stopFeishuThreadBindingManager,
+} from "./thread-bindings.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
@@ -41,6 +45,10 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
+    ensureFeishuThreadBindingManagerForAccount({
+      cfg,
+      accountId: account.accountId,
+    });
     return monitorSingleAccount({
       cfg,
       account,
@@ -64,6 +72,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       log("feishu: abort signal received during startup preflight; stopping startup");
       break;
     }
+
+    ensureFeishuThreadBindingManagerForAccount({
+      cfg,
+      accountId: account.accountId,
+    });
 
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
     const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
@@ -91,5 +104,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
 }
 
 export function stopFeishuMonitor(accountId?: string): void {
+  stopFeishuThreadBindingManager(accountId);
   stopFeishuMonitorState(accountId);
 }

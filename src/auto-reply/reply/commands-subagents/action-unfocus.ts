@@ -3,9 +3,11 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
+  resolveFeishuConversationId,
   resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
@@ -15,8 +17,8 @@ export async function handleSubagentsUnfocusAction(
 ): Promise<CommandHandlerResult> {
   const { params } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /unfocus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    return stopWithText("⚠️ /unfocus is only available on Discord, Telegram, and Feishu.");
   }
 
   const accountId = resolveChannelAccountId(params);
@@ -30,12 +32,20 @@ export async function handleSubagentsUnfocusAction(
     if (isTelegramSurface(params)) {
       return resolveTelegramConversationId(params);
     }
+    if (isFeishuSurface(params)) {
+      return resolveFeishuConversationId(params);
+    }
     return undefined;
   })();
 
   if (!conversationId) {
     if (channel === "discord") {
       return stopWithText("⚠️ /unfocus must be run inside a Discord thread.");
+    }
+    if (channel === "feishu") {
+      return stopWithText(
+        "⚠️ /unfocus on Feishu requires an existing group topic with a canonical root message.",
+      );
     }
     return stopWithText(
       "⚠️ /unfocus on Telegram requires a topic context in groups, or a direct-message conversation.",
@@ -51,7 +61,9 @@ export async function handleSubagentsUnfocusAction(
     return stopWithText(
       channel === "discord"
         ? "ℹ️ This thread is not currently focused."
-        : "ℹ️ This conversation is not currently focused.",
+        : channel === "feishu"
+          ? "ℹ️ This topic is not currently focused."
+          : "ℹ️ This conversation is not currently focused.",
     );
   }
 
@@ -62,7 +74,9 @@ export async function handleSubagentsUnfocusAction(
     return stopWithText(
       channel === "discord"
         ? `⚠️ Only ${boundBy} can unfocus this thread.`
-        : `⚠️ Only ${boundBy} can unfocus this conversation.`,
+        : channel === "feishu"
+          ? `⚠️ Only ${boundBy} can unfocus this topic.`
+          : `⚠️ Only ${boundBy} can unfocus this conversation.`,
     );
   }
 
@@ -71,6 +85,10 @@ export async function handleSubagentsUnfocusAction(
     reason: "manual",
   });
   return stopWithText(
-    channel === "discord" ? "✅ Thread unfocused." : "✅ Conversation unfocused.",
+    channel === "discord"
+      ? "✅ Thread unfocused."
+      : channel === "feishu"
+        ? "✅ Topic unfocused."
+        : "✅ Conversation unfocused.",
   );
 }

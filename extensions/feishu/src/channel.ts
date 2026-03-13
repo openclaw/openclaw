@@ -58,6 +58,18 @@ const secretInputJsonSchema = {
   ],
 } as const;
 
+const threadBindingsJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    enabled: { type: "boolean" },
+    idleHours: { type: "number", minimum: 0 },
+    maxAgeHours: { type: "number", minimum: 0 },
+    spawnSubagentSessions: { type: "boolean" },
+    spawnAcpSessions: { type: "boolean" },
+  },
+} as const;
+
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
   accountId: string,
@@ -160,6 +172,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         textChunkLimit: { type: "integer", minimum: 1 },
         chunkMode: { type: "string", enum: ["length", "newline"] },
         mediaMaxMb: { type: "number", minimum: 0 },
+        threadBindings: threadBindingsJsonSchema,
         renderMode: { type: "string", enum: ["auto", "raw", "card"] },
         accounts: {
           type: "object",
@@ -177,6 +190,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               webhookHost: { type: "string" },
               webhookPath: { type: "string" },
               webhookPort: { type: "integer", minimum: 1 },
+              threadBindings: threadBindingsJsonSchema,
             },
           },
         },

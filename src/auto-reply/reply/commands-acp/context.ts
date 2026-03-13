@@ -38,6 +38,15 @@ export function resolveAcpCommandThreadId(params: HandleCommandsParams): string 
   return threadId || undefined;
 }
 
+function resolveNativeConversationId(params: HandleCommandsParams): string | undefined {
+  const nativeConversationId = normalizeString(params.ctx.NativeChannelId);
+  return nativeConversationId || undefined;
+}
+
+function isThreadScopedConversationId(conversationId: string | undefined): boolean {
+  return typeof conversationId === "string" && conversationId.includes(":thread:");
+}
+
 export function resolveAcpCommandConversationId(params: HandleCommandsParams): string | undefined {
   const channel = resolveAcpCommandChannel(params);
   if (channel === "telegram") {
@@ -65,10 +74,15 @@ export function resolveAcpCommandConversationId(params: HandleCommandsParams): s
       );
     }
   }
-  return resolveConversationIdFromTargets({
+  const nativeConversationId = resolveNativeConversationId(params);
+  if (isThreadScopedConversationId(nativeConversationId)) {
+    return nativeConversationId;
+  }
+  const targetConversationId = resolveConversationIdFromTargets({
     threadId: params.ctx.MessageThreadId,
     targets: [params.ctx.OriginatingTo, params.command.to, params.ctx.To],
   });
+  return targetConversationId;
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {

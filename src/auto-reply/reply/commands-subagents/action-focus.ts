@@ -16,21 +16,23 @@ import type { CommandHandlerResult } from "../commands-types.js";
 import {
   type SubagentsCommandContext,
   isDiscordSurface,
+  isFeishuSurface,
   isTelegramSurface,
   resolveChannelAccountId,
   resolveCommandSurfaceChannel,
   resolveDiscordChannelIdForFocus,
+  resolveFeishuConversationId,
   resolveFocusTargetSession,
   resolveTelegramConversationId,
   stopWithText,
 } from "./shared.js";
 
 type FocusBindingContext = {
-  channel: "discord" | "telegram";
+  channel: "discord" | "telegram" | "feishu";
   accountId: string;
   conversationId: string;
   placement: "current" | "child";
-  labelNoun: "thread" | "conversation";
+  labelNoun: "thread" | "conversation" | "topic";
 };
 
 function resolveFocusBindingContext(
@@ -65,6 +67,19 @@ function resolveFocusBindingContext(
       labelNoun: "conversation",
     };
   }
+  if (isFeishuSurface(params)) {
+    const conversationId = resolveFeishuConversationId(params);
+    if (!conversationId) {
+      return null;
+    }
+    return {
+      channel: "feishu",
+      accountId: resolveChannelAccountId(params),
+      conversationId,
+      placement: "current",
+      labelNoun: "topic",
+    };
+  }
   return null;
 }
 
@@ -73,8 +88,8 @@ export async function handleSubagentsFocusAction(
 ): Promise<CommandHandlerResult> {
   const { params, runs, restTokens } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
-  if (channel !== "discord" && channel !== "telegram") {
-    return stopWithText("⚠️ /focus is only available on Discord and Telegram.");
+  if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
+    return stopWithText("⚠️ /focus is only available on Discord, Telegram, and Feishu.");
   }
 
   const token = restTokens.join(" ").trim();
@@ -89,13 +104,13 @@ export async function handleSubagentsFocusAction(
     accountId,
   });
   if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
-    const label = channel === "discord" ? "Discord thread" : "Telegram conversation";
+    const label =
+      channel === "discord"
+        ? "Discord thread"
+        : channel === "telegram"
+          ? "Telegram conversation"
+          : "Feishu topic";
     return stopWithText(`⚠️ ${label} bindings are unavailable for this account.`);
-  }
-
-  const focusTarget = await resolveFocusTargetSession({ runs, token });
-  if (!focusTarget) {
-    return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }
 
   const bindingContext = resolveFocusBindingContext(params);
@@ -105,7 +120,17 @@ export async function handleSubagentsFocusAction(
         "⚠️ /focus on Telegram requires a topic context in groups, or a direct-message conversation.",
       );
     }
+    if (channel === "feishu") {
+      return stopWithText(
+        "⚠️ /focus on Feishu requires an existing group topic with a canonical root message.",
+      );
+    }
     return stopWithText("⚠️ Could not resolve a Discord channel for /focus.");
+  }
+
+  const focusTarget = await resolveFocusTargetSession({ runs, token });
+  if (!focusTarget) {
+    return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }
 
   const senderId = params.command.senderId?.trim() || "";
