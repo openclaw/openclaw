@@ -120,6 +120,39 @@ describe("sanitizeHostExecEnv", () => {
     expect(env[" BAD KEY"]).toBeUndefined();
     expect(env["NOT-PORTABLE"]).toBeUndefined();
   });
+
+  it("can allow PATH overrides when explicitly opted out of blocking", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/custom/bin",
+      },
+      blockPathOverrides: false,
+    });
+
+    expect(env.PATH).toBe("/custom/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+  });
+
+  it("drops non-string inherited values and non-portable inherited keys", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        GOOD: "1",
+        // oxlint-disable-next-line typescript/no-explicit-any
+        BAD_NUMBER: 1 as any,
+        "NOT-PORTABLE": "x",
+      },
+    });
+
+    expect(env).toEqual({
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+      PATH: "/usr/bin:/bin",
+      GOOD: "1",
+    });
+  });
 });
 
 describe("isDangerousHostEnvOverrideVarName", () => {
@@ -172,6 +205,33 @@ describe("sanitizeSystemRunEnvOverrides", () => {
     expect(overrides).toEqual({
       LANG: "C",
       LC_ALL: "C",
+    });
+  });
+
+  it("returns undefined when no shell-wrapper overrides survive", () => {
+    expect(
+      sanitizeSystemRunEnvOverrides({
+        shellWrapper: true,
+        overrides: {
+          TOKEN: "abc",
+        },
+      }),
+    ).toBeUndefined();
+    expect(sanitizeSystemRunEnvOverrides({ shellWrapper: true })).toBeUndefined();
+  });
+
+  it("keeps allowlisted shell-wrapper overrides case-insensitively", () => {
+    expect(
+      sanitizeSystemRunEnvOverrides({
+        shellWrapper: true,
+        overrides: {
+          lang: "C",
+          ColorTerm: "truecolor",
+        },
+      }),
+    ).toEqual({
+      lang: "C",
+      ColorTerm: "truecolor",
     });
   });
 });
