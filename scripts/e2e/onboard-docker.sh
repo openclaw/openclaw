@@ -312,7 +312,7 @@ TRASH
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
-    for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+    for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md VALUE.md TOOLS.md USER.md; do
       assert_file "$workspace_dir/$file"
     done
 

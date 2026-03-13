@@ -13,7 +13,7 @@ Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), p
 
 An **agent** is a fully scoped brain with its own:
 
-- **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
+- **Workspace** (files like `AGENTS.md`, `SOUL.md`, `VALUE.md`, `USER.md`, and local notes/persona rules).
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
 - **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
 
@@ -124,7 +124,7 @@ openclaw channels status --probe
 With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
 
 - **Different phone numbers/accounts** (per channel `accountId`).
-- **Different personalities** (per-agent workspace files like `AGENTS.md` and `SOUL.md`).
+- **Different personalities** (per-agent workspace files like `AGENTS.md`, `SOUL.md`, and `VALUE.md`).
 - **Separate auth + sessions** (no cross-talk unless explicitly enabled).
 
 This lets **multiple people** share one Gateway server while keeping their AI “brains” and data isolated.

@@ -74,6 +74,10 @@ These are the standard files OpenClaw expects inside the workspace:
   - Persona, tone, and boundaries.
   - Loaded every session.
 
+- `VALUE.md`
+  - Long-horizon values, preferred tradeoffs, and judgment criteria.
+  - Loaded every session.
+
 - `USER.md`
   - Who the user is and how to address them.
   - Loaded every session.
@@ -151,7 +155,7 @@ workspace is not already a repo, run:
 ```bash
 cd ~/.openclaw/workspace
 git init
-git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
+git add AGENTS.md SOUL.md VALUE.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 

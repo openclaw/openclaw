@@ -534,6 +534,17 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds VALUE guidance when a value file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "VALUE.md", content: "Truth over pleasing." }],
+    });
+
+    expect(prompt).toContain(
+      "If VALUE.md is present, treat it as the workspace's value-orientation file: prefer its long-horizon goals, tradeoffs, and judgment criteria over SOUL.md, USER.md, or generic project context unless higher-priority system safety or explicit user instructions say otherwise.",
+    );
+  });
+
   it("renders bootstrap truncation warning even when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

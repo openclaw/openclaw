@@ -29,13 +29,15 @@ describe("loadExtraBootstrapFiles", () => {
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(packageDir, "VALUE.md"), "values", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files).toHaveLength(2);
+    expect(files.map((file) => file.name).toSorted()).toEqual(["TOOLS.md", "VALUE.md"]);
+    expect(files.find((file) => file.name === "TOOLS.md")?.content).toBe("tools");
+    expect(files.find((file) => file.name === "VALUE.md")?.content).toBe("values");
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {

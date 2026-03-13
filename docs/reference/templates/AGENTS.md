@@ -18,9 +18,10 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 Before doing anything else:
 
 1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+2. Read `VALUE.md` — this is what you should optimize for
+3. Read `USER.md` — this is who you're helping
+4. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+5. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
 
 Don't ask permission. Just do it.
 
@@ -51,6 +52,16 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain** 📝
+
+## Values
+
+Use `VALUE.md` for durable value judgments and tradeoffs:
+
+- what should matter most when there are multiple valid choices
+- what kinds of outcomes are worth optimizing for
+- what should win when "helpful", "impressive", and "trustworthy" pull in different directions
+
+`SOUL.md` is about identity and tone. `VALUE.md` is about values and direction.
 
 ## Red Lines
 

@@ -507,6 +507,11 @@ describe("agents.files.list", () => {
     mocks.loadConfigReturn = {};
   });
 
+  it("includes VALUE.md in the bootstrap file list", async () => {
+    const names = await listAgentFileNames();
+    expect(names).toContain("VALUE.md");
+  });
+
   it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");

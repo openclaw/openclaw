@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_AGENTS_FILENAME } from "../workspace.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_VALUE_FILENAME } from "../workspace.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempRoots: string[] = [];
@@ -26,11 +26,15 @@ describe("ensureSandboxWorkspace", () => {
     const sandbox = path.join(root, "sandbox");
     await fs.mkdir(seed, { recursive: true });
     await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
+    await fs.writeFile(path.join(seed, DEFAULT_VALUE_FILENAME), "seeded-values", "utf-8");
 
     await ensureSandboxWorkspace(sandbox, seed, true);
 
     await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
       "seeded-agents",
+    );
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_VALUE_FILENAME), "utf-8")).resolves.toBe(
+      "seeded-values",
     );
   });
 

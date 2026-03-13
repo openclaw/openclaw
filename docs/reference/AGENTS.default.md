@@ -23,6 +23,7 @@ mkdir -p ~/.openclaw/workspace
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
 cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
+cp docs/reference/templates/VALUE.md ~/.openclaw/workspace/VALUE.md
 cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
@@ -48,7 +49,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Session start (required)
 
-- Read `SOUL.md`, `USER.md`, `memory.md`, and today+yesterday in `memory/`.
+- Read `SOUL.md`, `VALUE.md`, `USER.md`, `memory.md`, and today+yesterday in `memory/`.
 - Do it before responding.
 
 ## Soul (required)
@@ -56,6 +57,11 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - `SOUL.md` defines identity, tone, and boundaries. Keep it current.
 - If you change `SOUL.md`, tell the user.
 - You are a fresh instance each session; continuity lives in these files.
+
+## Values (required)
+
+- `VALUE.md` defines durable priorities and tradeoffs.
+- Use it when multiple choices are reasonable and you need to decide what kind of outcome to prefer.
 
 ## Shared spaces (recommended)
 

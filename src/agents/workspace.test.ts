@@ -9,6 +9,7 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_VALUE_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -64,6 +65,7 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   expect(names).toContain("AGENTS.md");
   expect(names).toContain("TOOLS.md");
   expect(names).toContain("SOUL.md");
+  expect(names).toContain("VALUE.md");
   expect(names).toContain("IDENTITY.md");
   expect(names).toContain("USER.md");
   expect(names).not.toContain("HEARTBEAT.md");
@@ -78,6 +80,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectBootstrapSeeded(tempDir);
+    await expect(fs.access(path.join(tempDir, DEFAULT_VALUE_FILENAME))).resolves.toBeUndefined();
     expect((await readOnboardingState(tempDir)).onboardingCompletedAt).toBeUndefined();
   });
 
@@ -176,6 +179,18 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "memory");
   });
 
+  it("loads VALUE.md immediately after SOUL.md in bootstrap order", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "SOUL.md", content: "soul" });
+    await writeWorkspaceFile({ dir: tempDir, name: "VALUE.md", content: "value" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const names = files.map((file) => file.name);
+
+    expect(names.indexOf("SOUL.md")).toBeLessThan(names.indexOf("VALUE.md"));
+    expect(names.indexOf("VALUE.md")).toBeLessThan(names.indexOf("TOOLS.md"));
+  });
+
   it("includes memory.md when MEMORY.md is absent", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
@@ -227,6 +242,7 @@ describe("filterBootstrapFilesForSession", () => {
   const mockFiles: WorkspaceBootstrapFile[] = [
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
+    { name: "VALUE.md", path: "/w/VALUE.md", content: "", missing: false },
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
     { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
