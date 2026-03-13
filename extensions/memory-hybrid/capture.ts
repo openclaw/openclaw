@@ -16,6 +16,7 @@ import type { ChatModel } from "./chat.js";
 import type { MemoryCategory } from "./config.js";
 
 export { DEFAULT_CAPTURE_MAX_CHARS } from "./config.js";
+import { tracer } from "./tracer.js";
 
 // ============================================================================
 // Rule-based capture (from original memory-lancedb)
@@ -130,6 +131,8 @@ export interface SmartCaptureFact {
   happenedAt?: string | null;
   /** ISO date string — when this fact expires (for temporary facts), null if permanent */
   validUntil?: string | null;
+  /** A concise LLM-generated summary (1 sentence, max 150 chars) of the fact */
+  summary?: string | null;
   /** Detected emotional tone of the user when stating this fact */
   emotionalTone?: EmotionalTone | null;
   /** Emotional valence: -1.0 (very negative) to 1.0 (very positive) */
@@ -179,7 +182,8 @@ Return ONLY valid JSON:
       "happened_at": "YYYY-MM-DD or null",
       "valid_until": "YYYY-MM-DD or null",
       "emotional_tone": "stressed|happy|neutral|frustrated|excited|sad|angry|curious",
-      "emotion_score": -1.0 to 1.0
+      "emotion_score": -1.0 to 1.0,
+      "summary": "1 sentence, max 150 chars summary"
     }
   ]
 }
@@ -203,7 +207,7 @@ Rules:
       .replace(/```\s*/g, "")
       .trim();
 
-    const data = JSON.parse(cleanJson) as {
+    let data: {
       should_store?: boolean;
       facts?: Array<{
         text?: string;
@@ -213,8 +217,41 @@ Rules:
         valid_until?: string | null;
         emotional_tone?: string | null;
         emotion_score?: number | null;
+        summary?: string | null;
       }>;
     };
+
+    try {
+      data = JSON.parse(cleanJson);
+      tracer.trace(
+        "llm_capture_success",
+        { shouldStore: data.should_store, factCount: data.facts?.length },
+        "LLM successfully extracted facts",
+      );
+    } catch (parseErr) {
+      tracer.trace(
+        "llm_capture_json_error",
+        { raw: cleanJson },
+        `JSON Parse Failed: ${parseErr}. Attempting regex rescue.`,
+      );
+      const match = cleanJson.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          data = JSON.parse(match[0]);
+          tracer.trace("llm_capture_repair_success", {}, "Successfully rescued JSON via regex");
+        } catch (e) {
+          tracer.trace(
+            "llm_capture_repair_fatal",
+            { error: String(e) },
+            "Regex rescue failed too.",
+          );
+          throw e;
+        }
+      } else {
+        tracer.trace("llm_capture_fatal", {}, "No JSON-like structure found in LLM response.");
+        throw parseErr;
+      }
+    }
 
     if (!data.should_store || !data.facts || data.facts.length === 0) {
       return { shouldStore: false, facts: [] };
@@ -248,6 +285,7 @@ Rules:
           : "neutral") as EmotionalTone,
         emotionScore:
           typeof f.emotion_score === "number" ? Math.max(-1, Math.min(1, f.emotion_score)) : 0,
+        summary: typeof f.summary === "string" ? f.summary.slice(0, 150) : null,
       }));
 
     return {
@@ -262,4 +300,48 @@ Rules:
     );
     return { shouldStore: false, facts: [] };
   }
+}
+
+// ============================================================================
+// LLM Summary Generation (Star Factory)
+// ============================================================================
+
+/**
+ * Generates a concise summary (max 150 chars) of a longer memory text.
+ * Used for building the "Star Map" (Context Radar) without overflowing tokens.
+ */
+export async function generateMemorySummary(text: string, chatModel: ChatModel): Promise<string> {
+  if (text.length < 100) return text; // Too short to summarize, keep it as is.
+
+  const prompt = `Condense the following memory into a single short sentence (maximum 150 characters) that captures its core meaning. Focus on the factual or emotional essence.
+  
+Original memory: "${text.slice(0, 5000)}" // Truncate if insanely long
+
+Return ONLY the summary text, nothing else.`;
+
+  try {
+    const response = await chatModel.complete([{ role: "user", content: prompt }], false);
+    return response.trim().slice(0, 150);
+  } catch (error) {
+    console.warn(`[memory-hybrid][summary] Failed to generate summary:`, String(error));
+    return text.slice(0, 150) + "..."; // Fallback
+  }
+}
+
+/**
+ * Formats memories into "Context Radar" (Star Map).
+ * Outputs lightweight metadata and summary instead of full text to conserve context window.
+ */
+export function formatRadarContext(
+  memories: Array<{ id: string; category: MemoryCategory; summary?: string | null; text: string }>,
+): string {
+  const lines = memories.slice(0, 50).map((entry) => {
+    const content = entry.summary
+      ? entry.summary
+      : entry.text.length > 80
+        ? entry.text.slice(0, 80) + "..."
+        : entry.text;
+    return `[ID: ${entry.id} | ${entry.category}] ${escapeMemoryForPrompt(content)}`;
+  });
+  return `<star-map>\nBelow is a radar map of potentially relevant memories. If you need more details about any specific memory, use the memory_fetch_details tool with the provided IDs.\n${lines.join("\n")}\n</star-map>`;
 }

@@ -34,6 +34,8 @@ export interface MemoryEntry {
   happenedAt?: string | null;
   /** ISO date string when this fact expires */
   validUntil?: string | null;
+  /** A concise LLM-generated summary (1 sentence, max 150 chars) of the fact */
+  summary?: string | null;
   /** Emotional tone: stressed, happy, neutral, etc. */
   emotionalTone?: string | null;
   /** Emotional valence: -1.0 (negative) to 1.0 (positive) */

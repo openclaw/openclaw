@@ -10,6 +10,7 @@
  */
 
 import OpenAI from "openai";
+import { tracer } from "./tracer.js";
 import { withRetry } from "./utils.js";
 
 export type ChatProvider = "openai" | "google";
@@ -107,6 +108,15 @@ export class ChatModel {
       if (!response.ok) {
         const errorBody = await response.text();
 
+        // Sanitize API key from error messages
+        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
+
+        tracer.trace(
+          "llm_api_error",
+          { status: response.status, error: sanitizedError, model: this.model },
+          "Google API returned an error",
+        );
+
         // If JSON mode is not supported by this model, retry without it
         if (withJsonMime && errorBody.includes("JSON mode is not enabled")) {
           console.warn(
@@ -115,8 +125,6 @@ export class ChatModel {
           return doRequest(false);
         }
 
-        // Bug #7: sanitize API key from error messages
-        const sanitizedError = errorBody.replace(this.apiKey, "[REDACTED]");
         throw new Error(`Google Chat API error (${response.status}): ${sanitizedError}`);
       }
 

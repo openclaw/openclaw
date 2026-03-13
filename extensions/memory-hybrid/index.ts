@@ -21,6 +21,8 @@ import {
   detectCategory,
   smartCapture,
   formatRelevantMemoriesContext,
+  formatRadarContext,
+  generateMemorySummary,
 } from "./capture.js";
 import { ChatModel } from "./chat.js";
 import { MEMORY_CATEGORIES, type MemoryCategory, memoryConfigSchema } from "./config.js";
@@ -29,6 +31,8 @@ import { Embeddings, vectorDimsForModel } from "./embeddings.js";
 import { GraphDB, extractGraphFromText } from "./graph.js";
 import { hybridScore, getGraphEnrichment, type MemoryEntry } from "./recall.js";
 import { generateReflection } from "./reflection.js";
+import { ConversationStack } from "./stack.js";
+import { tracer } from "./tracer.js";
 
 // ============================================================================
 // LanceDB Lazy Loader
@@ -71,6 +75,12 @@ export class MemoryDB {
   private initPromise: Promise<void> | null = null;
 
   /**
+   * Set of column names that actually exist in the DB.
+   * Populated during init to guard against schema mismatches with older DBs.
+   */
+  private availableColumns: Set<string> = new Set();
+
+  /**
    * In-memory recall count deltas.
    * Instead of doing risky DELETE+INSERT on every recall, we accumulate
    * increments here and flush them to DB periodically in batch.
@@ -89,6 +99,21 @@ export class MemoryDB {
     return this.initPromise;
   }
 
+  /** All columns the code expects — new DBs get all of these. */
+  private static readonly ALL_COLUMNS = [
+    "id",
+    "text",
+    "importance",
+    "category",
+    "createdAt",
+    "recallCount",
+    "happenedAt",
+    "validUntil",
+    "summary",
+    "emotionalTone",
+    "emotionScore",
+  ] as const;
+
   private async doInitialize(): Promise<void> {
     const lancedb = await loadLanceDB();
     this.db = await lancedb.connect(this.dbPath);
@@ -96,6 +121,8 @@ export class MemoryDB {
 
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
+      // Detect which columns the DB actually has (handles older schema versions)
+      await this.detectColumns();
     } else {
       this.table = await this.db.createTable(TABLE_NAME, [
         {
@@ -108,12 +135,61 @@ export class MemoryDB {
           recallCount: 0,
           happenedAt: "",
           validUntil: "",
+          summary: "",
           emotionalTone: "neutral",
           emotionScore: 0,
         },
       ]);
       await this.table.delete('id = "__schema__"');
+      this.availableColumns = new Set(MemoryDB.ALL_COLUMNS);
     }
+  }
+
+  /**
+   * Probe the table schema by reading one row and recording which columns exist.
+   * Logs a warning if important columns are missing (older DB version).
+   */
+  private async detectColumns(): Promise<void> {
+    if (!this.table) return;
+    const probeRows = await this.table.query().limit(1).toArray();
+    if (probeRows.length === 0) {
+      // Empty table — assume full schema (will be created on first insert)
+      this.availableColumns = new Set(MemoryDB.ALL_COLUMNS);
+      return;
+    }
+    this.availableColumns = new Set(Object.keys(probeRows[0]));
+    const missing = MemoryDB.ALL_COLUMNS.filter((c) => !this.availableColumns.has(c));
+    if (missing.length > 0) {
+      console.warn(
+        `[memory-hybrid] DB schema is missing columns: ${missing.join(", ")}. ` +
+          `Queries will skip these fields. Delete the lancedb folder to recreate with full schema.`,
+      );
+    }
+  }
+
+  /**
+   * Return only those column names that actually exist in the DB.
+   * Prevents LanceDB "No field named X" errors on older DBs.
+   */
+  private selectColumns(requested: string[]): string[] {
+    return requested.filter((col) => this.availableColumns.has(col));
+  }
+
+  /**
+   * Safely add rows to LanceDB by stripping columns that don't exist in the schema.
+   * Prevents "Found field not in schema" errors on older DBs.
+   */
+  private async safeAdd(rows: Record<string, unknown>[]): Promise<void> {
+    const sanitized = rows.map((row) => {
+      const safe: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(row)) {
+        if (key === "vector" || this.availableColumns.has(key)) {
+          safe[key] = val;
+        }
+      }
+      return safe;
+    });
+    await this.table!.add(sanitized);
   }
 
   /** Merge in-memory recall delta into a recallCount value */
@@ -132,7 +208,7 @@ export class MemoryDB {
       recallCount: 0,
     };
 
-    await this.table!.add([fullEntry as unknown as Record<string, unknown>]);
+    await this.safeAdd([fullEntry as unknown as Record<string, unknown>]);
     return fullEntry;
   }
 
@@ -169,18 +245,21 @@ export class MemoryDB {
     // 2. Temporal Search (Recent memories unconditionally)
     // Avoid loading entire DB to sort! Use select() and limit()
     const recentRows = await this.table!.query()
-      .select([
-        "id",
-        "text",
-        "importance",
-        "category",
-        "createdAt",
-        "recallCount",
-        "happenedAt",
-        "validUntil",
-        "emotionalTone",
-        "emotionScore",
-      ])
+      .select(
+        this.selectColumns([
+          "id",
+          "text",
+          "importance",
+          "category",
+          "createdAt",
+          "recallCount",
+          "happenedAt",
+          "validUntil",
+          "summary",
+          "emotionalTone",
+          "emotionScore",
+        ]),
+      )
       .limit(200) // Fetch last 200 metadata entries to sort in memory (better than whole DB)
       .toArray();
 
@@ -221,6 +300,7 @@ export class MemoryDB {
           recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
           happenedAt: (row.happenedAt as string) ?? null,
           validUntil: (row.validUntil as string) ?? null,
+          summary: (row.summary as string) ?? null,
           emotionalTone: (row.emotionalTone as string) ?? null,
           emotionScore: (row.emotionScore as number) ?? null,
         },
@@ -271,9 +351,10 @@ export class MemoryDB {
 
     // Construct a compatible WHERE clause for multiple entities
     // LanceDB 2.0's DataFusion has some limitations with ARRAY/LIKE ANY
-    const conditions = Array.from(discoveredEntities).map(
-      (e) => `text LIKE '%${e.replace(/'/g, "''")}%'`,
-    );
+    const conditions = Array.from(discoveredEntities).map((e) => {
+      const safeE = e.replace(/['%_]/g, ""); // Prevent SQL injection and query crashes
+      return `text LIKE '%${safeE}%'`;
+    });
     const whereClause = `(${conditions.join(" OR ")}) OR category = 'fact'`;
 
     await this.ensureInitialized();
@@ -306,6 +387,7 @@ export class MemoryDB {
       recallCount: this.mergeRecallDelta(id, (rows[0].recallCount as number) ?? 0),
       happenedAt: (rows[0].happenedAt as string) ?? null,
       validUntil: (rows[0].validUntil as string) ?? null,
+      summary: (rows[0].summary as string) ?? null,
       emotionalTone: (rows[0].emotionalTone as string) ?? null,
       emotionScore: (rows[0].emotionScore as number) ?? null,
     };
@@ -340,6 +422,7 @@ export class MemoryDB {
         recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
         happenedAt: (row.happenedAt as string) ?? null,
         validUntil: (row.validUntil as string) ?? null,
+        summary: (row.summary as string) ?? null,
         emotionalTone: (row.emotionalTone as string) ?? null,
         emotionScore: (row.emotionScore as number) ?? null,
       };
@@ -350,18 +433,21 @@ export class MemoryDB {
   async listMetadata(): Promise<Omit<MemoryEntry, "vector">[]> {
     await this.ensureInitialized();
     const rows = await this.table!.query()
-      .select([
-        "id",
-        "text",
-        "importance",
-        "category",
-        "createdAt",
-        "recallCount",
-        "happenedAt",
-        "validUntil",
-        "emotionalTone",
-        "emotionScore",
-      ])
+      .select(
+        this.selectColumns([
+          "id",
+          "text",
+          "importance",
+          "category",
+          "createdAt",
+          "recallCount",
+          "happenedAt",
+          "validUntil",
+          "summary",
+          "emotionalTone",
+          "emotionScore",
+        ]),
+      )
       .toArray();
     return rows.map((row) => {
       const id = row.id as string;
@@ -374,6 +460,7 @@ export class MemoryDB {
         recallCount: this.mergeRecallDelta(id, (row.recallCount as number) ?? 0),
         happenedAt: (row.happenedAt as string) ?? null,
         validUntil: (row.validUntil as string) ?? null,
+        summary: (row.summary as string) ?? null,
         emotionalTone: (row.emotionalTone as string) ?? null,
         emotionScore: (row.emotionScore as number) ?? null,
       };
@@ -429,11 +516,11 @@ export class MemoryDB {
 
         await this.table!.delete(`id = '${id}'`);
         try {
-          await this.table!.add([updatedRow as unknown as Record<string, unknown>]);
+          await this.safeAdd([updatedRow as unknown as Record<string, unknown>]);
           flushed++;
         } catch (addErr) {
           // Rollback: restore old record
-          await this.table!.add([row as unknown as Record<string, unknown>]);
+          await this.safeAdd([row as unknown as Record<string, unknown>]);
           // Put delta back for next try
           this.recallCountDeltas.set(id, delta);
           throw addErr;
@@ -504,6 +591,7 @@ const memoryPlugin = {
     const chatModel = new ChatModel(cfg.chatApiKey, cfg.chatModel, cfg.chatProvider);
     const graphDB = new GraphDB(resolvedDbPath);
     const workingMemory = new WorkingMemoryBuffer(50, 0.7, 3);
+    const conversationStack = new ConversationStack(30);
     let lastPruneTime = 0;
     const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -535,6 +623,7 @@ const memoryPlugin = {
             query: string;
             limit?: number;
           };
+          tracer.trace("memory_recall_start", { query, limit });
 
           const vector = await embeddings.embed(query);
           api.logger.info(
@@ -620,6 +709,12 @@ const memoryPlugin = {
             category?: MemoryCategory;
           };
 
+          tracer.trace(
+            "memory_store_start",
+            { text, importance, category },
+            "Agent requested memory storage",
+          );
+
           const vector = await embeddings.embed(text);
 
           // 1. Check for duplicates/contradictions with high similarity
@@ -678,24 +773,35 @@ const memoryPlugin = {
             }
           }
 
+          const summary = await generateMemorySummary(text, chatModel);
+
           const entry = await db.store({
             text,
             vector,
             importance,
             category,
+            happenedAt: null,
+            validUntil: null,
+            summary,
+            emotionalTone: "neutral",
+            emotionScore: 0,
           });
 
           // Knowledge Graph extraction (async, non-blocking)
           extractGraphFromText(text, chatModel)
             .then(async (graph) => {
               if (graph.nodes.length > 0 || graph.edges.length > 0) {
-                await graphDB.modify(() => {
-                  for (const node of graph.nodes) graphDB.addNode(node);
-                  for (const edge of graph.edges) graphDB.addEdge(edge);
-                });
-                api.logger.info(
-                  `memory-hybrid: graph updated (+${graph.nodes.length} nodes, +${graph.edges.length} edges)`,
-                );
+                try {
+                  await graphDB.modify(() => {
+                    for (const node of graph.nodes) graphDB.addNode(node);
+                    for (const edge of graph.edges) graphDB.addEdge(edge);
+                  });
+                  api.logger.info(
+                    `memory-hybrid: graph updated (+${graph.nodes.length} nodes, +${graph.edges.length} edges)`,
+                  );
+                } catch (graphErr) {
+                  api.logger.warn(`memory-hybrid: graphDB.modify failed: ${String(graphErr)}`);
+                }
               }
             })
             .catch((err) => {
@@ -841,6 +947,56 @@ const memoryPlugin = {
         },
       },
       { name: "memory_reflect" },
+    );
+
+    // ======================================================================
+    // Tool: memory_fetch_details (Telescope — Stage 3)
+    // ======================================================================
+
+    api.registerTool(
+      {
+        name: "memory_fetch_details",
+        label: "Memory Fetch Details",
+        description:
+          "Fetch the FULL text of specific memories by their IDs. Use this when the star-map summary isn't detailed enough and you need the complete original memory text for a thorough response.",
+        parameters: Type.Object({
+          ids: Type.Array(Type.String(), { description: "Memory IDs to fetch full text for" }),
+        }),
+        async execute(_toolCallId, params) {
+          const { ids } = params as { ids: string[] };
+
+          if (!ids || ids.length === 0) {
+            return {
+              content: [{ type: "text", text: "No memory IDs provided." }],
+              details: { error: "missing_ids" },
+            };
+          }
+
+          // Cap to 5 IDs to prevent context overflow
+          const limitedIds = ids.slice(0, 5);
+          const memories = await db.getByIds(limitedIds);
+
+          if (memories.length === 0) {
+            return {
+              content: [{ type: "text", text: "No memories found for the provided IDs." }],
+              details: { found: 0 },
+            };
+          }
+
+          const text = memories.map((m) => `[${m.id}] [${m.category}] ${m.text}`).join("\n\n");
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Full details for ${memories.length} memories:\n\n${text}`,
+              },
+            ],
+            details: { found: memories.length, ids: memories.map((m) => m.id) },
+          };
+        },
+      },
+      { name: "memory_fetch_details" },
     );
 
     // ======================================================================
@@ -1068,6 +1224,8 @@ const memoryPlugin = {
 
               // Store merged memory FIRST (safety: if embed/store fails, originals are preserved)
               const vector = await embeddings.embed(merged);
+              const summary = await generateMemorySummary(merged, chatModel);
+
               await db.store({
                 text: merged,
                 vector,
@@ -1075,6 +1233,7 @@ const memoryPlugin = {
                 category: bestCategory,
                 happenedAt: bestHappenedAt,
                 validUntil: bestValidUntil,
+                summary,
                 emotionalTone: bestEmotionalTone,
                 emotionScore: bestEmotionScore,
               });
@@ -1149,17 +1308,22 @@ const memoryPlugin = {
 
           api.logger.info(`memory-hybrid: injecting ${scored.length} memories`);
 
-          let context = formatRelevantMemoriesContext(
+          // Stage 3: Use Radar (Star Map) instead of full text injection
+          // This sends lightweight summaries + IDs instead of heavy full texts
+          const radarContext = formatRadarContext(
             scored.map((r) => ({
+              id: r.entry.id,
               category: r.entry.category as MemoryCategory,
+              summary: r.entry.summary,
               text: r.entry.text,
             })),
           );
 
           // Add graph enrichment to context
           const graphInfo = getGraphEnrichment(scored, graphDB);
+          let context = radarContext;
           if (graphInfo) {
-            context = context.replace("</relevant-memories>", graphInfo + "\n</relevant-memories>");
+            context = context.replace("</star-map>", graphInfo + "\n</star-map>");
           }
 
           // Memory Reinforcement: boost recalled memories (sync, in-memory only)
@@ -1220,12 +1384,24 @@ const memoryPlugin = {
             }
           }
 
+          // ---- Rolling Summary Stack: compress this turn ----
+          // Non-blocking: accumulate compressed turn for session context
+          const lastUserMsg = userTexts.length > 0 ? userTexts[userTexts.length - 1] : "";
+          const lastAssistantMsg =
+            assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : "";
+
+          if (lastUserMsg.length > 10 || lastAssistantMsg.length > 10) {
+            conversationStack.push(lastUserMsg, lastAssistantMsg, chatModel).catch((err) => {
+              api.logger.warn(
+                `memory-hybrid: stack compression failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+
           // ---- Smart Capture (LLM-powered) ----
           // Note: Smart Capture intentionally bypasses Working Memory Buffer.
           // The LLM already decided what's worth storing — buffering would be redundant.
           if (cfg.smartCapture && userTexts.length > 0) {
-            const lastUserMsg = userTexts[userTexts.length - 1];
-
             // Pre-filter: skip LLM call for trivial messages (saves API quota)
             const isTrivial =
               lastUserMsg.length < 15 ||
@@ -1233,12 +1409,9 @@ const memoryPlugin = {
                 lastUserMsg.trim(),
               );
 
-            const lastAssistantMsg =
-              assistantTexts.length > 0 ? assistantTexts[assistantTexts.length - 1] : undefined;
-
             const result = isTrivial
               ? { shouldStore: false as const, facts: [] }
-              : await smartCapture(lastUserMsg, lastAssistantMsg, chatModel);
+              : await smartCapture(lastUserMsg, lastAssistantMsg || undefined, chatModel);
 
             if (result.shouldStore) {
               let stored = 0;
@@ -1254,6 +1427,9 @@ const memoryPlugin = {
                   const existing = await db.search(vector, 1, 0.95);
                   if (existing.length > 0) continue;
 
+                  const summary =
+                    fact.summary || (await generateMemorySummary(fact.text, chatModel));
+
                   await db.store({
                     text: fact.text,
                     vector,
@@ -1261,6 +1437,7 @@ const memoryPlugin = {
                     category: fact.category,
                     happenedAt: fact.happenedAt ?? null,
                     validUntil: fact.validUntil ?? null,
+                    summary,
                     emotionalTone: fact.emotionalTone ?? "neutral",
                     emotionScore: fact.emotionScore ?? 0,
                   });
@@ -1271,10 +1448,14 @@ const memoryPlugin = {
                   extractGraphFromText(fact.text, chatModel)
                     .then(async (graph) => {
                       if (graph.nodes.length > 0 || graph.edges.length > 0) {
-                        await graphDB.modify(() => {
-                          for (const n of graph.nodes) graphDB.addNode(n);
-                          for (const e of graph.edges) graphDB.addEdge(e);
-                        });
+                        try {
+                          await graphDB.modify(() => {
+                            for (const n of graph.nodes) graphDB.addNode(n);
+                            for (const e of graph.edges) graphDB.addEdge(e);
+                          });
+                        } catch (err) {
+                          api.logger.warn(`memory-hybrid: auto-capture graph fail: ${String(err)}`);
+                        }
                       }
                     })
                     .catch(() => {});
@@ -1325,11 +1506,14 @@ const memoryPlugin = {
             const existing = await db.search(vector, 1, 0.95);
             if (existing.length > 0) continue;
 
+            const summary = await generateMemorySummary(text, chatModel);
+
             await db.store({
               text,
               vector,
               importance,
               category,
+              summary,
             });
             stored++;
           }
