@@ -155,6 +155,7 @@ type RunPreparedReplyParams = {
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
   model: string;
+  perMessageAuthProfileId?: string;
   perMessageQueueMode?: InlineDirectives["queueMode"];
   perMessageQueueOptions?: {
     debounceMs?: number;
@@ -203,6 +204,7 @@ export async function runPreparedReply(
     modelState,
     provider,
     model,
+    perMessageAuthProfileId,
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
@@ -466,8 +468,11 @@ export async function runPreparedReply(
     sessionKey,
     storePath,
     isNewSession,
+    overrideProfileId: perMessageAuthProfileId,
   });
-  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const authProfileIdSource = perMessageAuthProfileId
+    ? "user"
+    : sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,

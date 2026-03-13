@@ -61,6 +61,7 @@ export type ReplyDirectiveContinuation = {
     cap?: number;
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
+  perMessageAuthProfileId?: string;
 };
 
 function resolveExecOverrides(params: {
@@ -241,14 +242,26 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        const oneShotModelDirective = parsedDirectives.hasModelDirective
+          ? parsedDirectives.rawModelDirective
+          : undefined;
+        const oneShotModelProfile = parsedDirectives.hasModelDirective
+          ? parsedDirectives.rawModelProfile
+          : undefined;
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
         parsedDirectives = allowInlineStatus
           ? {
               ...clearInlineDirectives(parsedDirectives.cleaned),
               hasStatusDirective: true,
+              oneShotModelDirective,
+              oneShotModelProfile,
             }
-          : clearInlineDirectives(parsedDirectives.cleaned);
+          : {
+              ...clearInlineDirectives(parsedDirectives.cleaned),
+              oneShotModelDirective,
+              oneShotModelProfile,
+            };
       }
     }
   }
@@ -263,6 +276,8 @@ export async function resolveReplyDirectives(params: {
         hasReasoningDirective: false,
         hasStatusDirective: false,
         hasModelDirective: false,
+        oneShotModelDirective: undefined,
+        oneShotModelProfile: undefined,
         hasQueueDirective: false,
         queueReset: false,
       };
@@ -338,7 +353,7 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
-  const resolvedThinkLevel =
+  const requestedThinkLevel =
     directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
 
   const resolvedVerboseLevel =
@@ -371,7 +386,7 @@ export async function resolveReplyDirectives(params: {
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
 
-  const modelState = await createModelSelectionState({
+  let modelState = await createModelSelectionState({
     cfg,
     agentCfg,
     sessionEntry,
@@ -383,27 +398,11 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     provider,
     model,
-    hasModelDirective: directives.hasModelDirective,
+    hasModelDirective: directives.hasModelDirective || Boolean(directives.oneShotModelDirective),
     hasResolvedHeartbeatModelOverride,
   });
   provider = modelState.provider;
   model = modelState.model;
-  const resolvedThinkLevelWithDefault =
-    resolvedThinkLevel ??
-    (await modelState.resolveDefaultThinkingLevel()) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
-
-  // When neither directive nor session set reasoning, default to model capability
-  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
-  // active, including model-inferred defaults, or internal thinking blocks can
-  // be emitted as visible "Reasoning:" messages.
-  const reasoningExplicitlySet =
-    directives.reasoningLevel !== undefined ||
-    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
-  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
-  }
 
   let contextTokens = resolveContextTokens({
     agentCfg,
@@ -460,7 +459,44 @@ export async function resolveReplyDirectives(params: {
   provider = applyResult.provider;
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
-  const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
+  const { directiveAck, perMessageQueueMode, perMessageQueueOptions, perMessageAuthProfileId } =
+    applyResult;
+
+  if (provider !== modelState.provider || model !== modelState.model) {
+    modelState = await createModelSelectionState({
+      cfg,
+      agentCfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey: ctx.ParentSessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      provider,
+      model,
+      hasModelDirective: false,
+      hasResolvedHeartbeatModelOverride,
+    });
+  }
+
+  const resolvedThinkLevelWithDefault =
+    requestedThinkLevel ??
+    (await modelState.resolveDefaultThinkingLevel()) ??
+    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+
+  // When neither directive nor session set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
+  // active, including model-inferred defaults, or internal thinking blocks can
+  // be emitted as visible "Reasoning:" messages.
+  const reasoningExplicitlySet =
+    directives.reasoningLevel !== undefined ||
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
+  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
+  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
+    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+  }
+
   const execOverrides = resolveExecOverrides({ directives, sessionEntry });
 
   return {
@@ -493,6 +529,7 @@ export async function resolveReplyDirectives(params: {
       directiveAck,
       perMessageQueueMode,
       perMessageQueueOptions,
+      perMessageAuthProfileId,
     },
   };
 }

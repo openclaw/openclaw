@@ -47,6 +47,9 @@ export type InlineDirectives = {
   hasModelDirective: boolean;
   rawModelDirective?: string;
   rawModelProfile?: string;
+  /** Model selection from `/model <provider/model> <body>`. Applied to one message only. */
+  oneShotModelDirective?: string;
+  oneShotModelProfile?: string;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -175,6 +178,8 @@ export function parseInlineDirectives(
     hasModelDirective,
     rawModelDirective: rawModel,
     rawModelProfile: rawProfile,
+    oneShotModelDirective: undefined,
+    oneShotModelProfile: undefined,
     hasQueueDirective,
     queueMode,
     queueReset,
