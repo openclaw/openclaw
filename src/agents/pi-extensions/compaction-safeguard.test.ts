@@ -1607,8 +1607,12 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyMock).toHaveBeenCalled();
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     expect(mockSummarizeInStages.mock.calls[0]?.[0]?.messages).toEqual(turnPrefixMessages);
-    expect(result.compaction?.summary).toContain("**Turn Context (split turn):**");
-    expect(result.compaction?.summary).toContain("split-turn prefix summary");
+    if (!("compaction" in result)) {
+      throw new Error("Expected compaction result for split-turn safeguard test.");
+    }
+    const compaction = result.compaction as { summary?: string } | undefined;
+    expect(compaction?.summary).toContain("**Turn Context (split turn):**");
+    expect(compaction?.summary).toContain("split-turn prefix summary");
   });
 
   it("continues when messages include real conversation content", async () => {
