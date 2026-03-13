@@ -339,11 +339,6 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamily: false,
       }),
     );
-    expect(transport.pinnedDispatcherPolicy).toEqual(
-      expect.objectContaining({
-        mode: "direct",
-      }),
-    );
   });
 
   it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {

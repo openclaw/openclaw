@@ -103,7 +103,6 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   }
   return {
     fetch: resolvedFetch,
-    sourceFetch: resolvedFetch,
   };
 }
 
