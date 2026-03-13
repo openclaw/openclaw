@@ -10,6 +10,7 @@ HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
+TIMEZONE="${OPENCLAW_TZ:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -80,6 +81,24 @@ NODE
   fi
 }
 
+read_env_gateway_token() {
+  local env_path="$1"
+  local line=""
+  local token=""
+  if [[ ! -f "$env_path" ]]; then
+    return 0
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
+      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
+    fi
+  done <"$env_path"
+  if [[ -n "$token" ]]; then
+    printf '%s' "$token"
+  fi
+}
+
 ensure_control_ui_allowed_origins() {
   if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
     return 0
@@ -115,6 +134,11 @@ sync_gateway_mode_and_bind() {
 contains_disallowed_chars() {
   local value="$1"
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
+}
+
+is_valid_timezone() {
+  local value="$1"
+  [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
 }
 
 validate_mount_path_value() {
@@ -184,6 +208,17 @@ fi
 if [[ -n "$SANDBOX_ENABLED" ]]; then
   validate_mount_path_value "OPENCLAW_DOCKER_SOCKET" "$DOCKER_SOCKET_PATH"
 fi
+if [[ -n "$TIMEZONE" ]]; then
+  if contains_disallowed_chars "$TIMEZONE"; then
+    fail "OPENCLAW_TZ contains unsupported control characters."
+  fi
+  if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
+    fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
+  fi
+  if ! is_valid_timezone "$TIMEZONE"; then
+    fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
+  fi
+fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
@@ -200,11 +235,13 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
+export OPENCLAW_TZ="$TIMEZONE"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -218,14 +255,20 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
-  elif command -v openssl >/dev/null 2>&1; then
-    OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
-    OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
+    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+    if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
+      OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
+      echo "Reusing gateway token from $ROOT_DIR/.env"
+    elif command -v openssl >/dev/null 2>&1; then
+      OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+    else
+      OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
 import secrets
 print(secrets.token_hex(32))
 PY
 )"
+    fi
   fi
 fi
 export OPENCLAW_GATEWAY_TOKEN
@@ -378,16 +421,19 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_EXTENSIONS \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
-  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
+  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
+  OPENCLAW_TZ
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   docker build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \

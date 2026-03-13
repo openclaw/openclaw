@@ -43,6 +43,7 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    replyToMode: z.enum(["off", "first", "all"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({
@@ -53,6 +54,7 @@ const MattermostAccountSchemaBase = z
     interactions: z
       .object({
         callbackBaseUrl: z.string().optional(),
+        allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
   })

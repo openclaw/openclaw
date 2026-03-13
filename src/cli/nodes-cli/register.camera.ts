@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   type CameraFacing,
@@ -71,7 +71,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           }
 
           const { heading, muted } = getNodesTheme();
-          const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+          const tableWidth = getTerminalTableWidth();
           const rows = devices.map((device) => ({
             Name: typeof device.name === "string" ? device.name : "Unknown Camera",
             Position: typeof device.position === "string" ? device.position : muted("unspecified"),

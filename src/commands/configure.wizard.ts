@@ -166,18 +166,38 @@ async function promptWebToolsConfig(
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const existingProvider = existingSearch?.provider ?? "brave";
-  const hasPerplexityKey = Boolean(
-    existingSearch?.perplexity?.apiKey || process.env.PERPLEXITY_API_KEY,
-  );
-  const hasBraveKey = Boolean(existingSearch?.apiKey || process.env.BRAVE_API_KEY);
-  const hasSearchKey = existingProvider === "perplexity" ? hasPerplexityKey : hasBraveKey;
+  const {
+    SEARCH_PROVIDER_OPTIONS,
+    resolveExistingKey,
+    hasExistingKey,
+    applySearchKey,
+    hasKeyInEnv,
+  } = await import("./onboard-search.js");
+  type SP = (typeof SEARCH_PROVIDER_OPTIONS)[number]["value"];
+
+  const hasKeyForProvider = (provider: string): boolean => {
+    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === provider);
+    if (!entry) {
+      return false;
+    }
+    return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
+  };
+
+  const existingProvider: string = (() => {
+    const stored = existingSearch?.provider;
+    if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
+      return stored;
+    }
+    return (
+      SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ??
+      SEARCH_PROVIDER_OPTIONS[0].value
+    );
+  })();
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider: Perplexity Search (recommended) or Brave Search.",
-      "Both return structured results (title, URL, snippet) for fast research.",
+      "Choose a provider and paste your API key.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -186,30 +206,31 @@ async function promptWebToolsConfig(
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue: existingSearch?.enabled ?? hasSearchKey,
+      initialValue:
+        existingSearch?.enabled ?? SEARCH_PROVIDER_OPTIONS.some((e) => hasKeyForProvider(e.value)),
     }),
     runtime,
   );
 
-  let nextSearch = {
+  let nextSearch: Record<string, unknown> = {
     ...existingSearch,
     enabled: enableSearch,
   };
 
   if (enableSearch) {
+    const providerOptions = SEARCH_PROVIDER_OPTIONS.map((entry) => {
+      const configured = hasKeyForProvider(entry.value);
+      return {
+        value: entry.value,
+        label: entry.label,
+        hint: configured ? `${entry.hint} · configured` : entry.hint,
+      };
+    });
+
     const providerChoice = guardCancel(
       await select({
         message: "Choose web search provider",
-        options: [
-          {
-            value: "perplexity",
-            label: "Perplexity Search",
-          },
-          {
-            value: "brave",
-            label: "Brave Search",
-          },
-        ],
+        options: providerOptions,
         initialValue: existingProvider,
       }),
       runtime,
@@ -217,59 +238,42 @@ async function promptWebToolsConfig(
 
     nextSearch = { ...nextSearch, provider: providerChoice };
 
-    if (providerChoice === "perplexity") {
-      const hasKey = Boolean(existingSearch?.perplexity?.apiKey);
-      const keyInput = guardCancel(
-        await text({
-          message: hasKey
-            ? "Perplexity API key (leave blank to keep current or use PERPLEXITY_API_KEY)"
-            : "Perplexity API key (paste it here; leave blank to use PERPLEXITY_API_KEY)",
-          placeholder: hasKey ? "Leave blank to keep current" : "pplx-...",
-        }),
-        runtime,
-      );
-      const key = String(keyInput ?? "").trim();
-      if (key) {
-        nextSearch = {
-          ...nextSearch,
-          perplexity: { ...existingSearch?.perplexity, apiKey: key },
-        };
-      } else if (!hasKey && !process.env.PERPLEXITY_API_KEY) {
-        note(
-          [
-            "No key stored yet, so web_search will stay unavailable.",
-            "Store a key here or set PERPLEXITY_API_KEY in the Gateway environment.",
-            "Get your API key at: https://www.perplexity.ai/settings/api",
-            "Docs: https://docs.openclaw.ai/tools/web",
-          ].join("\n"),
-          "Web search",
-        );
-      }
+    const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
+    const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
+    const keyConfigured = hasExistingKey(nextConfig, providerChoice as SP);
+    const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
+    const envVarNames = entry.envKeys.join(" / ");
+
+    const keyInput = guardCancel(
+      await text({
+        message: keyConfigured
+          ? envAvailable
+            ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
+            : `${entry.label} API key (leave blank to keep current)`
+          : envAvailable
+            ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
+            : `${entry.label} API key`,
+        placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+      }),
+      runtime,
+    );
+    const key = String(keyInput ?? "").trim();
+
+    if (key || existingKey) {
+      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
+      nextSearch = { ...applied.tools?.web?.search };
+    } else if (keyConfigured || envAvailable) {
+      nextSearch = { ...nextSearch };
     } else {
-      const hasKey = Boolean(existingSearch?.apiKey);
-      const keyInput = guardCancel(
-        await text({
-          message: hasKey
-            ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-            : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-          placeholder: hasKey ? "Leave blank to keep current" : "BSA...",
-        }),
-        runtime,
+      note(
+        [
+          "No key stored yet — web_search won't work until a key is available.",
+          `Store a key here or set ${envVarNames} in the Gateway environment.`,
+          `Get your API key at: ${entry.signupUrl}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
       );
-      const key = String(keyInput ?? "").trim();
-      if (key) {
-        nextSearch = { ...nextSearch, apiKey: key };
-      } else if (!hasKey && !process.env.BRAVE_API_KEY) {
-        note(
-          [
-            "No key stored yet, so web_search will stay unavailable.",
-            "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
-            "Get your API key at: https://brave.com/search/api/",
-            "Docs: https://docs.openclaw.ai/tools/web",
-          ].join("\n"),
-          "Web search",
-        );
-      }
     }
   }
 

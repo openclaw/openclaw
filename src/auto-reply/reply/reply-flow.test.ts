@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -8,7 +9,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  resetRecentQueuedMessageIdDedupe,
+  scheduleFollowupDrain,
+} from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
@@ -627,6 +632,10 @@ function createRun(params: {
 }
 
 describe("followup queue deduplication", () => {
+  beforeEach(() => {
+    resetRecentQueuedMessageIdDedupe();
+  });
+
   it("deduplicates messages with same Discord message_id", async () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -688,6 +697,161 @@ describe("followup queue deduplication", () => {
     await done.promise;
     // Should collect both unique messages
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+  });
+
+  it("deduplicates same message_id after queue drain restarts", async () => {
+    const key = `test-dedup-after-drain-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const redelivery = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first-redelivery",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "+10000000000",
+      }),
+      settings,
+    );
+
+    expect(redelivery).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("deduplicates same message_id across distinct enqueue module instances", async () => {
+    const enqueueA = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=dedupe-a",
+    );
+    const enqueueB = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=dedupe-b",
+    );
+    const { clearSessionQueues } = await import("./queue.js");
+    const key = `test-dedup-cross-module-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueA.resetRecentQueuedMessageIdDedupe();
+    enqueueB.resetRecentQueuedMessageIdDedupe();
+
+    try {
+      expect(
+        enqueueA.enqueueFollowupRun(
+          key,
+          createRun({
+            prompt: "first",
+            messageId: "same-id",
+            originatingChannel: "signal",
+            originatingTo: "+10000000000",
+          }),
+          settings,
+        ),
+      ).toBe(true);
+
+      scheduleFollowupDrain(key, runFollowup);
+      await done.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(
+        enqueueB.enqueueFollowupRun(
+          key,
+          createRun({
+            prompt: "first-redelivery",
+            messageId: "same-id",
+            originatingChannel: "signal",
+            originatingTo: "+10000000000",
+          }),
+          settings,
+        ),
+      ).toBe(false);
+      expect(calls).toHaveLength(1);
+    } finally {
+      clearSessionQueues([key]);
+      enqueueA.resetRecentQueuedMessageIdDedupe();
+      enqueueB.resetRecentQueuedMessageIdDedupe();
+    }
+  });
+
+  it("does not collide recent message-id keys when routing contains delimiters", async () => {
+    const key = `test-dedup-key-collision-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "signal|group",
+        originatingTo: "peer",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    // Different routing dimensions can produce identical pipe-joined strings.
+    // This must not be deduplicated as a replay of the first run.
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "same-id",
+        originatingChannel: "signal",
+        originatingTo: "group|peer",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -1164,6 +1328,55 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("before-idle");
     expect(calls[1]?.prompt).toBe("after-idle");
+  });
+
+  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+    const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
+      import.meta.url,
+      "./queue/drain.js?scope=restart-a",
+    );
+    const enqueueB = await importFreshModule<typeof import("./queue/enqueue.js")>(
+      import.meta.url,
+      "./queue/enqueue.js?scope=restart-b",
+    );
+    const { clearSessionQueues } = await import("./queue.js");
+    const key = `test-idle-window-cross-module-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    enqueueB.resetRecentQueuedMessageIdDedupe();
+
+    try {
+      const runFollowup = async (run: FollowupRun) => {
+        calls.push(run);
+        if (calls.length === 1) {
+          firstProcessed.resolve();
+        }
+      };
+
+      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+      drainA.scheduleFollowupDrain(key, runFollowup);
+      await firstProcessed.promise;
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+
+      await vi.waitFor(
+        () => {
+          expect(calls).toHaveLength(2);
+        },
+        { timeout: 1_000 },
+      );
+
+      expect(calls[0]?.prompt).toBe("before-idle");
+      expect(calls[1]?.prompt).toBe("after-idle");
+    } finally {
+      clearSessionQueues([key]);
+      drainA.clearFollowupDrainCallback(key);
+      enqueueB.resetRecentQueuedMessageIdDedupe();
+    }
   });
 
   it("does not double-drain when a message arrives while drain is still running", async () => {

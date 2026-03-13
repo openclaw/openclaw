@@ -36,17 +36,18 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
+import { createConnectedChannelStatusPatch } from "../../gateway/channel-status-patches.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { summarizeStringEntries } from "../../shared/string-sample.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
-import { DiscordVoiceManager, DiscordVoiceReadyListener } from "../voice/manager.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
@@ -102,23 +103,15 @@ export type MonitorDiscordOpts = {
   setStatus?: DiscordMonitorStatusSink;
 };
 
-function summarizeAllowList(list?: string[]) {
-  if (!list || list.length === 0) {
-    return "any";
-  }
-  const sample = list.slice(0, 4).map((entry) => String(entry));
-  const suffix = list.length > sample.length ? ` (+${list.length - sample.length})` : "";
-  return `${sample.join(", ")}${suffix}`;
-}
+type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
-function summarizeGuilds(entries?: Record<string, unknown>) {
-  if (!entries || Object.keys(entries).length === 0) {
-    return "any";
-  }
-  const keys = Object.keys(entries);
-  const sample = keys.slice(0, 4);
-  const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
-  return `${sample.join(", ")}${suffix}`;
+type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
+
+let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
+
+async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
+  discordVoiceRuntimePromise ??= import("../voice/manager.runtime.js");
+  return await discordVoiceRuntimePromise;
 }
 
 function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
@@ -134,7 +127,7 @@ function appendPluginCommandSpecs(params: {
   const existingNames = new Set(
     merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
   );
-  for (const pluginCommand of getPluginCommandSpecs()) {
+  for (const pluginCommand of getPluginCommandSpecs("discord")) {
     const normalizedName = pluginCommand.name.trim().toLowerCase();
     if (!normalizedName) {
       continue;
@@ -401,8 +394,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   allowFrom = allowlistResolved.allowFrom;
 
   if (shouldLogVerbose()) {
+    const allowFromSummary = summarizeStringEntries({
+      entries: allowFrom ?? [],
+      limit: 4,
+      emptyText: "any",
+    });
+    const groupDmChannelSummary = summarizeStringEntries({
+      entries: groupDmChannels ?? [],
+      limit: 4,
+      emptyText: "any",
+    });
+    const guildSummary = summarizeStringEntries({
+      entries: Object.keys(guildEntries ?? {}),
+      limit: 4,
+      emptyText: "any",
+    });
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"} threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
     );
   }
 
@@ -443,6 +451,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ? createThreadBindingManager({
         accountId: account.accountId,
         token,
+        cfg,
         idleTimeoutMs: threadBindingIdleTimeoutMs,
         maxAgeMs: threadBindingMaxAgeMs,
       })
@@ -664,6 +673,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
 
     if (voiceEnabled) {
+      const { DiscordVoiceManager, DiscordVoiceReadyListener } = await loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
         client,
         cfg,
@@ -752,7 +762,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.({ connected: true });
+      opts.setStatus?.(createConnectedChannelStatusPatch());
     }
 
     lifecycleStarted = true;

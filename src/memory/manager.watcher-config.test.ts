@@ -106,4 +106,50 @@ describe("memory watcher config", () => {
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
   });
+
+  it("watches multimodal extensions with case-insensitive globs", async () => {
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    extraDir = path.join(workspaceDir, "extra");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "PHOTO.PNG"), "png");
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            fallback: "none",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            query: { minScore: 0, hybrid: { enabled: false } },
+            extraPaths: [extraDir],
+            multimodal: { enabled: true, modalities: ["image", "audio"] },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const [watchedPaths] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      Record<string, unknown>,
+    ];
+    expect(watchedPaths).toEqual(
+      expect.arrayContaining([
+        path.join(extraDir, "**", "*.[pP][nN][gG]"),
+        path.join(extraDir, "**", "*.[wW][aA][vV]"),
+      ]),
+    );
+  });
 });

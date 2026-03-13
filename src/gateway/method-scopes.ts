@@ -22,7 +22,10 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 const NODE_ROLE_METHODS = new Set([
   "node.invoke.result",
   "node.event",
+  "node.pending.drain",
   "node.canvas.capability.refresh",
+  "node.pending.pull",
+  "node.pending.ack",
   "skills.bins",
 ]);
 
@@ -63,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "skills.status",
     "voicewake.get",
     "sessions.list",
+    "sessions.get",
     "sessions.preview",
     "sessions.resolve",
     "sessions.usage",
@@ -71,6 +75,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.list",
     "cron.status",
     "cron.runs",
+    "gateway.identity.get",
     "system-presence",
     "last-heartbeat",
     "node.list",
@@ -99,6 +104,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "chat.abort",
     "browser.request",
     "push.test",
+    "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",

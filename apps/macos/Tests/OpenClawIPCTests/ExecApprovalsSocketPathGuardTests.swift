@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 struct ExecApprovalsSocketPathGuardTests {
     @Test
-    func hardenParentDirectoryCreatesDirectoryWith0700Permissions() throws {
+    func `harden parent directory creates directory with0700 permissions`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
@@ -24,7 +24,7 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
-    func removeExistingSocketRejectsSymlinkPath() throws {
+    func `remove existing socket rejects symlink path`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
@@ -50,7 +50,7 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
-    func removeExistingSocketRejectsRegularFilePath() throws {
+    func `remove existing socket rejects regular file path`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }

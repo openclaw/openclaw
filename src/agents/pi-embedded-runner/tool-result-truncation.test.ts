@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   truncateToolResultText,
   truncateToolResultMessage,
@@ -35,23 +36,12 @@ function makeUserMessage(text: string): UserMessage {
 }
 
 function makeAssistantMessage(text: string): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     content: [{ type: "text", text }],
-    api: "openai-responses",
-    provider: "openai",
     model: "gpt-5.2",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
     stopReason: "stop",
     timestamp: nextTimestamp(),
-  };
+  });
 }
 
 describe("truncateToolResultText", () => {
