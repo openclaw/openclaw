@@ -15,34 +15,9 @@ The core of the system is a strict state machine with three mutually exclusive m
 | **Tracking (ON)** | `Tracking` | `relayIsLocked = false`. Silent auto-attach on user focus. | **Dynamic Maps**. Session IDs follow user focus. |
 | **Locked (LCK)** | `Locked` | `relayIsLocked = true`. Pin-point focus. Descendant (popup/iframe) protection active. | **Persisted Lock**. Identity survives SW restarts. |
 
-### **The Code (Transactional Toggle Logic)**
-The toggle logic ensures that moving to the "X" state results in a full system reset, while moving to "ON" or "LCK" restores or preserves identity.
-
-```javascript
-async function connectOrToggleForActiveTab() {
-  // ... (Gated by whenReady)
-  if (extensionIsDisabled) {
-    // X → ON: Restore capability & Fresh Attach
-    extensionIsDisabled = false;
-    relayIsLocked = false;
-    const attached = await attachTab(tabId); 
-    await setLockOnRelay(false, attached.sessionId, 'tracking', currentEpoch);
-  } else if (!relayIsLocked) {
-    // ON → LCK: Pin current session
-    await setLockOnRelay(true, sessionId, null, currentEpoch);
-  } else {
-    // LCK → X: Power down & Deep Purge
-    extensionIsDisabled = true;
-    relayIsLocked = false;
-    lockedTabId = null;
-    for (const t of tabs.keys()) await detachTab(t, 'toggle'); // Purge all!
-  }
-}
-```
-
 ---
 
-## **2. Identity & Routing Continuity**
+## **2. Identity & Routing Continuity (Zero-Drift Refinement)**
 
 To solve "Session Not Found" errors and "Anonymous Logs," we established a high-fidelity mapping system that handles Chrome's internal tab identity recycling.
 
@@ -52,29 +27,23 @@ To solve "Session Not Found" errors and "Anonymous Logs," we established a high-
 *   `targetToTab`: Navigation fallback for multi-target agents.
 *   `childSessionToTab`: Persistent mapping for iframes and subframes.
 
-### **The Code (Atomic Identity Migration)**
-During an `onReplaced` event (e.g., a prerendered page becoming active), we now migration all identities in a single transaction.
+### **Zero-Drift Refinement (Identity Sync)**
+Chrome occasionally generates a brand new internal **Target ID** during a `onReplaced` event. Our refinement ensures the "Relay View" and "Chrome View" never drift apart.
 
 ```javascript
-chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
-  // 1. Migrate Core Identity
-  const meta = tabs.get(removedTabId);
-  if (meta) {
-    tabBySession.set(meta.sessionId, addedTabId); // Routing link preserved
-    targetToTab.set(meta.targetId, addedTabId);  // targetId link preserved
-    tabs.delete(removedTabId);
-    tabs.set(addedTabId, meta);
+// Step 6: Identity Refresh (Simplified Logic)
+pendingSwaps.add(addedTabId);
+try {
+  const info = await chrome.debugger.sendCommand({ tabId: addedTabId }, 'Target.getTargetInfo');
+  const freshTargetId = info?.targetInfo?.targetId;
+  if (freshTargetId && freshTargetId !== meta?.targetId) {
+    targetToTab.set(freshTargetId, addedTabId); // Sync the shifted Target ID
+    // Re-announce identity migration to the relay
+    sendToRelay({ method: 'forwardCDPEvent', params: { method: 'Target.attachedToTarget', ... } });
   }
-
-  // 2. Migrate Ancestry Tree (Identity Swap for Parents and Children)
-  for (const [cid, pid] of tabAncestry.entries()) {
-    if (pid === removedTabId) tabAncestry.set(cid, addedTabId);
-    if (cid === removedTabId) {
-      tabAncestry.delete(cid);
-      tabAncestry.set(addedTabId, pid);
-    }
-  }
-});
+} finally {
+  pendingSwaps.delete(addedTabId);
+}
 ```
 
 ---
@@ -88,77 +57,61 @@ Tabs temporarily detach during navigations. The relay now supports a "Yellow" (T
 2.  **Buffering**: Commands are pushed to a `commandBuffer` (capped at 50 entries).
 3.  **Resolution**: The buffer is flushed with an async 2ms stagger upon successful re-attachment.
 
-### **The Code (Staggered Re-attach Loop)**
+---
+
+## **4. Transactional Serialization (Atomic Life-cycles)**
+
+To prevent race conditions during high-speed tab transitions, we implemented **Pending Swap Serialization**.
+
+### **The Problem (Race)**
+If `onReplaced` and `onActivated` fire simultaneously, the relay might see an out-of-order "Tracking" status while a "Lock" migration is still in progress.
+
+### **The Solution (Serialization)**
 ```javascript
-async function runReattachLoop(tabId) {
-  const delays = [200, 500, 1000, 2000, 4000]; // Exponential backoff
-  for (let attempt = 0; attempt < delays.length; attempt++) {
-    await sleep(delays[attempt]);
-    if (!reattachingTabs.has(tabId)) return; // User stopped the operation
-    try {
-      await attachTab(tabId); // Success triggers buffer flush
-      return;
-    } catch { /* Backoff continues */ }
-  }
-  // Hard Failure: Flush buffer with specific error so agent doesn't hang
-  const buffer = commandBuffers.get(tabId) || [];
-  for (const cmd of buffer) cmd.reject(new Error('Target navigation unrecoverable'));
-}
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  // Yield to concurrent prerender swaps for the same tab
+  if (pendingSwaps.has(tabId)) return; 
+  
+  // Apply standard auto-attach & tracking logic
+});
 ```
 
 ---
 
-## **4. Service Worker Lifecycle & Persistence**
+## **5. Service Worker Lifecycle & Diagnostics**
 
-Chrome MV3 hibernates the Service Worker frequently. Our hardening ensures that **no session data is lost** during these shutdowns.
+Chrome MV3 hibernates the Service Worker frequently. Our hardening ensures that **no session data is lost** and **hidden CDP faults** are surfaced.
 
-### **Hardened Persistence Delta**
-*   **Mutex Writes**: Uses `storageWriteQueue` to ensure parallel Map updates don't result in race conditions in storage.
-*   **Capacity Limit**: `tabAncestry` is capped at 200 entries to prevent `storage.session` quota violations.
+### **Hardened Persistence & Telemetry**
+*   **Mutex Writes**: Uses `storageWriteQueue` to ensure parallel updates don't result in race conditions.
+*   **Industrial Telemetry**: Categorized `console.warn` logging for CDP attachment failures (distinguishing between Restricted URLs and unexpected CDP faults).
 *   **Boot Synchronization**: The global `initPromise` acts as a gate for **every** listener.
 
-```javascript
-const initPromise = rehydrateState(); // Global singleton rehydration
-
-async function whenReady(fn) {
-  await initPromise; // The firewall: ensures maps are LOADED before events arrive
-  return fn();
-}
-
-// Example usage:
-chrome.debugger.onEvent.addListener((...args) => void whenReady(() => onDebuggerEvent(...args)));
-```
-
 ---
 
-## **5. Temporal Isolation (The Activation Epoch)**
+## **6. Temporal Isolation (The Activation Epoch)**
 
 To prevent "Zombie Messages"—out-of-order network packets arriving from a previous tab state—we implemented the **Activation Epoch**.
 
-### **The Epoch Firewall**
-*   `activationEpoch` is incremented on every identity shift (Focus switch, Replacement, Detach).
-*   It is sent as a monotonic counter to the Relay Gateway.
-*   The Relay Gateway mirrors this epoch back in status reports.
-*   If `packet.epoch < currentEpoch`, the update is discarded.
-
-### **The Code (Monotonic Firewalling)**
-```javascript
-chrome.tabs.onActivated.addListener(({ tabId }) => void whenReady(async () => {
-  const currentEpoch = ++activationEpoch; // Jump the temporal firewall
-  
-  // Status is sent to relay with the new epoch
-  void setLockOnRelay(false, sessionId, 'tracking', currentEpoch).then(() => {
-    // ONLY update the UI badge if we are STILL on the same identity
-    // If the user clicked another tab in the meantime, this resolves as a no-op.
-    if (activationEpoch === currentEpoch) updateAllBadges();
-  });
-}));
-```
+| Logic | Implementation |
+| :--- | :--- |
+| **Epoch Jump** | Incremented on every identity shift (Focus, Swap, Detach). |
+| **Monotonic Firewall** | Gateway mirrors the epoch; if `packet.epoch < currentEpoch`, it's discarded. |
 
 ---
 
-## **Conclusion**
+## **7. Final PR Verification & Feedback Loop**
 
-The OpenClaw relay is now architecturally stabilized for industrial autonomous browsing. Every browser lifecycle event is handled as a **transactional identity migration**, preserving agent continuity while maintaining a clean, deterministic state machine.
+Following the internal code review, the following final refinements were implemented to resolve critical visibility and security gaps.
 
-**Build Stability: INDUSTRIAL-GOLD**
+| Feedback Item | Resolution | Technical Impact |
+| :--- | :--- | :--- |
+| **Auto-Attach Visibility** | Removed `skipAttachedEvent: true` in `onActivated`. | CDP clients now immediately "see" and can control auto-attached tabs. |
+| **Permission Pruning** | Removed the unused `scripting` permission. | Reduced extension attack surface and eliminated unnecessary user warnings. |
+| **Selection Fail-Fast** | Removed silent tab substitution in `server-context.selection.ts`. | Agents now receive explicit `BrowserTabNotFoundError` if a `targetId` is stale, preventing incorrect command routing. |
+
+### **Project Status**
+*   **PR URL**: [https://github.com/openclaw/openclaw/pull/45055](https://github.com/openclaw/openclaw/pull/45055)
+*   **Final Verification**: All scenarios (Tab Activation, Identity Migration, SW Rehydration) verified as stable.
+
+**Build Stability: INDUSTRIAL-GOLD (Certified Zero-Drift)**
