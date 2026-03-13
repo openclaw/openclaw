@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadConfigMock as loadConfig,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
-const { resolveGatewayConnection } = await import("./gateway-chat.js");
+let resolveGatewayConnection: typeof import("./gateway-chat.js").resolveGatewayConnection;
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -97,6 +97,13 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.CLAWDBOT_GATEWAY_URL;
+  });
+
+  beforeEach(async () => {
+    // Force gateway-chat.ts (and gateway/call.ts beneath it) to rebind against
+    // this file's mocked config helpers even when another suite imported it first.
+    vi.resetModules();
+    ({ resolveGatewayConnection } = await import("./gateway-chat.js"));
   });
 
   afterEach(() => {

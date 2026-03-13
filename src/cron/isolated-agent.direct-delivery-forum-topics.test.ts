@@ -15,17 +15,21 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("routes forum-topic telegram targets through the correct delivery path", async () => {
+  async function expectTelegramAnnounceDelivery(params: {
+    deliveryTarget: string;
+    text: string;
+    expectedThreadId?: number;
+  }) {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
-      mockAgentPayloads([{ text: "forum message" }]);
+      mockAgentPayloads([{ text: params.text }]);
 
       const res = await runTelegramAnnounceTurn({
         home,
         storePath,
         deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
+        delivery: { mode: "announce", channel: "telegram", to: params.deliveryTarget },
       });
 
       expect(res.status).toBe("ok");
@@ -33,32 +37,26 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expectDirectTelegramDelivery(deps, {
         chatId: "123",
-        text: "forum message",
-        messageThreadId: 42,
+        text: params.text,
+        ...(params.expectedThreadId === undefined
+          ? {}
+          : { messageThreadId: params.expectedThreadId }),
       });
+    });
+  }
+
+  it("routes forum-topic telegram targets through direct delivery with a topic id", async () => {
+    await expectTelegramAnnounceDelivery({
+      deliveryTarget: "123:topic:42",
+      text: "forum message",
+      expectedThreadId: 42,
     });
   });
 
-  it("routes plain telegram targets through the correct delivery path", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const deps = createCliDeps();
-      mockAgentPayloads([{ text: "plain message" }]);
-
-      const plainRes = await runTelegramAnnounceTurn({
-        home,
-        storePath,
-        deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      });
-
-      expect(plainRes.status).toBe("ok");
-      expect(plainRes.delivered).toBe(true);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expectDirectTelegramDelivery(deps, {
-        chatId: "123",
-        text: "plain message",
-      });
+  it("routes plain telegram targets through direct delivery without a topic id", async () => {
+    await expectTelegramAnnounceDelivery({
+      deliveryTarget: "123",
+      text: "plain message",
     });
   });
 });
