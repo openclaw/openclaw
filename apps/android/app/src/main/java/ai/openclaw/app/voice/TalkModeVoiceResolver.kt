@@ -101,9 +101,8 @@ internal object TalkModeVoiceResolver {
           val name = obj["name"].asStringOrNull()
           ElevenLabsVoice(voiceId, name)
         }
-      } catch (e: Exception) {
+      } finally {
         conn.disconnect()
-        throw e
       }
     }
   }
